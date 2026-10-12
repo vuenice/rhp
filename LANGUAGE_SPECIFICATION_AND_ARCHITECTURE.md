@@ -1,0 +1,319 @@
+# Language Specification & Architecture Document
+
+## Table of Contents
+- [Executive Summary & Design Decisions](#executive-summary--design-decisions)
+  - [1. Type System Strategy: Medium (Gradual / Surface-Level Contracts)](#1-type-system-strategy-medium-gradual--surface-level-contracts)
+  - [2. Type System & Numeric Datatypes](#2-type-system--numeric-datatypes)
+- [Technical Architecture (Performance-First Paradigm)](#technical-architecture-performance-first-paradigm)
+  - [Process & Threading Architecture](#process--threading-architecture)
+  - [1. Compiler Pipeline & Execution Engine](#1-compiler-pipeline--execution-engine)
+  - [2. Standard Library & Explicit Subtype System](#2-standard-library--explicit-subtype-system)
+  - [Facade Library Pattern](#facade-library-pattern)
+  - [Facade Tiering Architecture](#facade-tiering-architecture)
+- [Facades & Utility Helpers](#facades--utility-helpers)
+  - [1. Arr Facade](#1-arr-facade)
+  - [2. Str Facade](#2-str-facade)
+  - [3. HTTP Facade](#3-http-facade)
+  - [4. File Facade](#4-file-facade)
+  - [5. Session Facade](#5-session-facade)
+  - [6. Image Facade](#6-image-facade)
+  - [7. URL Facade](#7-url-facade)
+- [Asynchronous Non-Blocking Concurrent Core](#asynchronous-non-blocking-concurrent-core)
+- [Process Model & Database Pooling](#process-model--database-pooling)
+- [Dual-Engine Execution Modes (Development vs Production Mode)](#dual-engine-execution-modes-development-vs-production-mode)
+  - [Overview & Execution Modes Strategy](#overview--execution-modes-strategy)
+  - [Developer Experience Framework (`rhp run dev`)](#developer-experience-framework-rhp-run-dev)
+  - [Implementation Code Sketch](#implementation-code-sketch)
+  - [Execution Matrix](#execution-matrix)
+- [Technical Language Construction Architecture (20 Technical Points)](#technical-language-construction-architecture-20-technical-points)
+
+---
+
+## Executive Summary & Design Decisions
+
+### 1. Type System Strategy: Medium (Gradual / Surface-Level Contracts)
+
+- **Function & Method Boundaries:** Enforces strict parameter and return types across signatures to guarantee API predictability, IDE intelligence, and compile-time boundary safety.
+- **Function Bodies:** Evaluated using dynamic inference and assignment, preserving rapid prototyping, clean syntax, and low syntactic overhead.
+- **Reference Mechanics:** Explicit pass-by-reference (`&$var`) is removed in favor of explicit returns and mutable collection wrappers. Objects pass by reference handle, while arrays/strings utilize Copy-On-Write (COW) semantics.
+
+### 2. Type System & Numeric Datatypes
+
+- **Capital String:** Use capital `String` across type definitions and specifications.
+- **Default Integers and Floats:** Default/standard integer and float types use `i32` (`Int` and `Float` wrappers/primitives).
+- **Extended Rust Numeric Types & Fluent APIs:** Developers can also use all other native Rust numeric types in our language (such as `i64`, `f64`, `u32`, etc.). They can be constructed and manipulated fluently via type wrappers, e.g.:
+
+```php
+Int::i64()->random()->add()->subtract()
+
+Float::i64()->toDecimal(2)
+```
+
+---
+
+## Technical Architecture (Performance-First Paradigm)
+
+### Process & Threading Architecture
+
+```mermaid
+flowchart TD
+    subgraph Parent["PARENT PROCESS"]
+        direction TB
+        P1["- Bootstraps Framework & Application Code"]
+        P2["- Holds Immutable Global State & Routing Tables"]
+        P3["- Manages Shared Connection Pools (sqlx / Diesel)"]
+        P4["- Centralized Async Logging Manager"]
+    end
+
+    Parent --> Bridge["Shared Memory / Arc  |  IPC / Direct Thread Dispatch"]
+
+    Bridge --> W1["WORKER THREAD 1<br/>(Tokio Fiber Execution)"]
+    Bridge --> W2["WORKER THREAD 2<br/>(Tokio Fiber Execution)"]
+    Bridge --> W3["WORKER THREAD 3<br/>(Tokio Fiber Execution)"]
+```
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                     PARENT PROCESS                      │
+│ - Bootstraps Framework & Application Code               │
+│ - Holds Immutable Global State & Routing Tables         │
+│ - Manages Shared Connection Pools (sqlx / Diesel)       │
+│ - Centralized Async Logging Manager                     │
+└───────────────────────────┬─────────────────────────────┘
+                            │
+┌───────────────────────────┴─────────────────────────────┐
+│ Shared Memory / Arc       │ IPC / Direct Thread Dispatch │
+└───────────────────────────┬─────────────────────────────┘
+              ┌─────────────┼─────────────┐
+              ▼             ▼             ▼
+┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
+│    WORKER THREAD 1    │ │    WORKER THREAD 2    │ │    WORKER THREAD 3    │
+│(Tokio Fiber Execution)│ │(Tokio Fiber Execution)│ │(Tokio Fiber Execution)│
+└───────────────────────┘ └───────────────────────┘ └───────────────────────┘
+```
+
+### 1. Compiler Pipeline & Execution Engine
+
+- **Lexer:** Powered by `logos` for ultra-fast, deterministic finite automata (DFA) tokenization.
+- **Parser:** Custom Pratt Parser combined with expression combinators to generate a typed Abstract Syntax Tree (AST).
+- **Execution Model:** Lowers AST into a linear Intermediate Representation (IR) opcode stream executed by a register-based Bytecode VM written natively in Rust. Hot paths can be conditionally JIT-compiled via Cranelift.
+- **Reference:** Take reference from [https://github.com/tagua-vm/tagua-vm](https://github.com/tagua-vm/tagua-vm)
+
+### 2. Standard Library & Explicit Subtype System
+
+Standard arrays are broken down into four underlying high-performance Rust types. To keep the parent array handle size small on the stack and avoid inline copy overhead, the inner array variants/representations are heap-allocated via `Box`:
+
+| Surface Type | Underlying Rust Representation | Primary Use Case |
+| :--- | :--- | :--- |
+| `Arr::list()` | `Box<Vec<PhpValue>>` | Sequential indexed data, maximum CPU cache locality |
+| `Arr::dict()` | `Box<IndexMap<String, PhpValue>>` | Key-value map retaining insertion order |
+| `Arr::set()` | `Box<IndexSet<PhpValue>>` | Unique collection with deterministic insertion ordering and $O(1)$ lookups |
+| `Arr::hashMap()` | `Box<HashMap<PhpValue, PhpValue>>` | Universal key-value map supporting complex keys |
+
+### Facade Library Pattern
+
+Global helper functions are eliminated in favor of object-oriented class facades (e.g., `Str::contains()`, `Arr::list()`, `Sys::env()`).
+
+### Facade Tiering Architecture
+
+- **Tier 1 (Built-in Native Facades):** Ship core facades (`Str`, `Arr`, `Future`, `Log`, `DB`) pre-compiled inside the engine.
+- **Tier 2 (Custom Rust Plugins):** Allow developers to include them as Rust crates during an AOT build step.
+- **Tier 3 (Script-land Facades):** Allow standard facades written in your class static function for simple, non-performance-critical user utilities.
+
+---
+
+## Facades & Utility Helpers
+
+The runtime replaces global procedural functions with expressive, static facade helpers inspired by Laravel syntax. These facades wrap optimized Rust implementations with clean fluent APIs.
+
+### 1. Arr Facade
+
+Provides explicit collection instantiation and chaining helpers. Standard arrays map to four high-performance collection subtypes:
+
+- **Subtypes:** `Arr::list()` (sequential indexed list), `Arr::dict()` (insertion-ordered string-key map), `Arr::hashMap()` (universal complex key-value map), and `Arr::set()` (insertion-ordered unique value set).
+- **Arr::list Behavior:** Designed for contiguous numerical index operations, providing seamless method-chaining and high CPU cache locality. Includes array helper methods such as `list`, `map`, `filter`, `reduce`, `reject`, and `find`.
+
+#### Method Chaining Example:
+
+```php
+$numbers = Arr::list([1, 2, 3, 4, 5])
+    ->map(fn($n) => $n * 2)
+    ->filter(fn($n) => $n > 4);
+```
+
+### 2. Str Facade
+
+Utility methods for UTF-8 string transformation and string inspection:
+
+- **Key Methods:** `Str::contains()`, `Str::slug()`, `Str::random()`, `Str::upper()`, `Str::lower()`.
+
+```php
+$slug = Str::slug('Laravel Style Facades'); // 'laravel-style-facades'
+
+$token = Str::random(32);
+
+$hasWord = Str::contains('Runtime engine', 'engine'); // true
+```
+
+### 3. HTTP Facade
+
+Fluent HTTP client wrappers built on non-blocking async network tasks:
+
+- **Key Utilities:** `HTTP::get()`, `HTTP::post()`, `HTTP::withHeaders()`, `HTTP::async()`.
+
+```php
+$response = HTTP::withHeaders(['Authorization' => 'Bearer token'])
+    ->post('https://api.example.com/data', ['name' => 'Runtime']);
+```
+
+### 4. File Facade
+
+High-level file I/O interface supporting both synchronous fibers and non-blocking asynchronous execution models:
+
+- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`.
+- **Execution Models:** Standard call `File::read('app.log')` blocks the local fiber transparently. Using `Future::run(fn() => File::read(...))` spawns a background task for non-blocking concurrent execution.
+
+### 5. Session Facade
+
+Session state management interface across requests:
+
+- **Key Methods:** `Session::get()`, `Session::put()`, `Session::has()`, `Session::forget()`.
+
+### 6. Image Facade
+
+Fluent image manipulation utilities leveraging native underlying graphics libraries:
+
+- **Key Methods:** `Image::make()`, `Image::resize()`, `Image::crop()`, `Image::save()`.
+
+```php
+Image::make('photo.jpg')
+    ->resize(300, 200)
+    ->save('thumbnail.jpg');
+```
+
+### 7. URL Facade
+
+URL generation, route inspection, and request URL analysis:
+
+- **Key Methods:** `URL::to()`, `URL::route()`, `URL::current()`, `URL::full()`.
+
+---
+
+## Asynchronous Non-Blocking Concurrent Core
+
+- **Synchronous-By-Default Execution Model:** Helpers and standard library calls execute line-by-line synchronously on local execution fibers without blocking underlying OS worker threads.
+- **Dart-Style Future Facade API (`Future` class):**
+  - `Future::run(callable $fn)`: Spawns a background task on the Tokio worker pool without holding up subsequent local code.
+  - `Future::delayed(int $milliseconds, callable $fn = null)`: Non-blocking yield/delay using Tokio timers (`tokio::time::sleep`). If a closure is provided, executes and returns its result after the delay.
+  - `Future::value(mixed $value)`: Immediately wraps a value into a completed `Future` instance synchronously.
+  - `Future::error(mixed $error)`: Immediately returns a rejected/failed `Future` wrapping an error or exception.
+  - `Future::wait(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns an array of resolved values without requiring an explicit `->wait()` chain.
+  - `Future::any(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns the result of whichever task completes first without requiring an explicit `->wait()` chain.
+  - `Future::defer(callable $fn)`: Registers a post-response callback in the request queue executed after the HTTP response payload is flushed to the client (replacing stand-alone `defer()`).
+
+#### Concurrent execution using `Future::wait()`:
+
+```php
+[$user, $posts] = Future::wait([
+    fn() => DB::table('users')->find($id),
+    fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
+]);
+```
+
+#### First-to-complete resolution using `Future::any()`:
+
+```php
+$fastestResponse = Future::any([
+    fn() => HTTP::get('https://primary-mirror.com/data')->json(),
+    fn() => HTTP::get('https://secondary-mirror.com/data')->json()
+]);
+```
+
+#### Non-blocking delay using `Future::delayed()`:
+
+```php
+$delayedResult = Future::delayed(500, fn() => 'Execution resumed after 500ms');
+```
+
+#### Register post-response hook with `Future::defer()`:
+
+```php
+Future::defer(fn() => Log::info('Request processed successfully'));
+```
+
+---
+
+## Process Model & Database Pooling
+
+- **Persistent Memory Model:** The parent process parses and compiles the framework code once into an immutable state (`Arc<EngineState>`), bypassing per-request bootstrapping.
+- **Connection Pooling:** The parent manages a database pool (e.g., `sqlx`). Worker tasks check out connections instantly during active requests/transactions without creating socket handshake bottlenecks.
+- **Centralized Logging (`Log::info`):** Log invocations push structured log payloads over a non-blocking multi-producer single-consumer (`mpsc`) channel directly to the parent process logging worker.
+
+---
+
+## Dual-Engine Execution Modes (Development vs Production Mode)
+
+### Overview & Execution Modes Strategy
+
+- **Development Mode (`rhp run dev`):** Direct AST Execution via Tree-Walking Interpreter. Evaluates AST nodes directly in memory using recursive pattern matching without emitting bytecode. Delivers instant cold startup times and sub-millisecond hot reloading.
+- **Production / Build Mode (`rhp run build`):** Register-based Bytecode VM with optional JIT (Cranelift) compilation. Lowers AST into linear IR opcode streams executed within a Tokio multi-worker execution pool for maximum throughput.
+
+### Developer Experience Framework (`rhp run dev`)
+
+- **Hot Reloading:** File-watching engine powered by the `notify` crate. Re-parses changed files on the fly via Logos/Pratt parser, invalidating in-memory AST cache nodes without restarting persistent server state.
+- **Exact Stack Traces & Source Maps:** Precise source span tracking (`Span { file_id, start, end, line, col }`) attached directly across AST nodes. Translates runtime errors directly to source file locations without requiring IP-to-bytecode line-table offset translation.
+- **Interactive Debugging (DAP Protocol):** Integrated Debug Adapter Protocol (`dap-rs`) server listening on a configurable port. Execution traps checked via atomic execution flags in the evaluator loop for breakpoints and local environment scope inspection.
+- **Integrated Code Coverage Engine:** AST execution counter tracking executed nodes during test runs, exported directly to LCOV (`coverage.info`) format.
+
+### Implementation Code Sketch
+
+```rust
+// CLI Dispatch Logic
+
+pub enum RunMode {
+    Dev { hot_reload: bool, dap_port: Option<u16> },
+    Build { jit_enabled: bool, opt_level: u8 },
+}
+
+pub fn execute(mode: RunMode, ast: &ASTNode, env: &mut Environment) -> Result<Value, RuntimeError> {
+    match mode {
+        RunMode::Dev { .. } => eval_expr(ast, env),
+        RunMode::Build { jit_enabled, .. } => {
+            let bytecode = compile_to_bytecode(ast)?;
+            VM::new(bytecode, jit_enabled).run()
+        }
+    }
+}
+
+// Direct Recursive AST Evaluator (Dev Mode)
+
+pub fn eval_expr(node: &ASTNode, env: &mut Environment) -> Result<Value, RuntimeError> {
+    check_dap_breakpoints(&node.span)?;
+    track_coverage(&node.span.id);
+
+    match &node.kind {
+        ASTKind::BinaryOp { op, left, right } => {
+            let lhs = eval_expr(left, env)?;
+            let rhs = eval_expr(right, env)?;
+            apply_binary_op(op, lhs, rhs)
+        }
+        ASTKind::FunctionCall { callee, args } => {
+            invoke_func(callee, args, env)
+        }
+        ASTKind::Literal(val) => Ok(val.clone()),
+    }
+}
+```
+
+### Execution Matrix
+
+| Feature / Dimension | Development Mode (`rhp run dev`) | Production Mode (`rhp run build`) |
+| :--- | :--- | :--- |
+| **Execution Pipeline** | Direct Tree-Walking AST Interpreter | Register Bytecode VM + Cranelift JIT |
+| **Reload Strategy** | Instant AST Node Invalidation & Re-parse | AOT / Compiled Bytecode Artifacts |
+| **Startup Latency** | Near-Zero Cold Start (<5ms) | Requires Compilation Pass |
+| **Throughput** | Optimized for Rapid Feedback | Maximum Ops/Sec & Cache Locality |
+| **Developer Ergonomics** | DAP protocol, exact source maps, LCOV coverage | Production logging & telemetry |
+
+---
+
