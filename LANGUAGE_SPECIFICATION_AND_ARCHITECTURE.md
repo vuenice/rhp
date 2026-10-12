@@ -10,6 +10,7 @@
   - [2. Standard Library & Explicit Subtype System](#2-standard-library--explicit-subtype-system)
   - [Facade Library Pattern](#facade-library-pattern)
   - [Facade Tiering Architecture](#facade-tiering-architecture)
+  - [Facade Extensibility: Runtime Macro Registration vs. Class Inheritance](#facade-extensibility-runtime-macro-registration-vs-class-inheritance)
 - [Facades & Utility Helpers](#facades--utility-helpers)
   - [1. Arr Facade](#1-arr-facade)
   - [2. Str Facade](#2-str-facade)
@@ -120,6 +121,66 @@ Global helper functions are eliminated in favor of object-oriented class facades
 - **Tier 2 (Custom Rust Plugins):** Allow developers to include them as Rust crates during an AOT build step.
 - **Tier 3 (Script-land Facades):** Allow standard facades written in your class static function for simple, non-performance-critical user utilities.
 
+### Facade Extensibility: Runtime Macro Registration vs. Class Inheritance
+
+#### Why Traditional Class Extension (`extends Arr`) is Forbidden
+
+1. **Tight Coupling to Rust Internals:** Core helper classes like `Arr` and `Str` are not regular user-land classes—they are static facades wrapping optimized Rust heap allocations (like `Box<Vec<PhpValue>>` or UTF-8 string buffers). Allowing inheritance (`class CustomArr extends Arr`) would expose these internal memory boundaries and complicate the VM's optimization pipeline.
+2. **Stateless Design Violations:** `Arr` and `Str` are intentionally designed as stateless utility wrappers and fluent pipeline builders. Subclassing them introduces state management confusion and thread-safety risks in a multi-threaded Tokio execution environment.
+
+Attempting to extend a static facade results in a compile-time fatal error:
+```text
+Fatal Error: Cannot extend static facade class 'Arr'. Use 'Arr::macro()' to register custom methods dynamically.
+```
+
+#### Runtime Macro Registration (`::macro`)
+
+Instead of extending the class via inheritance, developers can register custom methods dynamically at runtime:
+
+```php
+// Define a custom macro on the Arr facade
+Arr::macro('toCsv', function ($delimiter = ',') {
+    // Custom logic accessing the underlying collection
+    return implode($delimiter, $this->all());
+});
+
+// Usage anywhere in your application
+$csv = Arr::list([1, 2, 3])->toCsv();
+```
+
+#### Why Macros Work Perfectly for RHP
+
+- **Zero Performance Cost on Core Types:** Macros are stored in a global runtime registry rather than altering the core class definition or Rust struct layouts.
+- **Maintains Familiarity:** Matches the exact developer ergonomics of Laravel (`Macroable`), making migration seamless for teams upgrading high-traffic apps.
+- **Thread-Safe Registration:** Macros can be registered once during the initial application bootstrap phase in the parent process, making them safely accessible across all concurrent worker threads.
+
+### Global Helpers & Backward-Compatible AST Lowering (`Sys::*`, `phpFun::*`, & `Glob::customHelper`)
+
+To preserve strict object-oriented facade consistency while supporting developer-friendly shorthand syntax, legacy PHP standard library functions, and user-defined global helpers, the **Pratt Parser** performs static symbol resolution and AST lowering during expression parsing:
+
+1. **Why Not the Lexer?** The `logos` DFA lexer is strictly responsible for zero-copy tokenization and lacks grammatical context to distinguish variable names, class names, keywords, or function invocations.
+2. **Pratt Parser Symbol Resolution & AST Rewriting:** When the Pratt parser encounters a function call expression (`callee(args)`), it checks:
+   - **Reserved Intrinsics (`env`, `print`, `dd`):** Rewritten directly into `Sys::env(...)`, `Sys::print(...)`, and `Sys::dd(...)` static facade calls (`ExprKind::StaticCall`), ensuring zero-copy engine optimizations and exact source span tracking.
+   - **Declared User Functions:** Preserved as standard user function call nodes (`ExprKind::Call`).
+   - **Legacy PHP Standard Functions (`phpFun::old_php_function()`):** Recognized via a static key-value mapping registry (`LEGACY_PHP_FUNCTIONS` / `php_function_signature_map()`) pairing legacy PHP function names (such as `array_merge`, `implode`, `strlen`, `file_get_contents`) with their canonical RHP facade call signatures (e.g., `"array_merge" => "Arr::merge(array ...$arrays): array"`). The parser rewrites calls like `array_merge($a, $b)` into `phpFun::array_merge($a, $b)` which bridges directly to `Arr::merge($a, $b)`.
+   - **Unrecognized Global Helpers (Backward Support):** Automatically intercepted and lowered into `Glob::customHelper('helper_name', ...args)`, routing legacy or dynamically registered custom helpers through the `Glob` namespace container without polluting the global namespace or adding runtime lookup overhead in Development or Production modes.
+
+```rust
+let call_node = if is_reserved_intrinsic(callee_name) {
+    // Rewrites to Sys::* (Sys::env(), Sys::print(), Sys::dd())
+    Expr::static_call("Sys", callee_name, args, callee_span, span)
+} else if self.is_user_defined_function(callee_name) {
+    // Calls standard user function
+    Expr::user_function_call(callee_name, args, callee_span, span)
+} else if is_legacy_php_function(callee_name) {
+    // Rewrites legacy PHP function (e.g. array_merge) to phpFun::array_merge() -> Arr::merge()
+    Expr::static_call("phpFun", callee_name, args, callee_span, span)
+} else {
+    // Fallback: Transforms legacy custom helper into Glob::customHelper()
+    Expr::static_call("Glob", "customHelper", custom_args, callee_span, span)
+};
+```
+
 ---
 
 ## Facades & Utility Helpers
@@ -132,6 +193,7 @@ Provides explicit collection instantiation and chaining helpers. Standard arrays
 
 - **Subtypes:** `Arr::list()` (sequential indexed list), `Arr::dict()` (insertion-ordered string-key map), `Arr::hashMap()` (universal complex key-value map), and `Arr::set()` (insertion-ordered unique value set).
 - **Arr::list Behavior:** Designed for contiguous numerical index operations, providing seamless method-chaining and high CPU cache locality. Includes array helper methods such as `list`, `map`, `filter`, `reduce`, `reject`, and `find`.
+- **Custom Macros (`Arr::macro`):** Supports dynamic method registration bound to collection instances without subclassing `Arr`.
 
 #### Method Chaining Example:
 

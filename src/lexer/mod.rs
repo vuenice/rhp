@@ -8,8 +8,11 @@ use logos::Logos;
 
 pub use error::{LexError, SpannedLexError};
 pub use facade::{
-    get_static_facade, is_static_facade, validate_instantiation, FacadeInfo, FacadeTier,
-    NATIVE_FACADES,
+    get_custom_helper, get_legacy_php_function, get_macro, get_static_facade, has_custom_helper,
+    has_macro, is_legacy_php_function, is_reserved_intrinsic, is_static_facade,
+    php_function_signature_map, register_custom_helper, register_macro, validate_inheritance,
+    validate_instantiation, FacadeInfo, FacadeTier, LegacyPhpFunctionMapping, MacroEntry,
+    MacroRegistry, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
 };
 pub use span::{SourceFile, SourceMap, Span};
 pub use token::Token;
@@ -76,18 +79,25 @@ impl<'s> Lexer<'s> {
             return;
         }
 
-        let slice = &self.source[self.curr_offset..target_offset];
-        for b in slice.bytes() {
-            if b == b'\n' {
+        let bytes = self.source.as_bytes();
+        let mut i = self.curr_offset;
+        while i < target_offset {
+            let b = bytes[i];
+            if b == b'\r' {
                 self.curr_line += 1;
                 self.curr_col = 1;
-            } else {
-                // Approximate column advance by bytes or UTF-8 characters
-                // Here we advance by 1 for UTF-8 start bytes and ASCII
-                if (b & 0xC0) != 0x80 {
-                    self.curr_col += 1;
+                if i + 1 < target_offset && bytes[i + 1] == b'\n' {
+                    i += 2;
+                    continue;
                 }
+            } else if b == b'\n' {
+                self.curr_line += 1;
+                self.curr_col = 1;
+            } else if (b & 0xC0) != 0x80 {
+                // Advance by 1 for UTF-8 start bytes and ASCII
+                self.curr_col += 1;
             }
+            i += 1;
         }
         self.curr_offset = target_offset;
     }

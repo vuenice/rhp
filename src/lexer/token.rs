@@ -39,6 +39,26 @@ fn err_unterminated_backtick<'s>(_lex: &mut Lexer<'s, Token<'s>>) -> Result<(), 
     Err(LexError::UnterminatedString)
 }
 
+fn err_invalid_numeric<'s>(lex: &mut Lexer<'s, Token<'s>>) -> Result<(), LexError> {
+    let slice = lex.slice();
+    if slice.ends_with('_') || slice.ends_with('.') {
+        Err(LexError::InvalidNumericLiteral(
+            "Numeric literal cannot end with a separator or decimal point.".to_string(),
+        ))
+    } else {
+        Err(LexError::InvalidNumericLiteral(
+            "SyntaxError: invalid syntax.".to_string(),
+        ))
+    }
+}
+
+fn err_invalid_variable<'s>(_lex: &mut Lexer<'s, Token<'s>>) -> Result<(), LexError> {
+    Err(LexError::InvalidVariableIdentifier(
+        "Variable names must start with a letter or underscore, followed by alphanumeric characters (e.g., $varName)."
+            .to_string(),
+    ))
+}
+
 /// Strongly-typed deterministic finite automaton (DFA) token enumeration.
 ///
 /// Designed with zero-copy string slicing referencing the source buffer lifetime `'s`.
@@ -46,7 +66,6 @@ fn err_unterminated_backtick<'s>(_lex: &mut Lexer<'s, Token<'s>>) -> Result<(), 
 #[logos(error = LexError)]
 #[logos(skip r"[ \t\r\n\f]+")]
 #[logos(skip(r"//[^\r\n]*", allow_greedy = true))]
-#[logos(skip(r"#[^\[\r\n][^\r\n]*|#", allow_greedy = true))]
 pub enum Token<'s> {
     // -------------------------------------------------------------------------
     // Comments
@@ -77,6 +96,9 @@ pub enum Token<'s> {
     // -------------------------------------------------------------------------
     #[regex(r"\$[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*", |lex| lex.slice())]
     Variable(&'s str),
+
+    #[regex(r"\$\$[a-zA-Z0-9_\x7f-\xff\$]*|\$[0-9][a-zA-Z0-9_\x7f-\xff]*|\$", err_invalid_variable)]
+    InvalidVariable,
 
     // -------------------------------------------------------------------------
     // Specific Language Keywords
@@ -133,6 +155,9 @@ pub enum Token<'s> {
 
     #[token("return")]
     Return,
+
+    #[token("echo")]
+    Echo,
 
     #[token("yield")]
     Yield,
@@ -241,29 +266,23 @@ pub enum Token<'s> {
     #[token("xor")]
     Xor,
 
-    // Literals (Keywords)
+    // Literals (Keywords - Strictly Lowercase)
     #[token("true")]
-    #[token("TRUE")]
     True,
 
     #[token("false")]
-    #[token("FALSE")]
     False,
 
     #[token("null")]
-    #[token("NULL")]
     Null,
 
     // -------------------------------------------------------------------------
-    // Type Keywords (Capital String, primitive base types int & float, native Rust types)
+    // Type Keywords (Strictly Lowercase Primitives: string, bool, int, float)
     // Note: 'Int::' and 'Float::' are supporting classes, not base datatypes;
-    // base types 'int' and 'float' are primitives and not instances of Int/Float.
+    // base types 'int', 'float', 'string', 'bool' are primitives.
     // -------------------------------------------------------------------------
-    #[token("String")]
-    TypeString,
-
     #[token("string")]
-    TypeStringLower,
+    TypeString,
 
     #[token("int")]
     TypeInt,
@@ -272,7 +291,6 @@ pub enum Token<'s> {
     TypeFloat,
 
     #[token("bool")]
-    #[token("boolean")]
     TypeBool,
 
     #[token("void")]
@@ -303,21 +321,25 @@ pub enum Token<'s> {
     Ident(&'s str),
 
     // -------------------------------------------------------------------------
-    // Numeric Literals (Zero-Copy Slicing)
+    // Numeric Literals (Zero-Copy Slicing & Strict Lexical Validation)
     // -------------------------------------------------------------------------
-    // Floats (e.g., 3.14, 1.0e10, 1.5e-3, .5)
-    #[regex(r"([0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?|\.[0-9][0-9_]+([eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)", |lex| lex.slice())]
+    // Valid Floats (e.g., 3.14, 1.0e10, 1.5e-3, 0.5)
+    #[regex(r"[0-9]+(_[0-9]+)*\.[0-9]+(_[0-9]+)*([eE][+-]?[0-9]+(_[0-9]+)*)?|[0-9]+(_[0-9]+)*[eE][+-]?[0-9]+(_[0-9]+)*", |lex| lex.slice())]
     FloatLiteral(&'s str),
 
     // Hexadecimal integers (e.g. 0x1A_3F)
-    #[regex(r"0[xX][0-9a-fA-F][0-9a-fA-F_]*", |lex| lex.slice())]
+    #[regex(r"0[xX][0-9a-fA-F]+(_[0-9a-fA-F]+)*", |lex| lex.slice())]
     // Binary integers (e.g. 0b1010_0101)
-    #[regex(r"0[bB][01][01_]*", |lex| lex.slice())]
+    #[regex(r"0[bB][01]+(_[01]+)*", |lex| lex.slice())]
     // Octal integers (e.g. 0o755)
-    #[regex(r"0[oO][0-7][0-7_]*", |lex| lex.slice())]
+    #[regex(r"0[oO][0-7]+(_[0-7]+)*", |lex| lex.slice())]
     // Standard decimal integers (e.g. 100, 1_000_000)
-    #[regex(r"[0-9][0-9_]*", |lex| lex.slice())]
+    #[regex(r"[0-9]+(_[0-9]+)*", |lex| lex.slice())]
     IntLiteral(&'s str),
+
+    // Malformed numeric literals: trailing underscore/dot, leading dot (.5), incomplete prefix (0x, 0b, 0o), incomplete exponent (1e), or consecutive underscores
+    #[regex(r"[0-9][0-9_]*_|\.[0-9][0-9_]*([eE][+-]?[0-9_]*)?|[0-9][0-9_]*\.[0-9_]*_|[0-9][0-9_]*(\.[0-9][0-9_]*)?[eE][+-]?[0-9_]*_|0[xX][0-9a-fA-F_]*_|0[bB][01_]*_|0[oO][0-7_]*_|[0-9][0-9_]*\.|0[xXbBoO]|[0-9][0-9_]*(\.[0-9][0-9_]*)?[eE][+-]?|[0-9][0-9_]*__[0-9_]*", err_invalid_numeric)]
+    InvalidNumeric,
 
     // -------------------------------------------------------------------------
     // String Literals (Zero-Copy Slicing)
@@ -574,6 +596,7 @@ impl<'s> Token<'s> {
             Token::Default => "default",
             Token::Match => "match",
             Token::Return => "return",
+            Token::Echo => "echo",
             Token::Yield => "yield",
             Token::From => "from",
             Token::Goto => "goto",
@@ -611,8 +634,7 @@ impl<'s> Token<'s> {
             Token::True => "true",
             Token::False => "false",
             Token::Null => "null",
-            Token::TypeString => "String",
-            Token::TypeStringLower => "string",
+            Token::TypeString => "string",
             Token::TypeInt => "int",
             Token::TypeFloat => "float",
             Token::TypeBool => "bool",
@@ -694,6 +716,8 @@ impl<'s> Token<'s> {
             Token::UnterminatedSingleQuote => "'",
             Token::UnterminatedDoubleQuote => "\"",
             Token::UnterminatedBacktick => "`",
+            Token::InvalidVariable => "$",
+            Token::InvalidNumeric => "",
         }
     }
 
@@ -718,6 +742,7 @@ impl<'s> Token<'s> {
                 | Token::Default
                 | Token::Match
                 | Token::Return
+                | Token::Echo
                 | Token::Yield
                 | Token::From
                 | Token::Goto
@@ -760,7 +785,6 @@ impl<'s> Token<'s> {
         matches!(
             self,
             Token::TypeString
-                | Token::TypeStringLower
                 | Token::TypeInt
                 | Token::TypeFloat
                 | Token::TypeBool

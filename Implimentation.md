@@ -12,7 +12,7 @@
 9. **Subtyped Collection Architecture (`Arr::dict`):** Map key-value dictionaries with strict insertion ordering to Rust `IndexMap<String, PhpValue>` structures.
 10. **Subtyped Collection Architecture (`Arr::set`):** Map unique collections directly to Rust `HashSet<PhpValue>` structures.
 11. **Subtyped Collection Architecture (`Arr::map`):** Implement universal general key-value dictionaries supporting complex keys using Rust `HashMap<PhpValue, PhpValue>` structures.
-12. **Object-Oriented Facade Standard Library:** Eliminate procedural global functions in favor of static class facades (such as `Str::contains`, `Arr::list`, and `Sys::env`) to maintain namespace hygiene.
+12. **Object-Oriented Facade Standard Library & Runtime Macros:** Eliminate procedural global functions in favor of static class facades (such as `Str::contains`, `Arr::list`, and `Sys::env`) to maintain namespace hygiene. Forbid traditional class inheritance (`extends Arr`) to preserve Rust memory layout boundaries and stateless Tokio safety, instead supporting Laravel-style dynamic runtime macro registration (`Arr::macro('toCsv', ...)`).
 13. **Persistent Parent Process Architecture:** Boot, parse, and compile application code inside a long-lived parent process into an immutable memory state (`Arc<EngineState>`) to avoid per-request bootstrap overhead.
 14. **Worker Process Isolation & Concurrency:** Spawn multi-threaded worker tasks or use process-level copy-on-write models to handle incoming requests concurrently against the shared parent state.
 15. **Database Connection Pooling:** Manage persistent database connection pools (via `sqlx`) centrally within the parent process, allowing workers to check out connections instantly during active requests.

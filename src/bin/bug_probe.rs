@@ -1,4 +1,4 @@
-use rhp::lexer::{Lexer, token::Token};
+use rhp::lexer::Lexer;
 
 fn probe(label: &str, src: &str) {
     print!("{:45} => ", label);

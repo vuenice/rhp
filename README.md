@@ -48,6 +48,21 @@ $numbers = Arr::list([1, 2, 3, 4, 5])
     ->filter(fn($n) => $n > 4);
 ```
 
+#### Runtime Macro Registration (`Arr::macro`):
+
+Core facades (`Arr`, `Str`, etc.) wrap optimized Rust allocations and cannot be subclassed (`extends Arr` is forbidden). Instead, register custom methods dynamically via `::macro()`:
+
+```php
+// Define a custom macro on the Arr facade
+Arr::macro('toCsv', function ($delimiter = ',') {
+    // Custom logic accessing the underlying collection
+    return implode($delimiter, $this->all());
+});
+
+// Usage anywhere in your application
+$csv = Arr::list([1, 2, 3])->toCsv();
+```
+
 ### 2. Str Facade
 
 Provides clean, UTF-8-safe string inspection and transformation utilities:

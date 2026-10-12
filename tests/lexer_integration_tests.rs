@@ -219,7 +219,7 @@ fn test_spec_numeric_types_and_fluent_apis() {
 #[test]
 fn test_spec_surface_level_gradual_typing() {
     let source = r#"
-        function calculateTotal(int $quantity, float $unitPrice, String $currency): float {
+        function calculateTotal(int $quantity, float $unitPrice, string $currency): float {
             $subtotal = $quantity * $unitPrice;
             $tax = $subtotal * 0.18;
             return $subtotal + $tax;
@@ -241,10 +241,10 @@ fn test_spec_surface_level_gradual_typing() {
 #[test]
 fn test_supporting_classes_vs_base_datatypes() {
     let source = r#"
-        // int and float are base datatypes
+        // int, float, string are base datatypes
         $x: int = 10;
         $y: float = 3.14;
-        $s: String = "hello";
+        $s: string = "hello";
 
         // Int and Float are supporting facade classes
         $boxedInt = Int::i64();
@@ -283,6 +283,7 @@ fn test_pdf_spec_facade_instantiation_forbidden() {
     assert!(is_static_facade("Float"));
     assert!(is_static_facade("Arr"));
     assert!(is_static_facade("Str"));
+    assert!(is_static_facade("Glob"));
 
     // Confirm instantiation via new is strictly forbidden as required by PDF page 2 & 3
     assert_eq!(
@@ -308,7 +309,7 @@ fn test_pdf_spec_facade_instantiation_forbidden() {
 
 #[test]
 fn test_numeric_literal_radixes_and_parsing() {
-    let source = "42 1_000_000 0x1A_2F 0b1010_0101 0o755 3.14159 1.5e-3 .75";
+    let source = "42 1_000_000 0x1A_2F 0b1010_0101 0o755 3.14159 1.5e-3 0.75";
     let tokens = Lexer::tokenize(source).expect("Failed to tokenize numbers");
 
     assert_eq!(tokens[0].token.parse_int(), Some(42));
@@ -442,3 +443,159 @@ fn test_error_handling_unterminated_tokens() {
     assert!(result3.is_err());
     assert_eq!(result3.unwrap_err().error, LexError::UnterminatedComment);
 }
+
+#[test]
+fn test_numeric_literal_strict_validation() {
+    // Trailing underscores and dots must be rejected with exact error message
+    for invalid in ["1_", "1_000_", "1.", "1_000.", "0x1A_", "0b10_"] {
+        let err = Lexer::tokenize(invalid).expect_err(&format!("Expected error for {}", invalid));
+        assert_eq!(
+            err.error,
+            LexError::InvalidNumericLiteral(
+                "Numeric literal cannot end with a separator or decimal point.".to_string()
+            )
+        );
+    }
+
+    // Leading dots and incomplete prefixes/exponents must trigger SyntaxError: invalid syntax.
+    for invalid in [".5", "0x", "0b", "1e"] {
+        let err = Lexer::tokenize(invalid).expect_err(&format!("Expected error for {}", invalid));
+        assert_eq!(
+            err.error,
+            LexError::InvalidNumericLiteral("SyntaxError: invalid syntax.".to_string())
+        );
+    }
+
+    // Valid separator must succeed
+    let valid = Lexer::tokenize("1_2").expect("Valid numeric separator must succeed");
+    assert_eq!(valid[0].token, Token::IntLiteral("1_2"));
+}
+
+#[test]
+fn test_string_quoting_and_backticks() {
+    let single_esc = Lexer::tokenize(r"'it\'s'").expect("Single escaped quote");
+    assert_eq!(single_esc[0].token.unescape_string(), Some("it's".to_string()));
+
+    let nested_in_single = Lexer::tokenize(r#"'"nested"'"#).expect("Double inside single");
+    assert_eq!(nested_in_single[0].token.unescape_string(), Some("\"nested\"".to_string()));
+
+    let nested_in_double = Lexer::tokenize(r#""'nested'""#).expect("Single inside double");
+    assert_eq!(nested_in_double[0].token.unescape_string(), Some("'nested'".to_string()));
+
+    let backtick = Lexer::tokenize(r#"`raw "double" and 'single' quotes`"#).expect("Backtick string");
+    assert_eq!(
+        backtick[0].token,
+        Token::BacktickString(r#"`raw "double" and 'single' quotes`"#)
+    );
+    assert_eq!(
+        backtick[0].token.unescape_string(),
+        Some(r#"raw "double" and 'single' quotes"#.to_string())
+    );
+}
+
+#[test]
+fn test_strict_case_sensitivity_and_type_keywords() {
+    let toks = Lexer::tokenize("TRUE == true FALSE == false NULL == null string String bool boolean")
+        .expect("Tokenize case sensitivity");
+    let kinds: Vec<_> = toks.into_iter().map(|t| t.token).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Token::Ident("TRUE"),
+            Token::Equal,
+            Token::True,
+            Token::Ident("FALSE"),
+            Token::Equal,
+            Token::False,
+            Token::Ident("NULL"),
+            Token::Equal,
+            Token::Null,
+            Token::TypeString,
+            Token::Ident("String"),
+            Token::TypeBool,
+            Token::Ident("boolean"),
+        ]
+    );
+}
+
+#[test]
+fn test_comments_and_attribute_boundaries() {
+    let attr = Lexer::tokenize("#[Route]").expect("Attribute must tokenize");
+    assert_eq!(attr[0].token, Token::AttributeStart);
+    assert_eq!(attr[1].token, Token::Ident("Route"));
+    assert_eq!(attr[2].token, Token::CloseBracket);
+
+    // '#' is strictly reserved for attributes and never used for comments
+    assert!(Lexer::tokenize("# line comment").is_err());
+    assert!(Lexer::tokenize("#").is_err());
+
+    // Standard comments work as expected
+    assert!(Lexer::tokenize("// line comment").unwrap().is_empty());
+    let block = Lexer::tokenize("/* block */ code").unwrap();
+    assert_eq!(block[0].token, Token::Ident("code"));
+}
+
+#[test]
+fn test_variable_identifier_validation() {
+    for invalid in ["$$", "$$var", "$", "$0", "$9abc"] {
+        let err = Lexer::tokenize(invalid).expect_err(&format!("Expected error for {}", invalid));
+        assert_eq!(
+            err.error,
+            LexError::InvalidVariableIdentifier(
+                "Variable names must start with a letter or underscore, followed by alphanumeric characters (e.g., $varName)."
+                    .to_string()
+            )
+        );
+    }
+}
+
+#[test]
+fn test_static_facade_inheritance_forbidden_and_macro_registry() {
+    use rhp::lexer::facade::{validate_inheritance, MacroEntry, MacroRegistry};
+    use std::sync::Arc;
+    use std::thread;
+
+    // Extending Arr, Str, Int, Float via inheritance is strictly forbidden
+    assert_eq!(
+        validate_inheritance("Arr"),
+        Err("Fatal Error: Cannot extend static facade class 'Arr'. Use 'Arr::macro()' to register custom methods dynamically.".to_string())
+    );
+    assert_eq!(
+        validate_inheritance("Str"),
+        Err("Fatal Error: Cannot extend static facade class 'Str'. Use 'Str::macro()' to register custom methods dynamically.".to_string())
+    );
+    assert!(validate_inheritance("BaseController").is_ok());
+
+    // Thread-safe runtime macro registration (parent bootstrap -> concurrent worker threads)
+    let registry = Arc::new(MacroRegistry::new());
+    registry
+        .register(MacroEntry::new(
+            "Arr",
+            "toCsv",
+            vec![("$delimiter".to_string(), Some("','".to_string()))],
+            "return implode($delimiter, $this->all());",
+        ))
+        .expect("Failed to register Arr::toCsv macro");
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let reg = Arc::clone(&registry);
+        handles.push(thread::spawn(move || {
+            assert!(reg.has("Arr", "toCsv"));
+            let entry = reg.get("Arr", "toCsv").expect("Macro must be accessible in worker thread");
+            assert_eq!(entry.facade, "Arr");
+            assert_eq!(entry.method_name, "toCsv");
+            assert_eq!(entry.params[0].0, "$delimiter");
+        }));
+    }
+    for h in handles {
+        h.join().expect("Worker thread panicked");
+    }
+
+    // Reject macro registration on non-facade classes
+    assert!(registry
+        .register(MacroEntry::new("CustomUserClass", "foo", vec![], ""))
+        .is_err());
+}
+
+

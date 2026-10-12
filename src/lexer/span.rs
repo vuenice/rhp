@@ -95,10 +95,21 @@ impl SourceFile {
         let name = name.into();
         let source = source.into();
         let mut line_starts = vec![0];
-        for (i, b) in source.bytes().enumerate() {
-            if b == b'\n' {
+        let bytes = source.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\r' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                    line_starts.push(i + 2);
+                    i += 2;
+                    continue;
+                } else {
+                    line_starts.push(i + 1);
+                }
+            } else if bytes[i] == b'\n' {
                 line_starts.push(i + 1);
             }
+            i += 1;
         }
         Self {
             id,

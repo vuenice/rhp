@@ -19,8 +19,11 @@ pub enum LexError {
     #[error("invalid escape sequence: {0}")]
     InvalidEscape(String),
 
-    #[error("invalid numeric literal: {0}")]
+    #[error("{0}")]
     InvalidNumericLiteral(String),
+
+    #[error("{0}")]
+    InvalidVariableIdentifier(String),
 }
 
 /// A lexical error bundled with its source span for precise diagnostics.

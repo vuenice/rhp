@@ -1,4 +1,4 @@
-//! Tiered Facade Architecture & Static Facade Registry
+//! Tiered Facade Architecture, Static Facade Registry & Runtime Macro System
 //!
 //! As specified in LANGUAGE_SPECIFICATION_AND_ARCHITECTURE.md and the
 //! "Designing Numeric Types in RHP" architectural guide:
@@ -8,13 +8,21 @@
 //! 2. They are static-only classes (`is_static_only: true`).
 //! 3. Instantiation via `new` is strictly forbidden:
 //!    `Fatal Error: Cannot instantiate static facade class '...'. Use static methods directly.`
-//! 4. Base datatypes (`int`, `float`, `String`) are lightweight primitives and are NOT instances of these facades.
+//! 4. Inheritance via `extends` is strictly forbidden to prevent tight coupling to Rust internals
+//!    (e.g. `Box<Vec<PhpValue>>`) and stateless design violations in Tokio workers:
+//!    `Fatal Error: Cannot extend static facade class '...'. Use '...::macro()' to register custom methods dynamically.`
+//! 5. Base datatypes (`int`, `float`, `String`) are lightweight primitives and are NOT instances of these facades.
+//! 6. Custom methods can be registered dynamically at runtime via `Facade::macro('name', closure)`
+//!    into a thread-safe global runtime macro registry with zero performance cost on core types.
+
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 /// Facade tier classification as defined in the architectural tiering strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FacadeTier {
     /// Tier 1: Built-in Native Facades pre-compiled inside the engine core.
-    /// Strictly static-only. Instantiation via `new` is forbidden.
+    /// Strictly static-only. Instantiation via `new` and inheritance via `extends` are forbidden.
     Tier1Native,
     /// Tier 2: Custom Rust Plugins included as crates during an AOT build step.
     Tier2RustPlugin,
@@ -28,6 +36,7 @@ pub struct FacadeInfo {
     pub name: &'static str,
     pub tier: FacadeTier,
     pub is_static_only: bool,
+    pub supports_macros: bool,
     pub description: &'static str,
 }
 
@@ -37,81 +46,410 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         name: "Int",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Static facade helper for integer utilities and specialized Rust numeric types (i64, u32, etc.)",
     },
     FacadeInfo {
         name: "Float",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Static facade helper for float operations, formatting, and high-precision types (f64, toDecimal)",
     },
     FacadeInfo {
         name: "Arr",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
-        description: "Static collection factory (list, dict, set, hashMap) with fluent chaining",
+        supports_macros: true,
+        description: "Static collection factory (list, dict, set, hashMap) with fluent chaining and runtime macro support",
     },
     FacadeInfo {
         name: "Str",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
-        description: "Static UTF-8 string transformation and inspection utilities (slug, contains, random)",
+        supports_macros: true,
+        description: "Static UTF-8 string transformation and inspection utilities (slug, contains, random) with runtime macro support",
     },
     FacadeInfo {
         name: "Future",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Dart-style non-blocking concurrency facade (run, wait, any, delayed, defer)",
     },
     FacadeInfo {
         name: "HTTP",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Non-blocking async HTTP client facade (get, post, withHeaders)",
     },
     FacadeInfo {
         name: "File",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "High-level cooperative fiber file I/O facade (read, write, exists, delete)",
     },
     FacadeInfo {
         name: "Session",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Session state management facade across requests (get, put, has, forget)",
     },
     FacadeInfo {
         name: "Image",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Fluent image manipulation facade (make, resize, crop, save)",
     },
     FacadeInfo {
         name: "URL",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "URL generation and route inspection facade (to, route, current, full)",
     },
     FacadeInfo {
         name: "DB",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Centralized database pool query facade (table, find)",
     },
     FacadeInfo {
         name: "Log",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
+        supports_macros: true,
         description: "Non-blocking centralized logging facade (info, error, debug)",
     },
     FacadeInfo {
         name: "Sys",
         tier: FacadeTier::Tier1Native,
         is_static_only: true,
-        description: "System environment and runtime inspection facade (env, os)",
+        supports_macros: true,
+        description: "System environment, output, and debugging intrinsics facade (env, print, dd, os)",
+    },
+    FacadeInfo {
+        name: "Glob",
+        tier: FacadeTier::Tier1Native,
+        is_static_only: true,
+        supports_macros: true,
+        description: "Static facade for disambiguating reserved keyword operations and backward-compatible custom helpers (getClass, match, customHelper)",
+    },
+    FacadeInfo {
+        name: "phpFun",
+        tier: FacadeTier::Tier1Native,
+        is_static_only: true,
+        supports_macros: true,
+        description: "Backward-compatibility static facade bridging legacy PHP functions (e.g., phpFun::array_merge() -> Arr::merge())",
     },
 ];
+
+/// Reserved global helper intrinsics that the Pratt parser statically rewrites
+/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::dd()`).
+pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "dd"];
+
+/// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`).
+#[inline]
+pub fn is_reserved_intrinsic(name: &str) -> bool {
+    RESERVED_INTRINSICS.contains(&name)
+}
+
+/// Key-value mapping entry connecting a legacy procedural PHP function to its
+/// target RHP facade, method, and RHP function call signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegacyPhpFunctionMapping {
+    /// Legacy PHP procedural function name (e.g., `"array_merge"`).
+    pub php_name: &'static str,
+    /// Target RHP static facade name (e.g., `"Arr"`).
+    pub rhp_facade: &'static str,
+    /// Target RHP method name on the facade (e.g., `"merge"`).
+    pub rhp_method: &'static str,
+    /// Canonical RHP function call signature (e.g., `"Arr::merge(array ...$arrays): array"`).
+    pub rhp_signature: &'static str,
+}
+
+/// Key-value registry of legacy PHP built-in functions mapped to their RHP facade call signatures.
+///
+/// When the Pratt parser encounters a legacy PHP function call like `array_merge($a, $b)`,
+/// it rewrites the AST node into `phpFun::array_merge($a, $b)` which dispatches to `Arr::merge($a, $b)`.
+pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
+    // Array functions -> Arr::*
+    LegacyPhpFunctionMapping {
+        php_name: "array_merge",
+        rhp_facade: "Arr",
+        rhp_method: "merge",
+        rhp_signature: "Arr::merge(array ...$arrays): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_map",
+        rhp_facade: "Arr",
+        rhp_method: "map",
+        rhp_signature: "Arr::map(callable $callback, array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_filter",
+        rhp_facade: "Arr",
+        rhp_method: "filter",
+        rhp_signature: "Arr::filter(array $array, ?callable $callback = null): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_reduce",
+        rhp_facade: "Arr",
+        rhp_method: "reduce",
+        rhp_signature: "Arr::reduce(array $array, callable $callback, mixed $initial = null): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_keys",
+        rhp_facade: "Arr",
+        rhp_method: "keys",
+        rhp_signature: "Arr::keys(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_values",
+        rhp_facade: "Arr",
+        rhp_method: "values",
+        rhp_signature: "Arr::values(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_unique",
+        rhp_facade: "Arr",
+        rhp_method: "unique",
+        rhp_signature: "Arr::unique(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_slice",
+        rhp_facade: "Arr",
+        rhp_method: "slice",
+        rhp_signature: "Arr::slice(array $array, int $offset, ?int $length = null): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_push",
+        rhp_facade: "Arr",
+        rhp_method: "push",
+        rhp_signature: "Arr::push(array $array, mixed ...$values): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_pop",
+        rhp_facade: "Arr",
+        rhp_method: "pop",
+        rhp_signature: "Arr::pop(array $array): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_shift",
+        rhp_facade: "Arr",
+        rhp_method: "shift",
+        rhp_signature: "Arr::shift(array $array): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_unshift",
+        rhp_facade: "Arr",
+        rhp_method: "unshift",
+        rhp_signature: "Arr::unshift(array $array, mixed ...$values): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_reverse",
+        rhp_facade: "Arr",
+        rhp_method: "reverse",
+        rhp_signature: "Arr::reverse(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_search",
+        rhp_facade: "Arr",
+        rhp_method: "search",
+        rhp_signature: "Arr::search(mixed $needle, array $haystack, bool $strict = false): int|string|bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "in_array",
+        rhp_facade: "Arr",
+        rhp_method: "contains",
+        rhp_signature: "Arr::contains(array $haystack, mixed $needle, bool $strict = false): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_key_exists",
+        rhp_facade: "Arr",
+        rhp_method: "hasKey",
+        rhp_signature: "Arr::hasKey(array $array, int|string $key): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "count",
+        rhp_facade: "Arr",
+        rhp_method: "count",
+        rhp_signature: "Arr::count(array $array): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "implode",
+        rhp_facade: "Str",
+        rhp_method: "join",
+        rhp_signature: "Str::join(string $separator, array $array): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "explode",
+        rhp_facade: "Str",
+        rhp_method: "split",
+        rhp_signature: "Str::split(string $separator, string $string, ?int $limit = null): array",
+    },
+    // String functions -> Str::*
+    LegacyPhpFunctionMapping {
+        php_name: "strlen",
+        rhp_facade: "Str",
+        rhp_method: "length",
+        rhp_signature: "Str::length(string $string): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_contains",
+        rhp_facade: "Str",
+        rhp_method: "contains",
+        rhp_signature: "Str::contains(string $haystack, string $needle): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_starts_with",
+        rhp_facade: "Str",
+        rhp_method: "startsWith",
+        rhp_signature: "Str::startsWith(string $haystack, string $needle): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_ends_with",
+        rhp_facade: "Str",
+        rhp_method: "endsWith",
+        rhp_signature: "Str::endsWith(string $haystack, string $needle): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strtolower",
+        rhp_facade: "Str",
+        rhp_method: "lower",
+        rhp_signature: "Str::lower(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strtoupper",
+        rhp_facade: "Str",
+        rhp_method: "upper",
+        rhp_signature: "Str::upper(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "trim",
+        rhp_facade: "Str",
+        rhp_method: "trim",
+        rhp_signature: "Str::trim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ltrim",
+        rhp_facade: "Str",
+        rhp_method: "ltrim",
+        rhp_signature: "Str::ltrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rtrim",
+        rhp_facade: "Str",
+        rhp_method: "rtrim",
+        rhp_signature: "Str::rtrim(string $string, string $characters = \" \\n\\r\\t\\v\\0\"): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_replace",
+        rhp_facade: "Str",
+        rhp_method: "replace",
+        rhp_signature: "Str::replace(string|array $search, string|array $replace, string $subject): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "substr",
+        rhp_facade: "Str",
+        rhp_method: "substr",
+        rhp_signature: "Str::substr(string $string, int $offset, ?int $length = null): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strpos",
+        rhp_facade: "Str",
+        rhp_method: "pos",
+        rhp_signature: "Str::pos(string $haystack, string $needle, int $offset = 0): int|bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "sprintf",
+        rhp_facade: "Str",
+        rhp_method: "format",
+        rhp_signature: "Str::format(string $format, mixed ...$values): string",
+    },
+    // File functions -> File::*
+    LegacyPhpFunctionMapping {
+        php_name: "file_get_contents",
+        rhp_facade: "File",
+        rhp_method: "read",
+        rhp_signature: "File::read(string $path): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "file_put_contents",
+        rhp_facade: "File",
+        rhp_method: "write",
+        rhp_signature: "File::write(string $path, string $contents): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "file_exists",
+        rhp_facade: "File",
+        rhp_method: "exists",
+        rhp_signature: "File::exists(string $path): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "unlink",
+        rhp_facade: "File",
+        rhp_method: "delete",
+        rhp_signature: "File::delete(string $path): bool",
+    },
+    // System & Type functions -> Sys::* / Glob::*
+    LegacyPhpFunctionMapping {
+        php_name: "getenv",
+        rhp_facade: "Sys",
+        rhp_method: "env",
+        rhp_signature: "Sys::env(string $key, mixed $default = null): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "var_dump",
+        rhp_facade: "Sys",
+        rhp_method: "dd",
+        rhp_signature: "Sys::dd(mixed ...$vars): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "print_r",
+        rhp_facade: "Sys",
+        rhp_method: "print",
+        rhp_signature: "Sys::print(mixed $value): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "get_class",
+        rhp_facade: "Glob",
+        rhp_method: "getClass",
+        rhp_signature: "Glob::getClass(object $object): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "preg_match",
+        rhp_facade: "Glob",
+        rhp_method: "match",
+        rhp_signature: "Glob::match(string $pattern, string $subject): bool",
+    },
+];
+
+/// Returns true if the given function name is a recognized legacy PHP standard library function
+/// that should be rewritten to `phpFun::<name>()` in the AST.
+#[inline]
+pub fn is_legacy_php_function(name: &str) -> bool {
+    LEGACY_PHP_FUNCTIONS.iter().any(|f| f.php_name == name)
+}
+
+/// Retrieve the key-value mapping metadata (`LegacyPhpFunctionMapping`) for a legacy PHP function.
+#[inline]
+pub fn get_legacy_php_function(name: &str) -> Option<&'static LegacyPhpFunctionMapping> {
+    LEGACY_PHP_FUNCTIONS.iter().find(|f| f.php_name == name)
+}
+
+/// Retrieve a HashMap of all legacy PHP function names mapped to their RHP function call signatures.
+pub fn php_function_signature_map() -> HashMap<&'static str, &'static str> {
+    LEGACY_PHP_FUNCTIONS
+        .iter()
+        .map(|entry| (entry.php_name, entry.rhp_signature))
+        .collect()
+}
 
 /// Returns true if the specified class name is a registered native static facade.
 #[inline]
@@ -141,3 +479,190 @@ pub fn validate_instantiation(name: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Checks whether a class can be extended via `extends`.
+///
+/// Core helper classes like `Arr` and `Str` wrap optimized Rust heap allocations
+/// (such as `Box<Vec<PhpValue>>` or UTF-8 string buffers) and are stateless utility facades.
+/// Subclassing them is strictly forbidden; developers must use `Facade::macro()` instead.
+pub fn validate_inheritance(name: &str) -> Result<(), String> {
+    if let Some(facade) = get_static_facade(name) {
+        if facade.is_static_only {
+            return Err(format!(
+                "Fatal Error: Cannot extend static facade class '{}'. Use '{}::macro()' to register custom methods dynamically.",
+                facade.name, facade.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Metadata and definition for a dynamically registered facade macro (`Arr::macro('toCsv', ...)`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacroEntry {
+    /// Target facade name (e.g., `"Arr"`, `"Str"`).
+    pub facade: String,
+    /// Registered custom method name (e.g., `"toCsv"`).
+    pub method_name: String,
+    /// Parameter names with optional default value expressions (e.g., `[("$delimiter", Some("','"))]`).
+    pub params: Vec<(String, Option<String>)>,
+    /// Source representation or body summary of the registered closure/callable.
+    pub body_source: String,
+}
+
+impl MacroEntry {
+    pub fn new(
+        facade: impl Into<String>,
+        method_name: impl Into<String>,
+        params: Vec<(String, Option<String>)>,
+        body_source: impl Into<String>,
+    ) -> Self {
+        Self {
+            facade: facade.into(),
+            method_name: method_name.into(),
+            params,
+            body_source: body_source.into(),
+        }
+    }
+}
+
+/// Thread-safe global runtime macro registry.
+///
+/// Macros are registered during the initial application bootstrap phase in the parent process
+/// and stored in a global runtime registry rather than altering core Rust struct layouts,
+/// making them safely accessible across all concurrent Tokio worker threads with zero overhead
+/// on native operations.
+#[derive(Debug, Default)]
+pub struct MacroRegistry {
+    macros: RwLock<HashMap<(String, String), MacroEntry>>,
+}
+
+impl MacroRegistry {
+    /// Create a new empty `MacroRegistry`.
+    pub fn new() -> Self {
+        Self {
+            macros: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Access the process-wide global runtime macro registry.
+    pub fn global() -> &'static MacroRegistry {
+        static GLOBAL_REGISTRY: OnceLock<MacroRegistry> = OnceLock::new();
+        GLOBAL_REGISTRY.get_or_init(MacroRegistry::new)
+    }
+
+    /// Register a custom macro method on a static facade.
+    pub fn register(&self, entry: MacroEntry) -> Result<(), String> {
+        let facade_info = get_static_facade(&entry.facade).ok_or_else(|| {
+            format!(
+                "Fatal Error: Cannot register macro '{}' on unknown or non-facade class '{}'.",
+                entry.method_name, entry.facade
+            )
+        })?;
+
+        if !facade_info.supports_macros {
+            return Err(format!(
+                "Fatal Error: Facade '{}' does not support runtime macro registration.",
+                entry.facade
+            ));
+        }
+
+        if entry.method_name.trim().is_empty() {
+            return Err(format!(
+                "Fatal Error: Invalid macro registration on facade '{}': macro name cannot be empty.",
+                entry.facade
+            ));
+        }
+
+        let mut guard = self
+            .macros
+            .write()
+            .map_err(|_| "MacroRegistry lock poisoned".to_string())?;
+        guard.insert((entry.facade.clone(), entry.method_name.clone()), entry);
+        Ok(())
+    }
+
+    /// Check if a macro is registered on the given facade.
+    pub fn has(&self, facade: &str, method_name: &str) -> bool {
+        self.macros
+            .read()
+            .map(|guard| guard.contains_key(&(facade.to_string(), method_name.to_string())))
+            .unwrap_or(false)
+    }
+
+    /// Retrieve a registered macro entry by facade and method name.
+    pub fn get(&self, facade: &str, method_name: &str) -> Option<MacroEntry> {
+        self.macros
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(&(facade.to_string(), method_name.to_string())).cloned())
+    }
+
+    /// List all macro method names registered for a specific facade.
+    pub fn list_for_facade(&self, facade: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .macros
+            .read()
+            .map(|guard| {
+                guard
+                    .keys()
+                    .filter(|(f, _)| f == facade)
+                    .map(|(_, m)| m.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// Remove all registered macros (used for test isolation and dev-mode hot reload).
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.macros.write() {
+            guard.clear();
+        }
+    }
+}
+
+/// Register a custom macro in the global runtime macro registry.
+pub fn register_macro(
+    facade: &str,
+    method_name: &str,
+    params: Vec<(String, Option<String>)>,
+    body_source: &str,
+) -> Result<(), String> {
+    MacroRegistry::global().register(MacroEntry::new(facade, method_name, params, body_source))
+}
+
+/// Check if a macro is registered on a facade in the global runtime macro registry.
+#[inline]
+pub fn has_macro(facade: &str, method_name: &str) -> bool {
+    MacroRegistry::global().has(facade, method_name)
+}
+
+/// Retrieve a macro definition from the global runtime macro registry.
+#[inline]
+pub fn get_macro(facade: &str, method_name: &str) -> Option<MacroEntry> {
+    MacroRegistry::global().get(facade, method_name)
+}
+
+/// Register a backward-compatible global custom helper function on the `Glob` facade.
+pub fn register_custom_helper(
+    helper_name: &str,
+    params: Vec<(String, Option<String>)>,
+    body_source: &str,
+) -> Result<(), String> {
+    register_macro("Glob", helper_name, params, body_source)
+}
+
+/// Check if a custom global helper is registered on the `Glob` facade.
+#[inline]
+pub fn has_custom_helper(helper_name: &str) -> bool {
+    has_macro("Glob", helper_name)
+}
+
+/// Retrieve a registered custom global helper definition from the `Glob` facade.
+#[inline]
+pub fn get_custom_helper(helper_name: &str) -> Option<MacroEntry> {
+    get_macro("Glob", helper_name)
+}
+
