@@ -5,6 +5,7 @@
 //! - **Production Mode**: Linear IR opcode register VM with Cranelift JIT compilation.
 
 pub mod ast;
+pub mod ir;
 pub mod lexer;
 pub mod parser;
 pub mod type_system;
@@ -15,6 +16,14 @@ pub use ast::{
     Expr, ExprKind, FunctionDecl, Ident, InterfaceDecl, Literal, MatchArm, MethodDecl, Param,
     Program, PropertyDecl, Stmt, StmtKind, StringPart, SwitchCase, TraitDecl, TypeHint,
     TypeHintKind, UnaryOp, Variable, Visibility, ASTKind, ASTNode,
+};
+pub use ir::{
+    compile_source, compile_source_with_file_id, compile_to_bytecode, lower_program,
+    lower_typed_program, BytecodeChunk, CatchTarget, ClassId, CompilationError, CompiledClass,
+    CompiledClassConst, CompiledEnum, CompiledEnumCase, CompiledFunction, CompiledInterface,
+    CompiledParam, CompiledProperty, Constant, ConstantId, ExceptionHandler, FunctionId,
+    IrCollectionKind, IrError, IrErrorKind, IrLowerer, IrModule, IrUnaryOp, OpCode, Reg,
+    RegisterInfo,
 };
 pub use lexer::{
     error::{LexError, SpannedLexError},
