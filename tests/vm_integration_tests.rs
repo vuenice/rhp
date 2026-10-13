@@ -474,3 +474,48 @@ fn test_unhandled_match_error_and_division_by_zero_diagnostics() {
         .expect_err("Division by zero must error");
     assert_eq!(err.kind, RuntimeErrorKind::DivisionByZero);
 }
+
+#[test]
+fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
+    use rhp::vm::value::{RhpString, VmObject};
+
+    // 1. Verify i32 and f32 default runtime values and operations
+    let source = r#"
+        $intVal = 42;
+        $floatVal = 3.5;
+        $divFloat = 7 / 2;
+        $divInt = 8 / 2;
+        $addFloat = $intVal + $floatVal;
+    "#;
+    let (vm, _) = run_source_with_vm(source).expect("Execution should pass");
+    assert_eq!(vm.get_main_variable("$intVal"), Some(&PhpValue::Int(42_i32)));
+    assert_eq!(vm.get_main_variable("$floatVal"), Some(&PhpValue::Float(3.5_f32)));
+    assert_eq!(vm.get_main_variable("$divFloat"), Some(&PhpValue::Float(3.5_f32)));
+    assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i32)));
+    assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f32)));
+
+    // 2. Verify Small-String-Optimization (SSO) on RhpString
+    let short_s = RhpString::new("small_string");
+    assert!(matches!(short_s, RhpString::Inline { len: 12, .. }));
+    assert_eq!(short_s.as_str(), "small_string");
+
+    let long_s = RhpString::new("this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
+    assert!(matches!(long_s, RhpString::Heap(_)));
+    assert_eq!(long_s.as_str(), "this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
+
+    // 3. Verify Shape-based slot indexing on VmObject
+    let mut obj = VmObject::new("User");
+    obj.set_property("id", PhpValue::Int(1_i32));
+    obj.set_property("status", PhpValue::string("active"));
+
+    assert_eq!(obj.slots.len(), 2);
+    assert_eq!(obj.slots[0], PhpValue::Int(1_i32));
+    assert_eq!(obj.slots[1], PhpValue::string("active"));
+    assert_eq!(obj.get_property("id"), Some(&PhpValue::Int(1_i32)));
+    assert_eq!(obj.get_property("status"), Some(&PhpValue::string("active")));
+
+    let shape = obj.shape.borrow();
+    assert_eq!(shape.property_indices.get("id"), Some(&0));
+    assert_eq!(shape.property_indices.get("status"), Some(&1));
+}
+

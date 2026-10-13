@@ -70,7 +70,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "length" => {
             let s = get_arg_str(args, 0, "Str::length")?;
-            Ok(PhpValue::Int(s.chars().count() as i64))
+            Ok(PhpValue::Int(s.chars().count() as i32))
         }
         "upper" => {
             let s = get_arg_str(args, 0, "Str::upper")?;
@@ -199,7 +199,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(PhpValue::HashMap(m)) => m.borrow().len(),
                 _ => 0,
             };
-            Ok(PhpValue::Int(cnt as i64))
+            Ok(PhpValue::Int(cnt as i32))
         }
         "merge" => {
             let mut merged = Vec::new();
@@ -229,7 +229,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                     .collect(),
                 Some(PhpValue::HashMap(m)) => m.borrow().iter().map(|(k, _)| k.clone()).collect(),
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => (0..a.borrow().len())
-                    .map(|i| PhpValue::Int(i as i64))
+                    .map(|i| PhpValue::Int(i as i32))
                     .collect(),
                 _ => Vec::new(),
             };
@@ -602,7 +602,7 @@ fn extract_map_elements(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
             .borrow()
             .iter()
             .enumerate()
-            .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
+            .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
             .collect(),
         _ => Vec::new(),
     }

@@ -3,28 +3,253 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ir::opcode::FunctionId;
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 
+/// Maximum byte length for an inlined Small String (SSO).
+pub const SSO_CAPACITY: usize = 23;
+
+/// Small-String-Optimized (SSO) string representation inspired by Bun and JavaScriptCore.
+///
+/// Strings with length <= 23 bytes are stored inline on the stack with zero heap allocations.
+/// Larger strings fall back to reference-counted heap buffers (`Rc<String>`).
+#[derive(Clone)]
+pub enum RhpString {
+    Inline { len: u8, buf: [u8; SSO_CAPACITY] },
+    Heap(Rc<String>),
+}
+
+impl RhpString {
+    #[inline]
+    pub fn new(s: &str) -> Self {
+        let len = s.len();
+        if len <= SSO_CAPACITY {
+            let mut buf = [0u8; SSO_CAPACITY];
+            buf[..len].copy_from_slice(s.as_bytes());
+            Self::Inline {
+                len: len as u8,
+                buf,
+            }
+        } else {
+            Self::Heap(Rc::new(s.to_string()))
+        }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Inline { len, buf } => {
+                // Safety: bytes originated from a valid UTF-8 &str
+                unsafe { std::str::from_utf8_unchecked(&buf[..*len as usize]) }
+            }
+            Self::Heap(rc) => rc.as_str(),
+        }
+    }
+}
+
+impl Deref for RhpString {
+    type Target = str;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for RhpString {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for RhpString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl fmt::Debug for RhpString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
+impl PartialEq for RhpString {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<str> for RhpString {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for RhpString {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl Eq for RhpString {}
+
+impl PartialOrd for RhpString {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RhpString {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl Hash for RhpString {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl From<&str> for RhpString {
+    #[inline]
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for RhpString {
+    #[inline]
+    fn from(s: String) -> Self {
+        if s.len() <= SSO_CAPACITY {
+            Self::new(&s)
+        } else {
+            Self::Heap(Rc::new(s))
+        }
+    }
+}
+
+impl From<Rc<String>> for RhpString {
+    #[inline]
+    fn from(rc: Rc<String>) -> Self {
+        if rc.len() <= SSO_CAPACITY {
+            Self::new(&rc)
+        } else {
+            Self::Heap(rc)
+        }
+    }
+}
+
+/// Object Shape (Hidden Class) structure inspired by Bun & JavaScriptCore.
+///
+/// Maps property names to contiguous vector slot indices, allowing
+/// predictable O(1) indexed property lookups instead of hash map bucket traversals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shape {
+    pub id: u32,
+    pub property_indices: HashMap<String, usize>,
+    pub readonly_flags: HashMap<String, bool>,
+}
+
+impl Shape {
+    pub fn new() -> Self {
+        Self {
+            id: 0,
+            property_indices: HashMap::new(),
+            readonly_flags: HashMap::new(),
+        }
+    }
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Runtime object representation with Shape-based slot indexing (Hidden Classes).
+#[derive(Debug, Clone)]
+pub struct VmObject {
+    pub class_name: String,
+    pub shape: Rc<RefCell<Shape>>,
+    pub slots: Vec<PhpValue>,
+    pub properties: HashMap<String, PhpValue>,
+    pub readonly_props: HashMap<String, bool>,
+}
+
+impl VmObject {
+    pub fn new(class_name: impl Into<String>) -> Self {
+        Self {
+            class_name: class_name.into(),
+            shape: Rc::new(RefCell::new(Shape::new())),
+            slots: Vec::new(),
+            properties: HashMap::new(),
+            readonly_props: HashMap::new(),
+        }
+    }
+
+    #[inline]
+    pub fn get_property(&self, name: &str) -> Option<&PhpValue> {
+        let shape = self.shape.borrow();
+        if let Some(&idx) = shape.property_indices.get(name) {
+            if idx < self.slots.len() {
+                return self.slots.get(idx);
+            }
+        }
+        self.properties.get(name)
+    }
+
+    pub fn set_property(&mut self, name: impl Into<String>, value: PhpValue) {
+        let name_str = name.into();
+        {
+            let mut shape = self.shape.borrow_mut();
+            if let Some(&idx) = shape.property_indices.get(&name_str) {
+                if idx < self.slots.len() {
+                    self.slots[idx] = value.clone();
+                }
+            } else {
+                let next_idx = self.slots.len();
+                shape.property_indices.insert(name_str.clone(), next_idx);
+                self.slots.push(value.clone());
+            }
+        }
+        self.properties.insert(name_str, value);
+    }
+
+    pub fn set_readonly(&mut self, name: impl Into<String>, is_ro: bool) {
+        let name_str = name.into();
+        self.shape.borrow_mut().readonly_flags.insert(name_str.clone(), is_ro);
+        self.readonly_props.insert(name_str, is_ro);
+    }
+}
+
 /// Unified core runtime value enum representing all primitive and complex RHP values.
 ///
 /// Implements Technical Point #7 of the RHP Architecture Specification:
-/// - Represents primitive scalars directly with zero heap indirection (`Null`, `Bool`, `Int`, `Float`, etc.).
+/// - Represents primitive scalars directly with zero heap indirection (`Null`, `Bool`, `Int`, `Float`).
+/// - Standard integer defaults to `i32` and standard float defaults to `f32`.
 /// - Native Rust numeric subtypes (`i8`..`u128`, `f32`, `f64`) are held with exact bit-level precision.
-/// - Strings utilize Copy-On-Write semantics via `Rc<String>` / reference-counted buffers.
-/// - Standard arrays and subtyped collections (`Arr::list`, `Arr::dict`, `Arr::set`, `Arr::hashMap`)
-///   are heap-allocated with reference-counting and copy-on-write clone behavior.
+/// - Strings utilize Small-String-Optimization (`RhpString`) for zero heap allocations on <= 23 bytes.
+/// - Standard arrays and subtyped collections are heap-allocated with reference-counting.
 /// - Objects, Closures, and Futures pass by reference handles (`Rc<RefCell<...>>`).
 #[derive(Clone, Default)]
 pub enum PhpValue {
     #[default]
     Null,
     Bool(bool),
-    Int(i64),
-    Float(f64),
+    Int(i32),
+    Float(f32),
     RustInt {
         kind: RustIntKind,
         value: i128,
@@ -33,7 +258,7 @@ pub enum PhpValue {
         kind: RustFloatKind,
         value: f64,
     },
-    String(Rc<String>),
+    String(RhpString),
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
     Dict(Rc<RefCell<Vec<(String, PhpValue)>>>),
@@ -43,32 +268,6 @@ pub enum PhpValue {
     Closure(Rc<VmClosure>),
     Future(Rc<RefCell<VmFuture>>),
     Resource(Arc<dyn std::any::Any + Send + Sync>),
-}
-
-/// Runtime object representation storing class name, properties, and readonly flags.
-#[derive(Debug, Clone)]
-pub struct VmObject {
-    pub class_name: String,
-    pub properties: HashMap<String, PhpValue>,
-    pub readonly_props: HashMap<String, bool>,
-}
-
-impl VmObject {
-    pub fn new(class_name: impl Into<String>) -> Self {
-        Self {
-            class_name: class_name.into(),
-            properties: HashMap::new(),
-            readonly_props: HashMap::new(),
-        }
-    }
-
-    pub fn get_property(&self, name: &str) -> Option<&PhpValue> {
-        self.properties.get(name)
-    }
-
-    pub fn set_property(&mut self, name: impl Into<String>, value: PhpValue) {
-        self.properties.insert(name.into(), value);
-    }
 }
 
 /// Runtime closure and arrow-function handle referencing a compiled function and captured upvalues.
@@ -112,8 +311,8 @@ impl PhpValue {
     // =========================================================================
 
     #[inline]
-    pub fn string(s: impl Into<String>) -> Self {
-        Self::String(Rc::new(s.into()))
+    pub fn string(s: impl Into<RhpString>) -> Self {
+        Self::String(s.into())
     }
 
     #[inline]
@@ -209,9 +408,21 @@ impl PhpValue {
         }
     }
 
-    pub fn to_i64(&self) -> Option<i64> {
+    pub fn to_i32(&self) -> Option<i32> {
         match self {
             Self::Int(n) => Some(*n),
+            Self::Bool(b) => Some(if *b { 1 } else { 0 }),
+            Self::Float(f) => Some(*f as i32),
+            Self::RustInt { value, .. } => Some(*value as i32),
+            Self::RustFloat { value, .. } => Some(*value as i32),
+            Self::String(s) => s.trim().parse::<i32>().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn to_i64(&self) -> Option<i64> {
+        match self {
+            Self::Int(n) => Some(*n as i64),
             Self::Bool(b) => Some(if *b { 1 } else { 0 }),
             Self::Float(f) => Some(*f as i64),
             Self::RustInt { value, .. } => Some(*value as i64),
@@ -221,9 +432,21 @@ impl PhpValue {
         }
     }
 
-    pub fn to_f64(&self) -> Option<f64> {
+    pub fn to_f32(&self) -> Option<f32> {
         match self {
             Self::Float(f) => Some(*f),
+            Self::Int(n) => Some(*n as f32),
+            Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Self::RustInt { value, .. } => Some(*value as f32),
+            Self::RustFloat { value, .. } => Some(*value as f32),
+            Self::String(s) => s.trim().parse::<f32>().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn to_f64(&self) -> Option<f64> {
+        match self {
+            Self::Float(f) => Some(*f as f64),
             Self::Int(n) => Some(*n as f64),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Self::RustInt { value, .. } => Some(*value as f64),
@@ -247,7 +470,7 @@ impl PhpValue {
             }
             Self::RustInt { value, .. } => value.to_string(),
             Self::RustFloat { value, .. } => value.to_string(),
-            Self::String(s) => (**s).clone(),
+            Self::String(s) => s.to_string(),
             Self::Array(_) => "Array".to_string(),
             Self::List(_) => "Arr::list".to_string(),
             Self::Dict(_) => "Arr::dict".to_string(),
@@ -356,14 +579,14 @@ impl PartialEq for PhpValue {
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Int(a), Self::Int(b)) => a == b,
             (Self::Float(a), Self::Float(b)) => a == b,
-            (Self::Int(a), Self::Float(b)) => (*a as f64) == *b,
-            (Self::Float(a), Self::Int(b)) => *a == (*b as f64),
+            (Self::Int(a), Self::Float(b)) => (*a as f32) == *b,
+            (Self::Float(a), Self::Int(b)) => *a == (*b as f32),
             (Self::RustInt { value: a, .. }, Self::RustInt { value: b, .. }) => a == b,
             (Self::RustInt { value: a, .. }, Self::Int(b)) => *a == (*b as i128),
             (Self::Int(a), Self::RustInt { value: b, .. }) => (*a as i128) == *b,
             (Self::RustFloat { value: a, .. }, Self::RustFloat { value: b, .. }) => a == b,
-            (Self::RustFloat { value: a, .. }, Self::Float(b)) => a == b,
-            (Self::Float(a), Self::RustFloat { value: b, .. }) => a == b,
+            (Self::RustFloat { value: a, .. }, Self::Float(b)) => (*a as f32) == *b,
+            (Self::Float(a), Self::RustFloat { value: b, .. }) => *a == (*b as f32),
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Array(a) | Self::List(a), Self::Array(b) | Self::List(b)) => {
                 *a.borrow() == *b.borrow()
@@ -384,8 +607,8 @@ impl PartialOrd for PhpValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
-            (Self::Int(a), Self::Float(b)) => (*a as f64).partial_cmp(b),
-            (Self::Float(a), Self::Int(b)) => a.partial_cmp(&(*b as f64)),
+            (Self::Int(a), Self::Float(b)) => (*a as f32).partial_cmp(b),
+            (Self::Float(a), Self::Int(b)) => a.partial_cmp(&(*b as f32)),
             (Self::RustInt { value: a, .. }, Self::RustInt { value: b, .. }) => a.partial_cmp(b),
             (Self::RustInt { value: a, .. }, Self::Int(b)) => a.partial_cmp(&(*b as i128)),
             (Self::Int(a), Self::RustInt { value: b, .. }) => (*a as i128).partial_cmp(b),

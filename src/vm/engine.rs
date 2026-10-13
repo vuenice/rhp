@@ -210,7 +210,7 @@ impl VM {
                 let backing_val = if let Some(ref chunk) = case.value_chunk {
                     self.eval_isolated_chunk(chunk)?
                 } else {
-                    PhpValue::Int(idx as i64)
+                    PhpValue::Int(idx as i32)
                 };
                 let mut case_obj = VmObject::new(enm.name.clone());
                 case_obj.set_property("name", PhpValue::string(case.name.clone()));
@@ -239,7 +239,7 @@ impl VM {
             match op {
                 OpCode::LoadNull { dst } => regs[dst.index()] = PhpValue::Null,
                 OpCode::LoadBool { dst, value } => regs[dst.index()] = PhpValue::Bool(value),
-                OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value as i64),
+                OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value),
                 OpCode::LoadConst { dst, const_id } => {
                     let c = chunk.get_constant(const_id).ok_or_else(|| {
                         RuntimeError::new(
@@ -318,7 +318,7 @@ impl VM {
                 }
 
                 OpCode::LoadInt { dst, value } => {
-                    self.registers[base_reg + dst.index()] = PhpValue::Int(value as i64);
+                    self.registers[base_reg + dst.index()] = PhpValue::Int(value);
                 }
 
                 OpCode::LoadConst { dst, const_id } => {
@@ -373,7 +373,7 @@ impl VM {
                     let current = &self.registers[base_reg + src.index()];
                     let updated = match current {
                         PhpValue::Int(n) => PhpValue::Int(n.wrapping_add(delta)),
-                        PhpValue::Float(f) => PhpValue::Float(*f + (delta as f64)),
+                        PhpValue::Float(f) => PhpValue::Float(*f + (delta as f32)),
                         PhpValue::RustInt { kind, value } => PhpValue::RustInt {
                             kind: *kind,
                             value: value.wrapping_add(delta as i128),
@@ -384,7 +384,7 @@ impl VM {
                         },
                         PhpValue::Null => PhpValue::Int(if is_inc { 1 } else { 0 }),
                         other => {
-                            let n = other.to_i64().unwrap_or(0);
+                            let n = other.to_i32().unwrap_or(0);
                             PhpValue::Int(n.wrapping_add(delta))
                         }
                     };
@@ -394,8 +394,8 @@ impl VM {
                 OpCode::Cast { dst, kind, src } => {
                     let val = self.registers[base_reg + src.index()].clone();
                     let casted = match kind {
-                        CastType::Int => PhpValue::Int(val.to_i64().unwrap_or(0)),
-                        CastType::Float => PhpValue::Float(val.to_f64().unwrap_or(0.0)),
+                        CastType::Int => PhpValue::Int(val.to_i32().unwrap_or(0)),
+                        CastType::Float => PhpValue::Float(val.to_f32().unwrap_or(0.0)),
                         CastType::String => PhpValue::string(val.to_php_string()),
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
                         CastType::Array => match val {
@@ -447,7 +447,7 @@ impl VM {
                     // Coerce `Int` into `Float` if the boundary explicitly expects `float`
                     if matches!(expected_ty, RhpType::Float) {
                         if let PhpValue::Int(n) = actual_val {
-                            self.registers[base_reg + reg.index()] = PhpValue::Float(*n as f64);
+                            self.registers[base_reg + reg.index()] = PhpValue::Float(*n as f32);
                         }
                     }
                 }
@@ -593,7 +593,7 @@ impl VM {
                         }
                         PhpValue::HashMap(map) => {
                             let mut b = map.borrow_mut();
-                            let next_key = PhpValue::Int(b.len() as i64);
+                            let next_key = PhpValue::Int(b.len() as i32);
                             b.push((next_key, val));
                         }
                         other => {
@@ -764,7 +764,7 @@ impl VM {
                             .borrow()
                             .iter()
                             .enumerate()
-                            .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
+                            .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
                             .collect(),
                         PhpValue::Dict(dict) => dict
                             .borrow()
@@ -1689,7 +1689,7 @@ impl VM {
                         for (idx, item) in items.into_iter().enumerate() {
                             mapped.push(self.invoke_closure_sync(
                                 cb,
-                                vec![item, PhpValue::Int(idx as i64)],
+                                vec![item, PhpValue::Int(idx as i32)],
                                 span,
                             )?);
                         }
@@ -1704,7 +1704,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let keep = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
                                     span,
                                 )?;
                                 if keep.is_truthy() {
@@ -1757,7 +1757,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 out.push(self.invoke_closure_sync(
                                     cb,
-                                    vec![item, PhpValue::Int(idx as i64)],
+                                    vec![item, PhpValue::Int(idx as i32)],
                                     span,
                                 )?);
                             }
@@ -1772,7 +1772,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let keep = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
                                     span,
                                 )?;
                                 if keep.is_truthy() {
@@ -1790,7 +1790,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let drop = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
                                     span,
                                 )?;
                                 if !drop.is_truthy() {
@@ -1816,7 +1816,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
                                     span,
                                 )?;
                                 if matched.is_truthy() {
@@ -1826,7 +1826,7 @@ impl VM {
                         }
                         Ok(PhpValue::Null)
                     }
-                    "count" | "size" => Ok(PhpValue::Int(items.len() as i64)),
+                    "count" | "size" => Ok(PhpValue::Int(items.len() as i32)),
                     "isEmpty" => Ok(PhpValue::Bool(items.is_empty())),
                     "first" => Ok(items.into_iter().next().unwrap_or(PhpValue::Null)),
                     "last" => Ok(items.into_iter().last().unwrap_or(PhpValue::Null)),
@@ -1887,8 +1887,8 @@ impl VM {
                         value.wrapping_div(rhs)
                     }
                     "abs" => value.abs(),
-                    "toInt" => return Ok(PhpValue::Int(*value as i64)),
-                    "toFloat" => return Ok(PhpValue::Float(*value as f64)),
+                    "toInt" => return Ok(PhpValue::Int(*value as i32)),
+                    "toFloat" => return Ok(PhpValue::Float(*value as f32)),
                     "toString" => return Ok(PhpValue::string(value.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -1929,7 +1929,7 @@ impl VM {
                     "floor" => val.floor(),
                     "ceil" => val.ceil(),
                     "abs" => val.abs(),
-                    "toInt" => return Ok(PhpValue::Int(val as i64)),
+                    "toInt" => return Ok(PhpValue::Int(val as i32)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -1949,11 +1949,11 @@ impl VM {
 
             PhpValue::Float(value) => {
                 let val = *value;
-                let rhs = args.first().and_then(|v| v.to_f64()).unwrap_or(1.0);
+                let rhs = args.first().and_then(|v| v.to_f32()).unwrap_or(1.0);
                 let next_val = match method {
                     "toDecimal" | "round" => {
-                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(2).clamp(0, 15) as i32;
-                        let factor = 10_f64.powi(places);
+                        let places = args.first().and_then(|v| v.to_i32()).unwrap_or(2).clamp(0, 15);
+                        let factor = 10_f32.powi(places);
                         (val * factor).round() / factor
                     }
                     "add" => val + rhs,
@@ -1968,7 +1968,7 @@ impl VM {
                     "floor" => val.floor(),
                     "ceil" => val.ceil(),
                     "abs" => val.abs(),
-                    "toInt" => return Ok(PhpValue::Int(val as i64)),
+                    "toInt" => return Ok(PhpValue::Int(val as i32)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -2317,9 +2317,9 @@ impl VM {
                 | PhpValue::RustInt { .. }
                 | PhpValue::RustFloat { .. } => Ok(src.clone()),
                 other => {
-                    if let Some(i) = other.to_i64() {
+                    if let Some(i) = other.to_i32() {
                         Ok(PhpValue::Int(i))
-                    } else if let Some(f) = other.to_f64() {
+                    } else if let Some(f) = other.to_f32() {
                         Ok(PhpValue::Float(f))
                     } else {
                         Err(self.make_error(
@@ -2344,7 +2344,7 @@ impl VM {
                     value: -*value,
                 }),
                 other => {
-                    if let Some(i) = other.to_i64() {
+                    if let Some(i) = other.to_i32() {
                         Ok(PhpValue::Int(-i))
                     } else {
                         Err(self.make_error(
@@ -2359,7 +2359,7 @@ impl VM {
             },
             IrUnaryOp::Not => Ok(PhpValue::Bool(!src.is_truthy())),
             IrUnaryOp::BitNot => {
-                if let Some(n) = src.to_i64() {
+                if let Some(n) = src.to_i32() {
                     Ok(PhpValue::Int(!n))
                 } else {
                     Err(self.make_error(
@@ -2398,7 +2398,7 @@ impl VM {
                 );
 
                 if involves_float {
-                    let a = lhs.to_f64().ok_or_else(|| {
+                    let a = lhs.to_f32().ok_or_else(|| {
                         self.make_error(
                             RuntimeErrorKind::InvalidBinaryOperands {
                                 op: op.to_string(),
@@ -2408,7 +2408,7 @@ impl VM {
                             span,
                         )
                     })?;
-                    let b = rhs.to_f64().ok_or_else(|| {
+                    let b = rhs.to_f32().ok_or_else(|| {
                         self.make_error(
                             RuntimeErrorKind::InvalidBinaryOperands {
                                 op: op.to_string(),
@@ -2440,7 +2440,7 @@ impl VM {
                     };
                     Ok(PhpValue::Float(res))
                 } else {
-                    let a = lhs.to_i64().ok_or_else(|| {
+                    let a = lhs.to_i32().ok_or_else(|| {
                         self.make_error(
                             RuntimeErrorKind::InvalidBinaryOperands {
                                 op: op.to_string(),
@@ -2450,7 +2450,7 @@ impl VM {
                             span,
                         )
                     })?;
-                    let b = rhs.to_i64().ok_or_else(|| {
+                    let b = rhs.to_i32().ok_or_else(|| {
                         self.make_error(
                             RuntimeErrorKind::InvalidBinaryOperands {
                                 op: op.to_string(),
@@ -2472,7 +2472,7 @@ impl VM {
                             if a % b == 0 {
                                 Ok(PhpValue::Int(a / b))
                             } else {
-                                Ok(PhpValue::Float((a as f64) / (b as f64)))
+                                Ok(PhpValue::Float((a as f32) / (b as f32)))
                             }
                         }
                         BinaryOp::Mod => {
@@ -2485,7 +2485,7 @@ impl VM {
                             if b >= 0 {
                                 Ok(PhpValue::Int(a.wrapping_pow(b as u32)))
                             } else {
-                                Ok(PhpValue::Float((a as f64).powf(b as f64)))
+                                Ok(PhpValue::Float((a as f32).powf(b as f32)))
                             }
                         }
                         _ => unreachable!(),
@@ -2495,8 +2495,8 @@ impl VM {
 
             // Bitwise operators
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
-                let a = lhs.to_i64().unwrap_or(0);
-                let b = rhs.to_i64().unwrap_or(0);
+                let a = lhs.to_i32().unwrap_or(0);
+                let b = rhs.to_i32().unwrap_or(0);
                 let res = match op {
                     BinaryOp::BitAnd => a & b,
                     BinaryOp::BitOr => a | b,
@@ -2595,7 +2595,7 @@ impl VM {
                 true
             }
             (PhpValue::Int(i), PhpValue::String(s)) | (PhpValue::String(s), PhpValue::Int(i)) => {
-                s.trim().parse::<i64>().ok() == Some(*i)
+                s.trim().parse::<i32>().ok() == Some(*i)
             }
             _ => false,
         }
@@ -2617,8 +2617,17 @@ impl VM {
         match c {
             Constant::Null => PhpValue::Null,
             Constant::Bool(b) => PhpValue::Bool(*b),
-            Constant::Int(n) => PhpValue::Int(*n),
-            Constant::Float(f) => PhpValue::Float(*f),
+            Constant::Int(n) => {
+                if let Ok(narrow) = i32::try_from(*n) {
+                    PhpValue::Int(narrow)
+                } else {
+                    PhpValue::RustInt {
+                        kind: RustIntKind::I64,
+                        value: *n as i128,
+                    }
+                }
+            }
+            Constant::Float(f) => PhpValue::Float(*f as f32),
             Constant::RustInt { kind, value } => PhpValue::RustInt {
                 kind: *kind,
                 value: *value,
@@ -2689,7 +2698,7 @@ impl VM {
                 .borrow()
                 .iter()
                 .enumerate()
-                .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
+                .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
                 .collect(),
             _ => Vec::new(),
         }

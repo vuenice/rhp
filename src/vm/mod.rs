@@ -128,8 +128,17 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Literal(lit) => match lit {
             Literal::Null => Ok(PhpValue::Null),
             Literal::Bool(b) => Ok(PhpValue::Bool(*b)),
-            Literal::Int { value, .. } => Ok(PhpValue::Int(*value)),
-            Literal::Float { value, .. } => Ok(PhpValue::Float(*value)),
+            Literal::Int { value, .. } => {
+                if let Ok(narrow) = i32::try_from(*value) {
+                    Ok(PhpValue::Int(narrow))
+                } else {
+                    Ok(PhpValue::RustInt {
+                        kind: crate::type_system::types::RustIntKind::I64,
+                        value: *value as i128,
+                    })
+                }
+            }
+            Literal::Float { value, .. } => Ok(PhpValue::Float(*value as f32)),
             Literal::String { value, .. } => Ok(PhpValue::string(value.clone())),
             Literal::InterpolatedString { parts, .. } => {
                 let mut out = String::new();
@@ -149,10 +158,10 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Unary { op, expr: inner, .. } => {
             let v = eval_expr(inner, env)?;
             match op {
-                UnaryOp::Plus => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
-                UnaryOp::Neg => Ok(PhpValue::Int(-v.to_i64().unwrap_or(0))),
+                UnaryOp::Plus => Ok(PhpValue::Int(v.to_i32().unwrap_or(0))),
+                UnaryOp::Neg => Ok(PhpValue::Int(-v.to_i32().unwrap_or(0))),
                 UnaryOp::Not => Ok(PhpValue::Bool(!v.is_truthy())),
-                UnaryOp::BitNot => Ok(PhpValue::Int(!v.to_i64().unwrap_or(0))),
+                UnaryOp::BitNot => Ok(PhpValue::Int(!v.to_i32().unwrap_or(0))),
                 _ => Ok(v),
             }
         }
@@ -161,20 +170,24 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             let rhs = eval_expr(right, env)?;
             match op {
                 BinaryOp::Add => Ok(PhpValue::Int(
-                    lhs.to_i64().unwrap_or(0) + rhs.to_i64().unwrap_or(0),
+                    lhs.to_i32().unwrap_or(0).wrapping_add(rhs.to_i32().unwrap_or(0)),
                 )),
                 BinaryOp::Sub => Ok(PhpValue::Int(
-                    lhs.to_i64().unwrap_or(0) - rhs.to_i64().unwrap_or(0),
+                    lhs.to_i32().unwrap_or(0).wrapping_sub(rhs.to_i32().unwrap_or(0)),
                 )),
                 BinaryOp::Mul => Ok(PhpValue::Int(
-                    lhs.to_i64().unwrap_or(0) * rhs.to_i64().unwrap_or(0),
+                    lhs.to_i32().unwrap_or(0).wrapping_mul(rhs.to_i32().unwrap_or(0)),
                 )),
                 BinaryOp::Div => {
-                    let b = rhs.to_i64().unwrap_or(0);
+                    let b = rhs.to_i32().unwrap_or(0);
                     if b == 0 {
                         return Err(RuntimeError::new(RuntimeErrorKind::DivisionByZero, node.span));
                     }
-                    Ok(PhpValue::Int(lhs.to_i64().unwrap_or(0) / b))
+                    if lhs.to_i32().unwrap_or(0) % b == 0 {
+                        Ok(PhpValue::Int(lhs.to_i32().unwrap_or(0) / b))
+                    } else {
+                        Ok(PhpValue::Float((lhs.to_i32().unwrap_or(0) as f32) / (b as f32)))
+                    }
                 }
                 BinaryOp::Concat => Ok(PhpValue::string(format!(
                     "{}{}",
@@ -203,8 +216,8 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Cast { kind, expr: inner } => {
             let v = eval_expr(inner, env)?;
             match kind {
-                CastType::Int => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
-                CastType::Float => Ok(PhpValue::Float(v.to_f64().unwrap_or(0.0))),
+                CastType::Int => Ok(PhpValue::Int(v.to_i32().unwrap_or(0))),
+                CastType::Float => Ok(PhpValue::Float(v.to_f32().unwrap_or(0.0))),
                 CastType::String => Ok(PhpValue::string(v.to_php_string())),
                 CastType::Bool => Ok(PhpValue::Bool(v.is_truthy())),
                 _ => Ok(v),
