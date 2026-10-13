@@ -107,7 +107,10 @@ pub fn execute(
 ) -> Result<Value, RuntimeError> {
     match mode {
         RunMode::Dev { .. } => eval_expr(ast, env),
-        RunMode::Build { jit_enabled, .. } => {
+        RunMode::Build {
+            jit_enabled,
+            opt_level,
+        } => {
             let bytecode = compile_to_bytecode(ast).map_err(|ir_err| {
                 RuntimeError::new(
                     RuntimeErrorKind::Custom {
@@ -116,7 +119,11 @@ pub fn execute(
                     ir_err.span,
                 )
             })?;
-            VM::new(bytecode, jit_enabled).run()
+            let mut vm = VM::new(bytecode, jit_enabled);
+            if jit_enabled {
+                vm = vm.with_jit_config(crate::jit::JitConfig::new().with_opt_level(opt_level));
+            }
+            vm.run()
         }
     }
 }

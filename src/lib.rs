@@ -6,6 +6,7 @@
 
 pub mod ast;
 pub mod ir;
+pub mod jit;
 pub mod lexer;
 pub mod parser;
 pub mod type_system;
@@ -49,6 +50,10 @@ pub use type_system::{
     EnumTypeInfo, FrontendError, FunctionSignature, InterfaceTypeInfo, ParamSignature,
     PropertyTypeInfo, RhpType, RustFloatKind, RustIntKind, TypeCheckResult, TypeChecker,
     TypeEnvironment, TypeError, TypeErrorKind, TypeHierarchy, TypedProgram, VariableBinding,
+};
+pub use jit::{
+    CompiledFunctionFn, CompiledLoopFn, JitCompiler, JitConfig, JitEngine, JitError, NativeFrame,
+    NativeSlot, TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_NULL, TAG_OTHER,
 };
 pub use vm::{
     dispatch_facade_call, eval_expr, execute, run_expr, run_module, run_source,

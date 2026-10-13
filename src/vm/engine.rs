@@ -8,6 +8,7 @@ use crate::ir::opcode::{
     BytecodeChunk, Constant, FunctionId, IrCollectionKind, IrUnaryOp, OpCode,
 };
 use crate::ir::IrModule;
+use crate::jit::{JitConfig, JitEngine};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
@@ -92,6 +93,8 @@ pub struct VM {
     type_hierarchy: Option<TypeHierarchy>,
     /// Maximum allowed call frame depth.
     max_call_depth: usize,
+    /// Cranelift JIT compiler backend for hot loops and functions.
+    jit_engine: Option<JitEngine>,
 }
 
 impl VM {
@@ -99,6 +102,11 @@ impl VM {
     pub fn new(bytecode: impl Into<IrModule>, jit_enabled: bool) -> Self {
         let module = bytecode.into();
         let initial_regs = (module.main_chunk.num_registers as usize).max(64);
+        let jit_engine = if jit_enabled {
+            Some(JitEngine::new(JitConfig::new().with_enabled(true)))
+        } else {
+            None
+        };
         Self {
             module,
             jit_enabled,
@@ -113,7 +121,29 @@ impl VM {
             defer_queue: Vec::new(),
             type_hierarchy: None,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH,
+            jit_engine,
         }
+    }
+
+    /// Configure the Cranelift JIT engine parameters for this VM instance.
+    pub fn with_jit_config(mut self, config: JitConfig) -> Self {
+        self.jit_enabled = config.enabled;
+        self.jit_engine = if config.enabled {
+            Some(JitEngine::new(config))
+        } else {
+            None
+        };
+        self
+    }
+
+    /// Access the Cranelift [`JitEngine`] reference if initialized.
+    pub fn jit_engine(&self) -> Option<&JitEngine> {
+        self.jit_engine.as_ref()
+    }
+
+    /// Access the Cranelift [`JitEngine`] mutable reference if initialized.
+    pub fn jit_engine_mut(&mut self) -> Option<&mut JitEngine> {
+        self.jit_engine.as_mut()
     }
 
     /// Attach a [`TypeHierarchy`] from the type checker for full class/interface subtype verification at runtime.
@@ -144,6 +174,44 @@ impl VM {
     pub fn get_global(&self, name: &str) -> Option<&PhpValue> {
         let bare = name.strip_prefix('$').unwrap_or(name);
         self.globals.get(bare)
+    }
+
+    /// Check whether a loop backedge has exceeded hotness thresholds and conditionally
+    /// compile and execute the loop body natively via Cranelift.
+    fn check_and_run_hot_loop(
+        &mut self,
+        frame_idx: usize,
+        header_ip: u32,
+        backedge_ip: u32,
+    ) -> bool {
+        if self.jit_engine.is_none() {
+            return false;
+        }
+        let func_id = self.frames[frame_idx].func_id;
+        let chunk = match func_id {
+            Some(fid) => &self.module.functions[fid.index()].chunk,
+            None => &self.module.main_chunk,
+        };
+        let maybe_loop = self
+            .jit_engine
+            .as_mut()
+            .unwrap()
+            .record_backedge(func_id, header_ip, backedge_ip, chunk);
+
+        if let Some(compiled_loop) = maybe_loop {
+            let base_reg = self.frames[frame_idx].base_reg;
+            let num_regs = self.frames[frame_idx].num_registers;
+            let reg_slice = &mut self.registers[base_reg..base_reg + num_regs];
+            let next_ip = self
+                .jit_engine
+                .as_mut()
+                .unwrap()
+                .execute_loop(compiled_loop, reg_slice);
+            self.frames[frame_idx].ip = next_ip as usize;
+            true
+        } else {
+            false
+        }
     }
 
     /// Pre-initialize class constants, static property defaults, and enum cases, then execute
@@ -290,6 +358,40 @@ impl VM {
             let ip = self.frames[frame_idx].ip;
             let func_id = self.frames[frame_idx].func_id;
             let base_reg = self.frames[frame_idx].base_reg;
+
+            // Check for hot function compilation and execution if entering a function frame
+            if ip == 0 && func_id.is_some() && self.jit_engine.is_some() {
+                if let Some(fid) = func_id {
+                    let chunk = &self.module.functions[fid.index()].chunk;
+                    let maybe_fn = self
+                        .jit_engine
+                        .as_mut()
+                        .unwrap()
+                        .record_function_call(fid, chunk);
+                    if let Some(compiled_fn) = maybe_fn {
+                        let num_regs = self.frames[frame_idx].num_registers;
+                        let reg_slice = &mut self.registers[base_reg..base_reg + num_regs];
+                        if let Some(ret_val) = self
+                            .jit_engine
+                            .as_mut()
+                            .unwrap()
+                            .execute_function(compiled_fn, reg_slice)
+                        {
+                            let popped = self.frames.pop().unwrap();
+                            if popped.base_reg > 0 {
+                                self.registers.truncate(popped.base_reg);
+                            }
+                            if self.frames.len() <= stop_depth {
+                                return Ok(ret_val);
+                            }
+                            if let Some(caller_dst) = popped.caller_dst {
+                                self.registers[caller_dst] = ret_val;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
 
             let (op, span) = {
                 let chunk = self.chunk_for_func(func_id);
@@ -484,18 +586,36 @@ impl VM {
                 // 3. Control Flow & Linear Branching
                 // -----------------------------------------------------------------
                 OpCode::Jump { target } => {
-                    self.frames[frame_idx].ip = target as usize;
+                    if target <= (ip as u32) {
+                        if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
+                            self.frames[frame_idx].ip = target as usize;
+                        }
+                    } else {
+                        self.frames[frame_idx].ip = target as usize;
+                    }
                 }
 
                 OpCode::JumpIfTrue { cond, target } => {
                     if self.registers[base_reg + cond.index()].is_truthy() {
-                        self.frames[frame_idx].ip = target as usize;
+                        if target <= (ip as u32) {
+                            if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
+                                self.frames[frame_idx].ip = target as usize;
+                            }
+                        } else {
+                            self.frames[frame_idx].ip = target as usize;
+                        }
                     }
                 }
 
                 OpCode::JumpIfFalse { cond, target } => {
                     if !self.registers[base_reg + cond.index()].is_truthy() {
-                        self.frames[frame_idx].ip = target as usize;
+                        if target <= (ip as u32) {
+                            if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
+                                self.frames[frame_idx].ip = target as usize;
+                            }
+                        } else {
+                            self.frames[frame_idx].ip = target as usize;
+                        }
                     }
                 }
 
