@@ -9,6 +9,7 @@ pub mod ir;
 pub mod lexer;
 pub mod parser;
 pub mod type_system;
+pub mod vm;
 
 pub use ast::{
     walk_expr, walk_program, walk_stmt, Argument, ArrayElement, AssignOp, AstVisitor, BinaryOp,
@@ -48,4 +49,10 @@ pub use type_system::{
     EnumTypeInfo, FrontendError, FunctionSignature, InterfaceTypeInfo, ParamSignature,
     PropertyTypeInfo, RhpType, RustFloatKind, RustIntKind, TypeCheckResult, TypeChecker,
     TypeEnvironment, TypeError, TypeErrorKind, TypeHierarchy, TypedProgram, VariableBinding,
+};
+pub use vm::{
+    dispatch_facade_call, eval_expr, execute, run_expr, run_module, run_source,
+    run_source_with_file_id, run_source_with_vm, CallFrame, Environment, ExecutionError,
+    FacadeResult, PhpValue, RunMode, RuntimeError, RuntimeErrorKind, StackTraceEntry, Value,
+    VmClosure, VmFuture, VmObject, DEFAULT_MAX_CALL_DEPTH, VM,
 };

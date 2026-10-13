@@ -1,0 +1,2747 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::ast::expr::BinaryOp;
+use crate::ast::types::CastType;
+use crate::ir::opcode::{
+    BytecodeChunk, Constant, FunctionId, IrCollectionKind, IrUnaryOp, OpCode,
+};
+use crate::ir::IrModule;
+use crate::lexer::span::Span;
+use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
+use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
+use crate::vm::facade::dispatch_facade_call;
+use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
+
+/// Default maximum call stack depth before throwing `StackOverflowError`.
+pub const DEFAULT_MAX_CALL_DEPTH: usize = 512;
+
+/// Staged argument pushed onto the VM argument stack by `OpCode::PushArg`.
+#[derive(Debug, Clone)]
+struct StagedArg {
+    value: PhpValue,
+    name: Option<String>,
+    is_unpack: bool,
+}
+
+/// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveIterator {
+    entries: Vec<(PhpValue, PhpValue)>,
+    cursor: usize,
+}
+
+/// Call frame on the register VM execution stack.
+#[derive(Debug, Clone)]
+pub struct CallFrame {
+    /// Human-readable frame label (`<main>`, `calculateTotal`, `Order::total`, etc.).
+    pub function_name: String,
+    /// `None` for `<main>`, `Some(FunctionId)` for functions, methods, closures, and defer hooks.
+    pub func_id: Option<FunctionId>,
+    /// Current instruction pointer inside the frame's [`BytecodeChunk`].
+    pub ip: usize,
+    /// Base index into the VM's flat register file (`vm.registers[base_reg + r.index()]`).
+    pub base_reg: usize,
+    /// Number of virtual registers allocated to this frame.
+    pub num_registers: usize,
+    /// Destination register in the caller's frame where the return value should be stored.
+    pub caller_dst: Option<usize>,
+    /// Stack of active `try` handler IDs entered in this frame (`EnterTry` / `LeaveTry`).
+    pub active_try_handlers: Vec<u16>,
+    /// Per-frame iterator table keyed by `iter_reg.index()`.
+    pub(crate) iterators: HashMap<usize, ActiveIterator>,
+}
+
+/// High-Performance Native Rust Register-Based Bytecode Virtual Machine (`VM`).
+///
+/// Implements Technical Point #5 of the RHP Architecture Specification:
+/// - **Flat Contiguous Register File:** All active call frames index into a pre-allocated
+///   contiguous `Vec<PhpValue>` register window (`registers[frame.base_reg + reg.0 as usize]`),
+///   avoiding per-call heap allocations and maximizing L1/L2 CPU cache locality.
+/// - **Tight Fetch-Decode-Execute Loop:** Dispatches flat `Copy`-able [`OpCode`] instructions
+///   with zero pointer chasing.
+/// - **Gradual Type Boundary Enforcement:** Executes `OpCode::AssertType` at function/method
+///   parameter and return boundaries as well as locked local declarations (`$x: int`).
+/// - **Zero-Cost Exception Table Unwinding:** Unwinds `try`/`catch`/`finally` regions via the
+///   chunk's `ExceptionHandler` table when `Throw` or `ThrowMatchError` is executed.
+/// - **Post-Response Defer Queue:** Collects `defer { ... }` and `Future::defer(...)` hooks and
+///   executes them in LIFO order after the main script payload completes.
+pub struct VM {
+    module: IrModule,
+    jit_enabled: bool,
+    /// Contiguous virtual register file shared across all active [`CallFrame`]s.
+    registers: Vec<PhpValue>,
+    /// Active call stack frames.
+    frames: Vec<CallFrame>,
+    /// Argument staging buffer populated by `OpCode::PushArg`.
+    arg_buffer: Vec<StagedArg>,
+    /// Upvalue staging buffer populated by `OpCode::CaptureUpvalue`.
+    upvalue_buffer: Vec<(String, PhpValue)>,
+    /// Global variables (`global $x;`).
+    globals: HashMap<String, PhpValue>,
+    /// Static class properties (`Class::$prop`).
+    static_properties: HashMap<(String, String), PhpValue>,
+    /// Cached evaluated class constants and enum cases (`Class::CONST`).
+    class_constants: HashMap<(String, String), PhpValue>,
+    /// Captured standard output from `echo`, `print()`, and `Sys::print()`.
+    output_buffer: String,
+    /// Post-response / post-execution deferred function hooks (`OpCode::Defer`).
+    defer_queue: Vec<FunctionId>,
+    /// Optional nominal type hierarchy for `instanceof` and `AssertType` subtype checks.
+    type_hierarchy: Option<TypeHierarchy>,
+    /// Maximum allowed call frame depth.
+    max_call_depth: usize,
+}
+
+impl VM {
+    /// Construct a new Register VM from a compiled [`IrModule`] (or single [`BytecodeChunk`]).
+    pub fn new(bytecode: impl Into<IrModule>, jit_enabled: bool) -> Self {
+        let module = bytecode.into();
+        let initial_regs = (module.main_chunk.num_registers as usize).max(64);
+        Self {
+            module,
+            jit_enabled,
+            registers: Vec::with_capacity(initial_regs * 4),
+            frames: Vec::with_capacity(32),
+            arg_buffer: Vec::with_capacity(16),
+            upvalue_buffer: Vec::with_capacity(8),
+            globals: HashMap::new(),
+            static_properties: HashMap::new(),
+            class_constants: HashMap::new(),
+            output_buffer: String::new(),
+            defer_queue: Vec::new(),
+            type_hierarchy: None,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH,
+        }
+    }
+
+    /// Attach a [`TypeHierarchy`] from the type checker for full class/interface subtype verification at runtime.
+    pub fn with_type_hierarchy(mut self, hierarchy: TypeHierarchy) -> Self {
+        self.type_hierarchy = Some(hierarchy);
+        self
+    }
+
+    /// Returns whether JIT compilation is enabled for hot loops in this VM instance.
+    #[inline]
+    pub fn is_jit_enabled(&self) -> bool {
+        self.jit_enabled
+    }
+
+    /// Access the captured output emitted by `echo` and `Sys::print` statements.
+    #[inline]
+    pub fn output(&self) -> &str {
+        &self.output_buffer
+    }
+
+    /// Read the value of a top-level `<main>` variable by name (`"$ans"` or `"ans"`) after execution.
+    pub fn get_main_variable(&self, name: &str) -> Option<&PhpValue> {
+        let reg = self.module.main_chunk.register_for_var(name)?;
+        self.registers.get(reg.index())
+    }
+
+    /// Read a global variable by bare name (`"x"` or `"$x"`).
+    pub fn get_global(&self, name: &str) -> Option<&PhpValue> {
+        let bare = name.strip_prefix('$').unwrap_or(name);
+        self.globals.get(bare)
+    }
+
+    /// Pre-initialize class constants, static property defaults, and enum cases, then execute
+    /// `<main>` followed by any registered `defer` hooks.
+    pub fn run(&mut self) -> Result<PhpValue, RuntimeError> {
+        self.initialize_module_metadata()?;
+
+        let main_num_regs = self.module.main_chunk.num_registers as usize;
+        self.registers.clear();
+        self.registers.resize(main_num_regs.max(1), PhpValue::Null);
+        self.frames.clear();
+        self.frames.push(CallFrame {
+            function_name: "<main>".to_string(),
+            func_id: None,
+            ip: 0,
+            base_reg: 0,
+            num_registers: main_num_regs,
+            caller_dst: None,
+            active_try_handlers: Vec::new(),
+            iterators: HashMap::new(),
+        });
+
+        let main_result = self.dispatch_loop(0)?;
+
+        // Execute post-response defer hooks in LIFO order
+        let deferred = std::mem::take(&mut self.defer_queue);
+        for func_id in deferred.into_iter().rev() {
+            self.invoke_compiled_function_sync(func_id, Vec::new(), Span::default())?;
+        }
+
+        Ok(main_result)
+    }
+
+    // =========================================================================
+    // Module Metadata Initialization (Class Constants, Static Props, Enums)
+    // =========================================================================
+
+    fn initialize_module_metadata(&mut self) -> Result<(), RuntimeError> {
+        // 1. Evaluate class constants and static property defaults
+        let classes = self.module.classes.clone();
+        for cls in &classes {
+            for c in &cls.constants {
+                let val = self.eval_isolated_chunk(&c.value_chunk)?;
+                self.class_constants
+                    .insert((cls.name.clone(), c.name.clone()), val);
+            }
+            for prop in &cls.properties {
+                if prop.is_static {
+                    let val = if let Some(ref chunk) = prop.default_chunk {
+                        self.eval_isolated_chunk(chunk)?
+                    } else {
+                        PhpValue::Null
+                    };
+                    self.static_properties
+                        .insert((cls.name.clone(), prop.name.clone()), val);
+                }
+            }
+        }
+
+        // 2. Evaluate enum cases
+        let enums: Vec<_> = self.module.enums.values().cloned().collect();
+        for enm in &enums {
+            for (idx, case) in enm.cases.iter().enumerate() {
+                let backing_val = if let Some(ref chunk) = case.value_chunk {
+                    self.eval_isolated_chunk(chunk)?
+                } else {
+                    PhpValue::Int(idx as i64)
+                };
+                let mut case_obj = VmObject::new(enm.name.clone());
+                case_obj.set_property("name", PhpValue::string(case.name.clone()));
+                case_obj.set_property("value", backing_val);
+                self.class_constants.insert(
+                    (enm.name.clone(), case.name.clone()),
+                    PhpValue::object(case_obj),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Evaluate a small self-contained initializer [`BytecodeChunk`] (for property/constant defaults).
+    fn eval_isolated_chunk(&mut self, chunk: &BytecodeChunk) -> Result<PhpValue, RuntimeError> {
+        if chunk.is_empty() {
+            return Ok(PhpValue::Null);
+        }
+        let mut regs = vec![PhpValue::Null; (chunk.num_registers as usize).max(1)];
+        let mut ip = 0usize;
+        while ip < chunk.instructions.len() {
+            let op = chunk.instructions[ip];
+            let span = chunk.span_at(ip).unwrap_or_default();
+            ip += 1;
+            match op {
+                OpCode::LoadNull { dst } => regs[dst.index()] = PhpValue::Null,
+                OpCode::LoadBool { dst, value } => regs[dst.index()] = PhpValue::Bool(value),
+                OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value as i64),
+                OpCode::LoadConst { dst, const_id } => {
+                    let c = chunk.get_constant(const_id).ok_or_else(|| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::InvalidConstantIndex { index: const_id.0 },
+                            span,
+                        )
+                    })?;
+                    regs[dst.index()] = Self::constant_to_value(c);
+                }
+                OpCode::Move { dst, src } => {
+                    regs[dst.index()] = regs[src.index()].cow_clone();
+                }
+                OpCode::Unary { dst, op: uop, src } => {
+                    let val = self.exec_unary(uop, &regs[src.index()], span)?;
+                    regs[dst.index()] = val;
+                }
+                OpCode::Binary { dst, op: bop, lhs, rhs } => {
+                    let val = self.exec_binary(bop, &regs[lhs.index()], &regs[rhs.index()], span)?;
+                    regs[dst.index()] = val;
+                }
+                OpCode::NewArray { dst, capacity } => {
+                    regs[dst.index()] =
+                        PhpValue::Array(Rc::new(RefCell::new(Vec::with_capacity(capacity as usize))));
+                }
+                OpCode::ArrayPush { array, value } => {
+                    let v = regs[value.index()].cow_clone();
+                    if let PhpValue::Array(ref arr) | PhpValue::List(ref arr) = regs[array.index()] {
+                        arr.borrow_mut().push(v);
+                    }
+                }
+                OpCode::Return { value } => {
+                    return Ok(value.map(|r| regs[r.index()].clone()).unwrap_or(PhpValue::Null));
+                }
+                _ => {}
+            }
+        }
+        Ok(PhpValue::Null)
+    }
+
+    // =========================================================================
+    // Core Register VM Dispatch Loop
+    // =========================================================================
+
+    /// Run the register bytecode dispatch loop until the frame at `stop_depth` returns.
+    fn dispatch_loop(&mut self, stop_depth: usize) -> Result<PhpValue, RuntimeError> {
+        loop {
+            let frame_idx = self.frames.len() - 1;
+            let ip = self.frames[frame_idx].ip;
+            let func_id = self.frames[frame_idx].func_id;
+            let base_reg = self.frames[frame_idx].base_reg;
+
+            let (op, span) = {
+                let chunk = self.chunk_for_func(func_id);
+                if ip >= chunk.instructions.len() {
+                    (OpCode::Return { value: None }, Span::default())
+                } else {
+                    (
+                        chunk.instructions[ip],
+                        chunk.span_at(ip).unwrap_or_default(),
+                    )
+                }
+            };
+
+            self.frames[frame_idx].ip = ip + 1;
+
+            match op {
+                // -----------------------------------------------------------------
+                // 1. Constants & Register Data Movement
+                // -----------------------------------------------------------------
+                OpCode::LoadNull { dst } => {
+                    self.registers[base_reg + dst.index()] = PhpValue::Null;
+                }
+
+                OpCode::LoadBool { dst, value } => {
+                    self.registers[base_reg + dst.index()] = PhpValue::Bool(value);
+                }
+
+                OpCode::LoadInt { dst, value } => {
+                    self.registers[base_reg + dst.index()] = PhpValue::Int(value as i64);
+                }
+
+                OpCode::LoadConst { dst, const_id } => {
+                    let val = {
+                        let chunk = self.chunk_for_func(func_id);
+                        let c = chunk.get_constant(const_id).ok_or_else(|| {
+                            self.make_error(
+                                RuntimeErrorKind::InvalidConstantIndex { index: const_id.0 },
+                                span,
+                            )
+                        })?;
+                        Self::constant_to_value(c)
+                    };
+                    self.registers[base_reg + dst.index()] = val;
+                }
+
+                OpCode::Move { dst, src } => {
+                    if dst != src {
+                        let val = self.registers[base_reg + src.index()].cow_clone();
+                        self.registers[base_reg + dst.index()] = val;
+                    }
+                }
+
+                OpCode::Clone { dst, src } => {
+                    let cloned = self.registers[base_reg + src.index()].cow_clone();
+                    self.registers[base_reg + dst.index()] = cloned;
+                }
+
+                // -----------------------------------------------------------------
+                // 2. Arithmetic, Bitwise, Comparison, Cast, & Type Contracts
+                // -----------------------------------------------------------------
+                OpCode::Unary { dst, op: uop, src } => {
+                    let operand = self.registers[base_reg + src.index()].clone();
+                    let res = self.exec_unary(uop, &operand, span)?;
+                    self.registers[base_reg + dst.index()] = res;
+                }
+
+                OpCode::Binary {
+                    dst,
+                    op: bop,
+                    lhs,
+                    rhs,
+                } => {
+                    let left = self.registers[base_reg + lhs.index()].clone();
+                    let right = self.registers[base_reg + rhs.index()].clone();
+                    let res = self.exec_binary(bop, &left, &right, span)?;
+                    self.registers[base_reg + dst.index()] = res;
+                }
+
+                OpCode::IncDec { dst, src, is_inc } => {
+                    let delta = if is_inc { 1 } else { -1 };
+                    let current = &self.registers[base_reg + src.index()];
+                    let updated = match current {
+                        PhpValue::Int(n) => PhpValue::Int(n.wrapping_add(delta)),
+                        PhpValue::Float(f) => PhpValue::Float(*f + (delta as f64)),
+                        PhpValue::RustInt { kind, value } => PhpValue::RustInt {
+                            kind: *kind,
+                            value: value.wrapping_add(delta as i128),
+                        },
+                        PhpValue::RustFloat { kind, value } => PhpValue::RustFloat {
+                            kind: *kind,
+                            value: *value + (delta as f64),
+                        },
+                        PhpValue::Null => PhpValue::Int(if is_inc { 1 } else { 0 }),
+                        other => {
+                            let n = other.to_i64().unwrap_or(0);
+                            PhpValue::Int(n.wrapping_add(delta))
+                        }
+                    };
+                    self.registers[base_reg + dst.index()] = updated;
+                }
+
+                OpCode::Cast { dst, kind, src } => {
+                    let val = self.registers[base_reg + src.index()].clone();
+                    let casted = match kind {
+                        CastType::Int => PhpValue::Int(val.to_i64().unwrap_or(0)),
+                        CastType::Float => PhpValue::Float(val.to_f64().unwrap_or(0.0)),
+                        CastType::String => PhpValue::string(val.to_php_string()),
+                        CastType::Bool => PhpValue::Bool(val.is_truthy()),
+                        CastType::Array => match val {
+                            PhpValue::Array(_) | PhpValue::List(_) => val,
+                            PhpValue::Null => PhpValue::list(Vec::new()),
+                            other => PhpValue::list(vec![other]),
+                        },
+                        CastType::Object => match val {
+                            PhpValue::Object(_) => val,
+                            other => {
+                                let mut obj = VmObject::new("stdClass");
+                                obj.set_property("scalar", other);
+                                PhpValue::object(obj)
+                            }
+                        },
+                    };
+                    self.registers[base_reg + dst.index()] = casted;
+                }
+
+                OpCode::AssertType { reg, type_const } => {
+                    let expected_ty = {
+                        let chunk = self.chunk_for_func(func_id);
+                        match chunk.get_constant(type_const) {
+                            Some(Constant::Type(ty)) => ty.clone(),
+                            _ => {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::InvalidConstantIndex {
+                                        index: type_const.0,
+                                    },
+                                    span,
+                                ))
+                            }
+                        }
+                    };
+
+                    let actual_val = &self.registers[base_reg + reg.index()];
+                    if !actual_val.matches_type_contract(&expected_ty, self.type_hierarchy.as_ref())
+                    {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::TypeContractViolation {
+                                expected: expected_ty,
+                                actual: self.runtime_type_label(actual_val),
+                                value_preview: format!("{:?}", actual_val),
+                            },
+                            span,
+                        ));
+                    }
+
+                    // Coerce `Int` into `Float` if the boundary explicitly expects `float`
+                    if matches!(expected_ty, RhpType::Float) {
+                        if let PhpValue::Int(n) = actual_val {
+                            self.registers[base_reg + reg.index()] = PhpValue::Float(*n as f64);
+                        }
+                    }
+                }
+
+                OpCode::WrapRustInt { dst, src, kind } => {
+                    let raw = match src {
+                        Some(s) => self.registers[base_reg + s.index()]
+                            .to_i64()
+                            .unwrap_or(0) as i128,
+                        None => 0i128,
+                    };
+                    self.registers[base_reg + dst.index()] = PhpValue::RustInt {
+                        kind,
+                        value: clamp_rust_int(kind, raw),
+                    };
+                }
+
+                OpCode::WrapRustFloat { dst, src, kind } => {
+                    let raw = match src {
+                        Some(s) => self.registers[base_reg + s.index()]
+                            .to_f64()
+                            .unwrap_or(0.0),
+                        None => 0.0,
+                    };
+                    let val = match kind {
+                        RustFloatKind::F32 => (raw as f32) as f64,
+                        RustFloatKind::F64 => raw,
+                    };
+                    self.registers[base_reg + dst.index()] =
+                        PhpValue::RustFloat { kind, value: val };
+                }
+
+                // -----------------------------------------------------------------
+                // 3. Control Flow & Linear Branching
+                // -----------------------------------------------------------------
+                OpCode::Jump { target } => {
+                    self.frames[frame_idx].ip = target as usize;
+                }
+
+                OpCode::JumpIfTrue { cond, target } => {
+                    if self.registers[base_reg + cond.index()].is_truthy() {
+                        self.frames[frame_idx].ip = target as usize;
+                    }
+                }
+
+                OpCode::JumpIfFalse { cond, target } => {
+                    if !self.registers[base_reg + cond.index()].is_truthy() {
+                        self.frames[frame_idx].ip = target as usize;
+                    }
+                }
+
+                OpCode::JumpIfNull { cond, target } => {
+                    if self.registers[base_reg + cond.index()].is_null() {
+                        self.frames[frame_idx].ip = target as usize;
+                    }
+                }
+
+                OpCode::JumpIfNotNull { cond, target } => {
+                    if !self.registers[base_reg + cond.index()].is_null() {
+                        self.frames[frame_idx].ip = target as usize;
+                    }
+                }
+
+                OpCode::Return { value } => {
+                    let ret_val = match value {
+                        Some(r) => self.registers[base_reg + r.index()].clone(),
+                        None => PhpValue::Null,
+                    };
+                    let popped = self.frames.pop().unwrap();
+                    if popped.base_reg > 0 {
+                        self.registers.truncate(popped.base_reg);
+                    }
+
+                    if self.frames.len() <= stop_depth {
+                        return Ok(ret_val);
+                    }
+
+                    if let Some(caller_dst) = popped.caller_dst {
+                        self.registers[caller_dst] = ret_val;
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                // 4. Standard Arrays & Subtyped Collections
+                // -----------------------------------------------------------------
+                OpCode::NewArray { dst, capacity } => {
+                    self.registers[base_reg + dst.index()] = PhpValue::Array(Rc::new(
+                        RefCell::new(Vec::with_capacity(capacity as usize)),
+                    ));
+                }
+
+                OpCode::NewCollection { dst, kind, source } => {
+                    let src_val = source.map(|s| self.registers[base_reg + s.index()].clone());
+                    let col = match kind {
+                        IrCollectionKind::List => {
+                            let items = src_val
+                                .as_ref()
+                                .map(Self::extract_items)
+                                .unwrap_or_default();
+                            PhpValue::list(items)
+                        }
+                        IrCollectionKind::Dict => {
+                            let entries = src_val
+                                .as_ref()
+                                .map(Self::extract_dict_entries)
+                                .unwrap_or_default();
+                            PhpValue::dict(entries)
+                        }
+                        IrCollectionKind::Set => {
+                            let items = src_val
+                                .as_ref()
+                                .map(Self::extract_items)
+                                .unwrap_or_default();
+                            PhpValue::set(items)
+                        }
+                        IrCollectionKind::HashMap => {
+                            let entries = src_val
+                                .as_ref()
+                                .map(Self::extract_map_entries)
+                                .unwrap_or_default();
+                            PhpValue::hash_map(entries)
+                        }
+                    };
+                    self.registers[base_reg + dst.index()] = col;
+                }
+
+                OpCode::ArrayPush { array, value } => {
+                    let val = self.registers[base_reg + value.index()].cow_clone();
+                    match &self.registers[base_reg + array.index()] {
+                        PhpValue::Array(arr) | PhpValue::List(arr) => {
+                            arr.borrow_mut().push(val);
+                        }
+                        PhpValue::Set(set) => {
+                            let mut b = set.borrow_mut();
+                            if !b.contains(&val) {
+                                b.push(val);
+                            }
+                        }
+                        PhpValue::Dict(dict) => {
+                            let mut b = dict.borrow_mut();
+                            let next_key = b.len().to_string();
+                            b.push((next_key, val));
+                        }
+                        PhpValue::HashMap(map) => {
+                            let mut b = map.borrow_mut();
+                            let next_key = PhpValue::Int(b.len() as i64);
+                            b.push((next_key, val));
+                        }
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::InvalidIndexTarget {
+                                    type_name: other.type_name().to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
+
+                OpCode::ArraySet { array, key, value } => {
+                    let k = self.registers[base_reg + key.index()].clone();
+                    let v = self.registers[base_reg + value.index()].cow_clone();
+
+                    // Check if setting a string key on a plain `Array` should upgrade it to `Dict`
+                    let upgrade_to_dict = match (&self.registers[base_reg + array.index()], &k) {
+                        (PhpValue::Array(arr), PhpValue::String(_)) => {
+                            let existing: Vec<(String, PhpValue)> = arr
+                                .borrow()
+                                .iter()
+                                .enumerate()
+                                .map(|(i, item)| (i.to_string(), item.clone()))
+                                .collect();
+                            Some(existing)
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(mut entries) = upgrade_to_dict {
+                        let k_str = k.to_php_string();
+                        if let Some(slot) = entries.iter_mut().find(|(ek, _)| ek == &k_str) {
+                            slot.1 = v;
+                        } else {
+                            entries.push((k_str, v));
+                        }
+                        self.registers[base_reg + array.index()] = PhpValue::dict(entries);
+                    } else {
+                        match &self.registers[base_reg + array.index()] {
+                            PhpValue::Array(arr) | PhpValue::List(arr) => {
+                                let idx = k.to_i64().unwrap_or(0);
+                                let mut b = arr.borrow_mut();
+                                if idx >= 0 && (idx as usize) < b.len() {
+                                    b[idx as usize] = v;
+                                } else if idx as usize == b.len() {
+                                    b.push(v);
+                                } else if idx >= 0 {
+                                    b.resize(idx as usize, PhpValue::Null);
+                                    b.push(v);
+                                }
+                            }
+                            PhpValue::Dict(dict) => {
+                                let k_str = k.to_php_string();
+                                let mut b = dict.borrow_mut();
+                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
+                                    slot.1 = v;
+                                } else {
+                                    b.push((k_str, v));
+                                }
+                            }
+                            PhpValue::HashMap(map) => {
+                                let mut b = map.borrow_mut();
+                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
+                                    slot.1 = v;
+                                } else {
+                                    b.push((k, v));
+                                }
+                            }
+                            PhpValue::Set(set) => {
+                                let mut b = set.borrow_mut();
+                                if !b.contains(&v) {
+                                    b.push(v);
+                                }
+                            }
+                            other => {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::InvalidIndexTarget {
+                                        type_name: other.type_name().to_string(),
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                OpCode::ArrayUnpack {
+                    dst_array,
+                    src_array,
+                } => {
+                    let src_val = self.registers[base_reg + src_array.index()].clone();
+                    let items = Self::extract_items(&src_val);
+                    match &self.registers[base_reg + dst_array.index()] {
+                        PhpValue::Array(arr) | PhpValue::List(arr) => {
+                            arr.borrow_mut().extend(items);
+                        }
+                        PhpValue::Set(set) => {
+                            let mut b = set.borrow_mut();
+                            for item in items {
+                                if !b.contains(&item) {
+                                    b.push(item);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                OpCode::ArrayGet { dst, array, index } => {
+                    let arr_val = &self.registers[base_reg + array.index()];
+                    let idx_val = &self.registers[base_reg + index.index()];
+                    let fetched = match arr_val {
+                        PhpValue::Array(arr) | PhpValue::List(arr) | PhpValue::Set(arr) => {
+                            let i = idx_val.to_i64().unwrap_or(-1);
+                            let b = arr.borrow();
+                            if i >= 0 && (i as usize) < b.len() {
+                                b[i as usize].clone()
+                            } else {
+                                PhpValue::Null
+                            }
+                        }
+                        PhpValue::Dict(dict) => {
+                            let key_str = idx_val.to_php_string();
+                            dict.borrow()
+                                .iter()
+                                .find(|(k, _)| k == &key_str)
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or(PhpValue::Null)
+                        }
+                        PhpValue::HashMap(map) => map
+                            .borrow()
+                            .iter()
+                            .find(|(k, _)| k == idx_val)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(PhpValue::Null),
+                        PhpValue::String(s) => {
+                            let i = idx_val.to_i64().unwrap_or(-1);
+                            if i >= 0 {
+                                s.chars()
+                                    .nth(i as usize)
+                                    .map(|c| PhpValue::string(c.to_string()))
+                                    .unwrap_or(PhpValue::Null)
+                            } else {
+                                PhpValue::Null
+                            }
+                        }
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::InvalidIndexTarget {
+                                    type_name: other.type_name().to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    self.registers[base_reg + dst.index()] = fetched;
+                }
+
+                // -----------------------------------------------------------------
+                // 5. Iteration (`foreach`)
+                // -----------------------------------------------------------------
+                OpCode::IterInit { iter_reg, iterable } => {
+                    let iter_source = &self.registers[base_reg + iterable.index()];
+                    let entries: Vec<(PhpValue, PhpValue)> = match iter_source {
+                        PhpValue::Array(arr) | PhpValue::List(arr) | PhpValue::Set(arr) => arr
+                            .borrow()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
+                            .collect(),
+                        PhpValue::Dict(dict) => dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
+                            .collect(),
+                        PhpValue::HashMap(map) => map.borrow().clone(),
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::NotIterable {
+                                    type_name: other.type_name().to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+
+                    self.frames[frame_idx].iterators.insert(
+                        iter_reg.index(),
+                        ActiveIterator { entries, cursor: 0 },
+                    );
+                }
+
+                OpCode::IterNext {
+                    iter_reg,
+                    key_dst,
+                    val_dst,
+                    jump_end,
+                } => {
+                    let next_pair = {
+                        if let Some(iter_state) =
+                            self.frames[frame_idx].iterators.get_mut(&iter_reg.index())
+                        {
+                            if iter_state.cursor < iter_state.entries.len() {
+                                let pair = iter_state.entries[iter_state.cursor].clone();
+                                iter_state.cursor += 1;
+                                Some(pair)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some((k, v)) = next_pair {
+                        if let Some(k_reg) = key_dst {
+                            self.registers[base_reg + k_reg.index()] = k;
+                        }
+                        self.registers[base_reg + val_dst.index()] = v;
+                    } else {
+                        self.frames[frame_idx].iterators.remove(&iter_reg.index());
+                        self.frames[frame_idx].ip = jump_end as usize;
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                // 6. Function, Facade, Method, & Closure Invocations
+                // -----------------------------------------------------------------
+                OpCode::PushArg {
+                    src,
+                    name,
+                    is_unpack,
+                } => {
+                    let arg_name = if let Some(cid) = name {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk.get_string_constant(cid).map(|s| s.to_string())
+                    } else {
+                        None
+                    };
+                    let val = self.registers[base_reg + src.index()].clone();
+                    self.arg_buffer.push(StagedArg {
+                        value: val,
+                        name: arg_name,
+                        is_unpack,
+                    });
+                }
+
+                OpCode::Interpolate { dst, part_count } => {
+                    let staged = self.drain_staged_args(part_count as usize);
+                    let mut out = String::new();
+                    for item in staged {
+                        out.push_str(&item.value.to_php_string());
+                    }
+                    self.registers[base_reg + dst.index()] = PhpValue::string(out);
+                }
+
+                OpCode::CaptureUpvalue { src, name } => {
+                    let upval_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(name)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let val = self.registers[base_reg + src.index()].clone();
+                    self.upvalue_buffer.push((upval_name, val));
+                }
+
+                OpCode::MakeClosure {
+                    dst,
+                    func_id: target_fn,
+                    upvalue_count,
+                } => {
+                    let count = upvalue_count as usize;
+                    let start = self.upvalue_buffer.len().saturating_sub(count);
+                    let captured: Vec<PhpValue> = self
+                        .upvalue_buffer
+                        .drain(start..)
+                        .map(|(_, v)| v)
+                        .collect();
+
+                    let (fn_name, is_static) = self
+                        .module
+                        .get_function(target_fn)
+                        .map(|f| (f.name.clone(), f.is_static))
+                        .unwrap_or_else(|| (format!("fn#{}", target_fn.0), false));
+
+                    self.registers[base_reg + dst.index()] =
+                        PhpValue::closure(target_fn, fn_name, captured, is_static);
+                }
+
+                OpCode::CallFunction {
+                    dst,
+                    name,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let fn_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(name)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+
+                    let target_id = self
+                        .module
+                        .function_index
+                        .get(&fn_name)
+                        .copied()
+                        .ok_or_else(|| {
+                            self.make_error(
+                                RuntimeErrorKind::UndefinedFunction {
+                                    name: fn_name.clone(),
+                                },
+                                span,
+                            )
+                        })?;
+
+                    self.push_compiled_call_frame(
+                        target_id,
+                        None,
+                        &staged,
+                        &[],
+                        Some(base_reg + dst.index()),
+                        span,
+                    )?;
+                }
+
+                OpCode::CallDynamic {
+                    dst,
+                    callee,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let callee_val = self.registers[base_reg + callee.index()].clone();
+                    match callee_val {
+                        PhpValue::Closure(closure) => {
+                            self.push_compiled_call_frame(
+                                closure.func_id,
+                                None,
+                                &staged,
+                                &closure.upvalues,
+                                Some(base_reg + dst.index()),
+                                span,
+                            )?;
+                        }
+                        PhpValue::String(fn_name) => {
+                            let target_id = self
+                                .module
+                                .function_index
+                                .get(fn_name.as_str())
+                                .copied()
+                                .ok_or_else(|| {
+                                    self.make_error(
+                                        RuntimeErrorKind::UndefinedFunction {
+                                            name: (*fn_name).to_string(),
+                                        },
+                                        span,
+                                    )
+                                })?;
+                            self.push_compiled_call_frame(
+                                target_id,
+                                None,
+                                &staged,
+                                &[],
+                                Some(base_reg + dst.index()),
+                                span,
+                            )?;
+                        }
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::NotCallable {
+                                    type_name: other.type_name().to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
+
+                OpCode::FacadeCall {
+                    dst,
+                    facade,
+                    method,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let (facade_name, method_name) = {
+                        let chunk = self.chunk_for_func(func_id);
+                        let f = chunk
+                            .get_string_constant(facade)
+                            .unwrap_or_default()
+                            .to_string();
+                        let m = chunk
+                            .get_string_constant(method)
+                            .unwrap_or_default()
+                            .to_string();
+                        (f, m)
+                    };
+
+                    let flat_args = Self::flatten_positional_args(&staged);
+                    let res = self.exec_facade_call(&facade_name, &method_name, &flat_args, span)?;
+                    self.registers[base_reg + dst.index()] = res;
+                }
+
+                OpCode::StaticCall {
+                    dst,
+                    class,
+                    method,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let (class_name, method_name) = {
+                        let chunk = self.chunk_for_func(func_id);
+                        let c = chunk
+                            .get_string_constant(class)
+                            .unwrap_or_default()
+                            .to_string();
+                        let m = chunk
+                            .get_string_constant(method)
+                            .unwrap_or_default()
+                            .to_string();
+                        (c, m)
+                    };
+
+                    let target_id = self
+                        .resolve_method_id(&class_name, &method_name)
+                        .ok_or_else(|| {
+                            self.make_error(
+                                RuntimeErrorKind::UndefinedMethod {
+                                    class: class_name.clone(),
+                                    method: method_name.clone(),
+                                },
+                                span,
+                            )
+                        })?;
+
+                    self.push_compiled_call_frame(
+                        target_id,
+                        None,
+                        &staged,
+                        &[],
+                        Some(base_reg + dst.index()),
+                        span,
+                    )?;
+                }
+
+                OpCode::MethodCall {
+                    dst,
+                    object,
+                    method,
+                    arg_count,
+                    is_nullsafe,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let receiver = self.registers[base_reg + object.index()].clone();
+                    if is_nullsafe && receiver.is_null() {
+                        self.registers[base_reg + dst.index()] = PhpValue::Null;
+                        continue;
+                    }
+
+                    let method_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(method)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+
+                    let flat_args = Self::flatten_positional_args(&staged);
+
+                    match &receiver {
+                        PhpValue::Object(obj_rc) => {
+                            let cls_name = obj_rc.borrow().class_name.clone();
+                            if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name)
+                            {
+                                self.push_compiled_call_frame(
+                                    target_id,
+                                    Some(receiver),
+                                    &staged,
+                                    &[],
+                                    Some(base_reg + dst.index()),
+                                    span,
+                                )?;
+                            } else {
+                                let res = self.exec_builtin_object_method(
+                                    &cls_name,
+                                    &receiver,
+                                    &method_name,
+                                    &flat_args,
+                                    span,
+                                )?;
+                                self.registers[base_reg + dst.index()] = res;
+                            }
+                        }
+                        _ => {
+                            let res = self.exec_fluent_value_method(
+                                &receiver,
+                                &method_name,
+                                &flat_args,
+                                span,
+                            )?;
+                            self.registers[base_reg + dst.index()] = res;
+                        }
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                // 7. Object-Oriented Operations & Properties
+                // -----------------------------------------------------------------
+                OpCode::NewObject {
+                    dst,
+                    class,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let class_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(class)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+
+                    let instance = self.instantiate_class(&class_name, span)?;
+                    self.registers[base_reg + dst.index()] = instance.clone();
+
+                    // If the class defines `__construct`, invoke it with `$this = instance`
+                    if let Some(ctor_id) = self.resolve_method_id(&class_name, "__construct") {
+                        self.push_compiled_call_frame(
+                            ctor_id,
+                            Some(instance),
+                            &staged,
+                            &[],
+                            None, // constructor return is void; `dst` retains `instance`
+                            span,
+                        )?;
+                    }
+                }
+
+                OpCode::GetProp { dst, object, prop } => {
+                    let prop_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(prop)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let obj_val = &self.registers[base_reg + object.index()];
+                    let val = match obj_val {
+                        PhpValue::Object(obj_rc) => obj_rc
+                            .borrow()
+                            .get_property(&prop_name)
+                            .cloned()
+                            .unwrap_or(PhpValue::Null),
+                        PhpValue::Null => PhpValue::Null,
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedProperty {
+                                    class: other.type_name().to_string(),
+                                    property: prop_name,
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    self.registers[base_reg + dst.index()] = val;
+                }
+
+                OpCode::SetProp {
+                    object,
+                    prop,
+                    value,
+                } => {
+                    let prop_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(prop)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let val = self.registers[base_reg + value.index()].cow_clone();
+                    let is_in_constructor = self.frames[frame_idx]
+                        .function_name
+                        .ends_with("::__construct");
+
+                    match &self.registers[base_reg + object.index()] {
+                        PhpValue::Object(obj_rc) => {
+                            let mut obj = obj_rc.borrow_mut();
+                            if let Some(&is_ro) = obj.readonly_props.get(&prop_name) {
+                                if is_ro && !is_in_constructor && obj.properties.contains_key(&prop_name)
+                                {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ReadonlyPropertyModification {
+                                            class: obj.class_name.clone(),
+                                            property: prop_name,
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                            obj.set_property(prop_name, val);
+                        }
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedProperty {
+                                    class: other.type_name().to_string(),
+                                    property: prop_name,
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
+
+                OpCode::GetStaticProp { dst, class, prop } => {
+                    let (cls_name, prop_name) = {
+                        let chunk = self.chunk_for_func(func_id);
+                        (
+                            chunk
+                                .get_string_constant(class)
+                                .unwrap_or_default()
+                                .to_string(),
+                            chunk
+                                .get_string_constant(prop)
+                                .unwrap_or_default()
+                                .to_string(),
+                        )
+                    };
+                    let val = self
+                        .static_properties
+                        .get(&(cls_name, prop_name))
+                        .cloned()
+                        .unwrap_or(PhpValue::Null);
+                    self.registers[base_reg + dst.index()] = val;
+                }
+
+                OpCode::SetStaticProp { class, prop, value } => {
+                    let (cls_name, prop_name) = {
+                        let chunk = self.chunk_for_func(func_id);
+                        (
+                            chunk
+                                .get_string_constant(class)
+                                .unwrap_or_default()
+                                .to_string(),
+                            chunk
+                                .get_string_constant(prop)
+                                .unwrap_or_default()
+                                .to_string(),
+                        )
+                    };
+                    let val = self.registers[base_reg + value.index()].cow_clone();
+                    self.static_properties.insert((cls_name, prop_name), val);
+                }
+
+                OpCode::GetClassConst {
+                    dst,
+                    class,
+                    const_name,
+                } => {
+                    let (cls_name, c_name) = {
+                        let chunk = self.chunk_for_func(func_id);
+                        (
+                            chunk
+                                .get_string_constant(class)
+                                .unwrap_or_default()
+                                .to_string(),
+                            chunk
+                                .get_string_constant(const_name)
+                                .unwrap_or_default()
+                                .to_string(),
+                        )
+                    };
+                    if c_name == "class" {
+                        self.registers[base_reg + dst.index()] = PhpValue::string(cls_name);
+                    } else if let Some(val) = self.class_constants.get(&(cls_name.clone(), c_name.clone())) {
+                        self.registers[base_reg + dst.index()] = val.clone();
+                    } else {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedClassConstant {
+                                class: cls_name,
+                                constant: c_name,
+                            },
+                            span,
+                        ));
+                    }
+                }
+
+                OpCode::Instanceof { dst, object, class } => {
+                    let target_cls = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(class)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let obj_val = &self.registers[base_reg + object.index()];
+                    let is_inst = match obj_val {
+                        PhpValue::Object(obj_rc) => {
+                            let actual_cls = &obj_rc.borrow().class_name;
+                            self.is_class_instance_of(actual_cls, &target_cls)
+                        }
+                        PhpValue::Future(_) => target_cls == "Future",
+                        PhpValue::Closure(_) => target_cls == "Closure",
+                        _ => false,
+                    };
+                    self.registers[base_reg + dst.index()] = PhpValue::Bool(is_inst);
+                }
+
+                // -----------------------------------------------------------------
+                // 8. Global Scope, Exceptions, Concurrency, Generators, & Output
+                // -----------------------------------------------------------------
+                OpCode::LoadGlobal { dst, name } => {
+                    let g_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(name)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let val = self.globals.get(&g_name).cloned().unwrap_or(PhpValue::Null);
+                    self.registers[base_reg + dst.index()] = val;
+                }
+
+                OpCode::StoreGlobal { name, src } => {
+                    let g_name = {
+                        let chunk = self.chunk_for_func(func_id);
+                        chunk
+                            .get_string_constant(name)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let val = self.registers[base_reg + src.index()].cow_clone();
+                    self.globals.insert(g_name, val);
+                }
+
+                OpCode::Echo { src } => {
+                    let text = self.registers[base_reg + src.index()].to_php_string();
+                    self.output_buffer.push_str(&text);
+                }
+
+                OpCode::Defer { func_id: def_id } => {
+                    self.defer_queue.push(def_id);
+                }
+
+                OpCode::Await { dst, future } => {
+                    let fut_val = self.registers[base_reg + future.index()].clone();
+                    let resolved = match fut_val {
+                        PhpValue::Future(f_rc) => {
+                            let borrow = f_rc.borrow();
+                            if let Some(ref err_msg) = borrow.error {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::Custom {
+                                        message: err_msg.clone(),
+                                    },
+                                    span,
+                                ));
+                            }
+                            borrow.value.clone().unwrap_or(PhpValue::Null)
+                        }
+                        other => other,
+                    };
+                    self.registers[base_reg + dst.index()] = resolved;
+                }
+
+                OpCode::Yield { dst, value, .. } => {
+                    let yielded = value
+                        .map(|r| self.registers[base_reg + r.index()].clone())
+                        .unwrap_or(PhpValue::Null);
+                    self.registers[base_reg + dst.index()] = yielded;
+                }
+
+                OpCode::EnterTry { handler_id } => {
+                    self.frames[frame_idx].active_try_handlers.push(handler_id);
+                }
+
+                OpCode::LeaveTry { handler_id } => {
+                    if let Some(pos) = self.frames[frame_idx]
+                        .active_try_handlers
+                        .iter()
+                        .rposition(|&h| h == handler_id)
+                    {
+                        self.frames[frame_idx].active_try_handlers.remove(pos);
+                    }
+                }
+
+                OpCode::Throw { exception } => {
+                    let exc_val = self.registers[base_reg + exception.index()].clone();
+                    self.unwind_exception(exc_val, stop_depth, span)?;
+                }
+
+                OpCode::ThrowMatchError { subject } => {
+                    let subj_str = self.registers[base_reg + subject.index()].to_php_string();
+                    let mut err_obj = VmObject::new("UnhandledMatchError");
+                    err_obj.set_property(
+                        "message",
+                        PhpValue::string(format!("Unhandled match value '{}'", subj_str)),
+                    );
+                    if !self.try_dispatch_to_catch(PhpValue::object(err_obj), stop_depth) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UnhandledMatchError { subject: subj_str },
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Call Frame Setup & Synchronous Re-Entrant Invocations
+    // =========================================================================
+
+    fn push_compiled_call_frame(
+        &mut self,
+        target_id: FunctionId,
+        receiver: Option<PhpValue>,
+        staged_args: &[StagedArg],
+        upvalues: &[PhpValue],
+        caller_dst: Option<usize>,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if self.frames.len() >= self.max_call_depth {
+            return Err(self.make_error(
+                RuntimeErrorKind::StackOverflow {
+                    max_depth: self.max_call_depth,
+                },
+                span,
+            ));
+        }
+
+        let func = self
+            .module
+            .get_function(target_id)
+            .cloned()
+            .ok_or_else(|| {
+                self.make_error(
+                    RuntimeErrorKind::UndefinedFunction {
+                        name: format!("fn#{}", target_id.0),
+                    },
+                    span,
+                )
+            })?;
+
+        let new_base = self.registers.len();
+        let num_regs = (func.chunk.num_registers as usize).max(1);
+        self.registers
+            .resize(new_base + num_regs, PhpValue::Null);
+
+        // 1. Bind `$this` to `r0` for instance methods
+        if let Some(this_val) = receiver {
+            if !func.is_static {
+                self.registers[new_base] = this_val;
+            }
+        }
+
+        // 2. Bind positional, unpacked, and named arguments to parameter registers
+        let mut positional_values = Vec::new();
+        let mut named_values = Vec::new();
+        for arg in staged_args {
+            if let Some(ref name) = arg.name {
+                named_values.push((name.clone(), arg.value.clone()));
+            } else if arg.is_unpack {
+                positional_values.extend(Self::extract_items(&arg.value));
+            } else {
+                positional_values.push(arg.value.clone());
+            }
+        }
+
+        let mut assigned_params = vec![false; func.params.len()];
+        for (idx, param) in func.params.iter().enumerate() {
+            if param.is_variadic {
+                let rest: Vec<PhpValue> = if idx < positional_values.len() {
+                    positional_values[idx..].to_vec()
+                } else {
+                    Vec::new()
+                };
+                self.registers[new_base + param.reg.index()] = PhpValue::list(rest);
+                assigned_params[idx] = true;
+                break;
+            } else if idx < positional_values.len() {
+                self.registers[new_base + param.reg.index()] = positional_values[idx].cow_clone();
+                assigned_params[idx] = true;
+            }
+        }
+
+        for (arg_name, arg_val) in named_values {
+            let norm = if arg_name.starts_with('$') {
+                arg_name.clone()
+            } else {
+                format!("${}", arg_name)
+            };
+            if let Some((idx, param)) = func
+                .params
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.name == norm)
+            {
+                self.registers[new_base + param.reg.index()] = arg_val.cow_clone();
+                assigned_params[idx] = true;
+            } else {
+                return Err(self.make_error(
+                    RuntimeErrorKind::UnknownNamedArgument {
+                        callable: func.name.clone(),
+                        name: arg_name,
+                    },
+                    span,
+                ));
+            }
+        }
+
+        // Verify required parameters were provided
+        for (idx, param) in func.params.iter().enumerate() {
+            if !assigned_params[idx] && !param.has_default && !param.is_variadic {
+                let min_req = func
+                    .params
+                    .iter()
+                    .filter(|p| !p.has_default && !p.is_variadic)
+                    .count();
+                return Err(self.make_error(
+                    RuntimeErrorKind::TooFewArguments {
+                        callable: func.name.clone(),
+                        passed: positional_values.len(),
+                        expected: min_req,
+                    },
+                    span,
+                ));
+            }
+        }
+
+        // 3. Bind captured closure/arrow upvalues (`use ($var)`)
+        for (upval_name, upval_val) in func.upvalues.iter().zip(upvalues.iter()) {
+            if let Some(reg) = func.chunk.register_for_var(upval_name) {
+                self.registers[new_base + reg.index()] = upval_val.cow_clone();
+            }
+        }
+
+        self.frames.push(CallFrame {
+            function_name: func.name,
+            func_id: Some(target_id),
+            ip: 0,
+            base_reg: new_base,
+            num_registers: num_regs,
+            caller_dst,
+            active_try_handlers: Vec::new(),
+            iterators: HashMap::new(),
+        });
+
+        Ok(())
+    }
+
+    /// Invoke a compiled function/closure synchronously and return its evaluated `PhpValue`
+    /// (used by higher-order collection helpers `map`, `filter`, `reduce`, `Future::wait`, and `defer`).
+    pub fn invoke_compiled_function_sync(
+        &mut self,
+        func_id: FunctionId,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let staged: Vec<StagedArg> = args
+            .into_iter()
+            .map(|value| StagedArg {
+                value,
+                name: None,
+                is_unpack: false,
+            })
+            .collect();
+        let depth_before = self.frames.len();
+        self.push_compiled_call_frame(func_id, None, &staged, &[], None, span)?;
+        self.dispatch_loop(depth_before)
+    }
+
+    /// Invoke a [`VmClosure`] synchronously and return its evaluated `PhpValue`.
+    pub fn invoke_closure_sync(
+        &mut self,
+        closure: &VmClosure,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let staged: Vec<StagedArg> = args
+            .into_iter()
+            .map(|value| StagedArg {
+                value,
+                name: None,
+                is_unpack: false,
+            })
+            .collect();
+        let depth_before = self.frames.len();
+        self.push_compiled_call_frame(
+            closure.func_id,
+            None,
+            &staged,
+            &closure.upvalues,
+            None,
+            span,
+        )?;
+        self.dispatch_loop(depth_before)
+    }
+
+    // =========================================================================
+    // Facade & Fluent Method Execution
+    // =========================================================================
+
+    fn exec_facade_call(
+        &mut self,
+        facade: &str,
+        method: &str,
+        args: &[PhpValue],
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        // Intercept higher-order `Future::*` and `Arr::*` facade calls that invoke closures
+        if facade == "Future" {
+            match method {
+                "run" => {
+                    let resolved = match args.first() {
+                        Some(PhpValue::Closure(c)) => self.invoke_closure_sync(c, Vec::new(), span)?,
+                        Some(other) => other.clone(),
+                        None => PhpValue::Null,
+                    };
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                        resolved,
+                    )))));
+                }
+                "delayed" => {
+                    let resolved = match args.get(1) {
+                        Some(PhpValue::Closure(c)) => self.invoke_closure_sync(c, Vec::new(), span)?,
+                        Some(other) => other.clone(),
+                        None => PhpValue::Null,
+                    };
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                        resolved,
+                    )))));
+                }
+                "wait" => {
+                    let mut out = Vec::new();
+                    if let Some(first) = args.first() {
+                        for task in Self::extract_items(first) {
+                            match task {
+                                PhpValue::Closure(c) => {
+                                    out.push(self.invoke_closure_sync(&c, Vec::new(), span)?);
+                                }
+                                PhpValue::Future(f) => {
+                                    out.push(f.borrow().value.clone().unwrap_or(PhpValue::Null));
+                                }
+                                other => out.push(other),
+                            }
+                        }
+                    }
+                    return Ok(PhpValue::list(out));
+                }
+                "any" => {
+                    if let Some(first) = args.first() {
+                        if let Some(first_task) = Self::extract_items(first).into_iter().next() {
+                            return match first_task {
+                                PhpValue::Closure(c) => {
+                                    self.invoke_closure_sync(&c, Vec::new(), span)
+                                }
+                                PhpValue::Future(f) => {
+                                    Ok(f.borrow().value.clone().unwrap_or(PhpValue::Null))
+                                }
+                                other => Ok(other),
+                            };
+                        }
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                "defer" => {
+                    if let Some(PhpValue::Closure(c)) = args.first() {
+                        self.defer_queue.push(c.func_id);
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                _ => {}
+            }
+        }
+
+        if facade == "Sys" && method == "print" {
+            for arg in args {
+                self.output_buffer.push_str(&arg.to_php_string());
+            }
+            return Ok(PhpValue::Null);
+        }
+
+        if facade == "Arr" {
+            match method {
+                "map" => {
+                    if let (Some(PhpValue::Closure(cb)), Some(arr)) = (args.first(), args.get(1)) {
+                        let items = Self::extract_items(arr);
+                        let mut mapped = Vec::with_capacity(items.len());
+                        for (idx, item) in items.into_iter().enumerate() {
+                            mapped.push(self.invoke_closure_sync(
+                                cb,
+                                vec![item, PhpValue::Int(idx as i64)],
+                                span,
+                            )?);
+                        }
+                        return Ok(PhpValue::list(mapped));
+                    }
+                }
+                "filter" => {
+                    if let Some(arr) = args.first() {
+                        let items = Self::extract_items(arr);
+                        let mut filtered = Vec::new();
+                        if let Some(PhpValue::Closure(cb)) = args.get(1) {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let keep = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    span,
+                                )?;
+                                if keep.is_truthy() {
+                                    filtered.push(item);
+                                }
+                            }
+                        } else {
+                            filtered.extend(items.into_iter().filter(|i| i.is_truthy()));
+                        }
+                        return Ok(PhpValue::list(filtered));
+                    }
+                }
+                "reduce" => {
+                    if let (Some(arr), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {
+                        let items = Self::extract_items(arr);
+                        let mut acc = args.get(2).cloned().unwrap_or(PhpValue::Null);
+                        for item in items {
+                            acc = self.invoke_closure_sync(cb, vec![acc, item], span)?;
+                        }
+                        return Ok(acc);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        dispatch_facade_call(facade, method, args, span)
+    }
+
+    /// Execute fluent chaining methods on subtyped collections, numeric wrappers, futures, and strings.
+    fn exec_fluent_value_method(
+        &mut self,
+        receiver: &PhpValue,
+        method: &str,
+        args: &[PhpValue],
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        match receiver {
+            // 1. Collection fluent methods (`Arr::list()->map()->filter()->reduce()`, etc.)
+            PhpValue::List(_)
+            | PhpValue::Array(_)
+            | PhpValue::Dict(_)
+            | PhpValue::Set(_)
+            | PhpValue::HashMap(_) => {
+                let items = Self::extract_items(receiver);
+                match method {
+                    "map" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = Vec::with_capacity(items.len());
+                            for (idx, item) in items.into_iter().enumerate() {
+                                out.push(self.invoke_closure_sync(
+                                    cb,
+                                    vec![item, PhpValue::Int(idx as i64)],
+                                    span,
+                                )?);
+                            }
+                            Ok(PhpValue::list(out))
+                        } else {
+                            Ok(PhpValue::list(items))
+                        }
+                    }
+                    "filter" => {
+                        let mut out = Vec::new();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let keep = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    span,
+                                )?;
+                                if keep.is_truthy() {
+                                    out.push(item);
+                                }
+                            }
+                        } else {
+                            out.extend(items.into_iter().filter(|i| i.is_truthy()));
+                        }
+                        Ok(PhpValue::list(out))
+                    }
+                    "reject" => {
+                        let mut out = Vec::new();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let drop = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    span,
+                                )?;
+                                if !drop.is_truthy() {
+                                    out.push(item);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::list(out))
+                    }
+                    "reduce" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut acc = args.get(1).cloned().unwrap_or(PhpValue::Int(0));
+                            for item in items {
+                                acc = self.invoke_closure_sync(cb, vec![acc, item], span)?;
+                            }
+                            Ok(acc)
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                    "find" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let matched = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
+                                    span,
+                                )?;
+                                if matched.is_truthy() {
+                                    return Ok(item);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::Null)
+                    }
+                    "count" | "size" => Ok(PhpValue::Int(items.len() as i64)),
+                    "isEmpty" => Ok(PhpValue::Bool(items.is_empty())),
+                    "first" => Ok(items.into_iter().next().unwrap_or(PhpValue::Null)),
+                    "last" => Ok(items.into_iter().last().unwrap_or(PhpValue::Null)),
+                    "all" | "toArray" | "values" => Ok(PhpValue::list(items)),
+                    "contains" => {
+                        let needle = args.first().cloned().unwrap_or(PhpValue::Null);
+                        Ok(PhpValue::Bool(items.contains(&needle)))
+                    }
+                    "join" | "implode" => {
+                        let sep = args
+                            .first()
+                            .map(|v| v.to_php_string())
+                            .unwrap_or_else(|| ",".to_string());
+                        let joined = items
+                            .iter()
+                            .map(|v| v.to_php_string())
+                            .collect::<Vec<_>>()
+                            .join(&sep);
+                        Ok(PhpValue::string(joined))
+                    }
+                    "push" | "add" => {
+                        let mut updated = items;
+                        for a in args {
+                            updated.push(a.clone());
+                        }
+                        Ok(PhpValue::list(updated))
+                    }
+                    "reverse" => {
+                        let mut rev = items;
+                        rev.reverse();
+                        Ok(PhpValue::list(rev))
+                    }
+                    other => Err(self.make_error(
+                        RuntimeErrorKind::UndefinedMethod {
+                            class: receiver.type_name().to_string(),
+                            method: other.to_string(),
+                        },
+                        span,
+                    )),
+                }
+            }
+
+            // 2. Native Rust Integer Wrapper fluent methods (`Int::i64()->random()->add()->subtract()`)
+            PhpValue::RustInt { kind, value } => {
+                let rhs = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as i128;
+                let next_val = match method {
+                    "random" => {
+                        let bound = args.first().and_then(|v| v.to_i64()).unwrap_or(100).max(1) as i128;
+                        ((*value).wrapping_add(42)) % bound
+                    }
+                    "add" => value.wrapping_add(rhs),
+                    "subtract" | "sub" => value.wrapping_sub(rhs),
+                    "multiply" | "mul" => value.wrapping_mul(rhs),
+                    "divide" | "div" => {
+                        if rhs == 0 {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        value.wrapping_div(rhs)
+                    }
+                    "abs" => value.abs(),
+                    "toInt" => return Ok(PhpValue::Int(*value as i64)),
+                    "toFloat" => return Ok(PhpValue::Float(*value as f64)),
+                    "toString" => return Ok(PhpValue::string(value.to_string())),
+                    other => {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: kind.as_str().to_string(),
+                                method: other.to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                };
+                Ok(PhpValue::RustInt {
+                    kind: *kind,
+                    value: clamp_rust_int(*kind, next_val),
+                })
+            }
+
+            // 3. Native Rust Float Wrapper fluent methods (`Float::f64(3.14159)->toDecimal(2)`)
+            PhpValue::RustFloat { kind, value } => {
+                let fk = *kind;
+                let val = *value;
+                let rhs = args.first().and_then(|v| v.to_f64()).unwrap_or(1.0);
+                let next_val = match method {
+                    "toDecimal" | "round" => {
+                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(2).clamp(0, 15) as i32;
+                        let factor = 10_f64.powi(places);
+                        (val * factor).round() / factor
+                    }
+                    "add" => val + rhs,
+                    "subtract" | "sub" => val - rhs,
+                    "multiply" | "mul" => val * rhs,
+                    "divide" | "div" => {
+                        if rhs == 0.0 {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        val / rhs
+                    }
+                    "floor" => val.floor(),
+                    "ceil" => val.ceil(),
+                    "abs" => val.abs(),
+                    "toInt" => return Ok(PhpValue::Int(val as i64)),
+                    "toString" => return Ok(PhpValue::string(val.to_string())),
+                    other => {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: fk.as_str().to_string(),
+                                method: other.to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                };
+                Ok(PhpValue::RustFloat {
+                    kind: fk,
+                    value: next_val,
+                })
+            }
+
+            PhpValue::Float(value) => {
+                let val = *value;
+                let rhs = args.first().and_then(|v| v.to_f64()).unwrap_or(1.0);
+                let next_val = match method {
+                    "toDecimal" | "round" => {
+                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(2).clamp(0, 15) as i32;
+                        let factor = 10_f64.powi(places);
+                        (val * factor).round() / factor
+                    }
+                    "add" => val + rhs,
+                    "subtract" | "sub" => val - rhs,
+                    "multiply" | "mul" => val * rhs,
+                    "divide" | "div" => {
+                        if rhs == 0.0 {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        val / rhs
+                    }
+                    "floor" => val.floor(),
+                    "ceil" => val.ceil(),
+                    "abs" => val.abs(),
+                    "toInt" => return Ok(PhpValue::Int(val as i64)),
+                    "toString" => return Ok(PhpValue::string(val.to_string())),
+                    other => {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: "float".to_string(),
+                                method: other.to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                };
+                Ok(PhpValue::Float(next_val))
+            }
+
+            // 4. Future fluent methods (`->wait()`, `->then()`)
+            PhpValue::Future(fut_rc) => match method {
+                "wait" => {
+                    let b = fut_rc.borrow();
+                    if let Some(ref err) = b.error {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: err.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                    Ok(b.value.clone().unwrap_or(PhpValue::Null))
+                }
+                "then" => {
+                    let val = fut_rc.borrow().value.clone().unwrap_or(PhpValue::Null);
+                    if let Some(PhpValue::Closure(cb)) = args.first() {
+                        let mapped = self.invoke_closure_sync(cb, vec![val], span)?;
+                        Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                            mapped,
+                        )))))
+                    } else {
+                        Ok(receiver.clone())
+                    }
+                }
+                other => Err(self.make_error(
+                    RuntimeErrorKind::UndefinedMethod {
+                        class: "Future".to_string(),
+                        method: other.to_string(),
+                    },
+                    span,
+                )),
+            },
+
+            other => Err(self.make_error(
+                RuntimeErrorKind::UndefinedMethod {
+                    class: other.type_name().to_string(),
+                    method: method.to_string(),
+                },
+                span,
+            )),
+        }
+    }
+
+    /// Execute built-in synthetic object methods (`HTTPResponse::json()`, `DBQuery::find()`, `Image::resize()`, etc.).
+    fn exec_builtin_object_method(
+        &mut self,
+        class_name: &str,
+        receiver: &PhpValue,
+        method: &str,
+        args: &[PhpValue],
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        match (class_name, method) {
+            ("HTTPResponse", "json") => {
+                let mut entries = Vec::new();
+                entries.push(("status".to_string(), PhpValue::string("ok")));
+                Ok(PhpValue::dict(entries))
+            }
+            ("HTTPResponse", "body") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow()
+                        .get_property("body")
+                        .cloned()
+                        .unwrap_or_else(|| PhpValue::string("")))
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            ("HTTPResponse", "status") => Ok(PhpValue::Int(200)),
+            ("HTTPClient", "get" | "post") => {
+                let url = args
+                    .first()
+                    .map(|v| v.to_php_string())
+                    .unwrap_or_default();
+                let mut resp = VmObject::new("HTTPResponse");
+                resp.set_property("url", PhpValue::string(url));
+                resp.set_property("status", PhpValue::Int(200));
+                resp.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
+                Ok(PhpValue::object(resp))
+            }
+            ("DBQuery", "find") => {
+                let id = args.first().cloned().unwrap_or(PhpValue::Int(1));
+                let mut record = VmObject::new("ModelRecord");
+                record.set_property("id", id);
+                Ok(PhpValue::object(record))
+            }
+            ("DBQuery", "where" | "orderBy" | "limit") => Ok(receiver.clone()),
+            ("DBQuery", "get" | "all") => Ok(PhpValue::list(Vec::new())),
+            ("Image", "resize" | "crop") => Ok(receiver.clone()),
+            ("Image", "save") => Ok(PhpValue::Bool(true)),
+            (_, "getMessage") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow()
+                        .get_property("message")
+                        .cloned()
+                        .unwrap_or_else(|| PhpValue::string("")))
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            _ => Err(self.make_error(
+                RuntimeErrorKind::UndefinedMethod {
+                    class: class_name.to_string(),
+                    method: method.to_string(),
+                },
+                span,
+            )),
+        }
+    }
+
+    // =========================================================================
+    // Object Instantiation, Inheritance Resolution, & Exception Unwinding
+    // =========================================================================
+
+    fn instantiate_class(&mut self, class_name: &str, span: Span) -> Result<PhpValue, RuntimeError> {
+        let mut obj = VmObject::new(class_name);
+
+        // Built-in Exception / RuntimeException classes
+        if class_name.ends_with("Exception") || class_name.ends_with("Error") || class_name == "stdClass" {
+            if !self.module.class_index.contains_key(class_name) {
+                obj.set_property("message", PhpValue::string(""));
+                obj.set_property("code", PhpValue::Int(0));
+                return Ok(PhpValue::object(obj));
+            }
+        }
+
+        // Collect inheritance chain from root ancestor down to `class_name`
+        let mut hierarchy_chain = Vec::new();
+        let mut cursor = Some(class_name.to_string());
+        while let Some(ref current_cls_name) = cursor {
+            if let Some(cls) = self.module.get_class_by_name(current_cls_name).cloned() {
+                let parent = cls.extends.clone();
+                hierarchy_chain.push(cls);
+                cursor = parent;
+            } else if current_cls_name == class_name {
+                return Err(self.make_error(
+                    RuntimeErrorKind::UndefinedClass {
+                        name: class_name.to_string(),
+                    },
+                    span,
+                ));
+            } else {
+                break;
+            }
+        }
+
+        for cls in hierarchy_chain.into_iter().rev() {
+            // Initialize trait properties
+            for trait_name in &cls.traits {
+                if let Some(tr) = self.module.get_class_by_name(trait_name).cloned() {
+                    for prop in &tr.properties {
+                        if !prop.is_static {
+                            let val = if let Some(ref chunk) = prop.default_chunk {
+                                self.eval_isolated_chunk(chunk)?
+                            } else {
+                                PhpValue::Null
+                            };
+                            obj.set_property(prop.name.clone(), val);
+                            obj.readonly_props.insert(prop.name.clone(), prop.is_readonly);
+                        }
+                    }
+                }
+            }
+
+            // Initialize class instance properties
+            for prop in &cls.properties {
+                if !prop.is_static {
+                    let val = if let Some(ref chunk) = prop.default_chunk {
+                        self.eval_isolated_chunk(chunk)?
+                    } else {
+                        PhpValue::Null
+                    };
+                    obj.set_property(prop.name.clone(), val);
+                    obj.readonly_props.insert(prop.name.clone(), prop.is_readonly);
+                }
+            }
+        }
+
+        Ok(PhpValue::object(obj))
+    }
+
+    fn resolve_method_id(&self, class_name: &str, method_name: &str) -> Option<FunctionId> {
+        let mut cursor = Some(class_name);
+        while let Some(cls_name) = cursor {
+            if let Some(cls) = self.module.get_class_by_name(cls_name) {
+                if let Some(&fn_id) = cls.methods.get(method_name) {
+                    return Some(fn_id);
+                }
+                for trait_name in &cls.traits {
+                    if let Some(tr) = self.module.get_class_by_name(trait_name) {
+                        if let Some(&fn_id) = tr.methods.get(method_name) {
+                            return Some(fn_id);
+                        }
+                    }
+                }
+                cursor = cls.extends.as_deref();
+            } else if let Some(enm) = self.module.enums.get(cls_name) {
+                return enm.methods.get(method_name).copied();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    fn is_class_instance_of(&self, actual_cls: &str, target_cls: &str) -> bool {
+        if actual_cls == target_cls || target_cls == "object" {
+            return true;
+        }
+        if let Some(ref h) = self.type_hierarchy {
+            if h.is_subtype_of(actual_cls, target_cls) {
+                return true;
+            }
+        }
+        // Walk compiled class extends / implements / traits
+        let mut cursor = Some(actual_cls);
+        while let Some(cls_name) = cursor {
+            if cls_name == target_cls {
+                return true;
+            }
+            if let Some(cls) = self.module.get_class_by_name(cls_name) {
+                if cls.implements.iter().any(|i| i == target_cls)
+                    || cls.traits.iter().any(|t| t == target_cls)
+                {
+                    return true;
+                }
+                cursor = cls.extends.as_deref();
+            } else if let Some(enm) = self.module.enums.get(cls_name) {
+                if enm.implements.iter().any(|i| i == target_cls) {
+                    return true;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+        // Built-in Exception subtyping
+        if actual_cls.ends_with("Exception") && (target_cls == "Exception" || target_cls == "Throwable") {
+            return true;
+        }
+        false
+    }
+
+    fn unwind_exception(
+        &mut self,
+        exc_val: PhpValue,
+        stop_depth: usize,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if self.try_dispatch_to_catch(exc_val.clone(), stop_depth) {
+            return Ok(());
+        }
+
+        let (exc_class, exc_msg) = match &exc_val {
+            PhpValue::Object(o) => {
+                let b = o.borrow();
+                let msg = b
+                    .get_property("message")
+                    .map(|v| v.to_php_string())
+                    .unwrap_or_default();
+                (b.class_name.clone(), msg)
+            }
+            other => ("Exception".to_string(), other.to_php_string()),
+        };
+
+        Err(self.make_error(
+            RuntimeErrorKind::UncaughtException {
+                class: exc_class,
+                message: exc_msg,
+            },
+            span,
+        ))
+    }
+
+    fn try_dispatch_to_catch(&mut self, exc_val: PhpValue, stop_depth: usize) -> bool {
+        let exc_class = match &exc_val {
+            PhpValue::Object(o) => o.borrow().class_name.clone(),
+            _ => "Exception".to_string(),
+        };
+
+        while self.frames.len() > stop_depth {
+            let frame_idx = self.frames.len() - 1;
+            let func_id = self.frames[frame_idx].func_id;
+            let base_reg = self.frames[frame_idx].base_reg;
+
+            while let Some(handler_id) = self.frames[frame_idx].active_try_handlers.pop() {
+                let handler_opt = self
+                    .chunk_for_func(func_id)
+                    .exception_handlers
+                    .get(handler_id as usize)
+                    .cloned();
+
+                if let Some(handler) = handler_opt {
+                    for catch in &handler.catches {
+                        let matches = catch.catch_types.is_empty()
+                            || catch.catch_types.iter().any(|ct| {
+                                ct == "Throwable"
+                                    || ct == "Exception"
+                                    || self.is_class_instance_of(&exc_class, ct)
+                            });
+                        if matches {
+                            self.registers[base_reg + catch.exception_reg.index()] = exc_val;
+                            self.frames[frame_idx].ip = catch.target_ip as usize;
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            let popped = self.frames.pop().unwrap();
+            self.registers.truncate(popped.base_reg);
+        }
+
+        false
+    }
+
+    // =========================================================================
+    // Pure Unary & Binary Instruction Execution
+    // =========================================================================
+
+    fn exec_unary(
+        &self,
+        op: IrUnaryOp,
+        src: &PhpValue,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        match op {
+            IrUnaryOp::Plus => match src {
+                PhpValue::Int(_)
+                | PhpValue::Float(_)
+                | PhpValue::RustInt { .. }
+                | PhpValue::RustFloat { .. } => Ok(src.clone()),
+                other => {
+                    if let Some(i) = other.to_i64() {
+                        Ok(PhpValue::Int(i))
+                    } else if let Some(f) = other.to_f64() {
+                        Ok(PhpValue::Float(f))
+                    } else {
+                        Err(self.make_error(
+                            RuntimeErrorKind::InvalidUnaryOperand {
+                                op: "+".to_string(),
+                                operand_type: other.type_name().to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                }
+            },
+            IrUnaryOp::Neg => match src {
+                PhpValue::Int(n) => Ok(PhpValue::Int(n.wrapping_neg())),
+                PhpValue::Float(f) => Ok(PhpValue::Float(-*f)),
+                PhpValue::RustInt { kind, value } => Ok(PhpValue::RustInt {
+                    kind: *kind,
+                    value: value.wrapping_neg(),
+                }),
+                PhpValue::RustFloat { kind, value } => Ok(PhpValue::RustFloat {
+                    kind: *kind,
+                    value: -*value,
+                }),
+                other => {
+                    if let Some(i) = other.to_i64() {
+                        Ok(PhpValue::Int(-i))
+                    } else {
+                        Err(self.make_error(
+                            RuntimeErrorKind::InvalidUnaryOperand {
+                                op: "-".to_string(),
+                                operand_type: other.type_name().to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                }
+            },
+            IrUnaryOp::Not => Ok(PhpValue::Bool(!src.is_truthy())),
+            IrUnaryOp::BitNot => {
+                if let Some(n) = src.to_i64() {
+                    Ok(PhpValue::Int(!n))
+                } else {
+                    Err(self.make_error(
+                        RuntimeErrorKind::InvalidUnaryOperand {
+                            op: "~".to_string(),
+                            operand_type: src.type_name().to_string(),
+                        },
+                        span,
+                    ))
+                }
+            }
+            IrUnaryOp::Silence => Ok(src.clone()),
+        }
+    }
+
+    fn exec_binary(
+        &self,
+        op: BinaryOp,
+        lhs: &PhpValue,
+        rhs: &PhpValue,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        match op {
+            BinaryOp::Concat => {
+                let mut s = lhs.to_php_string();
+                s.push_str(&rhs.to_php_string());
+                Ok(PhpValue::string(s))
+            }
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+                let involves_float = matches!(
+                    lhs,
+                    PhpValue::Float(_) | PhpValue::RustFloat { .. }
+                ) || matches!(
+                    rhs,
+                    PhpValue::Float(_) | PhpValue::RustFloat { .. }
+                );
+
+                if involves_float {
+                    let a = lhs.to_f64().ok_or_else(|| {
+                        self.make_error(
+                            RuntimeErrorKind::InvalidBinaryOperands {
+                                op: op.to_string(),
+                                lhs_type: lhs.type_name().to_string(),
+                                rhs_type: rhs.type_name().to_string(),
+                            },
+                            span,
+                        )
+                    })?;
+                    let b = rhs.to_f64().ok_or_else(|| {
+                        self.make_error(
+                            RuntimeErrorKind::InvalidBinaryOperands {
+                                op: op.to_string(),
+                                lhs_type: lhs.type_name().to_string(),
+                                rhs_type: rhs.type_name().to_string(),
+                            },
+                            span,
+                        )
+                    })?;
+
+                    let res = match op {
+                        BinaryOp::Add => a + b,
+                        BinaryOp::Sub => a - b,
+                        BinaryOp::Mul => a * b,
+                        BinaryOp::Div => {
+                            if b == 0.0 {
+                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                            }
+                            a / b
+                        }
+                        BinaryOp::Mod => {
+                            if b == 0.0 {
+                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                            }
+                            a % b
+                        }
+                        BinaryOp::Pow => a.powf(b),
+                        _ => unreachable!(),
+                    };
+                    Ok(PhpValue::Float(res))
+                } else {
+                    let a = lhs.to_i64().ok_or_else(|| {
+                        self.make_error(
+                            RuntimeErrorKind::InvalidBinaryOperands {
+                                op: op.to_string(),
+                                lhs_type: lhs.type_name().to_string(),
+                                rhs_type: rhs.type_name().to_string(),
+                            },
+                            span,
+                        )
+                    })?;
+                    let b = rhs.to_i64().ok_or_else(|| {
+                        self.make_error(
+                            RuntimeErrorKind::InvalidBinaryOperands {
+                                op: op.to_string(),
+                                lhs_type: lhs.type_name().to_string(),
+                                rhs_type: rhs.type_name().to_string(),
+                            },
+                            span,
+                        )
+                    })?;
+
+                    match op {
+                        BinaryOp::Add => Ok(PhpValue::Int(a.wrapping_add(b))),
+                        BinaryOp::Sub => Ok(PhpValue::Int(a.wrapping_sub(b))),
+                        BinaryOp::Mul => Ok(PhpValue::Int(a.wrapping_mul(b))),
+                        BinaryOp::Div => {
+                            if b == 0 {
+                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                            }
+                            if a % b == 0 {
+                                Ok(PhpValue::Int(a / b))
+                            } else {
+                                Ok(PhpValue::Float((a as f64) / (b as f64)))
+                            }
+                        }
+                        BinaryOp::Mod => {
+                            if b == 0 {
+                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                            }
+                            Ok(PhpValue::Int(a % b))
+                        }
+                        BinaryOp::Pow => {
+                            if b >= 0 {
+                                Ok(PhpValue::Int(a.wrapping_pow(b as u32)))
+                            } else {
+                                Ok(PhpValue::Float((a as f64).powf(b as f64)))
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            // Bitwise operators
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+                let a = lhs.to_i64().unwrap_or(0);
+                let b = rhs.to_i64().unwrap_or(0);
+                let res = match op {
+                    BinaryOp::BitAnd => a & b,
+                    BinaryOp::BitOr => a | b,
+                    BinaryOp::BitXor => a ^ b,
+                    BinaryOp::Shl => a.wrapping_shl(b as u32),
+                    BinaryOp::Shr => a.wrapping_shr(b as u32),
+                    _ => unreachable!(),
+                };
+                Ok(PhpValue::Int(res))
+            }
+
+            // Equality & Identity comparisons
+            BinaryOp::Eq => Ok(PhpValue::Bool(Self::loose_eq(lhs, rhs))),
+            BinaryOp::NotEq => Ok(PhpValue::Bool(!Self::loose_eq(lhs, rhs))),
+            BinaryOp::Identical => Ok(PhpValue::Bool(Self::strict_eq(lhs, rhs))),
+            BinaryOp::NotIdentical => Ok(PhpValue::Bool(!Self::strict_eq(lhs, rhs))),
+
+            // Relational & Spaceship comparisons
+            BinaryOp::Lt => Ok(PhpValue::Bool(lhs < rhs)),
+            BinaryOp::LtEq => Ok(PhpValue::Bool(lhs <= rhs)),
+            BinaryOp::Gt => Ok(PhpValue::Bool(lhs > rhs)),
+            BinaryOp::GtEq => Ok(PhpValue::Bool(lhs >= rhs)),
+            BinaryOp::Spaceship => {
+                let cmp = match lhs.partial_cmp(rhs) {
+                    Some(std::cmp::Ordering::Less) => -1,
+                    Some(std::cmp::Ordering::Equal) => 0,
+                    Some(std::cmp::Ordering::Greater) => 1,
+                    None => 0,
+                };
+                Ok(PhpValue::Int(cmp))
+            }
+
+            // Logical XOR (`xor`)
+            BinaryOp::WordXor => Ok(PhpValue::Bool(lhs.is_truthy() ^ rhs.is_truthy())),
+            BinaryOp::LogicalAnd | BinaryOp::WordAnd => {
+                Ok(PhpValue::Bool(lhs.is_truthy() && rhs.is_truthy()))
+            }
+            BinaryOp::LogicalOr | BinaryOp::WordOr => {
+                Ok(PhpValue::Bool(lhs.is_truthy() || rhs.is_truthy()))
+            }
+            BinaryOp::Coalesce => {
+                if !lhs.is_null() {
+                    Ok(lhs.clone())
+                } else {
+                    Ok(rhs.clone())
+                }
+            }
+        }
+    }
+
+    fn strict_eq(a: &PhpValue, b: &PhpValue) -> bool {
+        match (a, b) {
+            (PhpValue::Null, PhpValue::Null) => true,
+            (PhpValue::Bool(x), PhpValue::Bool(y)) => x == y,
+            (PhpValue::Int(x), PhpValue::Int(y)) => x == y,
+            (PhpValue::Float(x), PhpValue::Float(y)) => x == y,
+            (
+                PhpValue::RustInt {
+                    kind: k1,
+                    value: v1,
+                },
+                PhpValue::RustInt {
+                    kind: k2,
+                    value: v2,
+                },
+            ) => k1 == k2 && v1 == v2,
+            (
+                PhpValue::RustFloat {
+                    kind: k1,
+                    value: v1,
+                },
+                PhpValue::RustFloat {
+                    kind: k2,
+                    value: v2,
+                },
+            ) => k1 == k2 && v1 == v2,
+            (PhpValue::String(x), PhpValue::String(y)) => x == y,
+            (PhpValue::Array(x), PhpValue::Array(y)) | (PhpValue::List(x), PhpValue::List(y)) => {
+                *x.borrow() == *y.borrow()
+            }
+            (PhpValue::Dict(x), PhpValue::Dict(y)) => *x.borrow() == *y.borrow(),
+            (PhpValue::Set(x), PhpValue::Set(y)) => *x.borrow() == *y.borrow(),
+            (PhpValue::HashMap(x), PhpValue::HashMap(y)) => *x.borrow() == *y.borrow(),
+            (PhpValue::Object(x), PhpValue::Object(y)) => Rc::ptr_eq(x, y),
+            (PhpValue::Closure(x), PhpValue::Closure(y)) => Rc::ptr_eq(x, y),
+            _ => false,
+        }
+    }
+
+    fn loose_eq(a: &PhpValue, b: &PhpValue) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (PhpValue::Null, PhpValue::Bool(false)) | (PhpValue::Bool(false), PhpValue::Null) => {
+                true
+            }
+            (PhpValue::Int(i), PhpValue::String(s)) | (PhpValue::String(s), PhpValue::Int(i)) => {
+                s.trim().parse::<i64>().ok() == Some(*i)
+            }
+            _ => false,
+        }
+    }
+
+    // =========================================================================
+    // Internal Utilities
+    // =========================================================================
+
+    #[inline]
+    fn chunk_for_func(&self, func_id: Option<FunctionId>) -> &BytecodeChunk {
+        match func_id {
+            Some(id) => &self.module.functions[id.index()].chunk,
+            None => &self.module.main_chunk,
+        }
+    }
+
+    fn constant_to_value(c: &Constant) -> PhpValue {
+        match c {
+            Constant::Null => PhpValue::Null,
+            Constant::Bool(b) => PhpValue::Bool(*b),
+            Constant::Int(n) => PhpValue::Int(*n),
+            Constant::Float(f) => PhpValue::Float(*f),
+            Constant::RustInt { kind, value } => PhpValue::RustInt {
+                kind: *kind,
+                value: *value,
+            },
+            Constant::RustFloat { kind, value } => PhpValue::RustFloat {
+                kind: *kind,
+                value: *value,
+            },
+            Constant::String(s) => PhpValue::string(s.clone()),
+            Constant::Type(ty) => PhpValue::string(ty.to_string()),
+        }
+    }
+
+    fn drain_staged_args(&mut self, count: usize) -> Vec<StagedArg> {
+        let start = self.arg_buffer.len().saturating_sub(count);
+        self.arg_buffer.drain(start..).collect()
+    }
+
+    fn flatten_positional_args(staged: &[StagedArg]) -> Vec<PhpValue> {
+        let mut out = Vec::with_capacity(staged.len());
+        for arg in staged {
+            if arg.is_unpack {
+                out.extend(Self::extract_items(&arg.value));
+            } else {
+                out.push(arg.value.clone());
+            }
+        }
+        out
+    }
+
+    fn extract_items(val: &PhpValue) -> Vec<PhpValue> {
+        match val {
+            PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => a.borrow().clone(),
+            PhpValue::Dict(d) => d.borrow().iter().map(|(_, v)| v.clone()).collect(),
+            PhpValue::HashMap(m) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
+            PhpValue::Null => Vec::new(),
+            other => vec![other.clone()],
+        }
+    }
+
+    fn extract_dict_entries(val: &PhpValue) -> Vec<(String, PhpValue)> {
+        match val {
+            PhpValue::Dict(d) => d.borrow().clone(),
+            PhpValue::Array(a) | PhpValue::List(a) => a
+                .borrow()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i.to_string(), v.clone()))
+                .collect(),
+            PhpValue::HashMap(m) => m
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.to_php_string(), v.clone()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn extract_map_entries(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
+        match val {
+            PhpValue::HashMap(m) => m.borrow().clone(),
+            PhpValue::Dict(d) => d
+                .borrow()
+                .iter()
+                .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
+                .collect(),
+            PhpValue::Array(a) | PhpValue::List(a) => a
+                .borrow()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn runtime_type_label(&self, val: &PhpValue) -> String {
+        match val {
+            PhpValue::Object(o) => o.borrow().class_name.clone(),
+            other => other.type_name().to_string(),
+        }
+    }
+
+    fn make_error(&self, kind: RuntimeErrorKind, span: Span) -> RuntimeError {
+        let mut trace = Vec::with_capacity(self.frames.len());
+        for frame in self.frames.iter().rev() {
+            let ip = frame.ip.saturating_sub(1);
+            let frame_span = self
+                .chunk_for_func(frame.func_id)
+                .span_at(ip)
+                .unwrap_or(span);
+            trace.push(StackTraceEntry {
+                function_name: frame.function_name.clone(),
+                ip,
+                span: frame_span,
+            });
+        }
+        RuntimeError::with_stack_trace(kind, span, trace)
+    }
+}
+
+impl From<BytecodeChunk> for IrModule {
+    fn from(chunk: BytecodeChunk) -> Self {
+        Self {
+            main_chunk: chunk,
+            ..Default::default()
+        }
+    }
+}
+
+fn clamp_rust_int(kind: RustIntKind, val: i128) -> i128 {
+    match kind {
+        RustIntKind::I8 => (val as i8) as i128,
+        RustIntKind::I16 => (val as i16) as i128,
+        RustIntKind::I32 => (val as i32) as i128,
+        RustIntKind::I64 => (val as i64) as i128,
+        RustIntKind::I128 => val,
+        RustIntKind::Isize => (val as isize) as i128,
+        RustIntKind::U8 => (val as u8) as i128,
+        RustIntKind::U16 => (val as u16) as i128,
+        RustIntKind::U32 => (val as u32) as i128,
+        RustIntKind::U64 => (val as u64) as i128,
+        RustIntKind::U128 => val,
+        RustIntKind::Usize => (val as usize) as i128,
+    }
+}
