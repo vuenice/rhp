@@ -369,10 +369,21 @@ impl<'s> CombinatorStream<'s> {
             return Ok(TypeHint::new(TypeHintKind::Union(types), span));
         }
 
-        // Intersection types `Type1 & Type2`
-        if self.check(&Token::Ampersand) {
+        // Intersection types `Type1 & Type2` (only when `&` is not followed by `$var` or `...$var`)
+        if self.check(&Token::Ampersand)
+            && !matches!(
+                self.peek_nth(1).map(|t| &t.token),
+                Some(Token::Variable(_) | Token::Ellipsis)
+            )
+        {
             let mut types = vec![first];
-            while self.matches(&Token::Ampersand) {
+            while self.check(&Token::Ampersand)
+                && !matches!(
+                    self.peek_nth(1).map(|t| &t.token),
+                    Some(Token::Variable(_) | Token::Ellipsis)
+                )
+            {
+                self.advance();
                 types.push(self.parse_single_type_hint()?);
             }
             let end_span = types.last().unwrap().span;
@@ -394,7 +405,12 @@ impl<'s> CombinatorStream<'s> {
                 | Token::TypeBool
                 | Token::TypeVoid
                 | Token::TypeMixed
-                | Token::TypeNever => {
+                | Token::TypeNever
+                | Token::TypeObject
+                | Token::Null
+                | Token::True
+                | Token::False
+                | Token::Static => {
                     let ident = Ident::new(spanned.token.as_str(), spanned.span);
                     Ok(TypeHint::new(TypeHintKind::Named(ident), spanned.span))
                 }

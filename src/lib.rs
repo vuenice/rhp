@@ -7,6 +7,7 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod type_system;
 
 pub use ast::{
     walk_expr, walk_program, walk_stmt, Argument, ArrayElement, AssignOp, AstVisitor, BinaryOp,
@@ -32,4 +33,10 @@ pub use lexer::{
 pub use parser::{
     error::{ParseError, ParseErrorKind},
     parse, parse_expr, parse_stmt, parse_with_file_id, CombinatorStream, Parser,
+};
+pub use type_system::{
+    check_program, parse_and_check, parse_and_check_with_file_id, ClassTypeInfo, CollectionSubtype,
+    EnumTypeInfo, FrontendError, FunctionSignature, InterfaceTypeInfo, ParamSignature,
+    PropertyTypeInfo, RhpType, RustFloatKind, RustIntKind, TypeCheckResult, TypeChecker,
+    TypeEnvironment, TypeError, TypeErrorKind, TypeHierarchy, TypedProgram, VariableBinding,
 };
