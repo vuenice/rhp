@@ -285,6 +285,14 @@ pub fn resolve_facade_static_call(
                     Box::new(elem_ty),
                 )))
             }
+            "range" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
+                RhpType::Int,
+            )))),
+            "wrap" | "repeat" | "from" | "flatten" | "chunk" | "pluck" => {
+                Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
+                    RhpType::Mixed,
+                ))))
+            }
             "merge" | "keys" | "values" | "unique" | "slice" | "reverse" | "filter" | "map" => {
                 Ok(RhpType::Array(Box::new(RhpType::Mixed)))
             }
@@ -295,7 +303,7 @@ pub fn resolve_facade_static_call(
                 RhpType::String,
                 RhpType::Bool,
             ])),
-            "pop" | "shift" | "reduce" => Ok(RhpType::Mixed),
+            "first" | "last" | "pop" | "shift" | "reduce" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
 

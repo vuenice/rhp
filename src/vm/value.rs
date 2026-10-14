@@ -590,7 +590,13 @@ impl PhpValue {
             RhpType::String => matches!(self, Self::String(_)),
             RhpType::Array(_) => matches!(self, Self::Array(_) | Self::List(_)),
             RhpType::Collection(col) => match (col, self) {
-                (CollectionSubtype::List(_), Self::List(_) | Self::Array(_)) => true,
+                (CollectionSubtype::List(inner), Self::List(arr) | Self::Array(arr)) => {
+                    if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
+                        true
+                    } else {
+                        arr.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
+                    }
+                }
                 (CollectionSubtype::Dict(_), Self::Dict(_)) => true,
                 (CollectionSubtype::Set(_), Self::Set(_)) => true,
                 (CollectionSubtype::HashMap(_, _), Self::HashMap(_)) => true,
@@ -678,6 +684,62 @@ impl PhpValue {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Detaches the sequential list buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Returns `true` if this value is a List, `false` otherwise.
+    pub fn ensure_list_mut(&mut self) -> bool {
+        if let Self::List(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` if this value is an explicit subtyped sequential list (`Arr::list`).
+    #[inline]
+    pub fn is_list(&self) -> bool {
+        matches!(self, Self::List(_))
+    }
+
+    /// Borrows the underlying Rust `Vec<PhpValue>` sequential list structure.
+    #[inline]
+    pub fn as_list(&self) -> Option<std::cell::Ref<'_, Vec<PhpValue>>> {
+        match self {
+            Self::List(rc) | Self::Array(rc) => Some(rc.borrow()),
+            _ => None,
+        }
+    }
+
+    /// Mutably borrows the underlying Rust `Vec<PhpValue>` sequential list structure.
+    #[inline]
+    pub fn as_list_mut(&self) -> Option<std::cell::RefMut<'_, Vec<PhpValue>>> {
+        match self {
+            Self::List(rc) | Self::Array(rc) => Some(rc.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    /// Returns the length of the sequential list if this value is a List or Array.
+    #[inline]
+    pub fn list_len(&self) -> Option<usize> {
+        match self {
+            Self::List(rc) | Self::Array(rc) => Some(rc.borrow().len()),
+            _ => None,
+        }
+    }
+
+    /// Accesses an element by 0-based index from the contiguous Rust `Vec<PhpValue>` structure.
+    #[inline]
+    pub fn list_get(&self, index: usize) -> Option<PhpValue> {
+        match self {
+            Self::List(rc) | Self::Array(rc) => rc.borrow().get(index).cloned(),
+            _ => None,
         }
     }
 

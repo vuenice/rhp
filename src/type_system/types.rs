@@ -286,10 +286,10 @@ impl RhpType {
                         }
                     }
                     "Future" => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
-                    "List" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
-                    "Dict" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
-                    "Set" => Ok(RhpType::Collection(CollectionSubtype::Set(Box::new(RhpType::Mixed)))),
-                    "HashMap" | "Map" => Ok(RhpType::Collection(CollectionSubtype::HashMap(
+                    "List" | "list" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
+                    "Dict" | "dict" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+                    "Set" | "set" => Ok(RhpType::Collection(CollectionSubtype::Set(Box::new(RhpType::Mixed)))),
+                    "HashMap" | "hashmap" | "Map" | "map" => Ok(RhpType::Collection(CollectionSubtype::HashMap(
                         Box::new(RhpType::Mixed),
                         Box::new(RhpType::Mixed),
                     ))),
@@ -298,15 +298,6 @@ impl RhpType {
                             TypeErrorKind::InvalidTypeAnnotation {
                                 type_name: name.to_string(),
                                 reason: "primitive types must be strictly lowercase (string, bool, int, float)".to_string(),
-                            },
-                            hint.span,
-                        ))
-                    }
-                    "list" | "dict" | "set" | "hashmap" => {
-                        Err(TypeError::new(
-                            TypeErrorKind::InvalidTypeAnnotation {
-                                type_name: name.to_string(),
-                                reason: "collection type hints must be capitalized (List, Dict, Set, HashMap) to distinguish complex memory-backed structures from raw primitives".to_string(),
                             },
                             hint.span,
                         ))
@@ -609,6 +600,15 @@ impl RhpType {
             }
             (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
+            }
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::Dict(dst_el))) => {
+                src_el.is_assignable_to(dst_el, hierarchy)
+            }
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::Set(dst_el))) => {
+                src_el.is_assignable_to(dst_el, hierarchy)
+            }
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::HashMap(_, dst_v))) => {
+                src_el.is_assignable_to(dst_v, hierarchy)
             }
             (RhpType::Tuple(elems), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
                 elems.iter().all(|e| e.is_assignable_to(dst_el, hierarchy))

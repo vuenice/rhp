@@ -314,6 +314,18 @@ pub enum Token<'s> {
     #[token("never")]
     TypeNever,
 
+    #[token("list")]
+    TypeList,
+
+    #[token("dict")]
+    TypeDict,
+
+    #[token("set")]
+    TypeSet,
+
+    #[token("hashmap")]
+    TypeHashMap,
+
     // -------------------------------------------------------------------------
     // Identifiers (Fallback after keywords)
     // -------------------------------------------------------------------------
@@ -645,6 +657,10 @@ impl<'s> Token<'s> {
             Token::TypeObject => "object",
             Token::TypeIterable => "iterable",
             Token::TypeNever => "never",
+            Token::TypeList => "list",
+            Token::TypeDict => "dict",
+            Token::TypeSet => "set",
+            Token::TypeHashMap => "hashmap",
             Token::DoubleColon => "::",
             Token::NullsafeArrow => "?->",
             Token::Arrow => "->",
@@ -795,6 +811,10 @@ impl<'s> Token<'s> {
                 | Token::TypeObject
                 | Token::TypeIterable
                 | Token::TypeNever
+                | Token::TypeList
+                | Token::TypeDict
+                | Token::TypeSet
+                | Token::TypeHashMap
         )
     }
 

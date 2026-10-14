@@ -28,7 +28,11 @@ use crate::type_system::{parse_and_check, parse_and_check_with_file_id};
 
 pub use engine::{CallFrame, DEFAULT_MAX_CALL_DEPTH, VM};
 pub use error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
-pub use facade::{dispatch_facade_call, FacadeResult};
+pub use facade::{
+    clear_runtime_closure_macros, dispatch_facade_call, extract_array_elements,
+    extract_dict_elements, extract_map_elements, flatten_elements, get_runtime_closure_macro,
+    has_runtime_closure_macro, register_runtime_closure_macro, FacadeResult,
+};
 pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Type alias matching the architecture specification sketch (`Result<Value, RuntimeError>`).

@@ -1,9 +1,49 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::lexer::facade::get_macro;
 use crate::lexer::span::Span;
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
-use crate::vm::value::{PhpValue, VmFuture, VmObject};
+use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
+
+thread_local! {
+    /// Thread-local runtime closure macro registry for dynamic facade macros (`Arr::macro(...)`, etc.).
+    static RUNTIME_CLOSURE_MACROS: RefCell<HashMap<(String, String), VmClosure>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Retrieve a registered runtime closure macro.
+pub fn get_runtime_closure_macro(facade: &str, method: &str) -> Option<VmClosure> {
+    RUNTIME_CLOSURE_MACROS.with(|cell| {
+        cell.borrow()
+            .get(&(facade.to_string(), method.to_string()))
+            .cloned()
+    })
+}
+
+/// Register a compiled runtime closure macro on a facade (`Arr::macro('toCsv', ...)`).
+pub fn register_runtime_closure_macro(facade: &str, method: &str, closure: VmClosure) {
+    RUNTIME_CLOSURE_MACROS.with(|cell| {
+        cell.borrow_mut()
+            .insert((facade.to_string(), method.to_string()), closure);
+    });
+}
+
+/// Check if a runtime closure macro is registered.
+pub fn has_runtime_closure_macro(facade: &str, method: &str) -> bool {
+    RUNTIME_CLOSURE_MACROS.with(|cell| {
+        cell.borrow()
+            .contains_key(&(facade.to_string(), method.to_string()))
+    })
+}
+
+/// Remove all registered runtime closure macros (used for test isolation).
+pub fn clear_runtime_closure_macros() {
+    RUNTIME_CLOSURE_MACROS.with(|cell| {
+        cell.borrow_mut().clear();
+    });
+}
 
 /// Result type for standard facade dispatch functions.
 pub type FacadeResult = Result<PhpValue, RuntimeErrorKind>;
@@ -160,12 +200,116 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
 fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "list" => {
+            let items = if args.len() > 1 {
+                args.to_vec()
+            } else if let Some(first) = args.first() {
+                extract_array_elements(first)
+            } else {
+                Vec::new()
+            };
+            Ok(PhpValue::list(items))
+        }
+        "range" => {
+            let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            let end = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let step = args.get(2).and_then(|v| v.to_i64()).unwrap_or(1);
+            let step = if step == 0 { 1 } else { step };
+            let mut list = Vec::new();
+            if start <= end && step > 0 {
+                let mut curr = start;
+                while curr <= end {
+                    list.push(PhpValue::Int(curr as i32));
+                    curr += step;
+                }
+            } else if start >= end && step < 0 {
+                let mut curr = start;
+                while curr >= end {
+                    list.push(PhpValue::Int(curr as i32));
+                    curr += step;
+                }
+            }
+            Ok(PhpValue::list(list))
+        }
+        "wrap" => match args.first() {
+            None | Some(PhpValue::Null) => Ok(PhpValue::list(Vec::new())),
+            Some(PhpValue::List(l)) => Ok(PhpValue::List(l.clone())),
+            Some(PhpValue::Array(a)) => Ok(PhpValue::list(a.borrow().clone())),
+            Some(other) => Ok(PhpValue::list(vec![other.clone()])),
+        },
+        "repeat" => {
+            let val = args.first().cloned().unwrap_or(PhpValue::Null);
+            let count = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+            Ok(PhpValue::list(vec![val; count]))
+        }
+        "from" => {
             let items = if let Some(first) = args.first() {
                 extract_array_elements(first)
             } else {
                 Vec::new()
             };
             Ok(PhpValue::list(items))
+        }
+        "first" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            Ok(items.into_iter().next().unwrap_or(PhpValue::Null))
+        }
+        "last" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            Ok(items.into_iter().last().unwrap_or(PhpValue::Null))
+        }
+        "flatten" => {
+            let mut out = Vec::new();
+            if let Some(first) = args.first() {
+                flatten_elements(first, &mut out);
+            }
+            Ok(PhpValue::list(out))
+        }
+        "chunk" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            let size = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+            let chunks: Vec<PhpValue> = items
+                .chunks(size)
+                .map(|chunk| PhpValue::list(chunk.to_vec()))
+                .collect();
+            Ok(PhpValue::list(chunks))
+        }
+        "pluck" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let mut plucked = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    PhpValue::Object(obj) => {
+                        let val = obj.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null);
+                        plucked.push(val);
+                    }
+                    PhpValue::Dict(d) => {
+                        let val = d
+                            .borrow()
+                            .iter()
+                            .find(|(k, _)| k == &key)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(PhpValue::Null);
+                        plucked.push(val);
+                    }
+                    _ => plucked.push(PhpValue::Null),
+                }
+            }
+            Ok(PhpValue::list(plucked))
+        }
+        "sort" => {
+            let mut items = args.first().map(extract_array_elements).unwrap_or_default();
+            items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(PhpValue::list(items))
+        }
+        "macro" => {
+            if let Some(PhpValue::String(name)) = args.first() {
+                if let Some(PhpValue::Closure(closure)) = args.get(1) {
+                    register_runtime_closure_macro("Arr", name.as_str(), (**closure).clone());
+                    return Ok(PhpValue::Bool(true));
+                }
+            }
+            Ok(PhpValue::Bool(false))
         }
         "dict" => {
             let entries = if let Some(first) = args.first() {
@@ -567,7 +711,7 @@ fn get_arg_str(args: &[PhpValue], index: usize, callable: &str) -> Result<String
         })
 }
 
-fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
+pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
     match val {
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().clone(),
         PhpValue::Set(s) => s.borrow().clone(),
@@ -577,7 +721,30 @@ fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
     }
 }
 
-fn extract_dict_elements(val: &PhpValue) -> Vec<(String, PhpValue)> {
+pub fn flatten_elements(val: &PhpValue, out: &mut Vec<PhpValue>) {
+    match val {
+        PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => {
+            for item in a.borrow().iter() {
+                flatten_elements(item, out);
+            }
+        }
+        PhpValue::Dict(d) => {
+            for (_, item) in d.borrow().iter() {
+                flatten_elements(item, out);
+            }
+        }
+        PhpValue::HashMap(m) => {
+            for (_, item) in m.borrow().iter() {
+                flatten_elements(item, out);
+            }
+        }
+        other => {
+            out.push(other.clone());
+        }
+    }
+}
+
+pub fn extract_dict_elements(val: &PhpValue) -> Vec<(String, PhpValue)> {
     match val {
         PhpValue::Dict(d) => d.borrow().clone(),
         PhpValue::Array(a) | PhpValue::List(a) => a
@@ -590,7 +757,7 @@ fn extract_dict_elements(val: &PhpValue) -> Vec<(String, PhpValue)> {
     }
 }
 
-fn extract_map_elements(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
+pub fn extract_map_elements(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
     match val {
         PhpValue::HashMap(m) => m.borrow().clone(),
         PhpValue::Dict(d) => d

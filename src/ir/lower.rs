@@ -23,7 +23,7 @@ use crate::lexer::{
     span::Span,
 };
 use crate::type_system::{
-    types::{RhpType, RustFloatKind, RustIntKind},
+    types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind},
     TypeCheckResult,
 };
 
@@ -335,7 +335,38 @@ impl<'a> IrLowerer<'a> {
                 )?;
 
                 if let Some(init_expr) = init {
-                    self.lower_expr(b, init_expr, Some(reg))?;
+                    // Implicit Lowering to Factory Calls:
+                    // When declared type is a subtyped collection (list, dict, set, hashmap) and init is an Array literal,
+                    // compile it directly into OpCode::NewCollection { kind, source: ... }
+                    let col_kind = match &locked_ty {
+                        Some(RhpType::Collection(CollectionSubtype::List(_))) => {
+                            Some(IrCollectionKind::List)
+                        }
+                        Some(RhpType::Collection(CollectionSubtype::Dict(_))) => {
+                            Some(IrCollectionKind::Dict)
+                        }
+                        Some(RhpType::Collection(CollectionSubtype::Set(_))) => {
+                            Some(IrCollectionKind::Set)
+                        }
+                        Some(RhpType::Collection(CollectionSubtype::HashMap(_, _))) => {
+                            Some(IrCollectionKind::HashMap)
+                        }
+                        _ => None,
+                    };
+
+                    if let (Some(kind), ExprKind::Array(_)) = (col_kind, &init_expr.kind) {
+                        let arr_reg = self.lower_expr(b, init_expr, None)?;
+                        b.emit(
+                            OpCode::NewCollection {
+                                dst: reg,
+                                kind,
+                                source: Some(arr_reg),
+                            },
+                            stmt.span,
+                        );
+                    } else {
+                        self.lower_expr(b, init_expr, Some(reg))?;
+                    }
                 } else {
                     b.emit(OpCode::LoadNull { dst: reg }, stmt.span);
                 }
@@ -2200,10 +2231,44 @@ impl<'a> IrLowerer<'a> {
             // 1. Variable assignment (`$x = 10`, `$x += 5`, `$x ??= 'default'`)
             ExprKind::Variable(var) => {
                 let var_reg = b.get_or_alloc_local(var.name, None, false, false, target.span)?;
+                let locked_type = b
+                    .chunk
+                    .register_info
+                    .get(var_reg.index())
+                    .filter(|info| info.is_locked_type)
+                    .map(|info| info.rhp_type.clone());
 
                 match op {
                     AssignOp::Assign => {
-                        self.lower_expr(b, value, Some(var_reg))?;
+                        let col_kind = match &locked_type {
+                            Some(RhpType::Collection(CollectionSubtype::List(_))) => {
+                                Some(IrCollectionKind::List)
+                            }
+                            Some(RhpType::Collection(CollectionSubtype::Dict(_))) => {
+                                Some(IrCollectionKind::Dict)
+                            }
+                            Some(RhpType::Collection(CollectionSubtype::Set(_))) => {
+                                Some(IrCollectionKind::Set)
+                            }
+                            Some(RhpType::Collection(CollectionSubtype::HashMap(_, _))) => {
+                                Some(IrCollectionKind::HashMap)
+                            }
+                            _ => None,
+                        };
+
+                        if let (Some(kind), ExprKind::Array(_)) = (col_kind, &value.kind) {
+                            let arr_reg = self.lower_expr(b, value, None)?;
+                            b.emit(
+                                OpCode::NewCollection {
+                                    dst: var_reg,
+                                    kind,
+                                    source: Some(arr_reg),
+                                },
+                                span,
+                            );
+                        } else {
+                            self.lower_expr(b, value, Some(var_reg))?;
+                        }
                     }
                     AssignOp::CoalesceAssign => {
                         let skip_jmp = b.emit(
@@ -2233,12 +2298,6 @@ impl<'a> IrLowerer<'a> {
                 }
 
                 // If the variable has a locked type annotation, emit AssertType
-                let locked_type = b
-                    .chunk
-                    .register_info
-                    .get(var_reg.index())
-                    .filter(|info| info.is_locked_type)
-                    .map(|info| info.rhp_type.clone());
 
                 if let Some(ty) = locked_type {
                     if !matches!(ty, RhpType::Mixed | RhpType::Dynamic) {
@@ -2783,6 +2842,33 @@ impl<'a> IrLowerer<'a> {
             });
         }
 
+        // 1. Emit default parameter initialization prologue & type assertions
+        for (param_ast, compiled_param) in params.iter().zip(compiled_params.iter()) {
+            if let Some(ref def_expr) = param_ast.default_value {
+                let skip_jmp = fb.emit(
+                    OpCode::JumpIfNotNull {
+                        cond: compiled_param.reg,
+                        target: 0,
+                    },
+                    param_ast.span,
+                );
+                self.lower_expr(&mut fb, def_expr, Some(compiled_param.reg))?;
+                let after_def = fb.current_ip();
+                fb.patch_jump(skip_jmp, after_def);
+            }
+
+            if !matches!(compiled_param.rhp_type, RhpType::Mixed | RhpType::Dynamic) {
+                let type_const = fb.intern_type(compiled_param.rhp_type.clone());
+                fb.emit(
+                    OpCode::AssertType {
+                        reg: compiled_param.reg,
+                        type_const,
+                    },
+                    param_ast.span,
+                );
+            }
+        }
+
         // Automatically detect outer variables referenced in the arrow function body
         let mut referenced_vars = Vec::new();
         collect_expr_variables(body, &mut referenced_vars);
@@ -2869,6 +2955,11 @@ impl<'a> IrLowerer<'a> {
             parent.inferred_var_types.clone(),
         );
 
+        // For non-static closures, reserve r0 for `$this` to support instance method receivers and dynamic macros
+        if !is_static {
+            let _ = fb.get_or_alloc_local("$this", None, false, false, span);
+        }
+
         let mut compiled_params = Vec::with_capacity(params.len());
         for param in params {
             let param_ty = param
@@ -2893,6 +2984,33 @@ impl<'a> IrLowerer<'a> {
                 visibility: param.visibility,
                 span: param.span,
             });
+        }
+
+        // 1. Emit default parameter initialization prologue & type assertions
+        for (param_ast, compiled_param) in params.iter().zip(compiled_params.iter()) {
+            if let Some(ref def_expr) = param_ast.default_value {
+                let skip_jmp = fb.emit(
+                    OpCode::JumpIfNotNull {
+                        cond: compiled_param.reg,
+                        target: 0,
+                    },
+                    param_ast.span,
+                );
+                self.lower_expr(&mut fb, def_expr, Some(compiled_param.reg))?;
+                let after_def = fb.current_ip();
+                fb.patch_jump(skip_jmp, after_def);
+            }
+
+            if !matches!(compiled_param.rhp_type, RhpType::Mixed | RhpType::Dynamic) {
+                let type_const = fb.intern_type(compiled_param.rhp_type.clone());
+                fb.emit(
+                    OpCode::AssertType {
+                        reg: compiled_param.reg,
+                        type_const,
+                    },
+                    param_ast.span,
+                );
+            }
         }
 
         // Pre-allocate registers for captured `use ($var)` bindings

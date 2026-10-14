@@ -242,17 +242,26 @@ impl TypeChecker {
                 }
             }
             RhpType::Void
+        } else if let Some(ref ret_hint) = func.return_type {
+            RhpType::from_type_hint(ret_hint, current_class)?
         } else {
-            let ret_hint = func.return_type.as_ref().ok_or_else(|| {
-                TypeError::new(
+            let has_value_return = func
+                .body
+                .as_ref()
+                .map(|b| Self::stmts_have_value_return(b))
+                .unwrap_or(true);
+
+            if has_value_return {
+                return Err(TypeError::new(
                     TypeErrorKind::MissingReturnType {
                         callable_kind: callable_kind.to_string(),
                         callable_name: display_name.to_string(),
                     },
                     func.name.span,
-                )
-            })?;
-            RhpType::from_type_hint(ret_hint, current_class)?
+                ));
+            } else {
+                RhpType::Void
+            }
         };
 
         Ok(FunctionSignature {
@@ -1590,6 +1599,7 @@ impl TypeChecker {
             }
 
             ExprKind::Closure {
+                is_static,
                 params,
                 uses,
                 return_type,
@@ -1598,10 +1608,15 @@ impl TypeChecker {
             } => {
                 let current_class = ctx.and_then(|c| c.enclosing_class.as_deref());
                 let mut closure_env = TypeEnvironment::new();
-                if let Some(cls) = current_class {
+                if !*is_static {
+                    let this_ty = if let Some(cls) = current_class {
+                        RhpType::Class(cls.to_string())
+                    } else {
+                        RhpType::Dynamic
+                    };
                     let _ = closure_env.declare_typed(
                         "$this",
-                        RhpType::Class(cls.to_string()),
+                        this_ty,
                         None,
                         expr.span,
                         Some(&self.result.hierarchy),
@@ -2467,6 +2482,45 @@ impl TypeChecker {
         }
 
         Ok(())
+    }
+
+    fn stmts_have_value_return(stmts: &[crate::ast::stmt::Stmt<'_>]) -> bool {
+        stmts.iter().any(Self::stmt_has_value_return)
+    }
+
+    fn stmt_has_value_return(stmt: &crate::ast::stmt::Stmt<'_>) -> bool {
+        use crate::ast::stmt::StmtKind;
+        match &stmt.kind {
+            StmtKind::Return(Some(_)) => true,
+            StmtKind::Block(inner) => Self::stmts_have_value_return(inner),
+            StmtKind::If {
+                then_branch,
+                elseif_branches,
+                else_branch,
+                ..
+            } => {
+                Self::stmt_has_value_return(then_branch)
+                    || elseif_branches.iter().any(|eb| Self::stmt_has_value_return(&eb.body))
+                    || else_branch.as_ref().map(|b| Self::stmt_has_value_return(b)).unwrap_or(false)
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => Self::stmt_has_value_return(body),
+            StmtKind::Switch { cases, .. } => {
+                cases.iter().any(|c| Self::stmts_have_value_return(&c.body))
+            }
+            StmtKind::TryCatch {
+                try_block,
+                catches,
+                finally_block,
+            } => {
+                Self::stmts_have_value_return(try_block)
+                    || catches.iter().any(|c| Self::stmts_have_value_return(&c.body))
+                    || finally_block.as_ref().map(|b| Self::stmts_have_value_return(b)).unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 }
 

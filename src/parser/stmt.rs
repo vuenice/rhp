@@ -38,7 +38,7 @@ impl<'s> CombinatorStream<'s> {
             return self.parse_declaration_with_attributes(attributes, start_span);
         }
 
-        // 4. Strongly-typed variable declaration (`$x: int = 10;` or `$x: int;`)
+        // 4. Strongly-typed variable declaration (`$x: int = 10;`, `$x: int;`, or `list $my_arr = [];`, `int $x = 10;`)
         if let Some(tok) = self.peek() {
             if matches!(tok.token, Token::Variable(_))
                 && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
@@ -65,6 +65,29 @@ impl<'s> CombinatorStream<'s> {
                     start_span.merge(end_span),
                 ));
             }
+        }
+
+        if self.is_prefix_typed_var_decl() {
+            let type_hint = self.parse_type_hint()?;
+            let var = self.expect_variable()?;
+            let init = if self.matches(&Token::Assign) {
+                Some(self.parse_expr_lowest()?)
+            } else {
+                None
+            };
+            self.expect_statement_terminator()?;
+            let end_span = init
+                .as_ref()
+                .map(|e| e.span)
+                .unwrap_or(var.span);
+            return Ok(Stmt::new(
+                StmtKind::VarDecl {
+                    var,
+                    type_hint: Some(type_hint),
+                    init,
+                },
+                start_span.merge(end_span),
+            ));
         }
 
         // 5. Control Flow: If statement

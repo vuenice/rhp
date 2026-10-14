@@ -1219,9 +1219,11 @@ fn test_type_casting_syntax_and_rejection_of_function_style_casts() {
 fn test_scalar_and_collection_type_hint_casing_rules() {
     // 1. Valid function boundary signatures:
     // Strictly lowercase primitives: int, string, float, bool
-    // Capitalized collections: List, Dict, Set, HashMap
+    // Collections: list, dict, set, hashmap (both lowercase native and capitalized supported)
     let valid_source = r#"
-        function processItems(int $id, string $name, List $items, Dict $meta): List {
+        function processItems(int $id, string $name, list $items, dict $meta): list {
+            list $scoped_list = [];
+            dict $scoped_dict = [];
             return $items;
         }
     "#;
@@ -1229,9 +1231,9 @@ fn test_scalar_and_collection_type_hint_casing_rules() {
     if let StmtKind::FunctionDecl(ref f) = program.statements[0].kind {
         assert_eq!(f.params[0].type_hint.as_ref().unwrap().simple_name(), Some("int"));
         assert_eq!(f.params[1].type_hint.as_ref().unwrap().simple_name(), Some("string"));
-        assert_eq!(f.params[2].type_hint.as_ref().unwrap().simple_name(), Some("List"));
-        assert_eq!(f.params[3].type_hint.as_ref().unwrap().simple_name(), Some("Dict"));
-        assert_eq!(f.return_type.as_ref().unwrap().simple_name(), Some("List"));
+        assert_eq!(f.params[2].type_hint.as_ref().unwrap().simple_name(), Some("list"));
+        assert_eq!(f.params[3].type_hint.as_ref().unwrap().simple_name(), Some("dict"));
+        assert_eq!(f.return_type.as_ref().unwrap().simple_name(), Some("list"));
     } else {
         panic!("Expected FunctionDecl");
     }
@@ -1243,11 +1245,15 @@ fn test_scalar_and_collection_type_hint_casing_rules() {
         assert!(err.to_string().contains("primitive types must be strictly lowercase"));
     }
 
-    // 3. Reject lowercase collections
-    for invalid_col in ["list", "dict", "set", "hashmap"] {
-        let code = format!("function bad({} $arr): void {{}}", invalid_col);
-        let err = parse(&code).expect_err(&format!("Expected rejection for lowercase collection {}", invalid_col));
-        assert!(err.to_string().contains("collection type hints must be capitalized"));
+    // 3. Accept lowercase collections (list, dict, set, hashmap)
+    for col in ["list", "dict", "set", "hashmap"] {
+        let code = format!("function process({} $arr): void {{ {} $local = []; }}", col, col);
+        let program = parse(&code).expect(&format!("Lowercase collection {} must parse", col));
+        if let StmtKind::FunctionDecl(ref f) = program.statements[0].kind {
+            assert_eq!(f.params[0].type_hint.as_ref().unwrap().simple_name(), Some(col));
+        } else {
+            panic!("Expected FunctionDecl");
+        }
     }
 }
 

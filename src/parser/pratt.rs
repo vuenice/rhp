@@ -183,9 +183,13 @@ impl<'s> CombinatorStream<'s> {
                 spanned.span,
             )),
 
-            // Identifiers
+            // Identifiers & Contextual Type Identifiers
             Token::Ident(name) => Ok(Expr::new(
                 ExprKind::Ident(Ident::new(name, spanned.span)),
+                spanned.span,
+            )),
+            Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap => Ok(Expr::new(
+                ExprKind::Ident(Ident::new(spanned.token.as_str(), spanned.span)),
                 spanned.span,
             )),
 

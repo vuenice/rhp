@@ -410,7 +410,11 @@ impl<'s> CombinatorStream<'s> {
                 | Token::Null
                 | Token::True
                 | Token::False
-                | Token::Static => {
+                | Token::Static
+                | Token::TypeList
+                | Token::TypeDict
+                | Token::TypeSet
+                | Token::TypeHashMap => {
                     let ident = Ident::new(spanned.token.as_str(), spanned.span);
                     Ok(TypeHint::new(TypeHintKind::Named(ident), spanned.span))
                 }
@@ -420,17 +424,6 @@ impl<'s> CombinatorStream<'s> {
                             ParseErrorKind::Custom {
                                 message: format!(
                                     "Invalid primitive type '{}': primitive types must be strictly lowercase (string, bool, int, float).",
-                                    name
-                                ),
-                            },
-                            spanned.span,
-                        ));
-                    }
-                    if matches!(name, "list" | "dict" | "set" | "hashmap") {
-                        return Err(ParseError::new(
-                            ParseErrorKind::Custom {
-                                message: format!(
-                                    "Invalid collection type '{}': collection type hints must be capitalized (e.g., 'List', 'Dict') to distinguish complex memory-backed structures from raw primitives.",
                                     name
                                 ),
                             },
@@ -458,5 +451,46 @@ impl<'s> CombinatorStream<'s> {
                 span,
             )),
         }
+    }
+
+    /// Check if the upcoming token stream matches a prefix-typed variable declaration (`Type $var = ...` or `Type $var;`).
+    pub fn is_prefix_typed_var_decl(&self) -> bool {
+        let mut idx = 0;
+        // Optional leading '?' for nullable types
+        if let Some(t) = self.peek_nth(idx) {
+            if matches!(t.token, Token::Question) {
+                idx += 1;
+            }
+        }
+
+        let mut found_type = false;
+        loop {
+            match self.peek_nth(idx).map(|t| &t.token) {
+                Some(t) if t.is_type() => {
+                    found_type = true;
+                    idx += 1;
+                }
+                Some(Token::Ident(_)) => {
+                    found_type = true;
+                    idx += 1;
+                }
+                _ => break,
+            }
+
+            // Support union `|` or intersection `&`
+            match self.peek_nth(idx).map(|t| &t.token) {
+                Some(Token::Pipe | Token::Ampersand) => {
+                    idx += 1;
+                }
+                _ => break,
+            }
+        }
+
+        if found_type {
+            if let Some(t) = self.peek_nth(idx) {
+                return matches!(t.token, Token::Variable(_));
+            }
+        }
+        false
     }
 }

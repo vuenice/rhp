@@ -56,7 +56,9 @@ pub use jit::{
     NativeSlot, TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_NULL, TAG_OTHER,
 };
 pub use vm::{
-    dispatch_facade_call, eval_expr, execute, run_expr, run_module, run_source,
+    clear_runtime_closure_macros, dispatch_facade_call, eval_expr, execute, extract_array_elements,
+    extract_dict_elements, extract_map_elements, flatten_elements, get_runtime_closure_macro,
+    has_runtime_closure_macro, register_runtime_closure_macro, run_expr, run_module, run_source,
     run_source_with_file_id, run_source_with_vm, CallFrame, Environment, ExecutionError,
     FacadeResult, PhpValue, RunMode, RuntimeError, RuntimeErrorKind, StackTraceEntry, Value,
     VmClosure, VmFuture, VmObject, DEFAULT_MAX_CALL_DEPTH, VM,

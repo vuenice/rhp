@@ -12,7 +12,10 @@ use crate::jit::{JitConfig, JitEngine};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
-use crate::vm::facade::dispatch_facade_call;
+use crate::vm::facade::{
+    dispatch_facade_call, flatten_elements, get_runtime_closure_macro,
+    register_runtime_closure_macro,
+};
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Default maximum call stack depth before throwing `StackOverflowError`.
@@ -27,10 +30,23 @@ struct StagedArg {
 }
 
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
+///
+/// Implements Technical Point #8 of the RHP Architecture Specification:
+/// - Maps sequential lists directly to underlying Rust `Vec<PhpValue>` structures (`ActiveIterator::List`),
+///   enabling contiguous cache-line memory streaming during iteration with zero temporary vector allocations.
+/// - Associative dictionaries and complex maps fall back to `ActiveIterator::Entries`.
 #[derive(Debug, Clone)]
-pub(crate) struct ActiveIterator {
-    entries: Vec<(PhpValue, PhpValue)>,
-    cursor: usize,
+pub(crate) enum ActiveIterator {
+    /// Contiguous sequential list iterator referencing the underlying Rust `Vec<PhpValue>` directly.
+    List {
+        items: Rc<RefCell<Vec<PhpValue>>>,
+        cursor: usize,
+    },
+    /// Associative dictionary / key-value map iterator.
+    Entries {
+        entries: Vec<(PhpValue, PhpValue)>,
+        cursor: usize,
+    },
 }
 
 /// Call frame on the register VM execution stack.
@@ -703,9 +719,16 @@ impl VM {
                     let val = self.registers[base_reg + value.index()].clone();
                     let target = &mut self.registers[base_reg + array.index()];
                     let is_valid = match target {
-                        PhpValue::Array(_) | PhpValue::List(_) => {
+                        PhpValue::List(_) => {
+                            target.ensure_list_mut();
+                            if let PhpValue::List(arr) = target {
+                                arr.borrow_mut().push(val);
+                            }
+                            true
+                        }
+                        PhpValue::Array(_) => {
                             target.ensure_array_mut();
-                            if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
+                            if let PhpValue::Array(arr) = target {
                                 arr.borrow_mut().push(val);
                             }
                             true
@@ -776,56 +799,93 @@ impl VM {
                         }
                         self.registers[base_reg + array.index()] = PhpValue::dict(entries);
                     } else {
-                        let target = &mut self.registers[base_reg + array.index()];
-                        let is_valid = match target {
-                            PhpValue::Array(_) | PhpValue::List(_) => {
-                                target.ensure_array_mut();
-                                if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
-                                    let idx = k.to_i64().unwrap_or(0);
-                                    let mut b = arr.borrow_mut();
-                                    if idx >= 0 && (idx as usize) < b.len() {
-                                        b[idx as usize] = v;
-                                    } else if idx as usize == b.len() {
-                                        b.push(v);
-                                    } else if idx >= 0 {
-                                        b.resize(idx as usize, PhpValue::Null);
-                                        b.push(v);
+                        let mut undefined_key: Option<String> = None;
+                        let is_valid = match &mut self.registers[base_reg + array.index()] {
+                            PhpValue::List(arr) => {
+                                let maybe_idx = match &k {
+                                    PhpValue::Int(i) => Some(*i as i64),
+                                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                                    PhpValue::Float(f) => Some(*f as i64),
+                                    PhpValue::String(s) => s.trim().parse::<i64>().ok(),
+                                    _ => None,
+                                };
+                                match maybe_idx {
+                                    Some(idx) => {
+                                        if Rc::strong_count(arr) > 1 {
+                                            let cloned = arr.borrow().clone();
+                                            *arr = Rc::new(RefCell::new(cloned));
+                                        }
+                                        let mut b = arr.borrow_mut();
+                                        if idx >= 0 && (idx as usize) < b.len() {
+                                            b[idx as usize] = v;
+                                        } else if idx >= 0 && (idx as usize) == b.len() {
+                                            b.push(v);
+                                        } else if idx >= 0 {
+                                            b.resize(idx as usize, PhpValue::Null);
+                                            b.push(v);
+                                        } else {
+                                            undefined_key = Some(idx.to_string());
+                                        }
+                                        true
                                     }
+                                    None => {
+                                        undefined_key = Some(k.to_php_string());
+                                        true
+                                    }
+                                }
+                            }
+                            PhpValue::Array(arr) => {
+                                if Rc::strong_count(arr) > 1 {
+                                    let cloned = arr.borrow().clone();
+                                    *arr = Rc::new(RefCell::new(cloned));
+                                }
+                                let idx = k.to_i64().unwrap_or(0);
+                                let mut b = arr.borrow_mut();
+                                if idx >= 0 && (idx as usize) < b.len() {
+                                    b[idx as usize] = v;
+                                } else if idx >= 0 && (idx as usize) == b.len() {
+                                    b.push(v);
+                                } else if idx >= 0 {
+                                    b.resize(idx as usize, PhpValue::Null);
+                                    b.push(v);
                                 }
                                 true
                             }
-                            PhpValue::Dict(_) => {
-                                target.ensure_dict_mut();
-                                if let PhpValue::Dict(dict) = target {
-                                    let k_str = k.to_php_string();
-                                    let mut b = dict.borrow_mut();
-                                    if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
-                                        slot.1 = v;
-                                    } else {
-                                        b.push((k_str, v));
-                                    }
+                            PhpValue::Dict(dict) => {
+                                if Rc::strong_count(dict) > 1 {
+                                    let cloned = dict.borrow().clone();
+                                    *dict = Rc::new(RefCell::new(cloned));
+                                }
+                                let k_str = k.to_php_string();
+                                let mut b = dict.borrow_mut();
+                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
+                                    slot.1 = v;
+                                } else {
+                                    b.push((k_str, v));
                                 }
                                 true
                             }
-                            PhpValue::HashMap(_) => {
-                                target.ensure_hash_map_mut();
-                                if let PhpValue::HashMap(map) = target {
-                                    let mut b = map.borrow_mut();
-                                    if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
-                                        slot.1 = v;
-                                    } else {
-                                        b.push((k, v));
-                                    }
+                            PhpValue::HashMap(map) => {
+                                if Rc::strong_count(map) > 1 {
+                                    let cloned = map.borrow().clone();
+                                    *map = Rc::new(RefCell::new(cloned));
+                                }
+                                let mut b = map.borrow_mut();
+                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
+                                    slot.1 = v;
+                                } else {
+                                    b.push((k, v));
                                 }
                                 true
                             }
-                            PhpValue::Set(_) => {
-                                target.ensure_set_mut();
-                                if let PhpValue::Set(set) = target {
-                                    let mut b = set.borrow_mut();
-                                    if !b.contains(&v) {
-                                        b.push(v);
-                                    }
+                            PhpValue::Set(set) => {
+                                if Rc::strong_count(set) > 1 {
+                                    let cloned = set.borrow().clone();
+                                    *set = Rc::new(RefCell::new(cloned));
+                                }
+                                let mut b = set.borrow_mut();
+                                if !b.contains(&v) {
+                                    b.push(v);
                                 }
                                 true
                             }
@@ -839,6 +899,12 @@ impl VM {
                             }
                             _ => false,
                         };
+                        if let Some(bad_key) = undefined_key {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedIndex { key: bad_key },
+                                span,
+                            ));
+                        }
                         if !is_valid {
                             let type_name = self.registers[base_reg + array.index()].type_name().to_string();
                             return Err(self.make_error(
@@ -933,19 +999,31 @@ impl VM {
                 // -----------------------------------------------------------------
                 OpCode::IterInit { iter_reg, iterable } => {
                     let iter_source = &self.registers[base_reg + iterable.index()];
-                    let entries: Vec<(PhpValue, PhpValue)> = match iter_source {
-                        PhpValue::Array(arr) | PhpValue::List(arr) | PhpValue::Set(arr) => arr
-                            .borrow()
-                            .iter()
-                            .enumerate()
-                            .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
-                            .collect(),
-                        PhpValue::Dict(dict) => dict
-                            .borrow()
-                            .iter()
-                            .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
-                            .collect(),
-                        PhpValue::HashMap(map) => map.borrow().clone(),
+                    let active_iter = match iter_source {
+                        PhpValue::List(list) => ActiveIterator::List {
+                            items: list.clone(),
+                            cursor: 0,
+                        },
+                        PhpValue::Array(arr) => ActiveIterator::List {
+                            items: arr.clone(),
+                            cursor: 0,
+                        },
+                        PhpValue::Set(set) => ActiveIterator::List {
+                            items: set.clone(),
+                            cursor: 0,
+                        },
+                        PhpValue::Dict(dict) => {
+                            let entries = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
+                                .collect();
+                            ActiveIterator::Entries { entries, cursor: 0 }
+                        }
+                        PhpValue::HashMap(map) => {
+                            let entries = map.borrow().clone();
+                            ActiveIterator::Entries { entries, cursor: 0 }
+                        }
                         other => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::NotIterable {
@@ -958,7 +1036,7 @@ impl VM {
 
                     self.frames[frame_idx].iterators.insert(
                         iter_reg.index(),
-                        ActiveIterator { entries, cursor: 0 },
+                        active_iter,
                     );
                 }
 
@@ -968,25 +1046,42 @@ impl VM {
                     val_dst,
                     jump_end,
                 } => {
-                    let next_pair = {
+                    let next_item = {
                         if let Some(iter_state) =
                             self.frames[frame_idx].iterators.get_mut(&iter_reg.index())
                         {
-                            if iter_state.cursor < iter_state.entries.len() {
-                                let pair = iter_state.entries[iter_state.cursor].clone();
-                                iter_state.cursor += 1;
-                                Some(pair)
-                            } else {
-                                None
+                            match iter_state {
+                                ActiveIterator::List { items, cursor } => {
+                                    let b = items.borrow();
+                                    if *cursor < b.len() {
+                                        let val = b[*cursor].clone();
+                                        let curr = *cursor;
+                                        *cursor += 1;
+                                        Some((Some(PhpValue::Int(curr as i32)), val))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                ActiveIterator::Entries { entries, cursor } => {
+                                    if *cursor < entries.len() {
+                                        let (k, v) = entries[*cursor].clone();
+                                        *cursor += 1;
+                                        Some((Some(k), v))
+                                    } else {
+                                        None
+                                    }
+                                }
                             }
                         } else {
                             None
                         }
                     };
 
-                    if let Some((k, v)) = next_pair {
+                    if let Some((k_opt, v)) = next_item {
                         if let Some(k_reg) = key_dst {
-                            self.registers[base_reg + k_reg.index()] = k;
+                            if let Some(k) = k_opt {
+                                self.registers[base_reg + k_reg.index()] = k;
+                            }
                         }
                         self.registers[base_reg + val_dst.index()] = v;
                     } else {
@@ -1770,6 +1865,34 @@ impl VM {
         self.dispatch_loop(depth_before)
     }
 
+    /// Invoke a [`VmClosure`] synchronously with `$this` bound to `this_val` and return its evaluated `PhpValue`.
+    pub fn invoke_closure_sync_with_this(
+        &mut self,
+        closure: &VmClosure,
+        this_val: Option<PhpValue>,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let staged: Vec<StagedArg> = args
+            .into_iter()
+            .map(|value| StagedArg {
+                value,
+                name: None,
+                is_unpack: false,
+            })
+            .collect();
+        let depth_before = self.frames.len();
+        self.push_compiled_call_frame(
+            closure.func_id,
+            this_val,
+            &staged,
+            &closure.upvalues,
+            None,
+            span,
+        )?;
+        self.dispatch_loop(depth_before)
+    }
+
     // =========================================================================
     // Facade & Fluent Method Execution
     // =========================================================================
@@ -1856,6 +1979,13 @@ impl VM {
 
         if facade == "Arr" {
             match method {
+                "macro" => {
+                    if let (Some(name_val), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {
+                        let name_str = name_val.to_php_string();
+                        register_runtime_closure_macro("Arr", &name_str, (**cb).clone());
+                        return Ok(PhpValue::Bool(true));
+                    }
+                }
                 "map" => {
                     if let (Some(PhpValue::Closure(cb)), Some(arr)) = (args.first(), args.get(1)) {
                         let items = Self::extract_items(arr);
@@ -1901,7 +2031,11 @@ impl VM {
                         return Ok(acc);
                     }
                 }
-                _ => {}
+                _ => {
+                    if let Some(macro_closure) = get_runtime_closure_macro("Arr", method) {
+                        return self.invoke_closure_sync(&macro_closure, args.to_vec(), span);
+                    }
+                }
             }
         }
 
@@ -1917,7 +2051,7 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         match receiver {
-            // 1. Collection fluent methods (`Arr::list()->map()->filter()->reduce()`, etc.)
+            // 1. Subtyped collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
             PhpValue::List(_)
             | PhpValue::Array(_)
             | PhpValue::Dict(_)
@@ -2000,14 +2134,62 @@ impl VM {
                         }
                         Ok(PhpValue::Null)
                     }
-                    "count" | "size" => Ok(PhpValue::Int(items.len() as i32)),
+                    "first" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let matched = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    span,
+                                )?;
+                                if matched.is_truthy() {
+                                    return Ok(item);
+                                }
+                            }
+                            Ok(PhpValue::Null)
+                        } else {
+                            Ok(items.into_iter().next().unwrap_or(PhpValue::Null))
+                        }
+                    }
+                    "last" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut last_match = PhpValue::Null;
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let matched = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    span,
+                                )?;
+                                if matched.is_truthy() {
+                                    last_match = item;
+                                }
+                            }
+                            Ok(last_match)
+                        } else {
+                            Ok(items.into_iter().last().unwrap_or(PhpValue::Null))
+                        }
+                    }
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(items.len() as i32)),
                     "isEmpty" => Ok(PhpValue::Bool(items.is_empty())),
-                    "first" => Ok(items.into_iter().next().unwrap_or(PhpValue::Null)),
-                    "last" => Ok(items.into_iter().last().unwrap_or(PhpValue::Null)),
+                    "isNotEmpty" => Ok(PhpValue::Bool(!items.is_empty())),
                     "all" | "toArray" | "values" => Ok(PhpValue::list(items)),
-                    "contains" => {
-                        let needle = args.first().cloned().unwrap_or(PhpValue::Null);
-                        Ok(PhpValue::Bool(items.contains(&needle)))
+                    "contains" | "includes" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let matched = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item, PhpValue::Int(idx as i32)],
+                                    span,
+                                )?;
+                                if matched.is_truthy() {
+                                    return Ok(PhpValue::Bool(true));
+                                }
+                            }
+                            Ok(PhpValue::Bool(false))
+                        } else {
+                            let needle = args.first().cloned().unwrap_or(PhpValue::Null);
+                            Ok(PhpValue::Bool(items.contains(&needle)))
+                        }
                     }
                     "join" | "implode" => {
                         let sep = args
@@ -2026,20 +2208,351 @@ impl VM {
                         for a in args {
                             updated.push(a.clone());
                         }
+                        if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                            *rc.borrow_mut() = updated.clone();
+                        }
                         Ok(PhpValue::list(updated))
+                    }
+                    "pop" => {
+                        if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                            Ok(rc.borrow_mut().pop().unwrap_or(PhpValue::Null))
+                        } else {
+                            let mut it = items;
+                            Ok(it.pop().unwrap_or(PhpValue::Null))
+                        }
+                    }
+                    "shift" => {
+                        if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                            let mut b = rc.borrow_mut();
+                            if !b.is_empty() {
+                                Ok(b.remove(0))
+                            } else {
+                                Ok(PhpValue::Null)
+                            }
+                        } else {
+                            let mut it = items;
+                            if !it.is_empty() {
+                                Ok(it.remove(0))
+                            } else {
+                                Ok(PhpValue::Null)
+                            }
+                        }
+                    }
+                    "unshift" => {
+                        let mut updated: Vec<PhpValue> = args.to_vec();
+                        updated.extend(items);
+                        if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                            *rc.borrow_mut() = updated.clone();
+                        }
+                        Ok(PhpValue::list(updated))
+                    }
+                    "slice" => {
+                        let offset = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                        let len_req = args.get(1).and_then(|v| v.to_i64());
+                        let total_len = items.len() as i64;
+                        let start_idx = if offset < 0 {
+                            (total_len + offset).max(0) as usize
+                        } else {
+                            offset.min(total_len) as usize
+                        };
+                        let slice: Vec<PhpValue> = if let Some(l) = len_req {
+                            let count = if l < 0 {
+                                (total_len - start_idx as i64 + l).max(0) as usize
+                            } else {
+                                l as usize
+                            };
+                            items.into_iter().skip(start_idx).take(count).collect()
+                        } else {
+                            items.into_iter().skip(start_idx).collect()
+                        };
+                        Ok(PhpValue::list(slice))
+                    }
+                    "take" => {
+                        let limit = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                        let out: Vec<PhpValue> = if limit >= 0 {
+                            items.into_iter().take(limit as usize).collect()
+                        } else {
+                            let count = (-limit) as usize;
+                            let skip_n = items.len().saturating_sub(count);
+                            items.into_iter().skip(skip_n).collect()
+                        };
+                        Ok(PhpValue::list(out))
+                    }
+                    "skip" => {
+                        let count = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+                        Ok(PhpValue::list(items.into_iter().skip(count).collect()))
+                    }
+                    "chunk" => {
+                        let size = args.first().and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+                        let chunks: Vec<PhpValue> = items
+                            .chunks(size)
+                            .map(|c| PhpValue::list(c.to_vec()))
+                            .collect();
+                        Ok(PhpValue::list(chunks))
+                    }
+                    "flatten" => {
+                        let mut out = Vec::new();
+                        for item in items {
+                            flatten_elements(&item, &mut out);
+                        }
+                        Ok(PhpValue::list(out))
+                    }
+                    "concat" | "merge" => {
+                        let mut merged = items;
+                        for arg in args {
+                            merged.extend(Self::extract_items(arg));
+                        }
+                        Ok(PhpValue::list(merged))
+                    }
+                    "get" => {
+                        let idx = args.first().and_then(|v| v.to_i64()).unwrap_or(-1);
+                        let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        if idx >= 0 && (idx as usize) < items.len() {
+                            Ok(items[idx as usize].clone())
+                        } else {
+                            Ok(default)
+                        }
+                    }
+                    "has" => {
+                        let idx = args.first().and_then(|v| v.to_i64()).unwrap_or(-1);
+                        Ok(PhpValue::Bool(idx >= 0 && (idx as usize) < items.len()))
+                    }
+                    "sum" => {
+                        let mut is_float = false;
+                        let mut float_sum = 0.0f64;
+                        let mut int_sum = 0i64;
+                        for item in &items {
+                            if let Some(fl) = item.to_f64() {
+                                if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. }) {
+                                    is_float = true;
+                                }
+                                float_sum += fl;
+                            }
+                            if let Some(i) = item.to_i64() {
+                                int_sum += i;
+                            }
+                        }
+                        if is_float {
+                            Ok(PhpValue::Float(float_sum as f32))
+                        } else {
+                            Ok(PhpValue::Int(int_sum as i32))
+                        }
+                    }
+                    "avg" | "average" => {
+                        if items.is_empty() {
+                            Ok(PhpValue::Float(0.0))
+                        } else {
+                            let mut sum = 0.0f64;
+                            for item in &items {
+                                sum += item.to_f64().unwrap_or(0.0);
+                            }
+                            Ok(PhpValue::Float((sum / items.len() as f64) as f32))
+                        }
+                    }
+                    "min" => {
+                        let mut min_val: Option<PhpValue> = None;
+                        for item in items {
+                            min_val = match min_val {
+                                None => Some(item),
+                                Some(prev) => {
+                                    if item.partial_cmp(&prev) == Some(std::cmp::Ordering::Less) {
+                                        Some(item)
+                                    } else {
+                                        Some(prev)
+                                    }
+                                }
+                            };
+                        }
+                        Ok(min_val.unwrap_or(PhpValue::Null))
+                    }
+                    "max" => {
+                        let mut max_val: Option<PhpValue> = None;
+                        for item in items {
+                            max_val = match max_val {
+                                None => Some(item),
+                                Some(prev) => {
+                                    if item.partial_cmp(&prev) == Some(std::cmp::Ordering::Greater) {
+                                        Some(item)
+                                    } else {
+                                        Some(prev)
+                                    }
+                                }
+                            };
+                        }
+                        Ok(max_val.unwrap_or(PhpValue::Null))
+                    }
+                    "unique" => {
+                        let mut unique_items: Vec<PhpValue> = Vec::with_capacity(items.len());
+                        for item in items {
+                            if !unique_items.contains(&item) {
+                                unique_items.push(item);
+                            }
+                        }
+                        Ok(PhpValue::list(unique_items))
+                    }
+                    "sort" => {
+                        let mut sorted = items;
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = sorted.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let cmp_res = self.invoke_closure_sync(
+                                        cb,
+                                        vec![sorted[i].clone(), sorted[j].clone()],
+                                        span,
+                                    )?;
+                                    if cmp_res.to_i64().unwrap_or(0) > 0 {
+                                        sorted.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else {
+                            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        }
+                        Ok(PhpValue::list(sorted))
+                    }
+                    "sortBy" => {
+                        let mut sorted = items;
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = sorted.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let ki = self.invoke_closure_sync(cb, vec![sorted[i].clone()], span)?;
+                                    let kj = self.invoke_closure_sync(cb, vec![sorted[j].clone()], span)?;
+                                    if ki.partial_cmp(&kj) == Some(std::cmp::Ordering::Greater) {
+                                        sorted.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else if let Some(key_val) = args.first() {
+                            let key_str = key_val.to_php_string();
+                            sorted.sort_by(|a, b| {
+                                let ka = match a {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    PhpValue::Dict(d) => d
+                                        .borrow()
+                                        .iter()
+                                        .find(|(k, _)| k == &key_str)
+                                        .map(|(_, v)| v.clone())
+                                        .unwrap_or(PhpValue::Null),
+                                    _ => PhpValue::Null,
+                                };
+                                let kb = match b {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    PhpValue::Dict(d) => d
+                                        .borrow()
+                                        .iter()
+                                        .find(|(k, _)| k == &key_str)
+                                        .map(|(_, v)| v.clone())
+                                        .unwrap_or(PhpValue::Null),
+                                    _ => PhpValue::Null,
+                                };
+                                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                        Ok(PhpValue::list(sorted))
+                    }
+                    "each" | "forEach" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.iter().enumerate() {
+                                self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    span,
+                                )?;
+                            }
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "pluck" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        let mut plucked = Vec::with_capacity(items.len());
+                        for item in items {
+                            match item {
+                                PhpValue::Object(obj) => {
+                                    let val = obj
+                                        .borrow()
+                                        .get_property(&key)
+                                        .cloned()
+                                        .unwrap_or(PhpValue::Null);
+                                    plucked.push(val);
+                                }
+                                PhpValue::Dict(d) => {
+                                    let val = d
+                                        .borrow()
+                                        .iter()
+                                        .find(|(k, _)| k == &key)
+                                        .map(|(_, v)| v.clone())
+                                        .unwrap_or(PhpValue::Null);
+                                    plucked.push(val);
+                                }
+                                _ => plucked.push(PhpValue::Null),
+                            }
+                        }
+                        Ok(PhpValue::list(plucked))
+                    }
+                    "partition" => {
+                        let mut matching = Vec::new();
+                        let mut non_matching = Vec::new();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let res = self.invoke_closure_sync(
+                                    cb,
+                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    span,
+                                )?;
+                                if res.is_truthy() {
+                                    matching.push(item);
+                                } else {
+                                    non_matching.push(item);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::list(vec![
+                            PhpValue::list(matching),
+                            PhpValue::list(non_matching),
+                        ]))
+                    }
+                    "zip" => {
+                        let other_lists: Vec<Vec<PhpValue>> =
+                            args.iter().map(Self::extract_items).collect();
+                        let mut zipped = Vec::with_capacity(items.len());
+                        for (i, item) in items.into_iter().enumerate() {
+                            let mut tuple = vec![item];
+                            for other in &other_lists {
+                                tuple.push(other.get(i).cloned().unwrap_or(PhpValue::Null));
+                            }
+                            zipped.push(PhpValue::list(tuple));
+                        }
+                        Ok(PhpValue::list(zipped))
                     }
                     "reverse" => {
                         let mut rev = items;
                         rev.reverse();
                         Ok(PhpValue::list(rev))
                     }
-                    other => Err(self.make_error(
-                        RuntimeErrorKind::UndefinedMethod {
-                            class: receiver.type_name().to_string(),
-                            method: other.to_string(),
-                        },
-                        span,
-                    )),
+                    other => {
+                        if let Some(macro_closure) = get_runtime_closure_macro("Arr", other) {
+                            self.invoke_closure_sync_with_this(
+                                &macro_closure,
+                                Some(receiver.clone()),
+                                args.to_vec(),
+                                span,
+                            )
+                        } else {
+                            Err(self.make_error(
+                                RuntimeErrorKind::UndefinedMethod {
+                                    class: receiver.type_name().to_string(),
+                                    method: other.to_string(),
+                                },
+                                span,
+                            ))
+                        }
+                    }
                 }
             }
 

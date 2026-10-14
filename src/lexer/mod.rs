@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(token_types[1], &Token::Assign);
         assert_eq!(token_types[2], &Token::Ident("Arr"));
         assert_eq!(token_types[3], &Token::DoubleColon);
-        assert_eq!(token_types[4], &Token::Ident("list"));
+        assert_eq!(token_types[4], &Token::TypeList);
         assert_eq!(token_types[5], &Token::OpenParen);
         assert_eq!(token_types[6], &Token::OpenBracket);
         assert_eq!(token_types[7], &Token::IntLiteral("1"));

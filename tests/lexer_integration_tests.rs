@@ -52,7 +52,7 @@ fn test_spec_arr_facade_chaining() {
             Token::Assign,
             Token::Ident("Arr"),
             Token::DoubleColon,
-            Token::Ident("list"),
+            Token::TypeList,
             Token::OpenParen,
             Token::OpenBracket,
             Token::IntLiteral("1"),
