@@ -167,10 +167,36 @@ impl CollectionSubtype {
 impl fmt::Display for CollectionSubtype {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::List(t) => write!(f, "Arr::list<{}>", t),
-            Self::Dict(v) => write!(f, "Arr::dict<string, {}>", v),
-            Self::Set(t) => write!(f, "Arr::set<{}>", t),
-            Self::HashMap(k, v) => write!(f, "Arr::hashMap<{}, {}>", k, v),
+            Self::List(t) => {
+                if **t == RhpType::Mixed || **t == RhpType::Dynamic {
+                    write!(f, "List")
+                } else {
+                    write!(f, "List<{}>", t)
+                }
+            }
+            Self::Dict(v) => {
+                if **v == RhpType::Mixed || **v == RhpType::Dynamic {
+                    write!(f, "Dict")
+                } else {
+                    write!(f, "Dict<string, {}>", v)
+                }
+            }
+            Self::Set(t) => {
+                if **t == RhpType::Mixed || **t == RhpType::Dynamic {
+                    write!(f, "Set")
+                } else {
+                    write!(f, "Set<{}>", t)
+                }
+            }
+            Self::HashMap(k, v) => {
+                if (**k == RhpType::Mixed || **k == RhpType::Dynamic)
+                    && (**v == RhpType::Mixed || **v == RhpType::Dynamic)
+                {
+                    write!(f, "HashMap")
+                } else {
+                    write!(f, "HashMap<{}, {}>", k, v)
+                }
+            }
         }
     }
 }
@@ -260,11 +286,27 @@ impl RhpType {
                         }
                     }
                     "Future" => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
-                    "String" | "Boolean" | "Integer" | "boolean" | "integer" => {
+                    "List" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
+                    "Dict" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+                    "Set" => Ok(RhpType::Collection(CollectionSubtype::Set(Box::new(RhpType::Mixed)))),
+                    "HashMap" | "Map" => Ok(RhpType::Collection(CollectionSubtype::HashMap(
+                        Box::new(RhpType::Mixed),
+                        Box::new(RhpType::Mixed),
+                    ))),
+                    "String" | "Boolean" | "Integer" | "boolean" | "integer" | "Float" => {
                         Err(TypeError::new(
                             TypeErrorKind::InvalidTypeAnnotation {
                                 type_name: name.to_string(),
                                 reason: "primitive types must be strictly lowercase (string, bool, int, float)".to_string(),
+                            },
+                            hint.span,
+                        ))
+                    }
+                    "list" | "dict" | "set" | "hashmap" => {
+                        Err(TypeError::new(
+                            TypeErrorKind::InvalidTypeAnnotation {
+                                type_name: name.to_string(),
+                                reason: "collection type hints must be capitalized (List, Dict, Set, HashMap) to distinguish complex memory-backed structures from raw primitives".to_string(),
                             },
                             hint.span,
                         ))
@@ -564,6 +606,12 @@ impl RhpType {
             }
             (RhpType::Array(src_el), RhpType::Iterable(dst_el)) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
+            }
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
+                src_el.is_assignable_to(dst_el, hierarchy)
+            }
+            (RhpType::Tuple(elems), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
+                elems.iter().all(|e| e.is_assignable_to(dst_el, hierarchy))
             }
             (RhpType::Collection(sub1), RhpType::Collection(sub2)) => match (sub1, sub2) {
                 (CollectionSubtype::List(a), CollectionSubtype::List(b))

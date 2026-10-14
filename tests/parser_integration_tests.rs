@@ -1,7 +1,7 @@
 use rhp::ast::{
     expr::{AssignOp, BinaryOp, ExprKind, Literal, StringPart, UnaryOp},
     stmt::{ClassMemberKind, StmtKind},
-    types::{TypeHintKind, Visibility},
+    types::{CastType, TypeHintKind, Visibility},
     AstVisitor,
 };
 use rhp::lexer::span::SourceMap;
@@ -1170,6 +1170,87 @@ fn test_spec_legacy_php_functions_phpfun_lowering_and_signature_map() {
         other => panic!("Expected Expr statement, got {:?}", other),
     }
 }
+
+#[test]
+fn test_type_casting_syntax_and_rejection_of_function_style_casts() {
+    // 1. Native PHP type casting parses cleanly both without space and with space
+    let source = r#"
+        $intVal = (int)$raw;
+        $strVal = (string)$raw;
+        $floatVal = (float)$raw;
+        $boolVal = (bool)$raw;
+        $spacedInt = (int) $raw;
+        $spacedStr = (string) $raw;
+    "#;
+    let program = parse(source).expect("Native PHP casting syntax must parse");
+    assert_eq!(program.statements.len(), 6);
+
+    for (stmt, expected_kind) in program.statements.iter().zip([
+        CastType::Int,
+        CastType::String,
+        CastType::Float,
+        CastType::Bool,
+        CastType::Int,
+        CastType::String,
+    ]) {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => match &expr.kind {
+                ExprKind::Assign { value, .. } => match &value.kind {
+                    ExprKind::Cast { kind, .. } => assert_eq!(*kind, expected_kind),
+                    other => panic!("Expected ExprKind::Cast, got {:?}", other),
+                },
+                other => panic!("Expected Assign, got {:?}", other),
+            },
+            other => panic!("Expected Expr stmt, got {:?}", other),
+        }
+    }
+
+    // 2. Function-style cast syntax int($x), string($x) is rejected with informative error
+    let bad_int = "$x = int($val);";
+    let err_int = parse(bad_int).expect_err("int($val) must be rejected");
+    assert!(err_int.to_string().contains("use native PHP casting '(int) $x'"));
+
+    let bad_str = "$x = string($val);";
+    let err_str = parse(bad_str).expect_err("string($val) must be rejected");
+    assert!(err_str.to_string().contains("use native PHP casting '(string) $x'"));
+}
+
+#[test]
+fn test_scalar_and_collection_type_hint_casing_rules() {
+    // 1. Valid function boundary signatures:
+    // Strictly lowercase primitives: int, string, float, bool
+    // Capitalized collections: List, Dict, Set, HashMap
+    let valid_source = r#"
+        function processItems(int $id, string $name, List $items, Dict $meta): List {
+            return $items;
+        }
+    "#;
+    let program = parse(valid_source).expect("Valid scalar and collection type hints must parse");
+    if let StmtKind::FunctionDecl(ref f) = program.statements[0].kind {
+        assert_eq!(f.params[0].type_hint.as_ref().unwrap().simple_name(), Some("int"));
+        assert_eq!(f.params[1].type_hint.as_ref().unwrap().simple_name(), Some("string"));
+        assert_eq!(f.params[2].type_hint.as_ref().unwrap().simple_name(), Some("List"));
+        assert_eq!(f.params[3].type_hint.as_ref().unwrap().simple_name(), Some("Dict"));
+        assert_eq!(f.return_type.as_ref().unwrap().simple_name(), Some("List"));
+    } else {
+        panic!("Expected FunctionDecl");
+    }
+
+    // 2. Reject capitalized primitives
+    for invalid_prim in ["String", "Integer", "Boolean", "Float"] {
+        let code = format!("function bad({} $x): void {{}}", invalid_prim);
+        let err = parse(&code).expect_err(&format!("Expected rejection for {}", invalid_prim));
+        assert!(err.to_string().contains("primitive types must be strictly lowercase"));
+    }
+
+    // 3. Reject lowercase collections
+    for invalid_col in ["list", "dict", "set", "hashmap"] {
+        let code = format!("function bad({} $arr): void {{}}", invalid_col);
+        let err = parse(&code).expect_err(&format!("Expected rejection for lowercase collection {}", invalid_col));
+        assert!(err.to_string().contains("collection type hints must be capitalized"));
+    }
+}
+
 
 
 

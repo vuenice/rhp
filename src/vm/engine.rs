@@ -318,7 +318,7 @@ impl VM {
                     regs[dst.index()] = Self::constant_to_value(c);
                 }
                 OpCode::Move { dst, src } => {
-                    regs[dst.index()] = regs[src.index()].cow_clone();
+                    regs[dst.index()] = regs[src.index()].clone();
                 }
                 OpCode::Unary { dst, op: uop, src } => {
                     let val = self.exec_unary(uop, &regs[src.index()], span)?;
@@ -333,9 +333,14 @@ impl VM {
                         PhpValue::Array(Rc::new(RefCell::new(Vec::with_capacity(capacity as usize))));
                 }
                 OpCode::ArrayPush { array, value } => {
-                    let v = regs[value.index()].cow_clone();
-                    if let PhpValue::Array(ref arr) | PhpValue::List(ref arr) = regs[array.index()] {
-                        arr.borrow_mut().push(v);
+                    let v = regs[value.index()].clone();
+                    let target = &mut regs[array.index()];
+                    target.ensure_array_mut();
+                    match target {
+                        PhpValue::Array(arr) | PhpValue::List(arr) => {
+                            arr.borrow_mut().push(v);
+                        }
+                        _ => {}
                     }
                 }
                 OpCode::Return { value } => {
@@ -439,13 +444,13 @@ impl VM {
 
                 OpCode::Move { dst, src } => {
                     if dst != src {
-                        let val = self.registers[base_reg + src.index()].cow_clone();
+                        let val = self.registers[base_reg + src.index()].clone();
                         self.registers[base_reg + dst.index()] = val;
                     }
                 }
 
                 OpCode::Clone { dst, src } => {
-                    let cloned = self.registers[base_reg + src.index()].cow_clone();
+                    let cloned = self.registers[base_reg + src.index()].deep_clone();
                     self.registers[base_reg + dst.index()] = cloned;
                 }
 
@@ -695,41 +700,58 @@ impl VM {
                 }
 
                 OpCode::ArrayPush { array, value } => {
-                    let val = self.registers[base_reg + value.index()].cow_clone();
-                    match &self.registers[base_reg + array.index()] {
-                        PhpValue::Array(arr) | PhpValue::List(arr) => {
-                            arr.borrow_mut().push(val);
-                        }
-                        PhpValue::Set(set) => {
-                            let mut b = set.borrow_mut();
-                            if !b.contains(&val) {
-                                b.push(val);
+                    let val = self.registers[base_reg + value.index()].clone();
+                    let target = &mut self.registers[base_reg + array.index()];
+                    let is_valid = match target {
+                        PhpValue::Array(_) | PhpValue::List(_) => {
+                            target.ensure_array_mut();
+                            if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
+                                arr.borrow_mut().push(val);
                             }
+                            true
                         }
-                        PhpValue::Dict(dict) => {
-                            let mut b = dict.borrow_mut();
-                            let next_key = b.len().to_string();
-                            b.push((next_key, val));
+                        PhpValue::Set(_) => {
+                            target.ensure_set_mut();
+                            if let PhpValue::Set(set) = target {
+                                let mut b = set.borrow_mut();
+                                if !b.contains(&val) {
+                                    b.push(val);
+                                }
+                            }
+                            true
                         }
-                        PhpValue::HashMap(map) => {
-                            let mut b = map.borrow_mut();
-                            let next_key = PhpValue::Int(b.len() as i32);
-                            b.push((next_key, val));
+                        PhpValue::Dict(_) => {
+                            target.ensure_dict_mut();
+                            if let PhpValue::Dict(dict) = target {
+                                let mut b = dict.borrow_mut();
+                                let next_key = b.len().to_string();
+                                b.push((next_key, val));
+                            }
+                            true
                         }
-                        other => {
-                            return Err(self.make_error(
-                                RuntimeErrorKind::InvalidIndexTarget {
-                                    type_name: other.type_name().to_string(),
-                                },
-                                span,
-                            ));
+                        PhpValue::HashMap(_) => {
+                            target.ensure_hash_map_mut();
+                            if let PhpValue::HashMap(map) = target {
+                                let mut b = map.borrow_mut();
+                                let next_key = PhpValue::Int(b.len() as i32);
+                                b.push((next_key, val));
+                            }
+                            true
                         }
+                        _ => false,
+                    };
+                    if !is_valid {
+                        let type_name = self.registers[base_reg + array.index()].type_name().to_string();
+                        return Err(self.make_error(
+                            RuntimeErrorKind::InvalidIndexTarget { type_name },
+                            span,
+                        ));
                     }
                 }
 
                 OpCode::ArraySet { array, key, value } => {
                     let k = self.registers[base_reg + key.index()].clone();
-                    let v = self.registers[base_reg + value.index()].cow_clone();
+                    let v = self.registers[base_reg + value.index()].clone();
 
                     // Check if setting a string key on a plain `Array` should upgrade it to `Dict`
                     let upgrade_to_dict = match (&self.registers[base_reg + array.index()], &k) {
@@ -754,50 +776,75 @@ impl VM {
                         }
                         self.registers[base_reg + array.index()] = PhpValue::dict(entries);
                     } else {
-                        match &self.registers[base_reg + array.index()] {
-                            PhpValue::Array(arr) | PhpValue::List(arr) => {
-                                let idx = k.to_i64().unwrap_or(0);
-                                let mut b = arr.borrow_mut();
-                                if idx >= 0 && (idx as usize) < b.len() {
-                                    b[idx as usize] = v;
-                                } else if idx as usize == b.len() {
-                                    b.push(v);
-                                } else if idx >= 0 {
-                                    b.resize(idx as usize, PhpValue::Null);
-                                    b.push(v);
+                        let target = &mut self.registers[base_reg + array.index()];
+                        let is_valid = match target {
+                            PhpValue::Array(_) | PhpValue::List(_) => {
+                                target.ensure_array_mut();
+                                if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
+                                    let idx = k.to_i64().unwrap_or(0);
+                                    let mut b = arr.borrow_mut();
+                                    if idx >= 0 && (idx as usize) < b.len() {
+                                        b[idx as usize] = v;
+                                    } else if idx as usize == b.len() {
+                                        b.push(v);
+                                    } else if idx >= 0 {
+                                        b.resize(idx as usize, PhpValue::Null);
+                                        b.push(v);
+                                    }
                                 }
+                                true
                             }
-                            PhpValue::Dict(dict) => {
-                                let k_str = k.to_php_string();
-                                let mut b = dict.borrow_mut();
-                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
-                                    slot.1 = v;
-                                } else {
-                                    b.push((k_str, v));
+                            PhpValue::Dict(_) => {
+                                target.ensure_dict_mut();
+                                if let PhpValue::Dict(dict) = target {
+                                    let k_str = k.to_php_string();
+                                    let mut b = dict.borrow_mut();
+                                    if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
+                                        slot.1 = v;
+                                    } else {
+                                        b.push((k_str, v));
+                                    }
                                 }
+                                true
                             }
-                            PhpValue::HashMap(map) => {
-                                let mut b = map.borrow_mut();
-                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
-                                    slot.1 = v;
-                                } else {
-                                    b.push((k, v));
+                            PhpValue::HashMap(_) => {
+                                target.ensure_hash_map_mut();
+                                if let PhpValue::HashMap(map) = target {
+                                    let mut b = map.borrow_mut();
+                                    if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
+                                        slot.1 = v;
+                                    } else {
+                                        b.push((k, v));
+                                    }
                                 }
+                                true
                             }
-                            PhpValue::Set(set) => {
-                                let mut b = set.borrow_mut();
-                                if !b.contains(&v) {
-                                    b.push(v);
+                            PhpValue::Set(_) => {
+                                target.ensure_set_mut();
+                                if let PhpValue::Set(set) = target {
+                                    let mut b = set.borrow_mut();
+                                    if !b.contains(&v) {
+                                        b.push(v);
+                                    }
                                 }
+                                true
                             }
-                            other => {
-                                return Err(self.make_error(
-                                    RuntimeErrorKind::InvalidIndexTarget {
-                                        type_name: other.type_name().to_string(),
-                                    },
-                                    span,
-                                ));
+                            PhpValue::String(s) => {
+                                let idx = k.to_i64().unwrap_or(-1);
+                                if idx >= 0 {
+                                    let repl_char = v.to_php_string().chars().next().unwrap_or('\0');
+                                    s.set_char(idx as usize, repl_char);
+                                }
+                                true
                             }
+                            _ => false,
+                        };
+                        if !is_valid {
+                            let type_name = self.registers[base_reg + array.index()].type_name().to_string();
+                            return Err(self.make_error(
+                                RuntimeErrorKind::InvalidIndexTarget { type_name },
+                                span,
+                            ));
                         }
                     }
                 }
@@ -808,15 +855,22 @@ impl VM {
                 } => {
                     let src_val = self.registers[base_reg + src_array.index()].clone();
                     let items = Self::extract_items(&src_val);
-                    match &self.registers[base_reg + dst_array.index()] {
-                        PhpValue::Array(arr) | PhpValue::List(arr) => {
-                            arr.borrow_mut().extend(items);
+                    let target = &mut self.registers[base_reg + dst_array.index()];
+                    match target {
+                        PhpValue::Array(_) | PhpValue::List(_) => {
+                            target.ensure_array_mut();
+                            if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
+                                arr.borrow_mut().extend(items);
+                            }
                         }
-                        PhpValue::Set(set) => {
-                            let mut b = set.borrow_mut();
-                            for item in items {
-                                if !b.contains(&item) {
-                                    b.push(item);
+                        PhpValue::Set(_) => {
+                            target.ensure_set_mut();
+                            if let PhpValue::Set(set) = target {
+                                let mut b = set.borrow_mut();
+                                for item in items {
+                                    if !b.contains(&item) {
+                                        b.push(item);
+                                    }
                                 }
                             }
                         }
@@ -1298,7 +1352,7 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
-                    let val = self.registers[base_reg + value.index()].cow_clone();
+                    let val = self.registers[base_reg + value.index()].clone();
                     let is_in_constructor = self.frames[frame_idx]
                         .function_name
                         .ends_with("::__construct");
@@ -1368,7 +1422,7 @@ impl VM {
                                 .to_string(),
                         )
                     };
-                    let val = self.registers[base_reg + value.index()].cow_clone();
+                    let val = self.registers[base_reg + value.index()].clone();
                     self.static_properties.insert((cls_name, prop_name), val);
                 }
 
@@ -1449,7 +1503,7 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
-                    let val = self.registers[base_reg + src.index()].cow_clone();
+                    let val = self.registers[base_reg + src.index()].clone();
                     self.globals.insert(g_name, val);
                 }
 
@@ -1598,7 +1652,7 @@ impl VM {
                 assigned_params[idx] = true;
                 break;
             } else if idx < positional_values.len() {
-                self.registers[new_base + param.reg.index()] = positional_values[idx].cow_clone();
+                self.registers[new_base + param.reg.index()] = positional_values[idx].clone();
                 assigned_params[idx] = true;
             }
         }
@@ -1615,7 +1669,7 @@ impl VM {
                 .enumerate()
                 .find(|(_, p)| p.name == norm)
             {
-                self.registers[new_base + param.reg.index()] = arg_val.cow_clone();
+                self.registers[new_base + param.reg.index()] = arg_val.clone();
                 assigned_params[idx] = true;
             } else {
                 return Err(self.make_error(
@@ -1650,7 +1704,7 @@ impl VM {
         // 3. Bind captured closure/arrow upvalues (`use ($var)`)
         for (upval_name, upval_val) in func.upvalues.iter().zip(upvalues.iter()) {
             if let Some(reg) = func.chunk.register_for_var(upval_name) {
-                self.registers[new_base + reg.index()] = upval_val.cow_clone();
+                self.registers[new_base + reg.index()] = upval_val.clone();
             }
         }
 

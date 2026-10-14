@@ -336,6 +336,10 @@ impl<'s> CombinatorStream<'s> {
                         Token::TypeBool => Some(CastType::Bool),
                         Token::TypeArray => Some(CastType::Array),
                         Token::TypeObject => Some(CastType::Object),
+                        Token::Ident("integer") => Some(CastType::Int),
+                        Token::Ident("double") | Token::Ident("real") => Some(CastType::Float),
+                        Token::Ident("boolean") => Some(CastType::Bool),
+                        Token::Ident("binary") => Some(CastType::String),
                         _ => None,
                     };
 
@@ -535,6 +539,21 @@ impl<'s> CombinatorStream<'s> {
                         args,
                     },
                     span,
+                ))
+            }
+
+            Token::TypeInt | Token::TypeString | Token::TypeFloat | Token::TypeBool
+                if self.check(&Token::OpenParen) =>
+            {
+                let type_name = spanned.token.as_str();
+                Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: format!(
+                            "Invalid type cast syntax '{}(...)': use native PHP casting '({}) $x' instead to avoid confusion with object instantiation.",
+                            type_name, type_name
+                        ),
+                    },
+                    spanned.span,
                 ))
             }
 

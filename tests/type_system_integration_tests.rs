@@ -648,3 +648,53 @@ fn test_branch_type_unification_and_source_map_diagnostics() {
     assert!(diag.contains("--> broken.rhp:2:"));
     assert!(diag.contains("return \"wrong\";"));
 }
+
+#[test]
+fn test_collection_and_scalar_type_hint_boundary_contracts() {
+    let source = r#"
+        function transformData(int $id, string $prefix, List $items, Dict $attributes): List {
+            return $items;
+        }
+
+        $list = Arr::list([10, 20, 30]);
+        $dict = Arr::dict(['status' => 'active', 'env' => 'prod']);
+        $result = transformData(1, "item_", $list, $dict);
+    "#;
+
+    let typed = parse_and_check(source).expect("Scalar and collection boundary contracts must type-check");
+    assert_eq!(
+        typed.type_info.inferred_var_type("transformData", "$id"),
+        Some(&RhpType::Int)
+    );
+    assert_eq!(
+        typed.type_info.inferred_var_type("transformData", "$prefix"),
+        Some(&RhpType::String)
+    );
+    assert_eq!(
+        typed.type_info.inferred_var_type("transformData", "$items"),
+        Some(&RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed))))
+    );
+    assert_eq!(
+        typed.type_info.inferred_var_type("transformData", "$attributes"),
+        Some(&RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
+    );
+    assert_eq!(
+        typed.type_info.top_level_var_type("$result"),
+        Some(&RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed))))
+    );
+
+    // Verify passing mismatched type (e.g., int passed to List parameter) produces ArgumentTypeMismatch
+    let bad_call = r#"
+        function acceptList(List $arr): void {}
+        acceptList(123);
+    "#;
+    let err = parse_and_check(bad_call).expect_err("ArgumentTypeMismatch expected for List $arr");
+    match err {
+        FrontendError::Type(te) => assert!(matches!(
+            te.kind,
+            TypeErrorKind::ArgumentTypeMismatch { .. }
+        )),
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+}
+

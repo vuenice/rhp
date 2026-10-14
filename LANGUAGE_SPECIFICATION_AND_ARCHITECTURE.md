@@ -38,9 +38,14 @@
 - **Function Bodies:** Evaluated using dynamic inference and assignment, preserving rapid prototyping, clean syntax, and low syntactic overhead.
 - **Reference Mechanics:** Explicit pass-by-reference (`&$var`) is removed in favor of explicit returns and mutable collection wrappers. Objects pass by reference handle, while arrays/strings utilize Copy-On-Write (COW) semantics.
 
-### 2. Type System & Numeric Datatypes
+### 2. Type System, Type Hints & Casting Syntax
 
-- **Capital String:** Use capital `String` across type definitions and specifications.
+| Feature | Syntax | Architectural Rationale |
+| :--- | :--- | :--- |
+| **Type Casting** | `(int)$x`, `(string)$x` | Matches native PHP casting; avoids confusion with object instantiation (`new Class()`) or function invocations. |
+| **Scalar Type Hints** | `int $x`, `string $x`, `float $x`, `bool $x` | Strictly lowercase primitive keywords for function boundaries. Capitalized variants (e.g., `String`, `Integer`) are strictly rejected at parse and check time. |
+| **Collection Type Hints** | `List $arr`, `Dict $arr`, `Set $arr`, `HashMap $arr` | Capitalized to distinguish complex memory-backed structures (`Box<Vec<PhpValue>>`, `Box<IndexMap>`) from raw primitives. Lowercase aliases (`list`, `dict`) are strictly rejected. |
+
 - **Default Integers and Floats:** Default/standard integer and float types use `i32` (`Int` and `Float` wrappers/primitives).
 - **Extended Rust Numeric Types & Fluent APIs:** Developers can also use all other native Rust numeric types in our language (such as `i64`, `f64`, `u32`, etc.). They can be constructed and manipulated fluently via type wrappers, e.g.:
 

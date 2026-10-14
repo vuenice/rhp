@@ -519,3 +519,198 @@ fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
     assert_eq!(shape.property_indices.get("status"), Some(&1));
 }
 
+#[test]
+fn test_dynamic_value_enum_and_copy_on_write_semantics() {
+    use rhp::vm::value::{PhpValue, RhpString};
+
+    // 1. Core PhpValue enum representation & Ref-counting inspection
+    let scalar_int = PhpValue::Int(42);
+    assert_eq!(scalar_int.ref_count(), 1);
+    assert!(!scalar_int.is_shared());
+
+    let arr = PhpValue::array(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]);
+    assert_eq!(arr.ref_count(), 1);
+    assert!(!arr.is_shared());
+
+    let arr_alias = arr.clone();
+    assert_eq!(arr.ref_count(), 2);
+    assert_eq!(arr_alias.ref_count(), 2);
+    assert!(arr.is_shared());
+    assert!(arr_alias.is_shared());
+
+    // 2. COW detachment on array mutation
+    let mut arr_mut = arr_alias;
+    arr_mut.ensure_array_mut();
+    // After detachment, arr_mut has its own buffer with ref_count 1, while arr returns to ref_count 1
+    assert_eq!(arr_mut.ref_count(), 1);
+    assert_eq!(arr.ref_count(), 1);
+    assert!(!arr_mut.is_shared());
+    assert!(!arr.is_shared());
+
+    // 3. VM runtime: Array Copy-on-Write on assignment and mutation
+    let source_arr_cow = r#"
+        $orig = [10, 20, 30];
+        $copied = $orig;
+        $copied[0] = 99;
+        $copied[] = 100;
+    "#;
+    let (vm, _) = run_source_with_vm(source_arr_cow).expect("Array COW execution should pass");
+    let orig = vm.get_main_variable("$orig").unwrap();
+    let copied = vm.get_main_variable("$copied").unwrap();
+
+    assert_eq!(
+        orig,
+        &PhpValue::array(vec![
+            PhpValue::Int(10),
+            PhpValue::Int(20),
+            PhpValue::Int(30),
+        ])
+    );
+    assert_eq!(
+        copied,
+        &PhpValue::array(vec![
+            PhpValue::Int(99),
+            PhpValue::Int(20),
+            PhpValue::Int(30),
+            PhpValue::Int(100),
+        ])
+    );
+
+    // 4. VM runtime: Array Copy-on-Write across function calls
+    let source_func_cow = r#"
+        function mutateList(array $items): array {
+            $items[0] = 777;
+            $items[] = 888;
+            return $items;
+        }
+
+        $myList = [1, 2, 3];
+        $returnedList = mutateList($myList);
+    "#;
+    let (vm, _) = run_source_with_vm(source_func_cow).expect("Function COW execution should pass");
+    let my_list = vm.get_main_variable("$myList").unwrap();
+    let ret_list = vm.get_main_variable("$returnedList").unwrap();
+
+    assert_eq!(
+        my_list,
+        &PhpValue::array(vec![
+            PhpValue::Int(1),
+            PhpValue::Int(2),
+            PhpValue::Int(3),
+        ])
+    );
+    assert_eq!(
+        ret_list,
+        &PhpValue::array(vec![
+            PhpValue::Int(777),
+            PhpValue::Int(2),
+            PhpValue::Int(3),
+            PhpValue::Int(888),
+        ])
+    );
+
+    // 5. VM runtime: Object Reference Semantics (objects share reference handle)
+    let source_obj_ref = r#"
+        class Customer {
+            public string $name = 'Initial';
+        }
+
+        $c1 = new Customer();
+        $c2 = $c1;
+        $c2->name = 'Updated';
+
+        $c3 = clone $c1;
+        $c3->name = 'Cloned';
+    "#;
+    let (vm, _) = run_source_with_vm(source_obj_ref).expect("Object ref execution should pass");
+    let c1 = vm.get_main_variable("$c1").unwrap();
+    let c2 = vm.get_main_variable("$c2").unwrap();
+    let c3 = vm.get_main_variable("$c3").unwrap();
+
+    match (c1, c2, c3) {
+        (PhpValue::Object(o1), PhpValue::Object(o2), PhpValue::Object(o3)) => {
+            // $c1 and $c2 share the exact same underlying object handle
+            assert!(std::rc::Rc::ptr_eq(o1, o2));
+            assert_eq!(o1.borrow().get_property("name"), Some(&PhpValue::string("Updated")));
+            assert_eq!(o2.borrow().get_property("name"), Some(&PhpValue::string("Updated")));
+
+            // $c3 is an independent instance created via explicit language clone
+            assert!(!std::rc::Rc::ptr_eq(o1, o3));
+            assert_eq!(o3.borrow().get_property("name"), Some(&PhpValue::string("Cloned")));
+        }
+        _ => panic!("Expected objects"),
+    }
+
+    // 6. String COW and In-place Mutation
+    let mut s = RhpString::new("hello");
+    assert!(s.is_inline());
+    assert_eq!(s.ref_count(), 1);
+
+    // In-place COW push_str without heap allocation
+    s.push_str(" world");
+    assert!(s.is_inline());
+    assert_eq!(s.as_str(), "hello world");
+
+    // Exceeding SSO capacity promotes to Heap with COW
+    s.push_str(" with a very long string exceeding 23 bytes");
+    assert!(s.is_heap());
+    assert_eq!(s.ref_count(), 1);
+
+    // Heap string sharing & COW modification
+    let mut s_shared = s.clone();
+    assert_eq!(s.ref_count(), 2);
+    assert!(s.is_shared());
+
+    s_shared.push_str(" - mutated");
+    // After write, s_shared detached via COW
+    assert_eq!(s_shared.ref_count(), 1);
+    assert_eq!(s.ref_count(), 1);
+    assert!(s_shared.as_str().ends_with("- mutated"));
+    assert!(!s.as_str().ends_with("- mutated"));
+
+    // 7. VM string index mutation with COW
+    let source_str_idx = r#"
+        $greeting = 'hello';
+        $greeting[0] = 'j';
+    "#;
+    let (vm, _) = run_source_with_vm(source_str_idx).expect("String index mutation should pass");
+    assert_eq!(vm.get_main_variable("$greeting"), Some(&PhpValue::string("jello")));
+}
+
+#[test]
+fn test_vm_runtime_type_casting_and_collection_boundary_contracts() {
+    // 1. Runtime Type Casting: (int)$x, (string)$x, (float)$x, (bool)$x
+    let source_casts = r#"
+        $rawNum = "42";
+        $asInt = (int)$rawNum;
+        $asFloat = (float)"3.14";
+        $asStr = (string)999;
+        $asBool = (bool)1;
+        $asBoolFalse = (bool)0;
+    "#;
+    let (vm_casts, _) = run_source_with_vm(source_casts).expect("Type casting must succeed");
+    assert_eq!(vm_casts.get_main_variable("$asInt"), Some(&PhpValue::Int(42)));
+    assert_eq!(vm_casts.get_main_variable("$asFloat"), Some(&PhpValue::Float(3.14)));
+    assert_eq!(vm_casts.get_main_variable("$asStr"), Some(&PhpValue::string("999")));
+    assert_eq!(vm_casts.get_main_variable("$asBool"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm_casts.get_main_variable("$asBoolFalse"), Some(&PhpValue::Bool(false)));
+
+    // 2. Runtime Collection & Scalar Boundary Contracts: List $arr, Dict $arr, int $id, string $title
+    let source_contracts = r#"
+        function formatEntry(int $id, string $title, List $items, Dict $config): List {
+            return $items;
+        }
+
+        $myList = Arr::list([1, 2, 3]);
+        $myDict = Arr::dict(['enabled' => true]);
+        $res = formatEntry(101, 'Report', $myList, $myDict);
+    "#;
+    let (vm_contracts, _) = run_source_with_vm(source_contracts).expect("Collection contracts must execute cleanly");
+    assert_eq!(
+        vm_contracts.get_main_variable("$res"),
+        Some(&PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]))
+    );
+}
+
+
+

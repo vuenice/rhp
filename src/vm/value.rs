@@ -49,6 +49,88 @@ impl RhpString {
             Self::Heap(rc) => rc.as_str(),
         }
     }
+
+    #[inline]
+    pub fn is_inline(&self) -> bool {
+        matches!(self, Self::Inline { .. })
+    }
+
+    #[inline]
+    pub fn is_heap(&self) -> bool {
+        matches!(self, Self::Heap(_))
+    }
+
+    #[inline]
+    pub fn ref_count(&self) -> usize {
+        match self {
+            Self::Inline { .. } => 1,
+            Self::Heap(rc) => Rc::strong_count(rc),
+        }
+    }
+
+    #[inline]
+    pub fn is_shared(&self) -> bool {
+        match self {
+            Self::Inline { .. } => false,
+            Self::Heap(rc) => Rc::strong_count(rc) > 1,
+        }
+    }
+
+    /// Mutably access or promote string buffer using Copy-On-Write semantics.
+    pub fn make_mut(&mut self) -> &mut String {
+        match self {
+            Self::Inline { len, buf } => {
+                let s = unsafe { std::str::from_utf8_unchecked(&buf[..*len as usize]) }.to_string();
+                *self = Self::Heap(Rc::new(s));
+                match self {
+                    Self::Heap(rc) => Rc::make_mut(rc),
+                    _ => unreachable!(),
+                }
+            }
+            Self::Heap(rc) => Rc::make_mut(rc),
+        }
+    }
+
+    /// Append a string slice utilizing SSO when possible or Copy-On-Write heap mutation.
+    pub fn push_str(&mut self, s: &str) {
+        match self {
+            Self::Inline { len, buf } => {
+                let current_len = *len as usize;
+                let add_len = s.len();
+                if current_len + add_len <= SSO_CAPACITY {
+                    buf[current_len..current_len + add_len].copy_from_slice(s.as_bytes());
+                    *len = (current_len + add_len) as u8;
+                } else {
+                    let mut owned = String::with_capacity(current_len + add_len);
+                    owned.push_str(unsafe { std::str::from_utf8_unchecked(&buf[..current_len]) });
+                    owned.push_str(s);
+                    *self = Self::Heap(Rc::new(owned));
+                }
+            }
+            Self::Heap(rc) => {
+                Rc::make_mut(rc).push_str(s);
+            }
+        }
+    }
+
+    /// Append a single character with COW semantics.
+    pub fn push(&mut self, ch: char) {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        self.push_str(encoded);
+    }
+
+    /// Mutate a character at a byte/char index using COW semantics.
+    pub fn set_char(&mut self, index: usize, ch: char) {
+        if index < self.len() {
+            let mut chars: Vec<char> = self.as_str().chars().collect();
+            if index < chars.len() {
+                chars[index] = ch;
+                let new_str: String = chars.into_iter().collect();
+                *self = Self::new(&new_str);
+            }
+        }
+    }
 }
 
 impl Deref for RhpString {
@@ -553,9 +635,136 @@ impl PhpValue {
     }
 
     // =========================================================================
-    // COW Shallow Clone
+    // Copy-On-Write (COW) Semantics & Detachment Primitives
     // =========================================================================
 
+    /// Returns the strong reference count of the underlying buffer or handle.
+    /// Primitives, scalars, and inline SSO strings always return 1.
+    pub fn ref_count(&self) -> usize {
+        match self {
+            Self::String(s) => s.ref_count(),
+            Self::Array(rc) | Self::List(rc) => Rc::strong_count(rc),
+            Self::Dict(rc) => Rc::strong_count(rc),
+            Self::Set(rc) => Rc::strong_count(rc),
+            Self::HashMap(rc) => Rc::strong_count(rc),
+            Self::Object(rc) => Rc::strong_count(rc),
+            Self::Closure(rc) => Rc::strong_count(rc),
+            Self::Future(rc) => Rc::strong_count(rc),
+            _ => 1,
+        }
+    }
+
+    /// Returns `true` if this value references a shared heap structure (ref_count > 1).
+    pub fn is_shared(&self) -> bool {
+        self.ref_count() > 1
+    }
+
+    /// Detaches the sequential array buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Returns `true` if this value is an Array or List, `false` otherwise.
+    pub fn ensure_array_mut(&mut self) -> bool {
+        match self {
+            Self::Array(rc) => {
+                if Rc::strong_count(rc) > 1 {
+                    let cloned = rc.borrow().clone();
+                    *rc = Rc::new(RefCell::new(cloned));
+                }
+                true
+            }
+            Self::List(rc) => {
+                if Rc::strong_count(rc) > 1 {
+                    let cloned = rc.borrow().clone();
+                    *rc = Rc::new(RefCell::new(cloned));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Detaches the dictionary buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Returns `true` if this value is a Dict, `false` otherwise.
+    pub fn ensure_dict_mut(&mut self) -> bool {
+        if let Self::Dict(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Detaches the unique set buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Returns `true` if this value is a Set, `false` otherwise.
+    pub fn ensure_set_mut(&mut self) -> bool {
+        if let Self::Set(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Detaches the map buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Returns `true` if this value is a HashMap, `false` otherwise.
+    pub fn ensure_hash_map_mut(&mut self) -> bool {
+        if let Self::HashMap(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Explicit deep clone of collections and objects (used by language `clone $obj`).
+    /// Objects are cloned into fresh instances, while arrays are recursively cloned.
+    pub fn deep_clone(&self) -> Self {
+        match self {
+            Self::Array(arr) => {
+                let items: Vec<PhpValue> = arr.borrow().iter().map(|v| v.deep_clone()).collect();
+                Self::Array(Rc::new(RefCell::new(items)))
+            }
+            Self::List(list) => {
+                let items: Vec<PhpValue> = list.borrow().iter().map(|v| v.deep_clone()).collect();
+                Self::List(Rc::new(RefCell::new(items)))
+            }
+            Self::Dict(dict) => {
+                let entries: Vec<(String, PhpValue)> = dict
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.deep_clone()))
+                    .collect();
+                Self::Dict(Rc::new(RefCell::new(entries)))
+            }
+            Self::Set(set) => {
+                let items: Vec<PhpValue> = set.borrow().iter().map(|v| v.deep_clone()).collect();
+                Self::Set(Rc::new(RefCell::new(items)))
+            }
+            Self::HashMap(map) => {
+                let entries: Vec<(PhpValue, PhpValue)> = map
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| (k.deep_clone(), v.deep_clone()))
+                    .collect();
+                Self::HashMap(Rc::new(RefCell::new(entries)))
+            }
+            Self::Object(obj) => {
+                let inner = obj.borrow();
+                Self::Object(Rc::new(RefCell::new(inner.clone())))
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Clones the collection buffer on-demand, while preserving reference handle
+    /// identity for objects, closures, and futures.
     pub fn cow_clone(&self) -> Self {
         match self {
             Self::Array(arr) => Self::Array(Rc::new(RefCell::new(arr.borrow().clone()))),
@@ -563,10 +772,7 @@ impl PhpValue {
             Self::Dict(dict) => Self::Dict(Rc::new(RefCell::new(dict.borrow().clone()))),
             Self::Set(set) => Self::Set(Rc::new(RefCell::new(set.borrow().clone()))),
             Self::HashMap(map) => Self::HashMap(Rc::new(RefCell::new(map.borrow().clone()))),
-            Self::Object(obj) => {
-                let inner = obj.borrow();
-                Self::Object(Rc::new(RefCell::new(inner.clone())))
-            }
+            // Objects, Closures, and Futures ALWAYS preserve their reference handles
             other => other.clone(),
         }
     }

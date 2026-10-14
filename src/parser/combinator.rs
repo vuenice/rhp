@@ -415,11 +415,22 @@ impl<'s> CombinatorStream<'s> {
                     Ok(TypeHint::new(TypeHintKind::Named(ident), spanned.span))
                 }
                 Token::Ident(name) => {
-                    if matches!(name, "String" | "Boolean" | "Integer" | "boolean" | "integer") {
+                    if matches!(name, "String" | "Boolean" | "Integer" | "boolean" | "integer" | "Float") {
                         return Err(ParseError::new(
                             ParseErrorKind::Custom {
                                 message: format!(
                                     "Invalid primitive type '{}': primitive types must be strictly lowercase (string, bool, int, float).",
+                                    name
+                                ),
+                            },
+                            spanned.span,
+                        ));
+                    }
+                    if matches!(name, "list" | "dict" | "set" | "hashmap") {
+                        return Err(ParseError::new(
+                            ParseErrorKind::Custom {
+                                message: format!(
+                                    "Invalid collection type '{}': collection type hints must be capitalized (e.g., 'List', 'Dict') to distinguish complex memory-backed structures from raw primitives.",
                                     name
                                 ),
                             },
