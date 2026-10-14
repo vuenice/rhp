@@ -603,9 +603,8 @@ pub fn resolve_builtin_fluent_method(
                     .unwrap_or_else(|| sub.element_type().clone());
                 Some(RhpType::Collection(sub.with_element_type(mapped_elem)))
             }
-            "filter" | "reject" | "unique" | "reverse" | "slice" => {
-                Some(RhpType::Collection(sub.clone()))
-            }
+            "filter" | "reject" | "unique" | "reverse" | "slice" | "sort" | "sortBy"
+            | "sortKeys" | "sortKeysDesc" => Some(RhpType::Collection(sub.clone())),
             "reduce" => {
                 let reduced = arg_types
                     .first()
@@ -626,6 +625,53 @@ pub fn resolve_builtin_fluent_method(
             "all" | "toArray" => Some(RhpType::Array(Box::new(sub.element_type().clone()))),
             _ => {
                 // Check if registered as a runtime macro on `Arr`
+                if crate::lexer::facade::has_macro("Arr", method) {
+                    Some(RhpType::Dynamic)
+                } else {
+                    Some(RhpType::Dynamic)
+                }
+            }
+        },
+
+        // Fluent array helper methods (`$arr->sort()`, `array $arr->filter(...)`, etc.)
+        RhpType::Array(inner) => match method {
+            "map" => {
+                let mapped_elem = arg_types
+                    .first()
+                    .and_then(|cb| match cb {
+                        RhpType::Callable {
+                            return_type: Some(r),
+                            ..
+                        } => Some((**r).clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| (**inner).clone());
+                Some(RhpType::Array(Box::new(mapped_elem)))
+            }
+            "filter" | "reject" | "unique" | "reverse" | "slice" | "sort" | "sortBy"
+            | "sortKeys" | "sortKeysDesc" => Some(RhpType::Array(inner.clone())),
+            "reduce" => {
+                let reduced = arg_types
+                    .first()
+                    .and_then(|cb| match cb {
+                        RhpType::Callable {
+                            return_type: Some(r),
+                            ..
+                        } => Some((**r).clone()),
+                        _ => None,
+                    })
+                    .or_else(|| arg_types.get(1).cloned())
+                    .unwrap_or_else(|| (**inner).clone());
+                Some(reduced)
+            }
+            "find" | "first" | "last" => Some((**inner).clone().into_nullable()),
+            "count" => Some(RhpType::Int),
+            "contains" | "isEmpty" | "isNotEmpty" | "hasKey" => Some(RhpType::Bool),
+            "all" | "toArray" | "values" => Some(RhpType::Array(inner.clone())),
+            "keys" => Some(RhpType::Array(Box::new(RhpType::Mixed))),
+            "sum" | "avg" | "min" | "max" => Some(RhpType::Mixed),
+            "get" => Some(RhpType::Mixed),
+            _ => {
                 if crate::lexer::facade::has_macro("Arr", method) {
                     Some(RhpType::Dynamic)
                 } else {

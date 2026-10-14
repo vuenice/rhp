@@ -7,6 +7,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
+
 use crate::ir::opcode::FunctionId;
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 
@@ -343,7 +345,7 @@ pub enum PhpValue {
     String(RhpString),
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
-    Dict(Rc<RefCell<Vec<(String, PhpValue)>>>),
+    Dict(Rc<RefCell<IndexMap<String, PhpValue>>>),
     Set(Rc<RefCell<Vec<PhpValue>>>),
     HashMap(Rc<RefCell<Vec<(PhpValue, PhpValue)>>>),
     Object(Rc<RefCell<VmObject>>),
@@ -408,8 +410,17 @@ impl PhpValue {
     }
 
     #[inline]
-    pub fn dict(entries: Vec<(String, PhpValue)>) -> Self {
-        Self::Dict(Rc::new(RefCell::new(entries)))
+    pub fn dict(entries: impl IntoIterator<Item = (String, PhpValue)>) -> Self {
+        let mut map = IndexMap::new();
+        for (k, v) in entries {
+            map.insert(k, v);
+        }
+        Self::Dict(Rc::new(RefCell::new(map)))
+    }
+
+    #[inline]
+    pub fn dict_from_map(map: IndexMap<String, PhpValue>) -> Self {
+        Self::Dict(Rc::new(RefCell::new(map)))
     }
 
     #[inline]
@@ -588,7 +599,31 @@ impl PhpValue {
                 _ => false,
             },
             RhpType::String => matches!(self, Self::String(_)),
-            RhpType::Array(_) => matches!(self, Self::Array(_) | Self::List(_)),
+            RhpType::Array(inner) => {
+                if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
+                    matches!(
+                        self,
+                        Self::Array(_)
+                            | Self::List(_)
+                            | Self::Dict(_)
+                            | Self::Set(_)
+                            | Self::HashMap(_)
+                    )
+                } else {
+                    match self {
+                        Self::Array(a) | Self::List(a) | Self::Set(a) => {
+                            a.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
+                        }
+                        Self::Dict(d) => {
+                            d.borrow().values().all(|v| v.matches_type_contract(inner, hierarchy))
+                        }
+                        Self::HashMap(m) => {
+                            m.borrow().iter().all(|(_, v)| v.matches_type_contract(inner, hierarchy))
+                        }
+                        _ => false,
+                    }
+                }
+            }
             RhpType::Collection(col) => match (col, self) {
                 (CollectionSubtype::List(inner), Self::List(arr) | Self::Array(arr)) => {
                     if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
@@ -597,7 +632,13 @@ impl PhpValue {
                         arr.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
                     }
                 }
-                (CollectionSubtype::Dict(_), Self::Dict(_)) => true,
+                (CollectionSubtype::Dict(inner), Self::Dict(dict)) => {
+                    if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
+                        true
+                    } else {
+                        dict.borrow().values().all(|v| v.matches_type_contract(inner, hierarchy))
+                    }
+                }
                 (CollectionSubtype::Set(_), Self::Set(_)) => true,
                 (CollectionSubtype::HashMap(_, _), Self::HashMap(_)) => true,
                 _ => false,
@@ -701,6 +742,15 @@ impl PhpValue {
         }
     }
 
+    /// Returns `true` if this value is an array or collection variant (`Array`, `List`, `Dict`, `Set`, or `HashMap`).
+    #[inline]
+    pub fn is_array(&self) -> bool {
+        matches!(
+            self,
+            Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)
+        )
+    }
+
     /// Returns `true` if this value is an explicit subtyped sequential list (`Arr::list`).
     #[inline]
     pub fn is_list(&self) -> bool {
@@ -757,6 +807,66 @@ impl PhpValue {
         }
     }
 
+    /// Returns `true` if this value is an explicit subtyped dictionary (`Arr::dict`).
+    #[inline]
+    pub fn is_dict(&self) -> bool {
+        matches!(self, Self::Dict(_))
+    }
+
+    /// Borrows the underlying Rust `IndexMap<String, PhpValue>` structure.
+    #[inline]
+    pub fn as_dict(&self) -> Option<std::cell::Ref<'_, IndexMap<String, PhpValue>>> {
+        match self {
+            Self::Dict(rc) => Some(rc.borrow()),
+            _ => None,
+        }
+    }
+
+    /// Mutably borrows the underlying Rust `IndexMap<String, PhpValue>` structure.
+    #[inline]
+    pub fn as_dict_mut(&self) -> Option<std::cell::RefMut<'_, IndexMap<String, PhpValue>>> {
+        match self {
+            Self::Dict(rc) => Some(rc.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    /// Returns the length of the dictionary if this value is a Dict.
+    #[inline]
+    pub fn dict_len(&self) -> Option<usize> {
+        match self {
+            Self::Dict(rc) => Some(rc.borrow().len()),
+            _ => None,
+        }
+    }
+
+    /// Accesses an entry by string key from the `IndexMap<String, PhpValue>`.
+    #[inline]
+    pub fn dict_get(&self, key: &str) -> Option<PhpValue> {
+        match self {
+            Self::Dict(rc) => rc.borrow().get(key).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Accesses an entry by 0-based insertion index from the `IndexMap<String, PhpValue>`.
+    #[inline]
+    pub fn dict_get_index(&self, index: usize) -> Option<(String, PhpValue)> {
+        match self {
+            Self::Dict(rc) => rc.borrow().get_index(index).map(|(k, v)| (k.clone(), v.clone())),
+            _ => None,
+        }
+    }
+
+    /// Checks if a string key exists in the `IndexMap<String, PhpValue>`.
+    #[inline]
+    pub fn dict_contains_key(&self, key: &str) -> bool {
+        match self {
+            Self::Dict(rc) => rc.borrow().contains_key(key),
+            _ => false,
+        }
+    }
+
     /// Detaches the unique set buffer if shared (`strong_count > 1`) (Copy-On-Write).
     /// Returns `true` if this value is a Set, `false` otherwise.
     pub fn ensure_set_mut(&mut self) -> bool {
@@ -798,12 +908,11 @@ impl PhpValue {
                 Self::List(Rc::new(RefCell::new(items)))
             }
             Self::Dict(dict) => {
-                let entries: Vec<(String, PhpValue)> = dict
-                    .borrow()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.deep_clone()))
-                    .collect();
-                Self::Dict(Rc::new(RefCell::new(entries)))
+                let mut map = IndexMap::with_capacity(dict.borrow().len());
+                for (k, v) in dict.borrow().iter() {
+                    map.insert(k.clone(), v.deep_clone());
+                }
+                Self::Dict(Rc::new(RefCell::new(map)))
             }
             Self::Set(set) => {
                 let items: Vec<PhpValue> = set.borrow().iter().map(|v| v.deep_clone()).collect();

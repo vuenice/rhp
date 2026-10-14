@@ -14,8 +14,8 @@ use crate::type_system::{
     env::{resolve_builtin_fluent_method, resolve_facade_static_call, TypeEnvironment},
     error::{TypeError, TypeErrorKind},
     types::{
-        ClassTypeInfo, EnumTypeInfo, FunctionSignature, InterfaceTypeInfo, ParamSignature,
-        PropertyTypeInfo, RhpType, TypeHierarchy,
+        ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FunctionSignature, InterfaceTypeInfo,
+        ParamSignature, PropertyTypeInfo, RhpType, TypeHierarchy,
     },
 };
 
@@ -1517,7 +1517,7 @@ impl TypeChecker {
                             Some(prev) => RhpType::unify(&prev, t),
                         });
                     }
-                    RhpType::Array(Box::new(unified.unwrap_or(RhpType::Mixed)))
+                    RhpType::Collection(CollectionSubtype::Dict(Box::new(unified.unwrap_or(RhpType::Mixed))))
                 }
             }
 

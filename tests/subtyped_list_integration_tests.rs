@@ -490,3 +490,60 @@ fn test_user_requested_lowercase_list_and_dict_syntax() {
         err
     );
 }
+
+#[test]
+fn test_array_immutable_helper_methods_and_explicit_reassignment() {
+    // 1. Calling array helper methods on standard array never mutates original array in place
+    let source_direct = r#"
+        $my_array = [3, 1, 2];
+        $sorted = $my_array->sort();
+        $original_preserved = $my_array;
+        $my_array = $my_array->sort();
+        return [$sorted, $original_preserved, $my_array];
+    "#;
+
+    let res_direct = run_source(source_direct).expect("Direct array sort must succeed");
+    assert_eq!(
+        res_direct,
+        PhpValue::list(vec![
+            PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]),
+            PhpValue::list(vec![PhpValue::Int(3), PhpValue::Int(1), PhpValue::Int(2)]),
+            PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]),
+        ])
+    );
+
+    // 2. Calling Arr::list($my_array)->sort() returns a brand-new instance and preserves $my_array
+    let source_facade = r#"
+        $my_array = [50, 10, 40, 20];
+        $sorted = Arr::list($my_array)->sort();
+        $original_preserved = $my_array;
+        $my_array = Arr::list($my_array)->sort();
+        return [$sorted, $original_preserved, $my_array];
+    "#;
+
+    let res_facade = run_source(source_facade).expect("Arr::list sort must succeed");
+    assert_eq!(
+        res_facade,
+        PhpValue::list(vec![
+            PhpValue::list(vec![
+                PhpValue::Int(10),
+                PhpValue::Int(20),
+                PhpValue::Int(40),
+                PhpValue::Int(50)
+            ]),
+            PhpValue::list(vec![
+                PhpValue::Int(50),
+                PhpValue::Int(10),
+                PhpValue::Int(40),
+                PhpValue::Int(20)
+            ]),
+            PhpValue::list(vec![
+                PhpValue::Int(10),
+                PhpValue::Int(20),
+                PhpValue::Int(40),
+                PhpValue::Int(50)
+            ]),
+        ])
+    );
+}
+

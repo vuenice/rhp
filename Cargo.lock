@@ -419,6 +419,7 @@ dependencies = [
  "cranelift-jit",
  "cranelift-module",
  "cranelift-native",
+ "indexmap",
  "logos",
  "thiserror",
 ]

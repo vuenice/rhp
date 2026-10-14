@@ -266,19 +266,25 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
         other => panic!("Expected TypeError, got {:?}", other),
     }
 
-    // Typed parameter `$id` is also locked to its declared boundary type `int`
-    let param_mutation_violation = r#"
-        function mutateParam(int $id): int {
-            $id = "invalid string";
-            return 0;
-        }
+    // Prefix typed variable `int $x = 0;` cannot be reassigned to `string`
+    let prefix_typed_violation = r#"
+        int $x = 0;
+        $x = 'hello';
     "#;
-    let err2 = parse_and_check(param_mutation_violation).expect_err("Expected VariableTypeMismatch on param");
-    match err2 {
-        FrontendError::Type(te) => assert!(matches!(
-            te.kind,
-            TypeErrorKind::VariableTypeMismatch { ref var_name, .. } if var_name == "$id"
-        )),
+    let err3 = parse_and_check(prefix_typed_violation).expect_err("Expected VariableTypeMismatch on prefix typed var");
+    match err3 {
+        FrontendError::Type(te) => match te.kind {
+            TypeErrorKind::VariableTypeMismatch {
+                var_name,
+                expected,
+                found,
+            } => {
+                assert_eq!(var_name, "$x");
+                assert_eq!(expected, "int");
+                assert_eq!(found, "string");
+            }
+            other => panic!("Expected VariableTypeMismatch, got {:?}", other),
+        },
         other => panic!("Expected TypeError, got {:?}", other),
     }
 }

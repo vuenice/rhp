@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use indexmap::IndexMap;
+
 use crate::lexer::facade::get_macro;
 use crate::lexer::span::Span;
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
@@ -276,6 +278,24 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
         "pluck" => {
             let items = args.first().map(extract_array_elements).unwrap_or_default();
             let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let key_by = args.get(2).map(|v| v.to_php_string());
+            if let Some(kb) = key_by {
+                let mut map = IndexMap::new();
+                for item in items {
+                    let k = match &item {
+                        PhpValue::Object(obj) => obj.borrow().get_property(&kb).map(|v| v.to_php_string()),
+                        PhpValue::Dict(d) => d.borrow().get(&kb).map(|v| v.to_php_string()),
+                        _ => None,
+                    }.unwrap_or_default();
+                    let v = match &item {
+                        PhpValue::Object(obj) => obj.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null),
+                        PhpValue::Dict(d) => d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null),
+                        _ => PhpValue::Null,
+                    };
+                    map.insert(k, v);
+                }
+                return Ok(PhpValue::dict_from_map(map));
+            }
             let mut plucked = Vec::with_capacity(items.len());
             for item in items {
                 match item {
@@ -284,12 +304,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                         plucked.push(val);
                     }
                     PhpValue::Dict(d) => {
-                        let val = d
-                            .borrow()
-                            .iter()
-                            .find(|(k, _)| k == &key)
-                            .map(|(_, v)| v.clone())
-                            .unwrap_or(PhpValue::Null);
+                        let val = d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null);
                         plucked.push(val);
                     }
                     _ => plucked.push(PhpValue::Null),
@@ -312,20 +327,28 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::Bool(false))
         }
         "dict" => {
-            let entries = if let Some(first) = args.first() {
-                extract_dict_elements(first)
+            let map = if let Some(first) = args.first() {
+                extract_dict_map(first)
             } else {
-                Vec::new()
+                IndexMap::new()
             };
-            Ok(PhpValue::dict(entries))
+            Ok(PhpValue::dict_from_map(map))
         }
         "set" => {
-            let items = if let Some(first) = args.first() {
-                extract_array_elements(first)
+            if args.len() >= 3 {
+                let mut target = args.first().cloned().unwrap_or(PhpValue::Null);
+                let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                let val = args.get(2).cloned().unwrap_or(PhpValue::Null);
+                arr_set_dot(&mut target, &key, val);
+                Ok(target)
             } else {
-                Vec::new()
-            };
-            Ok(PhpValue::set(items))
+                let items = if let Some(first) = args.first() {
+                    extract_array_elements(first)
+                } else {
+                    Vec::new()
+                };
+                Ok(PhpValue::set(items))
+            }
         }
         "hashMap" => {
             let entries = if let Some(first) = args.first() {
@@ -346,11 +369,28 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::Int(cnt as i32))
         }
         "merge" => {
-            let mut merged = Vec::new();
+            let mut is_dict = false;
             for arg in args {
-                merged.extend(extract_array_elements(arg));
+                if matches!(arg, PhpValue::Dict(_)) {
+                    is_dict = true;
+                    break;
+                }
             }
-            Ok(PhpValue::list(merged))
+            if is_dict {
+                let mut merged = IndexMap::new();
+                for arg in args {
+                    for (k, v) in extract_dict_elements(arg) {
+                        merged.insert(k, v);
+                    }
+                }
+                Ok(PhpValue::dict_from_map(merged))
+            } else {
+                let mut merged = Vec::new();
+                for arg in args {
+                    merged.extend(extract_array_elements(arg));
+                }
+                Ok(PhpValue::list(merged))
+            }
         }
         "contains" => {
             let target = match args.get(1) {
@@ -360,6 +400,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let exists = match args.first() {
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().contains(target),
                 Some(PhpValue::Set(s)) => s.borrow().contains(target),
+                Some(PhpValue::Dict(d)) => d.borrow().values().any(|v| v == target),
                 _ => false,
             };
             Ok(PhpValue::Bool(exists))
@@ -368,8 +409,8 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let keys = match args.first() {
                 Some(PhpValue::Dict(d)) => d
                     .borrow()
-                    .iter()
-                    .map(|(k, _)| PhpValue::string(k.clone()))
+                    .keys()
+                    .map(|k| PhpValue::string(k.clone()))
                     .collect(),
                 Some(PhpValue::HashMap(m)) => m.borrow().iter().map(|(k, _)| k.clone()).collect(),
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => (0..a.borrow().len())
@@ -381,7 +422,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "values" => {
             let vals = match args.first() {
-                Some(PhpValue::Dict(d)) => d.borrow().iter().map(|(_, v)| v.clone()).collect(),
+                Some(PhpValue::Dict(d)) => d.borrow().values().cloned().collect(),
                 Some(PhpValue::HashMap(m)) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().clone(),
                 Some(PhpValue::Set(s)) => s.borrow().clone(),
@@ -398,13 +439,172 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::set(items))
         }
         "reverse" => {
-            let mut items = if let Some(first) = args.first() {
-                extract_array_elements(first)
+            if let Some(PhpValue::Dict(d)) = args.first() {
+                let mut rev = d.borrow().clone();
+                rev.reverse();
+                Ok(PhpValue::dict_from_map(rev))
             } else {
-                Vec::new()
+                let mut items = if let Some(first) = args.first() {
+                    extract_array_elements(first)
+                } else {
+                    Vec::new()
+                };
+                items.reverse();
+                Ok(PhpValue::list(items))
+            }
+        }
+        "get" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let default = args.get(2).cloned().unwrap_or(PhpValue::Null);
+            Ok(arr_get_dot(&target, &key, default))
+        }
+        "has" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            Ok(PhpValue::Bool(arr_has_dot(&target, &key)))
+        }
+        "hasAny" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let keys = args.get(1).map(extract_array_elements).unwrap_or_default();
+            let any = keys.iter().any(|k| arr_has_dot(&target, &k.to_php_string()));
+            Ok(PhpValue::Bool(any))
+        }
+        "forget" => {
+            let mut target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let keys: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.get(1) {
+                a.borrow().iter().map(|v| v.to_php_string()).collect()
+            } else {
+                args.iter().skip(1).map(|v| v.to_php_string()).collect()
             };
-            items.reverse();
-            Ok(PhpValue::list(items))
+            for k in keys {
+                arr_forget_dot(&mut target, &k);
+            }
+            Ok(target)
+        }
+        "pull" => {
+            let mut target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let default = args.get(2).cloned().unwrap_or(PhpValue::Null);
+            let val = arr_get_dot(&target, &key, default);
+            arr_forget_dot(&mut target, &key);
+            Ok(val)
+        }
+        "only" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let key_list: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.get(1) {
+                a.borrow().iter().map(|v| v.to_php_string()).collect()
+            } else {
+                args.iter().skip(1).map(|v| v.to_php_string()).collect()
+            };
+            let dict_map = extract_dict_map(&target);
+            let mut result = IndexMap::new();
+            for k in key_list {
+                if let Some(val) = dict_map.get(&k) {
+                    result.insert(k, val.clone());
+                }
+            }
+            Ok(PhpValue::dict_from_map(result))
+        }
+        "except" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let key_list: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.get(1) {
+                a.borrow().iter().map(|v| v.to_php_string()).collect()
+            } else {
+                args.iter().skip(1).map(|v| v.to_php_string()).collect()
+            };
+            let dict_map = extract_dict_map(&target);
+            let mut result = IndexMap::new();
+            for (k, val) in dict_map.iter() {
+                if !key_list.contains(k) {
+                    result.insert(k.clone(), val.clone());
+                }
+            }
+            Ok(PhpValue::dict_from_map(result))
+        }
+        "dot" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let prepend = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let mut out = IndexMap::new();
+            arr_dot(&target, &prepend, &mut out);
+            Ok(PhpValue::dict_from_map(out))
+        }
+        "undot" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let dict_map = extract_dict_map(&target);
+            Ok(arr_undot(&dict_map))
+        }
+        "divide" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let dict_map = extract_dict_map(&target);
+            let keys: Vec<PhpValue> = dict_map.keys().map(|k| PhpValue::string(k.clone())).collect();
+            let values: Vec<PhpValue> = dict_map.values().cloned().collect();
+            Ok(PhpValue::list(vec![PhpValue::list(keys), PhpValue::list(values)]))
+        }
+        "keyBy" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            let key_field = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let mut map = IndexMap::new();
+            for item in items {
+                let k_str = match &item {
+                    PhpValue::Object(o) => o.borrow().get_property(&key_field).map(|v| v.to_php_string()),
+                    PhpValue::Dict(d) => d.borrow().get(&key_field).map(|v| v.to_php_string()),
+                    _ => None,
+                }.unwrap_or_default();
+                map.insert(k_str, item);
+            }
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "collapse" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            let mut is_assoc = false;
+            for it in &items {
+                if matches!(it, PhpValue::Dict(_)) {
+                    is_assoc = true;
+                    break;
+                }
+            }
+            if is_assoc {
+                let mut collapsed = IndexMap::new();
+                for it in items {
+                    for (k, v) in extract_dict_elements(&it) {
+                        collapsed.insert(k, v);
+                    }
+                }
+                Ok(PhpValue::dict_from_map(collapsed))
+            } else {
+                let mut collapsed = Vec::new();
+                for it in items {
+                    collapsed.extend(extract_array_elements(&it));
+                }
+                Ok(PhpValue::list(collapsed))
+            }
+        }
+        "isAssoc" => {
+            let is_assoc = match args.first() {
+                Some(PhpValue::Dict(_)) => true,
+                _ => false,
+            };
+            Ok(PhpValue::Bool(is_assoc))
+        }
+        "isList" => {
+            let is_list = match args.first() {
+                Some(PhpValue::List(_) | PhpValue::Array(_)) => true,
+                _ => false,
+            };
+            Ok(PhpValue::Bool(is_list))
+        }
+        "sortKeys" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let mut map = extract_dict_map(&target);
+            map.sort_keys();
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "sortKeysDesc" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let mut map = extract_dict_map(&target);
+            map.sort_by(|k1, _, k2, _| k2.cmp(k1));
+            Ok(PhpValue::dict_from_map(map))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Arr".to_string(),
@@ -746,14 +946,44 @@ pub fn flatten_elements(val: &PhpValue, out: &mut Vec<PhpValue>) {
 
 pub fn extract_dict_elements(val: &PhpValue) -> Vec<(String, PhpValue)> {
     match val {
-        PhpValue::Dict(d) => d.borrow().clone(),
+        PhpValue::Dict(d) => d
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         PhpValue::Array(a) | PhpValue::List(a) => a
             .borrow()
             .iter()
             .enumerate()
             .map(|(i, v)| (i.to_string(), v.clone()))
             .collect(),
+        PhpValue::HashMap(m) => m
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.to_php_string(), v.clone()))
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+pub fn extract_dict_map(val: &PhpValue) -> IndexMap<String, PhpValue> {
+    match val {
+        PhpValue::Dict(d) => d.borrow().clone(),
+        PhpValue::Array(a) | PhpValue::List(a) => {
+            let mut map = IndexMap::new();
+            for (i, v) in a.borrow().iter().enumerate() {
+                map.insert(i.to_string(), v.clone());
+            }
+            map
+        }
+        PhpValue::HashMap(m) => {
+            let mut map = IndexMap::new();
+            for (k, v) in m.borrow().iter() {
+                map.insert(k.to_php_string(), v.clone());
+            }
+            map
+        }
+        _ => IndexMap::new(),
     }
 }
 
@@ -772,5 +1002,249 @@ pub fn extract_map_elements(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
             .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+pub fn arr_get_dot(target: &PhpValue, key: &str, default: PhpValue) -> PhpValue {
+    if key.is_empty() {
+        return target.clone();
+    }
+    let parts: Vec<&str> = key.split('.').collect();
+    let mut current = target.clone();
+    for part in parts {
+        match current {
+            PhpValue::Dict(d) => {
+                if let Some(val) = d.borrow().get(part) {
+                    current = val.clone();
+                } else {
+                    return default;
+                }
+            }
+            PhpValue::Array(a) | PhpValue::List(a) => {
+                if let Ok(idx) = part.parse::<usize>() {
+                    if let Some(val) = a.borrow().get(idx) {
+                        current = val.clone();
+                    } else {
+                        return default;
+                    }
+                } else {
+                    return default;
+                }
+            }
+            PhpValue::Object(o) => {
+                if let Some(val) = o.borrow().get_property(part) {
+                    current = val.clone();
+                } else {
+                    return default;
+                }
+            }
+            _ => return default,
+        }
+    }
+    current
+}
+
+pub fn arr_has_dot(target: &PhpValue, key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let parts: Vec<&str> = key.split('.').collect();
+    let mut current = target.clone();
+    for (i, part) in parts.iter().enumerate() {
+        match current {
+            PhpValue::Dict(d) => {
+                let b = d.borrow();
+                if let Some(val) = b.get(*part) {
+                    if i == parts.len() - 1 {
+                        return true;
+                    }
+                    current = val.clone();
+                } else {
+                    return false;
+                }
+            }
+            PhpValue::Array(a) | PhpValue::List(a) => {
+                if let Ok(idx) = part.parse::<usize>() {
+                    let b = a.borrow();
+                    if let Some(val) = b.get(idx) {
+                        if i == parts.len() - 1 {
+                            return true;
+                        }
+                        current = val.clone();
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            PhpValue::Object(o) => {
+                let b = o.borrow();
+                if let Some(val) = b.get_property(part) {
+                    if i == parts.len() - 1 {
+                        return true;
+                    }
+                    current = val.clone();
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+pub fn arr_set_dot(target: &mut PhpValue, key: &str, value: PhpValue) {
+    if key.is_empty() {
+        return;
+    }
+    let parts: Vec<&str> = key.split('.').collect();
+    if parts.len() == 1 {
+        match target {
+            PhpValue::Dict(d) => {
+                d.borrow_mut().insert(parts[0].to_string(), value);
+            }
+            _ => {
+                let mut map = IndexMap::new();
+                map.insert(parts[0].to_string(), value);
+                *target = PhpValue::dict_from_map(map);
+            }
+        }
+        return;
+    }
+
+    if !matches!(target, PhpValue::Dict(_)) {
+        *target = PhpValue::dict(Vec::new());
+    }
+    let mut curr_rc = match target {
+        PhpValue::Dict(d) => d.clone(),
+        _ => return,
+    };
+
+    for part in &parts[..parts.len() - 1] {
+        let next_exists = curr_rc.borrow().contains_key(*part);
+        if !next_exists || !matches!(curr_rc.borrow().get(*part), Some(PhpValue::Dict(_))) {
+            let next_dict = PhpValue::dict(Vec::new());
+            curr_rc.borrow_mut().insert(part.to_string(), next_dict);
+        }
+        let next_val = curr_rc.borrow().get(*part).cloned().unwrap();
+        if let PhpValue::Dict(next_rc) = next_val {
+            curr_rc = next_rc;
+        } else {
+            return;
+        }
+    }
+    let last_key = parts[parts.len() - 1];
+    curr_rc.borrow_mut().insert(last_key.to_string(), value);
+}
+
+pub fn arr_forget_dot(target: &mut PhpValue, key: &str) {
+    if key.is_empty() {
+        return;
+    }
+    let parts: Vec<&str> = key.split('.').collect();
+    if parts.len() == 1 {
+        if let PhpValue::Dict(d) = target {
+            d.borrow_mut().shift_remove(parts[0]);
+        }
+        return;
+    }
+
+    let mut curr = target.clone();
+    for part in &parts[..parts.len() - 1] {
+        match curr {
+            PhpValue::Dict(d) => {
+                if let Some(next) = d.borrow().get(*part).cloned() {
+                    curr = next;
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        }
+    }
+    let last_key = parts[parts.len() - 1];
+    if let PhpValue::Dict(d) = curr {
+        d.borrow_mut().shift_remove(last_key);
+    }
+}
+
+pub fn arr_dot(target: &PhpValue, prepend: &str, out: &mut IndexMap<String, PhpValue>) {
+    match target {
+        PhpValue::Dict(d) => {
+            for (k, v) in d.borrow().iter() {
+                let full_key = if prepend.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{}.{}", prepend, k)
+                };
+                if matches!(v, PhpValue::Dict(_)) {
+                    arr_dot(v, &full_key, out);
+                } else {
+                    out.insert(full_key, v.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn arr_undot(dotted: &IndexMap<String, PhpValue>) -> PhpValue {
+    let mut root = PhpValue::dict(Vec::new());
+    for (k, v) in dotted {
+        arr_set_dot(&mut root, k, v.clone());
+    }
+    root
+}
+
+pub fn php_value_to_json(val: &PhpValue) -> String {
+    match val {
+        PhpValue::Null => "null".to_string(),
+        PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
+        PhpValue::Int(n) => n.to_string(),
+        PhpValue::Float(fl) => fl.to_string(),
+        PhpValue::RustInt { value, .. } => value.to_string(),
+        PhpValue::RustFloat { value, .. } => value.to_string(),
+        PhpValue::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{}\"", escaped)
+        }
+        PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => {
+            let items: Vec<String> = a.borrow().iter().map(php_value_to_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        PhpValue::Dict(d) => {
+            let entries: Vec<String> = d
+                .borrow()
+                .iter()
+                .map(|(k, v)| {
+                    let escaped_k = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\":{}", escaped_k, php_value_to_json(v))
+                })
+                .collect();
+            format!("{{{}}}", entries.join(","))
+        }
+        PhpValue::HashMap(m) => {
+            let entries: Vec<String> = m
+                .borrow()
+                .iter()
+                .map(|(k, v)| {
+                    let escaped_k = k.to_php_string().replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\":{}", escaped_k, php_value_to_json(v))
+                })
+                .collect();
+            format!("{{{}}}", entries.join(","))
+        }
+        PhpValue::Object(o) => {
+            let obj = o.borrow();
+            let mut entries = Vec::new();
+            for (k, v) in obj.properties.iter() {
+                let escaped_k = k.replace('\\', "\\\\").replace('"', "\\\"");
+                entries.push(format!("\"{}\":{}", escaped_k, php_value_to_json(v)));
+            }
+            format!("{{{}}}", entries.join(","))
+        }
+        _ => "null".to_string(),
     }
 }

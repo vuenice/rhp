@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use indexmap::IndexMap;
+
 use crate::ast::expr::BinaryOp;
 use crate::ast::types::CastType;
 use crate::ir::opcode::{
@@ -13,7 +15,8 @@ use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 use crate::vm::facade::{
-    dispatch_facade_call, flatten_elements, get_runtime_closure_macro,
+    arr_get_dot, arr_has_dot, dispatch_facade_call, extract_array_elements, extract_dict_elements,
+    extract_dict_map, flatten_elements, get_runtime_closure_macro, php_value_to_json,
     register_runtime_closure_macro,
 };
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
@@ -31,15 +34,22 @@ struct StagedArg {
 
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
 ///
-/// Implements Technical Point #8 of the RHP Architecture Specification:
+/// Implements Technical Points #8 and #9 of the RHP Architecture Specification:
 /// - Maps sequential lists directly to underlying Rust `Vec<PhpValue>` structures (`ActiveIterator::List`),
 ///   enabling contiguous cache-line memory streaming during iteration with zero temporary vector allocations.
-/// - Associative dictionaries and complex maps fall back to `ActiveIterator::Entries`.
+/// - Maps subtyped key-value dictionaries directly to underlying Rust `IndexMap<String, PhpValue>` structures (`ActiveIterator::Dict`),
+///   guaranteeing strict insertion ordering and O(1) key indexing with zero temporary vector allocations.
+/// - Complex maps and dynamic fallbacks use `ActiveIterator::Entries`.
 #[derive(Debug, Clone)]
 pub(crate) enum ActiveIterator {
     /// Contiguous sequential list iterator referencing the underlying Rust `Vec<PhpValue>` directly.
     List {
         items: Rc<RefCell<Vec<PhpValue>>>,
+        cursor: usize,
+    },
+    /// Subtyped key-value dictionary iterator referencing the underlying Rust `IndexMap<String, PhpValue>` directly.
+    Dict {
+        dict: Rc<RefCell<IndexMap<String, PhpValue>>>,
         cursor: usize,
     },
     /// Associative dictionary / key-value map iterator.
@@ -695,7 +705,7 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_dict_entries)
                                 .unwrap_or_default();
-                            PhpValue::dict(entries)
+                            PhpValue::dict_from_map(entries)
                         }
                         IrCollectionKind::Set => {
                             let items = src_val
@@ -748,7 +758,7 @@ impl VM {
                             if let PhpValue::Dict(dict) = target {
                                 let mut b = dict.borrow_mut();
                                 let next_key = b.len().to_string();
-                                b.push((next_key, val));
+                                b.insert(next_key, val);
                             }
                             true
                         }
@@ -779,25 +789,19 @@ impl VM {
                     // Check if setting a string key on a plain `Array` should upgrade it to `Dict`
                     let upgrade_to_dict = match (&self.registers[base_reg + array.index()], &k) {
                         (PhpValue::Array(arr), PhpValue::String(_)) => {
-                            let existing: Vec<(String, PhpValue)> = arr
-                                .borrow()
-                                .iter()
-                                .enumerate()
-                                .map(|(i, item)| (i.to_string(), item.clone()))
-                                .collect();
-                            Some(existing)
+                            let mut map = IndexMap::new();
+                            for (i, item) in arr.borrow().iter().enumerate() {
+                                map.insert(i.to_string(), item.clone());
+                            }
+                            Some(map)
                         }
                         _ => None,
                     };
 
-                    if let Some(mut entries) = upgrade_to_dict {
+                    if let Some(mut map) = upgrade_to_dict {
                         let k_str = k.to_php_string();
-                        if let Some(slot) = entries.iter_mut().find(|(ek, _)| ek == &k_str) {
-                            slot.1 = v;
-                        } else {
-                            entries.push((k_str, v));
-                        }
-                        self.registers[base_reg + array.index()] = PhpValue::dict(entries);
+                        map.insert(k_str, v);
+                        self.registers[base_reg + array.index()] = PhpValue::dict_from_map(map);
                     } else {
                         let mut undefined_key: Option<String> = None;
                         let is_valid = match &mut self.registers[base_reg + array.index()] {
@@ -857,12 +861,7 @@ impl VM {
                                     *dict = Rc::new(RefCell::new(cloned));
                                 }
                                 let k_str = k.to_php_string();
-                                let mut b = dict.borrow_mut();
-                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k_str) {
-                                    slot.1 = v;
-                                } else {
-                                    b.push((k_str, v));
-                                }
+                                dict.borrow_mut().insert(k_str, v);
                                 true
                             }
                             PhpValue::HashMap(map) => {
@@ -959,11 +958,7 @@ impl VM {
                         }
                         PhpValue::Dict(dict) => {
                             let key_str = idx_val.to_php_string();
-                            dict.borrow()
-                                .iter()
-                                .find(|(k, _)| k == &key_str)
-                                .map(|(_, v)| v.clone())
-                                .unwrap_or(PhpValue::Null)
+                            dict.borrow().get(&key_str).cloned().unwrap_or(PhpValue::Null)
                         }
                         PhpValue::HashMap(map) => map
                             .borrow()
@@ -1012,14 +1007,10 @@ impl VM {
                             items: set.clone(),
                             cursor: 0,
                         },
-                        PhpValue::Dict(dict) => {
-                            let entries = dict
-                                .borrow()
-                                .iter()
-                                .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
-                                .collect();
-                            ActiveIterator::Entries { entries, cursor: 0 }
-                        }
+                        PhpValue::Dict(dict) => ActiveIterator::Dict {
+                            dict: dict.clone(),
+                            cursor: 0,
+                        },
                         PhpValue::HashMap(map) => {
                             let entries = map.borrow().clone();
                             ActiveIterator::Entries { entries, cursor: 0 }
@@ -1058,6 +1049,21 @@ impl VM {
                                         let curr = *cursor;
                                         *cursor += 1;
                                         Some((Some(PhpValue::Int(curr as i32)), val))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                ActiveIterator::Dict { dict, cursor } => {
+                                    let b = dict.borrow();
+                                    if *cursor < b.len() {
+                                        if let Some((k, v)) = b.get_index(*cursor) {
+                                            let key = PhpValue::string(k.clone());
+                                            let val = v.clone();
+                                            *cursor += 1;
+                                            Some((Some(key), val))
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         None
                                     }
@@ -2051,10 +2057,679 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         match receiver {
-            // 1. Subtyped collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
+            // 1. Subtyped Dictionary methods (`Arr::dict()->map()->filter()->keys()->get()`, etc.)
+            PhpValue::Dict(dict) => {
+                match method {
+                    "keys" => {
+                        let keys: Vec<PhpValue> = dict
+                            .borrow()
+                            .keys()
+                            .map(|k| PhpValue::string(k.clone()))
+                            .collect();
+                        Ok(PhpValue::list(keys))
+                    }
+                    "values" => {
+                        let vals: Vec<PhpValue> = dict.borrow().values().cloned().collect();
+                        Ok(PhpValue::list(vals))
+                    }
+                    "get" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        if key.contains('.') {
+                            Ok(arr_get_dot(receiver, &key, default))
+                        } else {
+                            Ok(dict.borrow().get(&key).cloned().unwrap_or(default))
+                        }
+                    }
+                    "has" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        if key.contains('.') {
+                            Ok(PhpValue::Bool(arr_has_dot(receiver, &key)))
+                        } else {
+                            Ok(PhpValue::Bool(dict.borrow().contains_key(&key)))
+                        }
+                    }
+                    "hasAny" => {
+                        let keys = args.first().map(extract_array_elements).unwrap_or_default();
+                        let any = keys.iter().any(|k| dict.borrow().contains_key(&k.to_php_string()));
+                        Ok(PhpValue::Bool(any))
+                    }
+                    "put" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        dict.borrow_mut().insert(key, val);
+                        Ok(receiver.clone())
+                    }
+                    "pull" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        Ok(dict.borrow_mut().shift_remove(&key).unwrap_or(default))
+                    }
+                    "forget" => {
+                        let keys: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.first() {
+                            a.borrow().iter().map(|v| v.to_php_string()).collect()
+                        } else {
+                            args.iter().map(|v| v.to_php_string()).collect()
+                        };
+                        for k in keys {
+                            dict.borrow_mut().shift_remove(&k);
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "map" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = IndexMap::new();
+                            let entries: Vec<(String, PhpValue)> = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                let new_v = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v, PhpValue::string(k.clone())],
+                                    span,
+                                )?;
+                                out.insert(k, new_v);
+                            }
+                            Ok(PhpValue::dict_from_map(out))
+                        } else {
+                            Ok(receiver.clone())
+                        }
+                    }
+                    "mapWithKeys" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = IndexMap::new();
+                            let entries: Vec<(String, PhpValue)> = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                let res = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v, PhpValue::string(k)],
+                                    span,
+                                )?;
+                                for (pair_k, pair_v) in extract_dict_elements(&res) {
+                                    out.insert(pair_k, pair_v);
+                                }
+                            }
+                            Ok(PhpValue::dict_from_map(out))
+                        } else {
+                            Ok(receiver.clone())
+                        }
+                    }
+                    "filter" => {
+                        let mut out = IndexMap::new();
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in entries {
+                                let keep = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k.clone())],
+                                    span,
+                                )?;
+                                if keep.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        } else {
+                            for (k, v) in entries {
+                                if v.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "reject" => {
+                        let mut out = IndexMap::new();
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in entries {
+                                let drop = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k.clone())],
+                                    span,
+                                )?;
+                                if !drop.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "reduce" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut acc = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                            let entries: Vec<(String, PhpValue)> = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                acc = self.invoke_closure_sync(
+                                    cb,
+                                    vec![acc, v, PhpValue::string(k)],
+                                    span,
+                                )?;
+                            }
+                            Ok(acc)
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                    "first" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let entries: Vec<(String, PhpValue)> = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                let m = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k)],
+                                    span,
+                                )?;
+                                if m.is_truthy() {
+                                    return Ok(v);
+                                }
+                            }
+                            Ok(PhpValue::Null)
+                        } else {
+                            Ok(dict.borrow().values().next().cloned().unwrap_or(PhpValue::Null))
+                        }
+                    }
+                    "last" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let entries: Vec<(String, PhpValue)> = dict
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            let mut last_match = PhpValue::Null;
+                            for (k, v) in entries {
+                                let m = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k)],
+                                    span,
+                                )?;
+                                if m.is_truthy() {
+                                    last_match = v;
+                                }
+                            }
+                            Ok(last_match)
+                        } else {
+                            Ok(dict.borrow().values().last().cloned().unwrap_or(PhpValue::Null))
+                        }
+                    }
+                    "firstKey" => Ok(dict
+                        .borrow()
+                        .keys()
+                        .next()
+                        .map(|k| PhpValue::string(k.clone()))
+                        .unwrap_or(PhpValue::Null)),
+                    "lastKey" => Ok(dict
+                        .borrow()
+                        .keys()
+                        .last()
+                        .map(|k| PhpValue::string(k.clone()))
+                        .unwrap_or(PhpValue::Null)),
+                    "only" => {
+                        let keys: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.first() {
+                            a.borrow().iter().map(|v| v.to_php_string()).collect()
+                        } else {
+                            args.iter().map(|v| v.to_php_string()).collect()
+                        };
+                        let mut out = IndexMap::new();
+                        let b = dict.borrow();
+                        for k in keys {
+                            if let Some(val) = b.get(&k) {
+                                out.insert(k, val.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "except" => {
+                        let keys: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.first() {
+                            a.borrow().iter().map(|v| v.to_php_string()).collect()
+                        } else {
+                            args.iter().map(|v| v.to_php_string()).collect()
+                        };
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            if !keys.contains(k) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "flip" => {
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            out.insert(v.to_php_string(), PhpValue::string(k.clone()));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "merge" => {
+                        let mut merged = dict.borrow().clone();
+                        for arg in args {
+                            for (k, v) in extract_dict_elements(arg) {
+                                merged.insert(k, v);
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(merged))
+                    }
+                    "sortKeys" => {
+                        let mut sorted = dict.borrow().clone();
+                        sorted.sort_keys();
+                        Ok(PhpValue::dict_from_map(sorted))
+                    }
+                    "sortKeysDesc" => {
+                        let mut sorted = dict.borrow().clone();
+                        sorted.sort_by(|k1, _, k2, _| k2.cmp(k1));
+                        Ok(PhpValue::dict_from_map(sorted))
+                    }
+                    "sort" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = entries.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let cmp_res = self.invoke_closure_sync(
+                                        cb,
+                                        vec![entries[i].1.clone(), entries[j].1.clone()],
+                                        span,
+                                    )?;
+                                    if cmp_res.to_i64().unwrap_or(0) > 0 {
+                                        entries.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else {
+                            entries.sort_by(|(_, a), (_, b)| {
+                                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "sortBy" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = entries.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let ki = self.invoke_closure_sync(
+                                        cb,
+                                        vec![entries[i].1.clone(), PhpValue::string(entries[i].0.clone())],
+                                        span,
+                                    )?;
+                                    let kj = self.invoke_closure_sync(
+                                        cb,
+                                        vec![entries[j].1.clone(), PhpValue::string(entries[j].0.clone())],
+                                        span,
+                                    )?;
+                                    if ki.partial_cmp(&kj) == Some(std::cmp::Ordering::Greater) {
+                                        entries.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else if let Some(key_val) = args.first() {
+                            let key_str = key_val.to_php_string();
+                            entries.sort_by(|(_, a), (_, b)| {
+                                let ka = match a {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        d.borrow().get(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    _ => PhpValue::Null,
+                                };
+                                let kb = match b {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        d.borrow().get(&key_str).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    _ => PhpValue::Null,
+                                };
+                                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "reverse" => {
+                        let mut rev = dict.borrow().clone();
+                        rev.reverse();
+                        Ok(PhpValue::dict_from_map(rev))
+                    }
+                    "count" | "size" | "length" | "len" => {
+                        Ok(PhpValue::Int(dict.borrow().len() as i32))
+                    }
+                    "isEmpty" => Ok(PhpValue::Bool(dict.borrow().is_empty())),
+                    "isNotEmpty" => Ok(PhpValue::Bool(!dict.borrow().is_empty())),
+                    "all" | "toArray" => Ok(receiver.clone()),
+                    "contains" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in dict.borrow().iter() {
+                                let matched = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k.clone())],
+                                    span,
+                                )?;
+                                if matched.is_truthy() {
+                                    return Ok(PhpValue::Bool(true));
+                                }
+                            }
+                            Ok(PhpValue::Bool(false))
+                        } else {
+                            let needle = args.first().cloned().unwrap_or(PhpValue::Null);
+                            let found = dict.borrow().values().any(|v| v == &needle);
+                            Ok(PhpValue::Bool(found))
+                        }
+                    }
+                    "each" | "forEach" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in dict.borrow().iter() {
+                                let res = self.invoke_closure_sync(
+                                    cb,
+                                    vec![v.clone(), PhpValue::string(k.clone())],
+                                    span,
+                                )?;
+                                if res == PhpValue::Bool(false) {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "pluck" => {
+                        let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                        let key_by = args.get(1).map(|v| v.to_php_string());
+                        if let Some(kb) = key_by {
+                            let mut map = IndexMap::new();
+                            for v in dict.borrow().values() {
+                                let k = match v {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&kb).map(|val| val.to_php_string())
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        d.borrow().get(&kb).map(|val| val.to_php_string())
+                                    }
+                                    _ => None,
+                                }.unwrap_or_default();
+                                let plucked_val = match v {
+                                    PhpValue::Object(o) => {
+                                        o.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null)
+                                    }
+                                    _ => PhpValue::Null,
+                                };
+                                map.insert(k, plucked_val);
+                            }
+                            Ok(PhpValue::dict_from_map(map))
+                        } else {
+                            let mut plucked = Vec::new();
+                            for v in dict.borrow().values() {
+                                match v {
+                                    PhpValue::Object(o) => {
+                                        plucked.push(o.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null))
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        plucked.push(d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null))
+                                    }
+                                    _ => plucked.push(PhpValue::Null),
+                                }
+                            }
+                            Ok(PhpValue::list(plucked))
+                        }
+                    }
+                    "diff" => {
+                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                        let other_values: Vec<PhpValue> = other_dict.values().cloned().collect();
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            if !other_values.contains(v) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "diffKeys" => {
+                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            if !other_dict.contains_key(k) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "intersect" => {
+                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                        let other_values: Vec<PhpValue> = other_dict.values().cloned().collect();
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            if other_values.contains(v) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "intersectKeys" => {
+                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                        let mut out = IndexMap::new();
+                        for (k, v) in dict.borrow().iter() {
+                            if other_dict.contains_key(k) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "chunk" => {
+                        let size = args.first().and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let chunks: Vec<PhpValue> = entries
+                            .chunks(size)
+                            .map(|c| {
+                                let mut m = IndexMap::new();
+                                for (k, v) in c {
+                                    m.insert(k.clone(), v.clone());
+                                }
+                                PhpValue::dict_from_map(m)
+                            })
+                            .collect();
+                        Ok(PhpValue::list(chunks))
+                    }
+                    "take" => {
+                        let limit = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let taken: Vec<(String, PhpValue)> = if limit >= 0 {
+                            entries.into_iter().take(limit as usize).collect()
+                        } else {
+                            let count = (-limit) as usize;
+                            let skip_n = entries.len().saturating_sub(count);
+                            entries.into_iter().skip(skip_n).collect()
+                        };
+                        let mut out = IndexMap::new();
+                        for (k, v) in taken {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "skip" => {
+                        let count = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries.into_iter().skip(count) {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "slice" => {
+                        let offset = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                        let len_req = args.get(1).and_then(|v| v.to_i64());
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        let total_len = entries.len() as i64;
+                        let start_idx = if offset < 0 {
+                            (total_len + offset).max(0) as usize
+                        } else {
+                            offset.min(total_len) as usize
+                        };
+                        let slice: Vec<(String, PhpValue)> = if let Some(l) = len_req {
+                            let count = if l < 0 {
+                                (total_len - start_idx as i64 + l).max(0) as usize
+                            } else {
+                                l as usize
+                            };
+                            entries.into_iter().skip(start_idx).take(count).collect()
+                        } else {
+                            entries.into_iter().skip(start_idx).collect()
+                        };
+                        let mut out = IndexMap::new();
+                        for (k, v) in slice {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "sum" => {
+                        let mut is_float = false;
+                        let mut float_sum = 0.0f64;
+                        let mut int_sum = 0i64;
+                        for item in dict.borrow().values() {
+                            if let Some(fl) = item.to_f64() {
+                                if item.to_i64().is_none()
+                                    || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. })
+                                {
+                                    is_float = true;
+                                }
+                                float_sum += fl;
+                            }
+                            if let Some(i) = item.to_i64() {
+                                int_sum += i;
+                            }
+                        }
+                        if is_float {
+                            Ok(PhpValue::Float(float_sum as f32))
+                        } else {
+                            Ok(PhpValue::Int(int_sum as i32))
+                        }
+                    }
+                    "avg" | "average" => {
+                        let b = dict.borrow();
+                        if b.is_empty() {
+                            Ok(PhpValue::Float(0.0))
+                        } else {
+                            let mut sum = 0.0f64;
+                            for item in b.values() {
+                                sum += item.to_f64().unwrap_or(0.0);
+                            }
+                            Ok(PhpValue::Float((sum / b.len() as f64) as f32))
+                        }
+                    }
+                    "min" => {
+                        let mut min_val: Option<PhpValue> = None;
+                        for item in dict.borrow().values() {
+                            min_val = match min_val {
+                                None => Some(item.clone()),
+                                Some(prev) => {
+                                    if item.partial_cmp(&prev) == Some(std::cmp::Ordering::Less) {
+                                        Some(item.clone())
+                                    } else {
+                                        Some(prev)
+                                    }
+                                }
+                            };
+                        }
+                        Ok(min_val.unwrap_or(PhpValue::Null))
+                    }
+                    "max" => {
+                        let mut max_val: Option<PhpValue> = None;
+                        for item in dict.borrow().values() {
+                            max_val = match max_val {
+                                None => Some(item.clone()),
+                                Some(prev) => {
+                                    if item.partial_cmp(&prev) == Some(std::cmp::Ordering::Greater) {
+                                        Some(item.clone())
+                                    } else {
+                                        Some(prev)
+                                    }
+                                }
+                            };
+                        }
+                        Ok(max_val.unwrap_or(PhpValue::Null))
+                    }
+                    "toJson" => Ok(PhpValue::string(php_value_to_json(receiver))),
+                    other => {
+                        if let Some(macro_closure) = get_runtime_closure_macro("Arr", other) {
+                            self.invoke_closure_sync_with_this(
+                                &macro_closure,
+                                Some(receiver.clone()),
+                                args.to_vec(),
+                                span,
+                            )
+                        } else {
+                            Err(self.make_error(
+                                RuntimeErrorKind::UndefinedMethod {
+                                    class: "Arr::dict".to_string(),
+                                    method: other.to_string(),
+                                },
+                                span,
+                            ))
+                        }
+                    }
+                }
+            }
+
+            // 2. Sequential list & generic collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
             PhpValue::List(_)
             | PhpValue::Array(_)
-            | PhpValue::Dict(_)
             | PhpValue::Set(_)
             | PhpValue::HashMap(_) => {
                 let items = Self::extract_items(receiver);
@@ -2433,9 +3108,8 @@ impl VM {
                                     }
                                     PhpValue::Dict(d) => d
                                         .borrow()
-                                        .iter()
-                                        .find(|(k, _)| k == &key_str)
-                                        .map(|(_, v)| v.clone())
+                                        .get(&key_str)
+                                        .cloned()
                                         .unwrap_or(PhpValue::Null),
                                     _ => PhpValue::Null,
                                 };
@@ -2445,9 +3119,8 @@ impl VM {
                                     }
                                     PhpValue::Dict(d) => d
                                         .borrow()
-                                        .iter()
-                                        .find(|(k, _)| k == &key_str)
-                                        .map(|(_, v)| v.clone())
+                                        .get(&key_str)
+                                        .cloned()
                                         .unwrap_or(PhpValue::Null),
                                     _ => PhpValue::Null,
                                 };
@@ -2482,12 +3155,7 @@ impl VM {
                                     plucked.push(val);
                                 }
                                 PhpValue::Dict(d) => {
-                                    let val = d
-                                        .borrow()
-                                        .iter()
-                                        .find(|(k, _)| k == &key)
-                                        .map(|(_, v)| v.clone())
-                                        .unwrap_or(PhpValue::Null);
+                                    let val = d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null);
                                     plucked.push(val);
                                 }
                                 _ => plucked.push(PhpValue::Null),
@@ -3348,29 +4016,15 @@ impl VM {
     fn extract_items(val: &PhpValue) -> Vec<PhpValue> {
         match val {
             PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => a.borrow().clone(),
-            PhpValue::Dict(d) => d.borrow().iter().map(|(_, v)| v.clone()).collect(),
+            PhpValue::Dict(d) => d.borrow().values().cloned().collect(),
             PhpValue::HashMap(m) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
             PhpValue::Null => Vec::new(),
             other => vec![other.clone()],
         }
     }
 
-    fn extract_dict_entries(val: &PhpValue) -> Vec<(String, PhpValue)> {
-        match val {
-            PhpValue::Dict(d) => d.borrow().clone(),
-            PhpValue::Array(a) | PhpValue::List(a) => a
-                .borrow()
-                .iter()
-                .enumerate()
-                .map(|(i, v)| (i.to_string(), v.clone()))
-                .collect(),
-            PhpValue::HashMap(m) => m
-                .borrow()
-                .iter()
-                .map(|(k, v)| (k.to_php_string(), v.clone()))
-                .collect(),
-            _ => Vec::new(),
-        }
+    fn extract_dict_entries(val: &PhpValue) -> IndexMap<String, PhpValue> {
+        extract_dict_map(val)
     }
 
     fn extract_map_entries(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {

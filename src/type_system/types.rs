@@ -601,14 +601,16 @@ impl RhpType {
             (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
             }
-            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::Dict(dst_el))) => {
-                src_el.is_assignable_to(dst_el, hierarchy)
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::Dict(_dst_el))) => {
+                // Allow empty array literal `[]` to initialize a Dict
+                **src_el == RhpType::Mixed || **src_el == RhpType::Dynamic
             }
             (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::Set(dst_el))) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
             }
-            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::HashMap(_, dst_v))) => {
-                src_el.is_assignable_to(dst_v, hierarchy)
+            (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::HashMap(_, _dst_v))) => {
+                // Allow empty array literal `[]` to initialize a HashMap
+                **src_el == RhpType::Mixed || **src_el == RhpType::Dynamic
             }
             (RhpType::Tuple(elems), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
                 elems.iter().all(|e| e.is_assignable_to(dst_el, hierarchy))
