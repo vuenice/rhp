@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use indexmap::IndexMap;
@@ -34,12 +34,13 @@ struct StagedArg {
 
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
 ///
-/// Implements Technical Points #8 and #9 of the RHP Architecture Specification:
+/// Implements Technical Points #8, #9, #10, and #11 of the RHP Architecture Specification:
 /// - Maps sequential lists directly to underlying Rust `Vec<PhpValue>` structures (`ActiveIterator::List`),
 ///   enabling contiguous cache-line memory streaming during iteration with zero temporary vector allocations.
 /// - Maps subtyped key-value dictionaries directly to underlying Rust `IndexMap<String, PhpValue>` structures (`ActiveIterator::Dict`),
 ///   guaranteeing strict insertion ordering and O(1) key indexing with zero temporary vector allocations.
-/// - Complex maps and dynamic fallbacks use `ActiveIterator::Entries`.
+/// - Maps unique collections directly to Rust `HashSet<PhpValue>` structures (`ActiveIterator::Set`).
+/// - Universal general key-value dictionaries supporting complex keys map to `ActiveIterator::Entries`.
 #[derive(Debug, Clone)]
 pub(crate) enum ActiveIterator {
     /// Contiguous sequential list iterator referencing the underlying Rust `Vec<PhpValue>` directly.
@@ -50,6 +51,11 @@ pub(crate) enum ActiveIterator {
     /// Subtyped key-value dictionary iterator referencing the underlying Rust `IndexMap<String, PhpValue>` directly.
     Dict {
         dict: Rc<RefCell<IndexMap<String, PhpValue>>>,
+        cursor: usize,
+    },
+    /// Subtyped unique set iterator over underlying `HashSet<PhpValue>`.
+    Set {
+        items: Vec<PhpValue>,
         cursor: usize,
     },
     /// Associative dictionary / key-value map iterator.
@@ -746,10 +752,7 @@ impl VM {
                         PhpValue::Set(_) => {
                             target.ensure_set_mut();
                             if let PhpValue::Set(set) = target {
-                                let mut b = set.borrow_mut();
-                                if !b.contains(&val) {
-                                    b.push(val);
-                                }
+                                set.borrow_mut().insert(val);
                             }
                             true
                         }
@@ -765,9 +768,8 @@ impl VM {
                         PhpValue::HashMap(_) => {
                             target.ensure_hash_map_mut();
                             if let PhpValue::HashMap(map) = target {
-                                let mut b = map.borrow_mut();
-                                let next_key = PhpValue::Int(b.len() as i32);
-                                b.push((next_key, val));
+                                let next_key = PhpValue::Int(map.borrow().len() as i32);
+                                map.borrow_mut().insert(next_key, val);
                             }
                             true
                         }
@@ -869,12 +871,7 @@ impl VM {
                                     let cloned = map.borrow().clone();
                                     *map = Rc::new(RefCell::new(cloned));
                                 }
-                                let mut b = map.borrow_mut();
-                                if let Some(slot) = b.iter_mut().find(|(ek, _)| ek == &k) {
-                                    slot.1 = v;
-                                } else {
-                                    b.push((k, v));
-                                }
+                                map.borrow_mut().insert(k, v);
                                 true
                             }
                             PhpValue::Set(set) => {
@@ -882,9 +879,10 @@ impl VM {
                                     let cloned = set.borrow().clone();
                                     *set = Rc::new(RefCell::new(cloned));
                                 }
-                                let mut b = set.borrow_mut();
-                                if !b.contains(&v) {
-                                    b.push(v);
+                                if v.is_truthy() {
+                                    set.borrow_mut().insert(k);
+                                } else {
+                                    set.borrow_mut().remove(&k);
                                 }
                                 true
                             }
@@ -933,9 +931,7 @@ impl VM {
                             if let PhpValue::Set(set) = target {
                                 let mut b = set.borrow_mut();
                                 for item in items {
-                                    if !b.contains(&item) {
-                                        b.push(item);
-                                    }
+                                    b.insert(item);
                                 }
                             }
                         }
@@ -947,7 +943,7 @@ impl VM {
                     let arr_val = &self.registers[base_reg + array.index()];
                     let idx_val = &self.registers[base_reg + index.index()];
                     let fetched = match arr_val {
-                        PhpValue::Array(arr) | PhpValue::List(arr) | PhpValue::Set(arr) => {
+                        PhpValue::Array(arr) | PhpValue::List(arr) => {
                             let i = idx_val.to_i64().unwrap_or(-1);
                             let b = arr.borrow();
                             if i >= 0 && (i as usize) < b.len() {
@@ -956,15 +952,17 @@ impl VM {
                                 PhpValue::Null
                             }
                         }
+                        PhpValue::Set(set) => {
+                            PhpValue::Bool(set.borrow().contains(idx_val))
+                        }
                         PhpValue::Dict(dict) => {
                             let key_str = idx_val.to_php_string();
                             dict.borrow().get(&key_str).cloned().unwrap_or(PhpValue::Null)
                         }
                         PhpValue::HashMap(map) => map
                             .borrow()
-                            .iter()
-                            .find(|(k, _)| k == idx_val)
-                            .map(|(_, v)| v.clone())
+                            .get(idx_val)
+                            .cloned()
                             .unwrap_or(PhpValue::Null),
                         PhpValue::String(s) => {
                             let i = idx_val.to_i64().unwrap_or(-1);
@@ -1003,16 +1001,20 @@ impl VM {
                             items: arr.clone(),
                             cursor: 0,
                         },
-                        PhpValue::Set(set) => ActiveIterator::List {
-                            items: set.clone(),
-                            cursor: 0,
-                        },
+                        PhpValue::Set(set) => {
+                            let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                            ActiveIterator::Set { items, cursor: 0 }
+                        }
                         PhpValue::Dict(dict) => ActiveIterator::Dict {
                             dict: dict.clone(),
                             cursor: 0,
                         },
                         PhpValue::HashMap(map) => {
-                            let entries = map.borrow().clone();
+                            let entries: Vec<(PhpValue, PhpValue)> = map
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
                             ActiveIterator::Entries { entries, cursor: 0 }
                         }
                         other => {
@@ -1064,6 +1066,16 @@ impl VM {
                                         } else {
                                             None
                                         }
+                                    } else {
+                                        None
+                                    }
+                                }
+                                ActiveIterator::Set { items, cursor } => {
+                                    if *cursor < items.len() {
+                                        let val = items[*cursor].clone();
+                                        let curr = *cursor;
+                                        *cursor += 1;
+                                        Some((Some(PhpValue::Int(curr as i32)), val))
                                     } else {
                                         None
                                     }
@@ -2727,11 +2739,414 @@ impl VM {
                 }
             }
 
-            // 2. Sequential list & generic collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
+            // 2. Subtyped Unique Set methods (`Arr::set()->contains()->add()->diff()`, etc.)
+            PhpValue::Set(set) => {
+                match method {
+                    "contains" | "has" => {
+                        let target = match args.first() {
+                            Some(v) => v,
+                            None => return Ok(PhpValue::Bool(false)),
+                        };
+                        Ok(PhpValue::Bool(set.borrow().contains(target)))
+                    }
+                    "add" | "push" => {
+                        let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                        set.borrow_mut().insert(val);
+                        Ok(receiver.clone())
+                    }
+                    "remove" | "delete" => {
+                        let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let removed = set.borrow_mut().remove(&val);
+                        Ok(PhpValue::Bool(removed))
+                    }
+                    "count" => Ok(PhpValue::Int(set.borrow().len() as i32)),
+                    "isEmpty" => Ok(PhpValue::Bool(set.borrow().is_empty())),
+                    "isNotEmpty" => Ok(PhpValue::Bool(!set.borrow().is_empty())),
+                    "all" | "toArray" | "values" => {
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        Ok(PhpValue::list(items))
+                    }
+                    "map" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = HashSet::new();
+                            let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                            for item in items {
+                                let res = self.invoke_closure_sync(cb, vec![item], span)?;
+                                out.insert(res);
+                            }
+                            Ok(PhpValue::set_from_hash_set(out))
+                        } else {
+                            Ok(receiver.clone())
+                        }
+                    }
+                    "filter" => {
+                        let mut out = HashSet::new();
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for item in items {
+                                let keep = self.invoke_closure_sync(cb, vec![item.clone()], span)?;
+                                if keep.is_truthy() {
+                                    out.insert(item);
+                                }
+                            }
+                        } else {
+                            for item in items {
+                                if item.is_truthy() {
+                                    out.insert(item);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "reject" => {
+                        let mut out = HashSet::new();
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for item in items {
+                                let drop = self.invoke_closure_sync(cb, vec![item.clone()], span)?;
+                                if !drop.is_truthy() {
+                                    out.insert(item);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "reduce" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut acc = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                            let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                            for item in items {
+                                acc = self.invoke_closure_sync(cb, vec![acc, item], span)?;
+                            }
+                            Ok(acc)
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                    "diff" => {
+                        let other_set: HashSet<PhpValue> = match args.first() {
+                            Some(PhpValue::Set(s)) => s.borrow().clone(),
+                            Some(other) => Self::extract_items(other).into_iter().collect(),
+                            None => HashSet::new(),
+                        };
+                        let mut out = HashSet::new();
+                        for item in set.borrow().iter() {
+                            if !other_set.contains(item) {
+                                out.insert(item.clone());
+                            }
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "intersect" => {
+                        let other_set: HashSet<PhpValue> = match args.first() {
+                            Some(PhpValue::Set(s)) => s.borrow().clone(),
+                            Some(other) => Self::extract_items(other).into_iter().collect(),
+                            None => HashSet::new(),
+                        };
+                        let mut out = HashSet::new();
+                        for item in set.borrow().iter() {
+                            if other_set.contains(item) {
+                                out.insert(item.clone());
+                            }
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "union" => {
+                        let mut out = set.borrow().clone();
+                        if let Some(other) = args.first() {
+                            match other {
+                                PhpValue::Set(s) => {
+                                    for item in s.borrow().iter() {
+                                        out.insert(item.clone());
+                                    }
+                                }
+                                _ => {
+                                    for item in Self::extract_items(other) {
+                                        out.insert(item);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "first" => Ok(set.borrow().iter().next().cloned().unwrap_or(PhpValue::Null)),
+                    "each" | "forEach" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                            for item in items {
+                                self.invoke_closure_sync(cb, vec![item], span)?;
+                            }
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "toJson" => Ok(PhpValue::string(php_value_to_json(receiver))),
+                    other => {
+                        if let Some(macro_closure) = get_runtime_closure_macro("Arr", other) {
+                            self.invoke_closure_sync_with_this(
+                                &macro_closure,
+                                Some(receiver.clone()),
+                                args.to_vec(),
+                                span,
+                            )
+                        } else {
+                            Err(self.make_error(
+                                RuntimeErrorKind::UndefinedMethod {
+                                    class: "Arr::set".to_string(),
+                                    method: other.to_string(),
+                                },
+                                span,
+                            ))
+                        }
+                    }
+                }
+            }
+
+            // 3. Subtyped Universal Hash Map methods (`Arr::hashMap()->get()->put()->keys()`, etc.)
+            PhpValue::HashMap(map) => {
+                match method {
+                    "get" => {
+                        let key = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        Ok(map.borrow().get(&key).cloned().unwrap_or(default))
+                    }
+                    "has" | "contains" | "hasKey" => {
+                        let key = args.first().cloned().unwrap_or(PhpValue::Null);
+                        Ok(PhpValue::Bool(map.borrow().contains_key(&key)))
+                    }
+                    "put" => {
+                        let key = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        map.borrow_mut().insert(key, val);
+                        Ok(receiver.clone())
+                    }
+                    "pull" => {
+                        let key = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        Ok(map.borrow_mut().remove(&key).unwrap_or(default))
+                    }
+                    "forget" | "remove" => {
+                        for arg in args {
+                            map.borrow_mut().remove(arg);
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "keys" => {
+                        let keys: Vec<PhpValue> = map.borrow().keys().cloned().collect();
+                        Ok(PhpValue::list(keys))
+                    }
+                    "values" => {
+                        let vals: Vec<PhpValue> = map.borrow().values().cloned().collect();
+                        Ok(PhpValue::list(vals))
+                    }
+                    "entries" | "all" | "toArray" => {
+                        let entries: Vec<PhpValue> = map
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| PhpValue::list(vec![k.clone(), v.clone()]))
+                            .collect();
+                        Ok(PhpValue::list(entries))
+                    }
+                    "count" => Ok(PhpValue::Int(map.borrow().len() as i32)),
+                    "isEmpty" => Ok(PhpValue::Bool(map.borrow().is_empty())),
+                    "isNotEmpty" => Ok(PhpValue::Bool(!map.borrow().is_empty())),
+                    "map" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = HashMap::new();
+                            let entries: Vec<(PhpValue, PhpValue)> = map
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                let new_v = self.invoke_closure_sync(cb, vec![v, k.clone()], span)?;
+                                out.insert(k, new_v);
+                            }
+                            Ok(PhpValue::hash_map_from_map(out))
+                        } else {
+                            Ok(receiver.clone())
+                        }
+                    }
+                    "mapWithKeys" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut out = HashMap::new();
+                            let entries: Vec<(PhpValue, PhpValue)> = map
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                let res = self.invoke_closure_sync(cb, vec![v, k], span)?;
+                                match res {
+                                    PhpValue::HashMap(m) => {
+                                        for (pair_k, pair_v) in m.borrow().iter() {
+                                            out.insert(pair_k.clone(), pair_v.clone());
+                                        }
+                                    }
+                                    PhpValue::Dict(d) => {
+                                        for (pair_k, pair_v) in d.borrow().iter() {
+                                            out.insert(PhpValue::string(pair_k.clone()), pair_v.clone());
+                                        }
+                                    }
+                                    PhpValue::Array(a) | PhpValue::List(a) => {
+                                        let b = a.borrow();
+                                        if b.len() == 2 {
+                                            out.insert(b[0].clone(), b[1].clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Ok(PhpValue::hash_map_from_map(out))
+                        } else {
+                            Ok(receiver.clone())
+                        }
+                    }
+                    "filter" => {
+                        let mut out = HashMap::new();
+                        let entries: Vec<(PhpValue, PhpValue)> = map
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in entries {
+                                let keep = self.invoke_closure_sync(cb, vec![v.clone(), k.clone()], span)?;
+                                if keep.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        } else {
+                            for (k, v) in entries {
+                                if v.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::hash_map_from_map(out))
+                    }
+                    "reject" => {
+                        let mut out = HashMap::new();
+                        let entries: Vec<(PhpValue, PhpValue)> = map
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            for (k, v) in entries {
+                                let drop = self.invoke_closure_sync(cb, vec![v.clone(), k.clone()], span)?;
+                                if !drop.is_truthy() {
+                                    out.insert(k, v);
+                                }
+                            }
+                        }
+                        Ok(PhpValue::hash_map_from_map(out))
+                    }
+                    "reduce" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let mut acc = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                            let entries: Vec<(PhpValue, PhpValue)> = map
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                acc = self.invoke_closure_sync(cb, vec![acc, v, k], span)?;
+                            }
+                            Ok(acc)
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                    "diff" => {
+                        let other_keys: HashSet<PhpValue> = match args.first() {
+                            Some(PhpValue::HashMap(m)) => m.borrow().keys().cloned().collect(),
+                            Some(PhpValue::Dict(d)) => d.borrow().keys().map(|k| PhpValue::string(k.clone())).collect(),
+                            Some(PhpValue::Set(s)) => s.borrow().clone(),
+                            Some(other) => Self::extract_items(other).into_iter().collect(),
+                            None => HashSet::new(),
+                        };
+                        let mut out = HashMap::new();
+                        for (k, v) in map.borrow().iter() {
+                            if !other_keys.contains(k) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::hash_map_from_map(out))
+                    }
+                    "intersect" => {
+                        let other_keys: HashSet<PhpValue> = match args.first() {
+                            Some(PhpValue::HashMap(m)) => m.borrow().keys().cloned().collect(),
+                            Some(PhpValue::Dict(d)) => d.borrow().keys().map(|k| PhpValue::string(k.clone())).collect(),
+                            Some(PhpValue::Set(s)) => s.borrow().clone(),
+                            Some(other) => Self::extract_items(other).into_iter().collect(),
+                            None => HashSet::new(),
+                        };
+                        let mut out = HashMap::new();
+                        for (k, v) in map.borrow().iter() {
+                            if other_keys.contains(k) {
+                                out.insert(k.clone(), v.clone());
+                            }
+                        }
+                        Ok(PhpValue::hash_map_from_map(out))
+                    }
+                    "merge" => {
+                        let mut merged = map.borrow().clone();
+                        for arg in args {
+                            match arg {
+                                PhpValue::HashMap(m) => {
+                                    for (k, v) in m.borrow().iter() {
+                                        merged.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                PhpValue::Dict(d) => {
+                                    for (k, v) in d.borrow().iter() {
+                                        merged.insert(PhpValue::string(k.clone()), v.clone());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(PhpValue::hash_map_from_map(merged))
+                    }
+                    "first" => Ok(map.borrow().values().next().cloned().unwrap_or(PhpValue::Null)),
+                    "each" | "forEach" => {
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let entries: Vec<(PhpValue, PhpValue)> = map
+                                .borrow()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            for (k, v) in entries {
+                                self.invoke_closure_sync(cb, vec![v, k], span)?;
+                            }
+                        }
+                        Ok(receiver.clone())
+                    }
+                    "toJson" => Ok(PhpValue::string(php_value_to_json(receiver))),
+                    other => {
+                        if let Some(macro_closure) = get_runtime_closure_macro("Arr", other) {
+                            self.invoke_closure_sync_with_this(
+                                &macro_closure,
+                                Some(receiver.clone()),
+                                args.to_vec(),
+                                span,
+                            )
+                        } else {
+                            Err(self.make_error(
+                                RuntimeErrorKind::UndefinedMethod {
+                                    class: "Arr::hashMap".to_string(),
+                                    method: other.to_string(),
+                                },
+                                span,
+                            ))
+                        }
+                    }
+                }
+            }
+
+            // 4. Sequential list & generic collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
             PhpValue::List(_)
-            | PhpValue::Array(_)
-            | PhpValue::Set(_)
-            | PhpValue::HashMap(_) => {
+            | PhpValue::Array(_) => {
                 let items = Self::extract_items(receiver);
                 match method {
                     "map" => {
@@ -4015,9 +4430,10 @@ impl VM {
 
     fn extract_items(val: &PhpValue) -> Vec<PhpValue> {
         match val {
-            PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => a.borrow().clone(),
+            PhpValue::Array(a) | PhpValue::List(a) => a.borrow().clone(),
+            PhpValue::Set(s) => s.borrow().iter().cloned().collect(),
             PhpValue::Dict(d) => d.borrow().values().cloned().collect(),
-            PhpValue::HashMap(m) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
+            PhpValue::HashMap(m) => m.borrow().values().cloned().collect(),
             PhpValue::Null => Vec::new(),
             other => vec![other.clone()],
         }
@@ -4029,18 +4445,40 @@ impl VM {
 
     fn extract_map_entries(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
         match val {
-            PhpValue::HashMap(m) => m.borrow().clone(),
+            PhpValue::HashMap(m) => m
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             PhpValue::Dict(d) => d
                 .borrow()
                 .iter()
                 .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
                 .collect(),
-            PhpValue::Array(a) | PhpValue::List(a) => a
-                .borrow()
-                .iter()
-                .enumerate()
-                .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
-                .collect(),
+            PhpValue::Array(a) | PhpValue::List(a) => {
+                let b = a.borrow();
+                let all_pairs = !b.is_empty()
+                    && b.iter().all(|item| match item {
+                        PhpValue::Array(sub) | PhpValue::List(sub) => sub.borrow().len() == 2,
+                        _ => false,
+                    });
+                if all_pairs {
+                    b.iter()
+                        .map(|item| match item {
+                            PhpValue::Array(sub) | PhpValue::List(sub) => {
+                                let sub_b = sub.borrow();
+                                (sub_b[0].clone(), sub_b[1].clone())
+                            }
+                            _ => unreachable!(),
+                        })
+                        .collect()
+                } else {
+                    b.iter()
+                        .enumerate()
+                        .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
+                        .collect()
+                }
+            }
             _ => Vec::new(),
         }
     }

@@ -118,14 +118,14 @@ flowchart TD
 
 ### 2. Standard Library & Explicit Subtype System
 
-Standard arrays are broken down into four underlying high-performance Rust types. To keep the parent array handle size small on the stack and avoid inline copy overhead, the inner array variants/representations are heap-allocated via `Box`:
+Standard arrays are broken down into four underlying high-performance Rust types. To keep the parent array handle size small on the stack and avoid inline copy overhead, the inner array variants/representations utilize ref-counted interior mutability with Copy-On-Write (COW) semantics:
 
 | Surface Type | Underlying Rust Representation | Primary Use Case |
 | :--- | :--- | :--- |
-| `Arr::list()` | `Box<Vec<PhpValue>>` | Sequential indexed data, maximum CPU cache locality |
-| `Arr::dict()` | `Box<IndexMap<String, PhpValue>>` | Key-value map retaining insertion order |
-| `Arr::set()` | `Box<IndexSet<PhpValue>>` | Unique collection with deterministic insertion ordering and $O(1)$ lookups |
-| `Arr::hashMap()` | `Box<HashMap<PhpValue, PhpValue>>` | Universal key-value map supporting complex keys |
+| `Arr::list()` | `Rc<RefCell<Vec<PhpValue>>>` | Sequential indexed data, maximum CPU cache locality |
+| `Arr::dict()` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | Key-value map retaining strict insertion order |
+| `Arr::set()` | `Rc<RefCell<HashSet<PhpValue>>>` | Unique collections with $O(1)$ membership and set algebra |
+| `Arr::hashMap()` / `Arr::map()` | `Rc<RefCell<HashMap<PhpValue, PhpValue>>>` | Universal key-value map supporting complex keys |
 
 ### Facade Library Pattern
 
@@ -207,8 +207,11 @@ The runtime replaces global procedural functions with expressive, static facade 
 
 Provides explicit collection instantiation and chaining helpers. Standard arrays map to four high-performance collection subtypes:
 
-- **Subtypes:** `Arr::list()` (sequential indexed list), `Arr::dict()` (insertion-ordered string-key map), `Arr::hashMap()` (universal complex key-value map), and `Arr::set()` (insertion-ordered unique value set).
+- **Subtypes:** `Arr::list()` (sequential indexed list), `Arr::dict()` (insertion-ordered string-key map), `Arr::set()` (unique value set), and `Arr::hashMap()` / `Arr::map()` (universal complex key-value map).
 - **Arr::list Behavior:** Designed for contiguous numerical index operations, providing seamless method-chaining and high CPU cache locality. Includes array helper methods such as `list`, `map`, `filter`, `reduce`, `reject`, and `find`.
+- **Arr::dict Behavior:** Key-value map backed by `IndexMap<String, PhpValue>` retaining deterministic insertion order and $O(1)$ key lookups. Provides fluent helpers like `get`, `put`, `pull`, `has`, `keys`, `values`, `sortBy`, `diff`, and `intersect`.
+- **Arr::set Behavior (Step 10):** Unique collection directly mapped to Rust `HashSet<PhpValue>`. Automatically deduplicates elements upon construction, push (`$set[] = $v`), or `$set->add($v)`. Bracket indexing (`$set[$val]`) provides $O(1)$ boolean membership checking, while `$set[$val] = true` and `$set[$val] = false` insert and remove elements. Includes set algebra (`diff`, `intersect`, `union`), higher-order methods (`map`, `filter`, `reject`, `reduce`), and native `foreach` iteration.
+- **Arr::hashMap Behavior (Step 11):** Universal key-value dictionary directly mapped to Rust `HashMap<PhpValue, PhpValue>`. Supports arbitrary complex keys including arrays/lists, objects/class instances, sets, and scalars. Supports dynamic indexing (`$map[$complexKey] = $val`), fluent operations (`get`, `put`, `pull`, `has`, `remove`, `keys`, `values`, `entries`, `diff`, `intersect`, `merge`), higher-order transforms (`map`, `mapWithKeys`, `filter`, `reject`, `reduce`), and native `foreach ($map as $key => $val)` yielding complex keys.
 - **Immutable Helper Methods by Default:** Calling array helper methods (such as `$my_array->sort()` or `Arr::list($my_array)->sort()`) **never mutates the original array in place**. Every transformation returns a brand-new array instance, keeping data flows clean and free of hidden side effects.
 - **Explicit Variable Reassignment:** If a developer wants to update the variable with the newly sorted array, they use explicit reassignment:
   ```php
@@ -217,14 +220,26 @@ Provides explicit collection instantiation and chaining helpers. Standard arrays
   $my_array = Arr::list($my_array)->sort();
   ```
   Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointer mechanics, making variable replacement lightning-fast without unnecessary memory duplication or garbage collection overhead.
-- **Custom Macros (`Arr::macro`):** Supports dynamic method registration bound to collection instances without subclassing `Arr`.
+- **Custom Macros (`Arr::macro`):** Supports dynamic method registration bound to collection instances (`list`, `dict`, `set`, `hashMap`) without subclassing `Arr`.
 
-#### Method Chaining Example:
+#### Method Chaining & Collection Subtype Examples:
 
 ```php
+// Arr::list sequential chaining
 $numbers = Arr::list([1, 2, 3, 4, 5])
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 4);
+
+// Arr::set unique collection and set algebra
+$unique = Arr::set([1, 2, 2, 3, 3])
+    ->add(4)
+    ->diff(Arr::set([2, 3])); // {1, 4}
+
+// Arr::hashMap with complex keys
+$coordsMap = Arr::hashMap();
+$coordsMap[[10, 20]] = 'Alpha Base';
+$coordsMap[[30, 40]] = 'Beta Outpost';
+$loc = $coordsMap[[10, 20]]; // 'Alpha Base'
 ```
 
 ### 2. Str Facade

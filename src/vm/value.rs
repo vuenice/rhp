@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -346,8 +346,8 @@ pub enum PhpValue {
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
     Dict(Rc<RefCell<IndexMap<String, PhpValue>>>),
-    Set(Rc<RefCell<Vec<PhpValue>>>),
-    HashMap(Rc<RefCell<Vec<(PhpValue, PhpValue)>>>),
+    Set(Rc<RefCell<HashSet<PhpValue>>>),
+    HashMap(Rc<RefCell<HashMap<PhpValue, PhpValue>>>),
     Object(Rc<RefCell<VmObject>>),
     Closure(Rc<VmClosure>),
     Future(Rc<RefCell<VmFuture>>),
@@ -424,19 +424,28 @@ impl PhpValue {
     }
 
     #[inline]
-    pub fn set(items: Vec<PhpValue>) -> Self {
-        let mut unique: Vec<PhpValue> = Vec::with_capacity(items.len());
-        for item in items {
-            if !unique.contains(&item) {
-                unique.push(item);
-            }
-        }
-        Self::Set(Rc::new(RefCell::new(unique)))
+    pub fn set(items: impl IntoIterator<Item = PhpValue>) -> Self {
+        let set: HashSet<PhpValue> = items.into_iter().collect();
+        Self::Set(Rc::new(RefCell::new(set)))
     }
 
     #[inline]
-    pub fn hash_map(entries: Vec<(PhpValue, PhpValue)>) -> Self {
-        Self::HashMap(Rc::new(RefCell::new(entries)))
+    pub fn set_from_hash_set(set: HashSet<PhpValue>) -> Self {
+        Self::Set(Rc::new(RefCell::new(set)))
+    }
+
+    #[inline]
+    pub fn hash_map(entries: impl IntoIterator<Item = (PhpValue, PhpValue)>) -> Self {
+        let mut map = HashMap::new();
+        for (k, v) in entries {
+            map.insert(k, v);
+        }
+        Self::HashMap(Rc::new(RefCell::new(map)))
+    }
+
+    #[inline]
+    pub fn hash_map_from_map(map: HashMap<PhpValue, PhpValue>) -> Self {
+        Self::HashMap(Rc::new(RefCell::new(map)))
     }
 
     #[inline]
@@ -611,14 +620,17 @@ impl PhpValue {
                     )
                 } else {
                     match self {
-                        Self::Array(a) | Self::List(a) | Self::Set(a) => {
+                        Self::Array(a) | Self::List(a) => {
                             a.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
+                        }
+                        Self::Set(s) => {
+                            s.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
                         }
                         Self::Dict(d) => {
                             d.borrow().values().all(|v| v.matches_type_contract(inner, hierarchy))
                         }
                         Self::HashMap(m) => {
-                            m.borrow().iter().all(|(_, v)| v.matches_type_contract(inner, hierarchy))
+                            m.borrow().values().all(|v| v.matches_type_contract(inner, hierarchy))
                         }
                         _ => false,
                     }
@@ -639,8 +651,25 @@ impl PhpValue {
                         dict.borrow().values().all(|v| v.matches_type_contract(inner, hierarchy))
                     }
                 }
-                (CollectionSubtype::Set(_), Self::Set(_)) => true,
-                (CollectionSubtype::HashMap(_, _), Self::HashMap(_)) => true,
+                (CollectionSubtype::Set(inner), Self::Set(set)) => {
+                    if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
+                        true
+                    } else {
+                        set.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
+                    }
+                }
+                (CollectionSubtype::HashMap(k_type, v_type), Self::HashMap(map)) => {
+                    let k_ok = **k_type == RhpType::Mixed || **k_type == RhpType::Dynamic;
+                    let v_ok = **v_type == RhpType::Mixed || **v_type == RhpType::Dynamic;
+                    if k_ok && v_ok {
+                        true
+                    } else {
+                        map.borrow().iter().all(|(k, v)| {
+                            (k_ok || k.matches_type_contract(k_type, hierarchy))
+                                && (v_ok || v.matches_type_contract(v_type, hierarchy))
+                        })
+                    }
+                }
                 _ => false,
             },
             RhpType::Iterable(_) => matches!(
@@ -881,6 +910,48 @@ impl PhpValue {
         }
     }
 
+    /// Returns `true` if this value is an explicit subtyped set (`Arr::set`).
+    #[inline]
+    pub fn is_set(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+
+    /// Borrows the underlying Rust `HashSet<PhpValue>` structure.
+    #[inline]
+    pub fn as_set(&self) -> Option<std::cell::Ref<'_, HashSet<PhpValue>>> {
+        match self {
+            Self::Set(rc) => Some(rc.borrow()),
+            _ => None,
+        }
+    }
+
+    /// Mutably borrows the underlying Rust `HashSet<PhpValue>` structure.
+    #[inline]
+    pub fn as_set_mut(&self) -> Option<std::cell::RefMut<'_, HashSet<PhpValue>>> {
+        match self {
+            Self::Set(rc) => Some(rc.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    /// Returns the length of the set if this value is a Set.
+    #[inline]
+    pub fn set_len(&self) -> Option<usize> {
+        match self {
+            Self::Set(rc) => Some(rc.borrow().len()),
+            _ => None,
+        }
+    }
+
+    /// Checks if a value exists in the `HashSet<PhpValue>`.
+    #[inline]
+    pub fn set_contains(&self, val: &PhpValue) -> bool {
+        match self {
+            Self::Set(rc) => rc.borrow().contains(val),
+            _ => false,
+        }
+    }
+
     /// Detaches the map buffer if shared (`strong_count > 1`) (Copy-On-Write).
     /// Returns `true` if this value is a HashMap, `false` otherwise.
     pub fn ensure_hash_map_mut(&mut self) -> bool {
@@ -892,6 +963,57 @@ impl PhpValue {
             true
         } else {
             false
+        }
+    }
+
+    /// Returns `true` if this value is an explicit subtyped universal hash map (`Arr::hashMap`).
+    #[inline]
+    pub fn is_hash_map(&self) -> bool {
+        matches!(self, Self::HashMap(_))
+    }
+
+    /// Borrows the underlying Rust `HashMap<PhpValue, PhpValue>` structure.
+    #[inline]
+    pub fn as_hash_map(&self) -> Option<std::cell::Ref<'_, HashMap<PhpValue, PhpValue>>> {
+        match self {
+            Self::HashMap(rc) => Some(rc.borrow()),
+            _ => None,
+        }
+    }
+
+    /// Mutably borrows the underlying Rust `HashMap<PhpValue, PhpValue>` structure.
+    #[inline]
+    pub fn as_hash_map_mut(&self) -> Option<std::cell::RefMut<'_, HashMap<PhpValue, PhpValue>>> {
+        match self {
+            Self::HashMap(rc) => Some(rc.borrow_mut()),
+            _ => None,
+        }
+    }
+
+    /// Returns the number of entries in the hash map if this value is a HashMap.
+    #[inline]
+    pub fn hash_map_len(&self) -> Option<usize> {
+        match self {
+            Self::HashMap(rc) => Some(rc.borrow().len()),
+            _ => None,
+        }
+    }
+
+    /// Accesses an entry by complex key from the `HashMap<PhpValue, PhpValue>`.
+    #[inline]
+    pub fn hash_map_get(&self, key: &PhpValue) -> Option<PhpValue> {
+        match self {
+            Self::HashMap(rc) => rc.borrow().get(key).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Checks if a key exists in the `HashMap<PhpValue, PhpValue>`.
+    #[inline]
+    pub fn hash_map_contains_key(&self, key: &PhpValue) -> bool {
+        match self {
+            Self::HashMap(rc) => rc.borrow().contains_key(key),
+            _ => false,
         }
     }
 
@@ -915,16 +1037,18 @@ impl PhpValue {
                 Self::Dict(Rc::new(RefCell::new(map)))
             }
             Self::Set(set) => {
-                let items: Vec<PhpValue> = set.borrow().iter().map(|v| v.deep_clone()).collect();
-                Self::Set(Rc::new(RefCell::new(items)))
+                let mut new_set = HashSet::with_capacity(set.borrow().len());
+                for item in set.borrow().iter() {
+                    new_set.insert(item.deep_clone());
+                }
+                Self::Set(Rc::new(RefCell::new(new_set)))
             }
             Self::HashMap(map) => {
-                let entries: Vec<(PhpValue, PhpValue)> = map
-                    .borrow()
-                    .iter()
-                    .map(|(k, v)| (k.deep_clone(), v.deep_clone()))
-                    .collect();
-                Self::HashMap(Rc::new(RefCell::new(entries)))
+                let mut new_map = HashMap::with_capacity(map.borrow().len());
+                for (k, v) in map.borrow().iter() {
+                    new_map.insert(k.deep_clone(), v.deep_clone());
+                }
+                Self::HashMap(Rc::new(RefCell::new(new_map)))
             }
             Self::Object(obj) => {
                 let inner = obj.borrow();
@@ -1009,21 +1133,19 @@ impl Hash for PhpValue {
             }
             Self::Int(n) => {
                 2u8.hash(state);
-                n.hash(state);
+                (*n as i128).hash(state);
+            }
+            Self::RustInt { value, .. } => {
+                2u8.hash(state);
+                value.hash(state);
             }
             Self::Float(fl) => {
                 3u8.hash(state);
                 fl.to_bits().hash(state);
             }
-            Self::RustInt { kind, value } => {
-                4u8.hash(state);
-                kind.hash(state);
-                value.hash(state);
-            }
-            Self::RustFloat { kind, value } => {
-                5u8.hash(state);
-                kind.hash(state);
-                value.to_bits().hash(state);
+            Self::RustFloat { value, .. } => {
+                3u8.hash(state);
+                (*value as f32).to_bits().hash(state);
             }
             Self::String(s) => {
                 6u8.hash(state);
@@ -1037,7 +1159,60 @@ impl Hash for PhpValue {
                 8u8.hash(state);
                 Rc::as_ptr(c).hash(state);
             }
-            _ => 9u8.hash(state),
+            Self::Array(a) | Self::List(a) => {
+                9u8.hash(state);
+                if let Ok(b) = a.try_borrow() {
+                    b.len().hash(state);
+                    for item in b.iter() {
+                        item.hash(state);
+                    }
+                }
+            }
+            Self::Dict(d) => {
+                10u8.hash(state);
+                if let Ok(b) = d.try_borrow() {
+                    b.len().hash(state);
+                    for (k, v) in b.iter() {
+                        k.hash(state);
+                        v.hash(state);
+                    }
+                }
+            }
+            Self::Set(s) => {
+                11u8.hash(state);
+                if let Ok(b) = s.try_borrow() {
+                    b.len().hash(state);
+                    let mut sum: u64 = 0;
+                    for item in b.iter() {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        item.hash(&mut h);
+                        sum = sum.wrapping_add(h.finish());
+                    }
+                    sum.hash(state);
+                }
+            }
+            Self::HashMap(m) => {
+                12u8.hash(state);
+                if let Ok(b) = m.try_borrow() {
+                    b.len().hash(state);
+                    let mut sum: u64 = 0;
+                    for (k, v) in b.iter() {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        k.hash(&mut h);
+                        v.hash(&mut h);
+                        sum = sum.wrapping_add(h.finish());
+                    }
+                    sum.hash(state);
+                }
+            }
+            Self::Future(fut) => {
+                13u8.hash(state);
+                Rc::as_ptr(fut).hash(state);
+            }
+            Self::Resource(r) => {
+                14u8.hash(state);
+                Arc::as_ptr(r).hash(state);
+            }
         }
     }
 }

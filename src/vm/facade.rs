@@ -350,7 +350,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::set(items))
             }
         }
-        "hashMap" => {
+        "hashMap" | "map" => {
             let entries = if let Some(first) = args.first() {
                 extract_map_elements(first)
             } else {
@@ -401,6 +401,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().contains(target),
                 Some(PhpValue::Set(s)) => s.borrow().contains(target),
                 Some(PhpValue::Dict(d)) => d.borrow().values().any(|v| v == target),
+                Some(PhpValue::HashMap(m)) => m.borrow().values().any(|v| v == target),
                 _ => false,
             };
             Ok(PhpValue::Bool(exists))
@@ -412,7 +413,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                     .keys()
                     .map(|k| PhpValue::string(k.clone()))
                     .collect(),
-                Some(PhpValue::HashMap(m)) => m.borrow().iter().map(|(k, _)| k.clone()).collect(),
+                Some(PhpValue::HashMap(m)) => m.borrow().keys().cloned().collect(),
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => (0..a.borrow().len())
                     .map(|i| PhpValue::Int(i as i32))
                     .collect(),
@@ -423,9 +424,9 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
         "values" => {
             let vals = match args.first() {
                 Some(PhpValue::Dict(d)) => d.borrow().values().cloned().collect(),
-                Some(PhpValue::HashMap(m)) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
+                Some(PhpValue::HashMap(m)) => m.borrow().values().cloned().collect(),
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().clone(),
-                Some(PhpValue::Set(s)) => s.borrow().clone(),
+                Some(PhpValue::Set(s)) => s.borrow().iter().cloned().collect(),
                 _ => Vec::new(),
             };
             Ok(PhpValue::list(vals))
@@ -914,7 +915,7 @@ fn get_arg_str(args: &[PhpValue], index: usize, callable: &str) -> Result<String
 pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
     match val {
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().clone(),
-        PhpValue::Set(s) => s.borrow().clone(),
+        PhpValue::Set(s) => s.borrow().iter().cloned().collect(),
         PhpValue::Dict(d) => d.borrow().iter().map(|(_, v)| v.clone()).collect(),
         PhpValue::HashMap(m) => m.borrow().iter().map(|(_, v)| v.clone()).collect(),
         other => vec![other.clone()],
@@ -923,8 +924,13 @@ pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
 
 pub fn flatten_elements(val: &PhpValue, out: &mut Vec<PhpValue>) {
     match val {
-        PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => {
+        PhpValue::Array(a) | PhpValue::List(a) => {
             for item in a.borrow().iter() {
+                flatten_elements(item, out);
+            }
+        }
+        PhpValue::Set(s) => {
+            for item in s.borrow().iter() {
                 flatten_elements(item, out);
             }
         }
@@ -989,18 +995,40 @@ pub fn extract_dict_map(val: &PhpValue) -> IndexMap<String, PhpValue> {
 
 pub fn extract_map_elements(val: &PhpValue) -> Vec<(PhpValue, PhpValue)> {
     match val {
-        PhpValue::HashMap(m) => m.borrow().clone(),
+        PhpValue::HashMap(m) => m
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         PhpValue::Dict(d) => d
             .borrow()
             .iter()
             .map(|(k, v)| (PhpValue::string(k.clone()), v.clone()))
             .collect(),
-        PhpValue::Array(a) | PhpValue::List(a) => a
-            .borrow()
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
-            .collect(),
+        PhpValue::Array(a) | PhpValue::List(a) => {
+            let b = a.borrow();
+            let all_pairs = !b.is_empty()
+                && b.iter().all(|item| match item {
+                    PhpValue::Array(sub) | PhpValue::List(sub) => sub.borrow().len() == 2,
+                    _ => false,
+                });
+            if all_pairs {
+                b.iter()
+                    .map(|item| match item {
+                        PhpValue::Array(sub) | PhpValue::List(sub) => {
+                            let sub_b = sub.borrow();
+                            (sub_b[0].clone(), sub_b[1].clone())
+                        }
+                        _ => unreachable!(),
+                    })
+                    .collect()
+            } else {
+                b.iter()
+                    .enumerate()
+                    .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
+                    .collect()
+            }
+        }
         _ => Vec::new(),
     }
 }
@@ -1031,6 +1059,14 @@ pub fn arr_get_dot(target: &PhpValue, key: &str, default: PhpValue) -> PhpValue 
                     return default;
                 }
             }
+            PhpValue::HashMap(m) => {
+                let k = PhpValue::string(part);
+                if let Some(val) = m.borrow().get(&k) {
+                    current = val.clone();
+                } else {
+                    return default;
+                }
+            }
             PhpValue::Object(o) => {
                 if let Some(val) = o.borrow().get_property(part) {
                     current = val.clone();
@@ -1055,6 +1091,18 @@ pub fn arr_has_dot(target: &PhpValue, key: &str) -> bool {
             PhpValue::Dict(d) => {
                 let b = d.borrow();
                 if let Some(val) = b.get(*part) {
+                    if i == parts.len() - 1 {
+                        return true;
+                    }
+                    current = val.clone();
+                } else {
+                    return false;
+                }
+            }
+            PhpValue::HashMap(m) => {
+                let k = PhpValue::string(*part);
+                let b = m.borrow();
+                if let Some(val) = b.get(&k) {
                     if i == parts.len() - 1 {
                         return true;
                     }
@@ -1210,8 +1258,12 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
         }
-        PhpValue::Array(a) | PhpValue::List(a) | PhpValue::Set(a) => {
+        PhpValue::Array(a) | PhpValue::List(a) => {
             let items: Vec<String> = a.borrow().iter().map(php_value_to_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        PhpValue::Set(s) => {
+            let items: Vec<String> = s.borrow().iter().map(php_value_to_json).collect();
             format!("[{}]", items.join(","))
         }
         PhpValue::Dict(d) => {
