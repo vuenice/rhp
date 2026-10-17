@@ -6,7 +6,12 @@ use crate::ast::{
     },
     types::{ClassModifiers, Visibility},
 };
-use crate::lexer::{facade::is_static_facade, span::Span, token::Token, SpannedToken};
+use crate::lexer::{
+    facade::{is_static_facade, is_static_only, register_tier3_facade},
+    span::Span,
+    token::Token,
+    SpannedToken,
+};
 use crate::parser::{
     combinator::CombinatorStream,
     error::{ParseError, ParseErrorKind},
@@ -412,10 +417,17 @@ impl<'s> CombinatorStream<'s> {
                 | Token::Abstract
                 | Token::Final
                 | Token::Readonly
+                | Token::Singleton
                 | Token::Interface
                 | Token::Trait
                 | Token::Enum,
             ) => true,
+            Some(Token::Static) => {
+                matches!(
+                    self.peek_nth(1).map(|t| &t.token),
+                    Some(Token::Class | Token::Function)
+                )
+            }
             _ => false,
         }
     }
@@ -458,23 +470,58 @@ impl<'s> CombinatorStream<'s> {
             ));
         }
 
-        // Class Modifiers
-        let is_abstract = self.matches(&Token::Abstract);
-        let is_final = self.matches(&Token::Final);
-        let is_readonly = self.matches(&Token::Readonly);
+        // Class Modifiers (can appear in any combination: `static class`, `final readonly class`, `singleton class`, etc.)
+        let mut is_abstract = false;
+        let mut is_final = false;
+        let mut is_readonly = false;
+        let mut is_static_mod = false;
+        let mut is_singleton = false;
+
+        loop {
+            if self.matches(&Token::Static) {
+                is_static_mod = true;
+            } else if self.matches(&Token::Abstract) {
+                is_abstract = true;
+            } else if self.matches(&Token::Final) {
+                is_final = true;
+            } else if self.matches(&Token::Readonly) {
+                is_readonly = true;
+            } else if self.matches(&Token::Singleton) {
+                is_singleton = true;
+            } else {
+                break;
+            }
+        }
+
+        // Script-land static facades can also be declared via attributes (#[StaticOnly], #[Facade], #[StaticFacade])
+        // and singletons via #[Singleton]
+        for attr in &attributes {
+            let attr_name = attr.name.name;
+            if attr_name == "StaticOnly" || attr_name == "Facade" || attr_name == "StaticFacade" {
+                is_static_mod = true;
+            } else if attr_name == "Singleton" {
+                is_singleton = true;
+            }
+        }
+
         let modifiers = ClassModifiers {
             is_abstract,
             is_final,
             is_readonly,
+            is_static_only: is_static_mod,
+            is_singleton,
         };
 
         // Class declaration
         if self.matches(&Token::Class) {
             let name = self.expect_ident()?;
+            if is_static_mod {
+                register_tier3_facade(name.name, "User-defined Tier 3 script static facade", true);
+            }
             let extends = if self.matches(&Token::Extends) {
                 let parent = self.expect_ident()?;
-                // Extending static facades (e.g., `extends Arr`, `extends Str`) is strictly forbidden
-                if is_static_facade(parent.name) {
+                // Extending static facades (e.g., `extends Arr`, `extends Str`, or Tier 2/3 static facades) is strictly forbidden
+                if is_static_facade(parent.name) || is_static_only(parent.name) {
                     return Err(ParseError::new(
                         ParseErrorKind::StaticFacadeInheritanceForbidden {
                             class_name: parent.name.to_string(),

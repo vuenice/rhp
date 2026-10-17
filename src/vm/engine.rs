@@ -11,6 +11,7 @@ use crate::ir::opcode::{
 };
 use crate::ir::IrModule;
 use crate::jit::{JitConfig, JitEngine};
+use crate::lexer::facade::{is_static_facade, is_static_only};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
@@ -127,6 +128,8 @@ pub struct VM {
     max_call_depth: usize,
     /// Cranelift JIT compiler backend for hot loops and functions.
     jit_engine: Option<JitEngine>,
+    /// Indicates whether this VM is running as the parent process during boot.
+    pub is_parent_process: bool,
 }
 
 impl VM {
@@ -154,7 +157,23 @@ impl VM {
             type_hierarchy: None,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH,
             jit_engine,
+            is_parent_process: false,
         }
+    }
+
+    /// Mark this VM as running in persistent parent process boot mode.
+    pub fn with_parent_process(mut self, is_parent: bool) -> Self {
+        self.is_parent_process = is_parent;
+        self
+    }
+
+    /// Look up the class name of the current call frame's enclosing method, if any.
+    pub fn current_caller_class(&self) -> Option<String> {
+        self.frames.last().and_then(|frame| {
+            frame.func_id.and_then(|fid| {
+                self.module.get_function(fid).and_then(|func| func.enclosing_class.clone())
+            })
+        })
     }
 
     /// Configure the Cranelift JIT engine parameters for this VM instance.
@@ -206,6 +225,46 @@ impl VM {
     pub fn get_global(&self, name: &str) -> Option<&PhpValue> {
         let bare = name.strip_prefix('$').unwrap_or(name);
         self.globals.get(bare)
+    }
+
+    /// Reference to the underlying compiled [`IrModule`].
+    pub fn module(&self) -> &IrModule {
+        &self.module
+    }
+
+    /// Reference to the attached nominal [`TypeHierarchy`] if available.
+    pub fn type_hierarchy(&self) -> Option<&TypeHierarchy> {
+        self.type_hierarchy.as_ref()
+    }
+
+    /// Reference to evaluated static class properties (`(Class, Prop) -> Value`).
+    pub fn static_properties(&self) -> &HashMap<(String, String), PhpValue> {
+        &self.static_properties
+    }
+
+    /// Reference to cached class constants (`(Class, Const) -> Value`).
+    pub fn class_constants(&self) -> &HashMap<(String, String), PhpValue> {
+        &self.class_constants
+    }
+
+    /// Reference to top-level globals map.
+    pub fn globals(&self) -> &HashMap<String, PhpValue> {
+        &self.globals
+    }
+
+    /// Set static properties map (e.g. from persistent parent process state).
+    pub fn set_static_properties(&mut self, props: HashMap<(String, String), PhpValue>) {
+        self.static_properties = props;
+    }
+
+    /// Set class constants map (e.g. from persistent parent process state).
+    pub fn set_class_constants(&mut self, consts: HashMap<(String, String), PhpValue>) {
+        self.class_constants = consts;
+    }
+
+    /// Set globals map (e.g. from persistent parent process state).
+    pub fn set_globals(&mut self, globals: HashMap<String, PhpValue>) {
+        self.globals = globals;
     }
 
     /// Check whether a loop backedge has exceeded hotness thresholds and conditionally
@@ -1309,6 +1368,26 @@ impl VM {
                         (c, m)
                     };
 
+                    // Dynamic Macro registration: `ClassName::macro('name', fn(...) => ...)`
+                    if method_name == "macro" {
+                        if let (Some(name_val), Some(arg1)) = (staged.first(), staged.get(1)) {
+                            if let PhpValue::Closure(ref cb) = arg1.value {
+                                let name_str = name_val.value.to_php_string();
+                                crate::vm::facade::register_runtime_closure_macro(&class_name, &name_str, (**cb).clone());
+                                self.registers[base_reg + dst.index()] = PhpValue::Bool(true);
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Dynamic Macro execution: `ClassName::customMacro(...)`
+                    if let Some(macro_closure) = crate::vm::facade::get_runtime_closure_macro(&class_name, &method_name) {
+                        let arg_values: Vec<PhpValue> = staged.into_iter().map(|a| a.value).collect();
+                        let res = self.invoke_closure_sync(&macro_closure, arg_values, span)?;
+                        self.registers[base_reg + dst.index()] = res;
+                        continue;
+                    }
+
                     let target_id = self
                         .resolve_method_id(&class_name, &method_name)
                         .ok_or_else(|| {
@@ -1358,6 +1437,33 @@ impl VM {
                     match &receiver {
                         PhpValue::Object(obj_rc) => {
                             let cls_name = obj_rc.borrow().class_name.clone();
+
+                            // Check Singleton Invocation Invariant:
+                            // "one can use both static and non-static methods of singleton class within other singleton class
+                            //  but can only use static methods of singleton class inside non-singleton class."
+                            if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
+                                if target_cls.modifiers.is_singleton {
+                                    if let Some(caller_class) = self.current_caller_class() {
+                                        let caller_is_singleton = self
+                                            .module
+                                            .get_class_by_name(&caller_class)
+                                            .map(|c| c.modifiers.is_singleton)
+                                            .unwrap_or(false);
+
+                                        if !caller_is_singleton {
+                                            return Err(self.make_error(
+                                                RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
+                                                    singleton_class: cls_name,
+                                                    method: method_name,
+                                                    caller_class,
+                                                },
+                                                span,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+
                             if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name)
                             {
                                 self.push_compiled_call_frame(
@@ -1419,6 +1525,29 @@ impl VM {
                             &staged,
                             &[],
                             None, // constructor return is void; `dst` retains `instance`
+                            span,
+                        )?;
+                    }
+                }
+
+                OpCode::NewObjectDynamic {
+                    dst,
+                    class_reg,
+                    arg_count,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let class_name = self.registers[base_reg + class_reg.index()].to_php_string();
+
+                    let instance = self.instantiate_class(&class_name, span)?;
+                    self.registers[base_reg + dst.index()] = instance.clone();
+
+                    if let Some(ctor_id) = self.resolve_method_id(&class_name, "__construct") {
+                        self.push_compiled_call_frame(
+                            ctor_id,
+                            Some(instance),
+                            &staged,
+                            &[],
+                            None,
                             span,
                         )?;
                     }
@@ -1856,6 +1985,24 @@ impl VM {
         self.dispatch_loop(depth_before)
     }
 
+    /// Invoke a compiled function or static method by name synchronously on this VM.
+    pub fn invoke_function_by_name(
+        &mut self,
+        name: &str,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let func_id = self.module.function_index.get(name).copied().ok_or_else(|| {
+            self.make_error(
+                RuntimeErrorKind::UndefinedFunction {
+                    name: name.to_string(),
+                },
+                span,
+            )
+        })?;
+        self.invoke_compiled_function_sync(func_id, args, span)
+    }
+
     /// Invoke a [`VmClosure`] synchronously and return its evaluated `PhpValue`.
     pub fn invoke_closure_sync(
         &mut self,
@@ -1922,6 +2069,20 @@ impl VM {
         args: &[PhpValue],
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
+        // 1. Dynamic Macro definition: `Facade::macro('name', fn(...) => ...)`
+        if method == "macro" {
+            if let (Some(name_val), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {
+                let name_str = name_val.to_php_string();
+                register_runtime_closure_macro(facade, &name_str, (**cb).clone());
+                return Ok(PhpValue::Bool(true));
+            }
+        }
+
+        // 2. Dynamic Macro invocation across Tier 1, Tier 2, and Tier 3 facades
+        if let Some(macro_closure) = get_runtime_closure_macro(facade, method) {
+            return self.invoke_closure_sync(&macro_closure, args.to_vec(), span);
+        }
+
         // Intercept higher-order `Future::*` and `Arr::*` facade calls that invoke closures
         if facade == "Future" {
             match method {
@@ -3838,10 +3999,55 @@ impl VM {
                 let id = args.first().cloned().unwrap_or(PhpValue::Int(1));
                 let mut record = VmObject::new("ModelRecord");
                 record.set_property("id", id);
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        record.set_property("table", t.clone());
+                    }
+                }
                 Ok(PhpValue::object(record))
             }
-            ("DBQuery", "where" | "orderBy" | "limit") => Ok(receiver.clone()),
-            ("DBQuery", "get" | "all") => Ok(PhpValue::list(Vec::new())),
+            ("DBQuery", "first") => {
+                let mut record = VmObject::new("ModelRecord");
+                record.set_property("id", PhpValue::Int(1));
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        record.set_property("table", t.clone());
+                    }
+                }
+                Ok(PhpValue::object(record))
+            }
+            ("DBQuery", "where" | "orderBy" | "limit" | "offset" | "select") => {
+                Ok(receiver.clone())
+            }
+            ("DBQuery", "get" | "all") => {
+                let mut record = VmObject::new("ModelRecord");
+                record.set_property("id", PhpValue::Int(1));
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        record.set_property("table", t.clone());
+                    }
+                }
+                Ok(PhpValue::list(vec![PhpValue::object(record)]))
+            }
+            ("DBQuery", "count") => Ok(PhpValue::Int(1)),
+            ("DBQuery", "insert") => Ok(PhpValue::Int(1)),
+            ("DBQuery", "update" | "delete") => Ok(PhpValue::Int(1)),
+            ("LoggerChannel", "info" | "error" | "debug" | "warning" | "warn" | "notice"
+            | "alert" | "critical" | "emergency") => {
+                let ch = if let PhpValue::Object(o) = receiver {
+                    o.borrow()
+                        .get_property("channel")
+                        .map(|v| v.to_php_string())
+                        .unwrap_or_else(|| "default".to_string())
+                } else {
+                    "default".to_string()
+                };
+                let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let ctx = args.get(1).cloned();
+                let lvl = if method == "warn" { "warning" } else { method };
+                crate::vm::facade::append_log(lvl, &msg, ctx, &ch);
+                Ok(PhpValue::Null)
+            }
             ("Image", "resize" | "crop") => Ok(receiver.clone()),
             ("Image", "save") => Ok(PhpValue::Bool(true)),
             (_, "getMessage") => {
@@ -3869,6 +4075,49 @@ impl VM {
     // =========================================================================
 
     fn instantiate_class(&mut self, class_name: &str, span: Span) -> Result<PhpValue, RuntimeError> {
+        // Engine-Level Instantiation Guard:
+        // Halts illegal instantiation attempts on static facades (Tier 1, Tier 2, Tier 3)
+        // or any class marked `is_static_only: true` with a fatal error.
+        if is_static_facade(class_name) || is_static_only(class_name) {
+            return Err(self.make_error(
+                RuntimeErrorKind::StaticFacadeInstantiationForbidden {
+                    class: class_name.to_string(),
+                },
+                span,
+            ));
+        }
+
+        if let Some(cls) = self.module.get_class_by_name(class_name) {
+            if cls.modifiers.is_static_only {
+                return Err(self.make_error(
+                    RuntimeErrorKind::StaticFacadeInstantiationForbidden {
+                        class: class_name.to_string(),
+                    },
+                    span,
+                ));
+            }
+
+            if cls.modifiers.is_singleton {
+                if let Some(caller_class) = self.current_caller_class() {
+                    let caller_is_singleton = self
+                        .module
+                        .get_class_by_name(&caller_class)
+                        .map(|c| c.modifiers.is_singleton)
+                        .unwrap_or(false);
+
+                    if !caller_is_singleton {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::SingletonInstantiationForbidden {
+                                singleton_class: class_name.to_string(),
+                                caller_class,
+                            },
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+
         let mut obj = VmObject::new(class_name);
 
         // Built-in Exception / RuntimeException classes
@@ -3885,6 +4134,19 @@ impl VM {
         let mut cursor = Some(class_name.to_string());
         while let Some(ref current_cls_name) = cursor {
             if let Some(cls) = self.module.get_class_by_name(current_cls_name).cloned() {
+                if let Some(ref parent_name) = cls.extends {
+                    if let Some(parent_cls) = self.module.get_class_by_name(parent_name) {
+                        if parent_cls.modifiers.is_singleton && !cls.modifiers.is_singleton {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::NonSingletonExtendsSingletonForbidden {
+                                    class_name: current_cls_name.to_string(),
+                                    parent_name: parent_name.to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
                 let parent = cls.extends.clone();
                 hierarchy_chain.push(cls);
                 cursor = parent;

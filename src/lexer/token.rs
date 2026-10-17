@@ -208,6 +208,9 @@ pub enum Token<'s> {
     #[token("readonly")]
     Readonly,
 
+    #[token("singleton")]
+    Singleton,
+
     #[token("const")]
     Const,
 
@@ -625,6 +628,7 @@ impl<'s> Token<'s> {
             Token::Abstract => "abstract",
             Token::Final => "final",
             Token::Readonly => "readonly",
+            Token::Singleton => "singleton",
             Token::Const => "const",
             Token::New => "new",
             Token::Clone => "clone",
@@ -775,6 +779,7 @@ impl<'s> Token<'s> {
                 | Token::Abstract
                 | Token::Final
                 | Token::Readonly
+                | Token::Singleton
                 | Token::Const
                 | Token::New
                 | Token::Clone

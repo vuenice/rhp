@@ -9,7 +9,10 @@ use crate::ast::{
     types::{CastType, Visibility},
     Program,
 };
-use crate::lexer::{facade::is_static_facade, span::Span};
+use crate::lexer::{
+    facade::{is_static_facade, is_static_only},
+    span::Span,
+};
 use crate::type_system::{
     env::{resolve_builtin_fluent_method, resolve_facade_static_call, TypeEnvironment},
     error::{TypeError, TypeErrorKind},
@@ -86,6 +89,16 @@ impl TypeChecker {
     pub fn new() -> Self {
         Self {
             result: TypeCheckResult::default(),
+        }
+    }
+
+    /// Construct a new [`TypeChecker`] pre-seeded with a parent [`TypeHierarchy`].
+    pub fn with_hierarchy(hierarchy: TypeHierarchy) -> Self {
+        Self {
+            result: TypeCheckResult {
+                hierarchy,
+                ..Default::default()
+            },
         }
     }
 
@@ -349,6 +362,8 @@ impl TypeChecker {
             is_abstract: false,
             is_final: false,
             is_readonly: false,
+            is_static_only: false,
+            is_singleton: false,
             extends: None,
             implements: Vec::new(),
             traits,
@@ -468,6 +483,8 @@ impl TypeChecker {
             is_abstract: cls.modifiers.is_abstract,
             is_final: cls.modifiers.is_final,
             is_readonly: cls.modifiers.is_readonly,
+            is_static_only: cls.modifiers.is_static_only,
+            is_singleton: cls.modifiers.is_singleton,
             extends: cls.extends.as_ref().map(|e| e.name.to_string()),
             implements: cls.implements.iter().map(|i| i.name.to_string()).collect(),
             traits,
@@ -524,7 +541,35 @@ impl TypeChecker {
         for (class_name, class_info) in &hierarchy.classes {
             // 1. Validate parent class overrides (`extends`)
             if let Some(ref parent_name) = class_info.extends {
+                if is_static_facade(parent_name) || is_static_only(parent_name) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::StaticFacadeInheritanceForbidden {
+                            class_name: parent_name.clone(),
+                        },
+                        class_info.span,
+                    ));
+                }
+
                 if let Some(parent_info) = hierarchy.classes.get(parent_name) {
+                    if parent_info.is_singleton && !class_info.is_singleton {
+                        return Err(TypeError::new(
+                            TypeErrorKind::NonSingletonExtendsSingletonForbidden {
+                                class_name: class_name.clone(),
+                                parent_name: parent_name.clone(),
+                            },
+                            class_info.span,
+                        ));
+                    }
+
+                    if parent_info.is_static_only {
+                        return Err(TypeError::new(
+                            TypeErrorKind::StaticFacadeInheritanceForbidden {
+                                class_name: parent_name.clone(),
+                            },
+                            class_info.span,
+                        ));
+                    }
+
                     if parent_info.is_final {
                         return Err(TypeError::new(
                             TypeErrorKind::MethodOverrideContractViolation {
@@ -1697,6 +1742,49 @@ impl TypeChecker {
                     _ => "object".to_string(),
                 };
 
+                if is_static_facade(&class_name) || is_static_only(&class_name) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::StaticFacadeInstantiationForbidden {
+                            class_name: class_name.clone(),
+                        },
+                        expr.span,
+                    ));
+                }
+
+                if let Some(ci) = self.result.hierarchy.classes.get(&class_name) {
+                    if ci.is_static_only {
+                        return Err(TypeError::new(
+                            TypeErrorKind::StaticFacadeInstantiationForbidden {
+                                class_name: class_name.clone(),
+                            },
+                            expr.span,
+                        ));
+                    }
+
+                    if ci.is_singleton {
+                        if let Some(caller_ctx) = ctx {
+                            if let Some(ref caller_class) = caller_ctx.enclosing_class {
+                                let caller_is_singleton = self
+                                    .result
+                                    .hierarchy
+                                    .classes
+                                    .get(caller_class)
+                                    .map(|c| c.is_singleton)
+                                    .unwrap_or(false);
+                                if !caller_is_singleton {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::SingletonInstantiationForbidden {
+                                            singleton_class: class_name.clone(),
+                                            caller_class: caller_class.clone(),
+                                        },
+                                        expr.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let arg_types = self.infer_arguments(args, env, ctx, None)?;
 
                 if let Some(ctor_sig) = self
@@ -1944,6 +2032,35 @@ impl TypeChecker {
 
                 // 2. User-defined class/interface/trait/enum method calls
                 if let RhpType::Class(ref cls_name) = base_obj_ty {
+                    // Check singleton rule:
+                    // "one can use both static and non-static methods of singleton class within other singleton class
+                    //  but can only use static methods of singleton class inside non-singleton class."
+                    if let Some(target_ci) = self.result.hierarchy.classes.get(cls_name) {
+                        if target_ci.is_singleton {
+                            if let Some(caller_ctx) = ctx {
+                                if let Some(ref caller_class) = caller_ctx.enclosing_class {
+                                    let caller_is_singleton = self
+                                        .result
+                                        .hierarchy
+                                        .classes
+                                        .get(caller_class)
+                                        .map(|c| c.is_singleton)
+                                        .unwrap_or(false);
+                                    if !caller_is_singleton {
+                                        return Err(TypeError::new(
+                                            TypeErrorKind::NonStaticSingletonMethodCallForbidden {
+                                                singleton_class: cls_name.clone(),
+                                                method: method.name.to_string(),
+                                                caller_class: caller_class.clone(),
+                                            },
+                                            expr.span,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if let Some(sig) = self
                         .result
                         .hierarchy

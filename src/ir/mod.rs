@@ -198,6 +198,14 @@ pub fn lower_typed_program(typed: &TypedProgram<'_>) -> Result<IrModule, IrError
     IrLowerer::new(Some(&typed.type_info)).lower_program(&typed.program)
 }
 
+/// Lower a type-checked [`TypedProgram`] seeded with an existing parent [`IrModule`].
+pub fn lower_typed_program_with_base(
+    typed: &TypedProgram<'_>,
+    base_module: IrModule,
+) -> Result<IrModule, IrError> {
+    IrLowerer::with_base_module(Some(&typed.type_info), base_module).lower_program(&typed.program)
+}
+
 /// Lower an AST [`Program`] (with optional [`TypeCheckResult`]) into a linear bytecode [`IrModule`].
 pub fn lower_program(
     program: &Program<'_>,

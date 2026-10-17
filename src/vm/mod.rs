@@ -14,6 +14,7 @@
 pub mod engine;
 pub mod error;
 pub mod facade;
+pub mod parent_process;
 pub mod value;
 
 use std::collections::HashMap;
@@ -29,12 +30,15 @@ use crate::type_system::{parse_and_check, parse_and_check_with_file_id};
 pub use engine::{CallFrame, DEFAULT_MAX_CALL_DEPTH, VM};
 pub use error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 pub use facade::{
-    clear_runtime_closure_macros, dispatch_facade_call, extract_array_elements,
-    extract_dict_elements, extract_dict_map, extract_map_elements, flatten_elements,
-    get_runtime_closure_macro, has_runtime_closure_macro, register_runtime_closure_macro,
-    FacadeResult,
+    append_log, clear_log_history, clear_runtime_closure_macros, clear_tier2_plugins,
+    dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,
+    extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
+    has_runtime_closure_macro, has_tier2_plugin, register_runtime_closure_macro,
+    register_tier2_plugin, register_tier2_plugin_handler, FacadeResult, LogRecord, PluginFacade,
+    Tier2PluginHandler,
 };
 pub use indexmap::IndexMap;
+pub use parent_process::{EngineState, ParentProcess};
 pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Type alias matching the architecture specification sketch (`Result<Value, RuntimeError>`).

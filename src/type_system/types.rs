@@ -808,6 +808,8 @@ pub struct ClassTypeInfo {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    pub is_static_only: bool,
+    pub is_singleton: bool,
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub traits: Vec<String>,

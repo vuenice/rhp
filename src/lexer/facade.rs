@@ -15,11 +15,12 @@
 //! 6. Custom methods can be registered dynamically at runtime via `Facade::macro('name', closure)`
 //!    into a thread-safe global runtime macro registry with zero performance cost on core types.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 /// Facade tier classification as defined in the architectural tiering strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FacadeTier {
     /// Tier 1: Built-in Native Facades pre-compiled inside the engine core.
     /// Strictly static-only. Instantiation via `new` and inheritance via `extends` are forbidden.
@@ -30,123 +31,106 @@ pub enum FacadeTier {
     Tier3Script,
 }
 
-/// Metadata describing a system facade.
+/// Metadata describing a system facade across Tier 1, Tier 2, and Tier 3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FacadeInfo {
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub tier: FacadeTier,
     pub is_static_only: bool,
     pub supports_macros: bool,
-    pub description: &'static str,
+    pub description: Cow<'static, str>,
+}
+
+impl FacadeInfo {
+    pub const fn native(name: &'static str, description: &'static str) -> Self {
+        Self {
+            name: Cow::Borrowed(name),
+            tier: FacadeTier::Tier1Native,
+            is_static_only: true,
+            supports_macros: true,
+            description: Cow::Borrowed(description),
+        }
+    }
+
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        tier: FacadeTier,
+        is_static_only: bool,
+        supports_macros: bool,
+        description: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            tier,
+            is_static_only,
+            supports_macros,
+            description: description.into(),
+        }
+    }
 }
 
 /// All registered Tier 1 Native Facades pre-compiled inside the RHP engine.
 pub static NATIVE_FACADES: &[FacadeInfo] = &[
-    FacadeInfo {
-        name: "Int",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Static facade helper for integer utilities and specialized Rust numeric types (i64, u32, etc.)",
-    },
-    FacadeInfo {
-        name: "Float",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Static facade helper for float operations, formatting, and high-precision types (f64, toDecimal)",
-    },
-    FacadeInfo {
-        name: "Arr",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Static collection factory (list, dict, set, hashMap) with fluent chaining and runtime macro support",
-    },
-    FacadeInfo {
-        name: "Str",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Static UTF-8 string transformation and inspection utilities (slug, contains, random) with runtime macro support",
-    },
-    FacadeInfo {
-        name: "Future",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Dart-style non-blocking concurrency facade (run, wait, any, delayed, defer)",
-    },
-    FacadeInfo {
-        name: "HTTP",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Non-blocking async HTTP client facade (get, post, withHeaders)",
-    },
-    FacadeInfo {
-        name: "File",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "High-level cooperative fiber file I/O facade (read, write, exists, delete)",
-    },
-    FacadeInfo {
-        name: "Session",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Session state management facade across requests (get, put, has, forget)",
-    },
-    FacadeInfo {
-        name: "Image",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Fluent image manipulation facade (make, resize, crop, save)",
-    },
-    FacadeInfo {
-        name: "URL",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "URL generation and route inspection facade (to, route, current, full)",
-    },
-    FacadeInfo {
-        name: "DB",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Centralized database pool query facade (table, find)",
-    },
-    FacadeInfo {
-        name: "Log",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Non-blocking centralized logging facade (info, error, debug)",
-    },
-    FacadeInfo {
-        name: "Sys",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "System environment, output, and debugging intrinsics facade (env, print, dd, os)",
-    },
-    FacadeInfo {
-        name: "Glob",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Static facade for disambiguating reserved keyword operations and backward-compatible custom helpers (getClass, match, customHelper)",
-    },
-    FacadeInfo {
-        name: "phpFun",
-        tier: FacadeTier::Tier1Native,
-        is_static_only: true,
-        supports_macros: true,
-        description: "Backward-compatibility static facade bridging legacy PHP functions (e.g., phpFun::array_merge() -> Arr::merge())",
-    },
+    FacadeInfo::native(
+        "Int",
+        "Static facade helper for integer utilities and specialized Rust numeric types (i64, u32, etc.)",
+    ),
+    FacadeInfo::native(
+        "Float",
+        "Static facade helper for float operations, formatting, and high-precision types (f64, toDecimal)",
+    ),
+    FacadeInfo::native(
+        "Arr",
+        "Static collection factory (list, dict, set, hashMap) with fluent chaining and runtime macro support",
+    ),
+    FacadeInfo::native(
+        "Str",
+        "Static UTF-8 string transformation and inspection utilities (slug, contains, random) with runtime macro support",
+    ),
+    FacadeInfo::native(
+        "Future",
+        "Dart-style non-blocking concurrency facade (run, wait, any, delayed, defer)",
+    ),
+    FacadeInfo::native(
+        "HTTP",
+        "Non-blocking async HTTP client facade (get, post, withHeaders)",
+    ),
+    FacadeInfo::native(
+        "File",
+        "High-level cooperative fiber file I/O facade (read, write, exists, delete)",
+    ),
+    FacadeInfo::native(
+        "Session",
+        "Session state management facade across requests (get, put, has, forget)",
+    ),
+    FacadeInfo::native(
+        "Image",
+        "Fluent image manipulation facade (make, resize, crop, save)",
+    ),
+    FacadeInfo::native(
+        "URL",
+        "URL generation and route inspection facade (to, route, current, full)",
+    ),
+    FacadeInfo::native(
+        "DB",
+        "Centralized database pool query facade (table, find, select, insert, update, delete)",
+    ),
+    FacadeInfo::native(
+        "Log",
+        "Non-blocking centralized logging facade (info, error, debug, warn, channel)",
+    ),
+    FacadeInfo::native(
+        "Sys",
+        "System environment, output, and debugging intrinsics facade (env, print, dd, os)",
+    ),
+    FacadeInfo::native(
+        "Glob",
+        "Static facade for disambiguating reserved keyword operations and backward-compatible custom helpers (getClass, match, customHelper)",
+    ),
+    FacadeInfo::native(
+        "phpFun",
+        "Backward-compatibility static facade bridging legacy PHP functions (e.g., phpFun::array_merge() -> Arr::merge())",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
@@ -451,16 +435,200 @@ pub fn php_function_signature_map() -> HashMap<&'static str, &'static str> {
         .collect()
 }
 
-/// Returns true if the specified class name is a registered native static facade.
-#[inline]
-pub fn is_static_facade(name: &str) -> bool {
-    NATIVE_FACADES.iter().any(|f| f.name == name)
+/// Thread-safe registry for managing the Three-Tier Facade Architecture.
+///
+/// - **Tier 1 (Built-in Native Engine Facades):** `Str`, `Arr`, `Future`, `Log`, `DB`, `Int`, `Float`, etc.
+/// - **Tier 2 (Custom Rust Plugins / Crates):** Included via AOT builds or dynamic crate registration.
+/// - **Tier 3 (Script-land Static Facades):** Userland static classes declared with static methods.
+#[derive(Debug, Default)]
+pub struct FacadeRegistry {
+    tier1: RwLock<HashMap<String, FacadeInfo>>,
+    tier2: RwLock<HashMap<String, FacadeInfo>>,
+    tier3: RwLock<HashMap<String, FacadeInfo>>,
 }
 
-/// Retrieve the metadata info for a static facade if registered.
+impl FacadeRegistry {
+    /// Create a new `FacadeRegistry` pre-populated with Tier 1 Native Facades.
+    pub fn new() -> Self {
+        let registry = Self {
+            tier1: RwLock::new(HashMap::new()),
+            tier2: RwLock::new(HashMap::new()),
+            tier3: RwLock::new(HashMap::new()),
+        };
+        for facade in NATIVE_FACADES {
+            registry.register_tier1(facade.clone());
+        }
+        registry
+    }
+
+    /// Access the process-wide global Three-Tier Facade Registry.
+    pub fn global() -> &'static FacadeRegistry {
+        static GLOBAL_REGISTRY: OnceLock<FacadeRegistry> = OnceLock::new();
+        GLOBAL_REGISTRY.get_or_init(FacadeRegistry::new)
+    }
+
+    /// Register a Tier 1 native engine facade.
+    pub fn register_tier1(&self, info: FacadeInfo) {
+        if let Ok(mut g) = self.tier1.write() {
+            g.insert(info.name.to_string(), info);
+        }
+    }
+
+    /// Register a Tier 2 custom Rust plugin facade.
+    pub fn register_tier2(&self, info: FacadeInfo) {
+        if let Ok(mut g) = self.tier2.write() {
+            g.insert(info.name.to_string(), info);
+        }
+    }
+
+    /// Register a Tier 3 script-land static facade.
+    pub fn register_tier3(&self, info: FacadeInfo) {
+        if let Ok(mut g) = self.tier3.write() {
+            g.insert(info.name.to_string(), info);
+        }
+    }
+
+    /// Retrieve the metadata info for a static facade if registered across any tier.
+    pub fn get_facade(&self, name: &str) -> Option<FacadeInfo> {
+        if let Ok(g) = self.tier1.read() {
+            if let Some(f) = g.get(name) {
+                return Some(f.clone());
+            }
+        }
+        if let Ok(g) = self.tier2.read() {
+            if let Some(f) = g.get(name) {
+                return Some(f.clone());
+            }
+        }
+        if let Ok(g) = self.tier3.read() {
+            if let Some(f) = g.get(name) {
+                return Some(f.clone());
+            }
+        }
+        None
+    }
+
+    /// Returns true if the specified class name is a registered static facade in any tier.
+    pub fn is_static_facade(&self, name: &str) -> bool {
+        self.get_facade(name).is_some()
+    }
+
+    /// Returns true if the specified class is marked static-only across any tier.
+    pub fn is_static_only(&self, name: &str) -> bool {
+        if let Some(f) = self.get_facade(name) {
+            return f.is_static_only;
+        }
+        // Normalize primitive/canonical names (e.g. 'int' -> 'Int', 'float' -> 'Float', etc.)
+        let normalized = match name.to_ascii_lowercase().as_str() {
+            "int" => "Int",
+            "float" => "Float",
+            "str" | "string" => "Str",
+            "arr" | "array" => "Arr",
+            "future" => "Future",
+            "log" => "Log",
+            "db" => "DB",
+            _ => return false,
+        };
+        self.get_facade(normalized)
+            .map(|f| f.is_static_only)
+            .unwrap_or(false)
+    }
+
+    /// Retrieve all registered facades belonging to a specific tier.
+    pub fn get_facades_by_tier(&self, tier: FacadeTier) -> Vec<FacadeInfo> {
+        match tier {
+            FacadeTier::Tier1Native => {
+                self.tier1.read().map(|g| g.values().cloned().collect()).unwrap_or_default()
+            }
+            FacadeTier::Tier2RustPlugin => {
+                self.tier2.read().map(|g| g.values().cloned().collect()).unwrap_or_default()
+            }
+            FacadeTier::Tier3Script => {
+                self.tier3.read().map(|g| g.values().cloned().collect()).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Clear dynamically registered Tier 2 and Tier 3 facades (used for test isolation).
+    pub fn clear_dynamic(&self) {
+        if let Ok(mut g) = self.tier2.write() {
+            g.clear();
+        }
+        if let Ok(mut g) = self.tier3.write() {
+            g.clear();
+        }
+    }
+}
+
+/// Returns true if the specified class name is a registered static facade in any tier.
 #[inline]
-pub fn get_static_facade(name: &str) -> Option<&'static FacadeInfo> {
-    NATIVE_FACADES.iter().find(|f| f.name == name)
+pub fn is_static_facade(name: &str) -> bool {
+    FacadeRegistry::global().is_static_facade(name)
+}
+
+/// Returns true if the facade is a Tier 1 (Native) or Tier 2 (Rust Plugin) facade
+/// that dispatches directly to native handlers via OpCode::FacadeCall.
+#[inline]
+pub fn is_native_or_plugin_facade(name: &str) -> bool {
+    if let Some(f) = FacadeRegistry::global().get_facade(name) {
+        return matches!(f.tier, FacadeTier::Tier1Native | FacadeTier::Tier2RustPlugin);
+    }
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
+            | "file" | "http" | "sys" | "glob" | "session" | "image" | "url" | "phpfun"
+    )
+}
+
+/// Returns true if the specified class is marked static-only (`is_static_only: true`).
+#[inline]
+pub fn is_static_only(name: &str) -> bool {
+    FacadeRegistry::global().is_static_only(name)
+}
+
+/// Retrieve the metadata info for a static facade if registered in any tier.
+#[inline]
+pub fn get_static_facade(name: &str) -> Option<FacadeInfo> {
+    FacadeRegistry::global().get_facade(name)
+}
+
+/// Register a custom Tier 2 Rust plugin facade.
+pub fn register_tier2_facade(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    supports_macros: bool,
+) -> FacadeInfo {
+    let info = FacadeInfo {
+        name: Cow::Owned(name.into()),
+        tier: FacadeTier::Tier2RustPlugin,
+        is_static_only: true,
+        supports_macros,
+        description: Cow::Owned(description.into()),
+    };
+    FacadeRegistry::global().register_tier2(info.clone());
+    info
+}
+
+/// Register a Tier 3 script-land static facade.
+pub fn register_tier3_facade(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    supports_macros: bool,
+) -> FacadeInfo {
+    let info = FacadeInfo {
+        name: Cow::Owned(name.into()),
+        tier: FacadeTier::Tier3Script,
+        is_static_only: true,
+        supports_macros,
+        description: Cow::Owned(description.into()),
+    };
+    FacadeRegistry::global().register_tier3(info.clone());
+    info
+}
+
+/// Retrieve all facades registered for a given tier.
+pub fn get_facades_by_tier(tier: FacadeTier) -> Vec<FacadeInfo> {
+    FacadeRegistry::global().get_facades_by_tier(tier)
 }
 
 /// Checks whether a class can be instantiated with `new`.
@@ -469,13 +637,11 @@ pub fn get_static_facade(name: &str) -> Option<&'static FacadeInfo> {
 /// matching the exact compiler diagnostic specified in the PDF:
 /// `Fatal Error: Cannot instantiate static facade class '{name}'. Use static methods directly.`
 pub fn validate_instantiation(name: &str) -> Result<(), String> {
-    if let Some(facade) = get_static_facade(name) {
-        if facade.is_static_only {
-            return Err(format!(
-                "Fatal Error: Cannot instantiate static facade class '{}'. Use static methods directly.",
-                facade.name
-            ));
-        }
+    if is_static_only(name) {
+        return Err(format!(
+            "Fatal Error: Cannot instantiate static facade class '{}'. Use static methods directly.",
+            name
+        ));
     }
     Ok(())
 }
@@ -486,13 +652,11 @@ pub fn validate_instantiation(name: &str) -> Result<(), String> {
 /// (such as `Box<Vec<PhpValue>>` or UTF-8 string buffers) and are stateless utility facades.
 /// Subclassing them is strictly forbidden; developers must use `Facade::macro()` instead.
 pub fn validate_inheritance(name: &str) -> Result<(), String> {
-    if let Some(facade) = get_static_facade(name) {
-        if facade.is_static_only {
-            return Err(format!(
-                "Fatal Error: Cannot extend static facade class '{}'. Use '{}::macro()' to register custom methods dynamically.",
-                facade.name, facade.name
-            ));
-        }
+    if is_static_only(name) {
+        return Err(format!(
+            "Fatal Error: Cannot extend static facade class '{}'. Use '{}::macro()' to register custom methods dynamically.",
+            name, name
+        ));
     }
     Ok(())
 }

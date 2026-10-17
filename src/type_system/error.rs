@@ -223,4 +223,43 @@ pub enum TypeErrorKind {
         type_name: String,
         reason: String,
     },
+
+    #[error(
+        "Fatal Error: Cannot instantiate static facade class '{class_name}'. Use static methods directly."
+    )]
+    StaticFacadeInstantiationForbidden {
+        class_name: String,
+    },
+
+    #[error(
+        "Fatal Error: Cannot extend static facade class '{class_name}'. Use '{class_name}::macro()' to register custom methods dynamically."
+    )]
+    StaticFacadeInheritanceForbidden {
+        class_name: String,
+    },
+
+    #[error(
+        "Type Error: Cannot call non-static method '{method}' of singleton class '{singleton_class}' inside non-singleton class '{caller_class}'."
+    )]
+    NonStaticSingletonMethodCallForbidden {
+        singleton_class: String,
+        method: String,
+        caller_class: String,
+    },
+
+    #[error(
+        "Type Error: Cannot instantiate singleton class '{singleton_class}' inside non-singleton class '{caller_class}'. Only static methods of singleton classes can be used in non-singleton classes."
+    )]
+    SingletonInstantiationForbidden {
+        singleton_class: String,
+        caller_class: String,
+    },
+
+    #[error(
+        "Type Error: Cannot extend singleton class '{parent_name}' from non-singleton class '{class_name}'."
+    )]
+    NonSingletonExtendsSingletonForbidden {
+        class_name: String,
+        parent_name: String,
+    },
 }

@@ -8,11 +8,13 @@ use logos::Logos;
 
 pub use error::{LexError, SpannedLexError};
 pub use facade::{
-    get_custom_helper, get_legacy_php_function, get_macro, get_static_facade, has_custom_helper,
-    has_macro, is_legacy_php_function, is_reserved_intrinsic, is_static_facade,
-    php_function_signature_map, register_custom_helper, register_macro, validate_inheritance,
-    validate_instantiation, FacadeInfo, FacadeTier, LegacyPhpFunctionMapping, MacroEntry,
-    MacroRegistry, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
+    get_custom_helper, get_facades_by_tier, get_legacy_php_function, get_macro, get_static_facade,
+    has_custom_helper, has_macro, is_legacy_php_function, is_native_or_plugin_facade,
+    is_reserved_intrinsic, is_static_facade, is_static_only, php_function_signature_map,
+    register_custom_helper, register_macro, register_tier2_facade, register_tier3_facade,
+    validate_inheritance, validate_instantiation, FacadeInfo, FacadeRegistry, FacadeTier,
+    LegacyPhpFunctionMapping, MacroEntry, MacroRegistry, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES,
+    RESERVED_INTRINSICS,
 };
 pub use span::{SourceFile, SourceMap, Span};
 pub use token::Token;

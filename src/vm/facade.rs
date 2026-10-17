@@ -1,13 +1,123 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use indexmap::IndexMap;
 
-use crate::lexer::facade::get_macro;
+use crate::lexer::facade::{get_macro, register_tier2_facade, FacadeRegistry};
 use crate::lexer::span::Span;
+use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
+
+/// Handler closure for Tier 2 custom Rust plugins.
+pub type Tier2PluginHandler =
+    Arc<dyn Fn(&str, &[PhpValue], Span) -> Result<PhpValue, RuntimeError> + Send + Sync>;
+
+/// Extensible trait for defining custom Rust plugins / crates in Tier 2.
+pub trait PluginFacade: Send + Sync {
+    /// Facade name (e.g., `"Payment"`, `"Redis"`).
+    fn name(&self) -> &str;
+
+    /// Optional description for documentation and introspection.
+    fn description(&self) -> &str {
+        ""
+    }
+
+    /// Whether this plugin supports dynamic macro registration.
+    fn supports_macros(&self) -> bool {
+        true
+    }
+
+    /// Execute a static call on this plugin facade (`Plugin::method(args...)`).
+    fn call(&self, method: &str, args: &[PhpValue], span: Span) -> Result<PhpValue, RuntimeError>;
+}
+
+/// Global registry for Tier 2 custom Rust plugin execution handlers.
+static TIER2_PLUGIN_REGISTRY: OnceLock<RwLock<HashMap<String, Tier2PluginHandler>>> =
+    OnceLock::new();
+
+fn get_tier2_plugins() -> &'static RwLock<HashMap<String, Tier2PluginHandler>> {
+    TIER2_PLUGIN_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Register a custom Tier 2 Rust plugin handler.
+pub fn register_tier2_plugin_handler(
+    name: &str,
+    description: &str,
+    supports_macros: bool,
+    handler: Tier2PluginHandler,
+) {
+    register_tier2_facade(name.to_string(), description.to_string(), supports_macros);
+    if let Ok(mut g) = get_tier2_plugins().write() {
+        g.insert(name.to_string(), handler);
+    }
+}
+
+/// Register a custom Tier 2 Rust plugin implementing the [`PluginFacade`] trait.
+pub fn register_tier2_plugin(plugin: impl PluginFacade + 'static) {
+    let arc = Arc::new(plugin);
+    let name = arc.name().to_string();
+    let desc = arc.description().to_string();
+    let macros = arc.supports_macros();
+    let p_clone = Arc::clone(&arc);
+    let handler: Tier2PluginHandler = Arc::new(move |method, args, span| {
+        p_clone.call(method, args, span)
+    });
+    register_tier2_plugin_handler(&name, &desc, macros, handler);
+}
+
+/// Check if a Tier 2 plugin is registered.
+pub fn has_tier2_plugin(name: &str) -> bool {
+    get_tier2_plugins()
+        .read()
+        .map(|g| g.contains_key(name))
+        .unwrap_or(false)
+}
+
+/// Remove all registered Tier 2 plugins (for test isolation).
+pub fn clear_tier2_plugins() {
+    if let Ok(mut g) = get_tier2_plugins().write() {
+        g.clear();
+    }
+    FacadeRegistry::global().clear_dynamic();
+}
+
+/// Structured log record captured by the centralized `Log` facade.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogRecord {
+    pub level: String,
+    pub message: String,
+    pub context: Option<PhpValue>,
+    pub channel: String,
+}
+
+thread_local! {
+    static LOG_HISTORY: RefCell<Vec<LogRecord>> = RefCell::new(Vec::new());
+}
+
+/// Record a structured log entry into the global log buffer.
+pub fn append_log(level: &str, message: &str, context: Option<PhpValue>, channel: &str) {
+    LOG_HISTORY.with(|cell| {
+        cell.borrow_mut().push(LogRecord {
+            level: level.to_string(),
+            message: message.to_string(),
+            context,
+            channel: channel.to_string(),
+        });
+    });
+}
+
+/// Retrieve all structured log records.
+pub fn get_recorded_logs() -> Vec<LogRecord> {
+    LOG_HISTORY.with(|cell| cell.borrow().clone())
+}
+
+/// Clear structured log history (for test isolation).
+pub fn clear_log_history() {
+    LOG_HISTORY.with(|cell| cell.borrow_mut().clear());
+}
 
 thread_local! {
     /// Thread-local runtime closure macro registry for dynamic facade macros (`Arr::macro(...)`, etc.).
@@ -75,15 +185,24 @@ pub fn dispatch_facade_call(
         "HTTP" => dispatch_http(method, args),
         "Log" => dispatch_log(method, args),
         "DB" => dispatch_db(method, args),
+        "Int" => dispatch_int(method, args),
+        "Float" => dispatch_float(method, args),
         "Session" => dispatch_session(method, args),
         "Image" => dispatch_image(method, args),
         "URL" => dispatch_url(method, args),
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
-        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
-            facade: facade.to_string(),
-            method: method.to_string(),
-        }),
+        _ => {
+            if let Ok(g) = get_tier2_plugins().read() {
+                if let Some(handler) = g.get(facade) {
+                    return handler(method, args, span);
+                }
+            }
+            Err(RuntimeErrorKind::UndefinedFacadeMethod {
+                facade: facade.to_string(),
+                method: method.to_string(),
+            })
+        }
     };
 
     result.map_err(|kind| RuntimeError::new(kind, span))
@@ -789,13 +908,59 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
 
 fn dispatch_log(method: &str, args: &[PhpValue]) -> FacadeResult {
     let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+    let ctx = args.get(1).cloned();
     match method {
-        "info" => println!("[INFO] {}", msg),
-        "error" => eprintln!("[ERROR] {}", msg),
-        "debug" => println!("[DEBUG] {}", msg),
-        _ => {}
+        "info" | "error" | "debug" | "warning" | "warn" | "notice" | "alert" | "critical"
+        | "emergency" => {
+            let lvl = if method == "warn" { "warning" } else { method };
+            append_log(lvl, &msg, ctx, "default");
+            Ok(PhpValue::Null)
+        }
+        "channel" => {
+            let ch = get_arg_str(args, 0, "Log::channel")?;
+            let mut obj = VmObject::new("LoggerChannel");
+            obj.set_property("channel", PhpValue::string(ch));
+            Ok(PhpValue::object(obj))
+        }
+        "history" | "getHistory" => {
+            let logs = get_recorded_logs();
+            let mut list = Vec::with_capacity(logs.len());
+            for entry in logs {
+                let mut dict = Vec::new();
+                dict.push(("level".to_string(), PhpValue::string(entry.level)));
+                dict.push(("message".to_string(), PhpValue::string(entry.message)));
+                dict.push(("channel".to_string(), PhpValue::string(entry.channel)));
+                if let Some(ctx_val) = entry.context {
+                    dict.push(("context".to_string(), ctx_val));
+                }
+                list.push(PhpValue::dict(dict));
+            }
+            Ok(PhpValue::list(list))
+        }
+        "clearHistory" | "clear" => {
+            clear_log_history();
+            Ok(PhpValue::Null)
+        }
+        "last" | "lastLog" => {
+            let logs = get_recorded_logs();
+            if let Some(last) = logs.last() {
+                let mut dict = Vec::new();
+                dict.push(("level".to_string(), PhpValue::string(last.level.clone())));
+                dict.push(("message".to_string(), PhpValue::string(last.message.clone())));
+                dict.push(("channel".to_string(), PhpValue::string(last.channel.clone())));
+                if let Some(ref ctx_val) = last.context {
+                    dict.push(("context".to_string(), ctx_val.clone()));
+                }
+                Ok(PhpValue::dict(dict))
+            } else {
+                Ok(PhpValue::Null)
+            }
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Log".to_string(),
+            method: method.to_string(),
+        }),
     }
-    Ok(PhpValue::Null)
 }
 
 fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
@@ -806,8 +971,166 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
             obj.set_property("table", PhpValue::string(tbl));
             Ok(PhpValue::object(obj))
         }
+        "raw" => {
+            let sql = get_arg_str(args, 0, "DB::raw")?;
+            let mut obj = VmObject::new("DBRaw");
+            obj.set_property("sql", PhpValue::string(sql));
+            Ok(PhpValue::object(obj))
+        }
+        "select" => Ok(PhpValue::list(Vec::new())),
+        "insert" => Ok(PhpValue::Int(1)),
+        "update" => Ok(PhpValue::Int(1)),
+        "delete" => Ok(PhpValue::Int(1)),
+        "find" => {
+            let tbl = get_arg_str(args, 0, "DB::find")?;
+            let id = args.get(1).cloned().unwrap_or(PhpValue::Int(1));
+            let mut record = VmObject::new("ModelRecord");
+            record.set_property("id", id);
+            record.set_property("table", PhpValue::string(tbl));
+            Ok(PhpValue::object(record))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "DB".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "i64" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::I64,
+                value: val as i128,
+            })
+        }
+        "u64" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::U64,
+                value: val as i128,
+            })
+        }
+        "i32" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::I32,
+                value: val as i128,
+            })
+        }
+        "u32" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::U32,
+                value: val as i128,
+            })
+        }
+        "i16" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::I16,
+                value: val as i128,
+            })
+        }
+        "u16" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::U16,
+                value: val as i128,
+            })
+        }
+        "i8" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::I8,
+                value: val as i128,
+            })
+        }
+        "u8" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::RustInt {
+                kind: RustIntKind::U8,
+                value: val as i128,
+            })
+        }
+        "min" => {
+            let a = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            let b = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::Int((a.min(b)) as i32))
+        }
+        "max" => {
+            let a = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            let b = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::Int((a.max(b)) as i32))
+        }
+        "clamp" => {
+            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            let min_v = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let max_v = args.get(2).and_then(|v| v.to_i64()).unwrap_or(0);
+            Ok(PhpValue::Int((val.max(min_v).min(max_v)) as i32))
+        }
+        "parse" => {
+            let s = get_arg_str(args, 0, "Int::parse")?;
+            let val = s.trim().parse::<i64>().unwrap_or(0);
+            Ok(PhpValue::Int(val as i32))
+        }
+        "random" => {
+            let min_v = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+            let max_v = args.get(1).and_then(|v| v.to_i64()).unwrap_or(100);
+            let span = if max_v > min_v { max_v - min_v + 1 } else { 1 };
+            let count = ASYNC_TASK_COUNTER.fetch_add(1, Ordering::Relaxed) as i64;
+            let val = min_v + (count.wrapping_mul(6364136223846793005).abs() % span);
+            Ok(PhpValue::Int(val as i32))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Int".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "f64" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F64,
+                value: val,
+            })
+        }
+        "f32" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F32,
+                value: val,
+            })
+        }
+        "round" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let precision = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0) as i32;
+            let factor = 10f64.powi(precision);
+            Ok(PhpValue::Float(((val * factor).round() / factor) as f32))
+        }
+        "floor" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::Float(val.floor() as f32))
+        }
+        "ceil" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::Float(val.ceil() as f32))
+        }
+        "abs" => {
+            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::Float(val.abs() as f32))
+        }
+        "parse" => {
+            let s = get_arg_str(args, 0, "Float::parse")?;
+            let val = s.trim().parse::<f64>().unwrap_or(0.0);
+            Ok(PhpValue::Float(val as f32))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Float".to_string(),
             method: method.to_string(),
         }),
     }

@@ -80,6 +80,8 @@ pub struct ClassModifiers {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    pub is_static_only: bool,
+    pub is_singleton: bool,
 }
 
 /// Cast type targets.

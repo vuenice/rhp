@@ -19,7 +19,7 @@ use crate::ir::{
     CompiledInterface, CompiledParam, CompiledProperty, IrModule,
 };
 use crate::lexer::{
-    facade::{get_legacy_php_function, is_static_facade},
+    facade::{get_legacy_php_function, is_native_or_plugin_facade},
     span::Span,
 };
 use crate::type_system::{
@@ -255,6 +255,17 @@ impl<'a> IrLowerer<'a> {
         Self {
             type_info,
             module: IrModule::new(),
+            current_namespace: None,
+            use_aliases: HashMap::new(),
+            synthetic_counter: 0,
+        }
+    }
+
+    /// Construct a new [`IrLowerer`] seeded with an existing parent [`IrModule`].
+    pub fn with_base_module(type_info: Option<&'a TypeCheckResult>, base_module: IrModule) -> Self {
+        Self {
+            type_info,
+            module: base_module,
             current_namespace: None,
             use_aliases: HashMap::new(),
             synthetic_counter: 0,
@@ -1487,8 +1498,8 @@ impl<'a> IrLowerer<'a> {
                         return Ok(dst);
                     }
 
-                    // 5. Built-in Static Facades (`Str`, `Arr`, `Future`, `HTTP`, `File`, `Session`, `Image`, `URL`, `DB`, `Log`, `Sys`, `Glob`)
-                    if is_static_facade(target_name) {
+                    // 5. Tier 1 Native Facades & Tier 2 Rust Plugins
+                    if is_native_or_plugin_facade(target_name) {
                         let arg_count = self.evaluate_and_push_args(b, args)?;
                         let facade_const = b.intern_string(target_name);
                         let method_const = b.intern_string(method_name);
@@ -1910,22 +1921,34 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
-                let class_name = match &class.kind {
+                match &class.kind {
                     ExprKind::Ident(id) => {
-                        self.resolve_class_name(id.name, b.enclosing_class.as_deref())
+                        let class_name =
+                            self.resolve_class_name(id.name, b.enclosing_class.as_deref());
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let class_const = b.intern_string(&class_name);
+                        b.emit(
+                            OpCode::NewObject {
+                                dst,
+                                class: class_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
                     }
-                    _ => "<dynamic>".to_string(),
-                };
-                let arg_count = self.evaluate_and_push_args(b, args)?;
-                let class_const = b.intern_string(&class_name);
-                b.emit(
-                    OpCode::NewObject {
-                        dst,
-                        class: class_const,
-                        arg_count,
-                    },
-                    expr.span,
-                );
+                    _ => {
+                        let class_reg = self.lower_expr(b, class, None)?;
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        b.emit(
+                            OpCode::NewObjectDynamic {
+                                dst,
+                                class_reg,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                    }
+                }
                 Ok(dst)
             }
 

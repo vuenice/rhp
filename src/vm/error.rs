@@ -110,6 +110,37 @@ pub enum RuntimeErrorKind {
     #[error("VMError: Invalid register access r{reg}")]
     InvalidRegisterAccess { reg: u16 },
 
+    #[error("Fatal Error: Cannot instantiate static facade class '{class}'. Use static methods directly.")]
+    StaticFacadeInstantiationForbidden { class: String },
+
+    #[error("Fatal Error: Cannot extend static facade class '{class}'. Use '{class}::macro()' to register custom methods dynamically.")]
+    StaticFacadeInheritanceForbidden { class: String },
+
+    #[error(
+        "Fatal Error: Cannot call non-static method '{method}' of singleton class '{singleton_class}' inside non-singleton class '{caller_class}'."
+    )]
+    NonStaticSingletonMethodCallForbidden {
+        singleton_class: String,
+        method: String,
+        caller_class: String,
+    },
+
+    #[error(
+        "Fatal Error: Cannot instantiate singleton class '{singleton_class}' inside non-singleton class '{caller_class}'. Only static methods of singleton classes can be used in non-singleton classes."
+    )]
+    SingletonInstantiationForbidden {
+        singleton_class: String,
+        caller_class: String,
+    },
+
+    #[error(
+        "Fatal Error: Cannot extend singleton class '{parent_name}' from non-singleton class '{class_name}'."
+    )]
+    NonSingletonExtendsSingletonForbidden {
+        class_name: String,
+        parent_name: String,
+    },
+
     #[error("RuntimeError: {message}")]
     Custom { message: String },
 }

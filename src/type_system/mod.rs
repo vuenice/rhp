@@ -82,10 +82,28 @@ pub fn check_program(program: &Program<'_>) -> Result<TypeCheckResult, TypeError
     TypeChecker::new().check_program(program)
 }
 
+/// Type-check an already-parsed AST `Program` using an existing parent `TypeHierarchy`.
+pub fn check_program_with_hierarchy(
+    program: &Program<'_>,
+    hierarchy: TypeHierarchy,
+) -> Result<TypeCheckResult, TypeError> {
+    TypeChecker::with_hierarchy(hierarchy).check_program(program)
+}
+
 /// Parse source code and run the Medium/Gradual Type Checker in one pass.
 pub fn parse_and_check<'s>(source: &'s str) -> Result<TypedProgram<'s>, FrontendError> {
     let program = parse(source)?;
     let type_info = check_program(&program)?;
+    Ok(TypedProgram { program, type_info })
+}
+
+/// Parse source code and run the Medium/Gradual Type Checker seeded with a parent `TypeHierarchy`.
+pub fn parse_and_check_with_hierarchy<'s>(
+    source: &'s str,
+    hierarchy: TypeHierarchy,
+) -> Result<TypedProgram<'s>, FrontendError> {
+    let program = parse(source)?;
+    let type_info = check_program_with_hierarchy(&program, hierarchy)?;
     Ok(TypedProgram { program, type_info })
 }
 

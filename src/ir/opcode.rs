@@ -376,6 +376,13 @@ pub enum OpCode {
         arg_count: u16,
     },
 
+    /// Instantiate a class dynamically (`dst = new $classVar(args...)`).
+    NewObjectDynamic {
+        dst: Reg,
+        class_reg: Reg,
+        arg_count: u16,
+    },
+
     /// Read instance property (`dst = object->prop`).
     GetProp {
         dst: Reg,
@@ -622,6 +629,11 @@ impl fmt::Display for OpCode {
                 class,
                 arg_count,
             } => write!(f, "NEW_OBJECT      {}, {}, args={}", dst, class, arg_count),
+            OpCode::NewObjectDynamic {
+                dst,
+                class_reg,
+                arg_count,
+            } => write!(f, "NEW_OBJECT_DYN  {}, {}, args={}", dst, class_reg, arg_count),
             OpCode::GetProp { dst, object, prop } => {
                 write!(f, "GET_PROP        {}, {}->{}", dst, object, prop)
             }

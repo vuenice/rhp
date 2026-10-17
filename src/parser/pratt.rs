@@ -7,7 +7,10 @@ use crate::ast::{
     types::{CastType, Ident, Variable},
 };
 use crate::lexer::{
-    facade::{is_legacy_php_function, is_reserved_intrinsic, is_static_facade, register_macro},
+    facade::{
+        is_legacy_php_function, is_reserved_intrinsic, is_static_facade, is_static_only,
+        register_macro,
+    },
     span::Span,
     token::Token,
     Lexer, SpannedToken,
@@ -508,28 +511,38 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            // New expression `new User($name)`
+            // New expression `new User($name)` or `new $className($name)`
             Token::New => {
                 let start_span = spanned.span;
-                let class_ident = self.expect_ident()?;
+                let (class_expr, end_target_span) = if matches!(
+                    self.peek().map(|t| &t.token),
+                    Some(Token::Variable(_))
+                ) {
+                    let var = self.expect_variable()?;
+                    let v_span = var.span;
+                    (Expr::new(ExprKind::Variable(var), v_span), v_span)
+                } else {
+                    let class_ident = self.expect_ident()?;
 
-                // Static facade instantiation is strictly forbidden by specification
-                if is_static_facade(class_ident.name) {
-                    return Err(ParseError::new(
-                        ParseErrorKind::StaticFacadeInstantiationForbidden {
-                            class_name: class_ident.name.to_string(),
-                        },
-                        class_ident.span,
-                    ));
-                }
+                    // Static facade instantiation is strictly forbidden by specification
+                    if is_static_facade(class_ident.name) || is_static_only(class_ident.name) {
+                        return Err(ParseError::new(
+                            ParseErrorKind::StaticFacadeInstantiationForbidden {
+                                class_name: class_ident.name.to_string(),
+                            },
+                            class_ident.span,
+                        ));
+                    }
 
-                let class_expr = Expr::new(
-                    ExprKind::Ident(class_ident.clone()),
-                    class_ident.span,
-                );
+                    let id_span = class_ident.span;
+                    (
+                        Expr::new(ExprKind::Ident(class_ident), id_span),
+                        id_span,
+                    )
+                };
 
                 let mut args = Vec::new();
-                let mut end_span = class_ident.span;
+                let mut end_span = end_target_span;
                 if self.matches(&Token::OpenParen) {
                     args = self.parse_call_arguments()?;
                     let close_paren = self.expect(Token::CloseParen)?;
