@@ -139,6 +139,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Memory",
         "Memory ownership, deterministic RAII safety, and zero-GC telemetry facade (usage, peak, stats, isGcFree, scope, assertThreadSafe)",
     ),
+    FacadeInfo::native(
+        "Weak",
+        "Weak reference facade for breaking circular reference graphs (Weak::to, Weak::get, Weak::isValid)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites

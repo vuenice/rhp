@@ -403,6 +403,71 @@ impl<'s> CombinatorStream<'s> {
                 Ok(Expr::new(ExprKind::Array(elements), span))
             }
 
+            // Static closure or arrow function `static fn(...) => ...` / `static function(...) { ... }`
+            Token::Static => {
+                if self.matches(&Token::Fn) {
+                    let params = self.parse_formal_parameters()?;
+                    let return_type = if self.matches(&Token::Colon) {
+                        Some(self.parse_type_hint()?)
+                    } else {
+                        None
+                    };
+                    self.expect(Token::DoubleArrow)?;
+                    let body = self.parse_expr(binding_power::LOWEST)?;
+                    let span = spanned.span.merge(body.span);
+                    Ok(Expr::new(
+                        ExprKind::ArrowFunction {
+                            params,
+                            return_type,
+                            body: Box::new(body),
+                        },
+                        span,
+                    ))
+                } else if self.matches(&Token::Function) {
+                    let params = self.parse_formal_parameters()?;
+                    let mut uses = Vec::new();
+                    if self.matches(&Token::Use) {
+                        self.expect(Token::OpenParen)?;
+                        uses = self.separated_by(
+                            |s| {
+                                let u_start = s.current_span();
+                                let by_ref = s.matches(&Token::Ampersand);
+                                let var = s.expect_variable()?;
+                                let span = u_start.merge(var.span);
+                                Ok(ClosureUse { span, var, by_ref })
+                            },
+                            Token::Comma,
+                            &Token::CloseParen,
+                        )?;
+                        self.expect(Token::CloseParen)?;
+                    }
+
+                    let return_type = if self.matches(&Token::Colon) {
+                        Some(self.parse_type_hint()?)
+                    } else {
+                        None
+                    };
+
+                    let body = self.parse_block_statements()?;
+                    let end_span = self.current_span();
+                    let span = spanned.span.merge(end_span);
+
+                    Ok(Expr::new(
+                        ExprKind::Closure {
+                            is_static: true,
+                            params,
+                            uses,
+                            return_type,
+                            body,
+                        },
+                        span,
+                    ))
+                } else {
+                    let ident = Ident::new("static", spanned.span);
+                    Ok(Expr::new(ExprKind::Ident(ident), spanned.span))
+                }
+            }
+
             // Arrow function `fn($n) => $n * 2`
             Token::Fn => {
                 let params = self.parse_formal_parameters()?;

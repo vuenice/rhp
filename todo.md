@@ -195,6 +195,232 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Implement static facade constructors on `Str` (`Str::fromEncoding`, `Str::toEncoding`, `Str::utf8`, `Str::fromBytes`, `Str::bytes`, `Str::byteLength`, `Str::isUtf8`).
   - Immutable fluent string helper methods with explicit reassignment (`$str = $str->trim()->upper()`) with COW semantics.
 
+- [x] **Compile-Time AST Cycle Prevention & Request-Scoped Arena Allocation (Step 21):**
+  - **Compile-Time Static AST Linting:** Prevent cyclic references before code runs. The AST checker inspects closures and arrow functions; if a closure assigned to an object property captures `$this` (either explicitly via `use ($this)` or implicitly via property access/arrow functions), the compiler rejects it with `CyclicClosureCaptureForbidden`. Static closures (`static fn(...) => ...`, `static function(...) { ... }`) are allowed.
+  - **Explicit Weak References for Circular Links:** Disallow assigning parent or self references directly into child properties without explicit weak reference wrapping (`CyclicReferenceRisk`). Provide native Tier 1 `Weak` facade (`Weak::to($obj)`, `Weak::get($ref)`, `Weak::isValid($ref)`) backed by `std::rc::Weak<RefCell<VmObject>>` with zero strong reference count increment.
+  - **Request-Scoped Arena Allocation (`RequestArena`):** Fast bump pointer allocator tied to worker request lifecycles. Instantaneous $O(1)$ bulk drop/reset when request completes. Pre-allocated chunk buffers are retained across requests, eliminating heap churn and memory fragmentation.
+  - **DropList Resource Hooks:** Non-memory OS handles (database transactions, open file descriptors, network sockets) are registered in the arena's `DropList` and cleanly closed upon request termination before memory pointers are reset.
+  - **Parent vs. Child Process Tiering:** Immutable parent bytecode/AST in `Arc<EngineState>` shared across workers; worker VM executes requests using `RequestArena` with guaranteed 0 tracing GC runs (`gc_runs: 0`, `gc_pause_ms: 0.0`), reporting telemetry via `WorkerResponse::arena_drop()`.
+  - Expose telemetry through `Memory::arenaStats()` and manual rollback through `Memory::resetArena()`.
+
+---
+
+### Phase 9: Regex Engine & PCRE2 Parity (Laravel/Symfony Compatibility)
+
+- [ ] **PCRE2 / `fancy-regex` Engine Integration:**
+  - Rust's standard `regex` crate uses linear-time finite automata and does not support lookaround assertions (`(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`), backreferences (`\1`, `\k<name>`), atomic groups, or recursion.
+  - Laravel and Symfony routing routers, validation rules, Blade directive parsers, and string manipulation libraries rely heavily on Perl-Compatible Regular Expressions (PCRE).
+  - Integrate `pcre2` (via `pcre2-sys` C bindings) or a hybrid engine with `fancy-regex` to ensure full PCRE feature parity.
+  - Support standard PCRE modifiers (`/u` UTF-8, `/i` case-insensitive, `/s` dotall, `/m` multiline, `/x` extended).
+  - Provide an in-memory LRU pattern compilation cache for compiled PCRE regex objects to avoid repeated compilation across requests.
+  - Implement standard PHP regex APIs: `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, and `preg_grep()`.
+
+---
+
+### Phase 10: Built-in High-Performance HTTP Server Engine (`hyper`, TLS, HTTP/2, WebSockets)
+
+- [ ] **Embedded Async HTTP Engine with `hyper` & `tokio`:**
+  - Build a high-performance, embedded Rust HTTP server using `hyper` (v1) and `tokio`, eliminating the mandatory requirement for an external web server (Nginx/Apache + FPM).
+  - Multi-protocol support: Native HTTP/1.1 and HTTP/2 (via `h2`) negotiation with ALPN.
+  - Native TLS termination: Integrate `rustls` (zero OpenSSL C-dependency overhead) or `native-tls` with support for dynamic certificate reloading.
+
+- [ ] **Streaming Responses & Server-Sent Events (SSE):**
+  - Implement async chunked transfer encoding and streaming response bodies (`Stream<Item = Bytes>`), allowing instant data flushing without buffering full payloads in RAM.
+  - First-class Server-Sent Events (SSE) primitives for real-time notifications and streaming endpoints.
+
+- [ ] **WebSockets & Real-Time Protocol Support (Laravel Reverb Compatibility):**
+  - Built-in RFC 6455 WebSocket upgrade pipeline using `tokio-tungstenite` / `fastwebsockets`.
+  - Provide full compatibility with Laravel Reverb and custom WebSocket handlers on the same HTTP port.
+
+- [ ] **Zero-Copy Multipart File Uploads:**
+  - Streaming multipart form-data parser (e.g. `multer-rs`) that spools uploaded files directly to temporary disk storage to prevent Out-Of-Memory (OOM) vulnerabilities.
+  - Configurable upload size thresholds and file limits.
+  - Seamlessly populate request file objects and standard `$_FILES` structures.
+  - Automatic cleanup of temporary upload files at the end of the request lifecycle.
+
+---
+
+### Phase 11: Web Request Lifecycle, State, Superglobals & Output Buffering
+
+- [ ] **Session & Cookie Management Subsystem:**
+  - Built-in session store abstraction with pluggable storage backends (In-memory, File, Redis).
+  - Cryptographically secure session ID generation, cookie binding, lifetime tracking, and garbage collection.
+  - Comprehensive cookie parser/serializer supporting `SameSite` (Lax, Strict, None), `HttpOnly`, `Secure`, and domain/path scoping.
+  - Built-in CSRF token generation and validation middleware.
+
+- [ ] **Superglobals CoW Emulation (`$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`, `$_FILES`, `$_SESSION`, `$_ENV`):**
+  - Map incoming HTTP request headers, query parameters, parsed bodies, cookies, and environment variables into isolated request-scoped superglobals.
+  - Enforce Copy-on-Write (CoW) state isolation: mutations within a request fiber do not bleed into concurrent or subsequent requests.
+
+- [ ] **Nested Output Buffering Subsystem:**
+  - Implement full PHP output buffering semantics: `ob_start()`, `ob_get_clean()`, `ob_get_contents()`, `ob_flush()`, `ob_end_clean()`, and `ob_end_flush()`.
+  - Support nested buffer levels, chunk size triggers, and custom output filtering callbacks.
+  - Automatically flush and send active output buffers upon normal request completion.
+
+- [ ] **Clean Control-Flow Unwinding on `exit()` / `die()`:**
+  - Calling `exit()` or `die()` in script-land must NOT terminate the host operating system process or worker thread.
+  - Implement `exit()` / `die()` as a controlled unwinding exception/panic boundary (`ExitUnwind`), safely triggering output buffer flushes, executing shutdown functions and post-response `defer` hooks, and returning the HTTP response cleanly.
+
+---
+
+### Phase 12: Module System, Composer Interoperability & Modern PHP OOP
+
+- [ ] **Composer Ecosystem Interoperability & Autoloading (PSR-4 / PSR-0):**
+  - Native runtime parser for `composer.json` and `composer.lock`.
+  - Built-in high-performance PSR-4 and PSR-0 class loader with an in-memory cached path resolution map, eliminating hot-path filesystem `stat()` calls.
+  - Enable 100% compatibility with Composer packages in `vendor/` without requiring modifications to package code.
+
+- [ ] **Modern PHP OOP Constructs:**
+  - **Namespaces:** Full support for namespaces, aliases (`use Foo\Bar as Baz`), and namespace resolution rules.
+  - **Traits:** Trait composition, conflict resolution (`insteadof`), method aliasing (`as`), and property precedence.
+  - **Enums:** Pure enums and Backed enums (`enum Status: string`), backed value casting, methods on enums, and `UnitEnum` / `BackedEnum` interfaces.
+  - **Attributes:** First-class PHP 8+ attributes (`#[Attribute]`, `#[Route('/api')]`), reflection metadata API, and compile-time attribute extraction.
+  - **Readonly Properties & Classes:** Enforce `readonly` immutability invariants at compile time and runtime initialization.
+  - **Constructor Property Promotion:** Parsing and lowering of `public function __construct(private string $name)`.
+
+- [ ] **Function-Local Static Variables Lifecycle:**
+  - Implement `static $var = initial;` semantics with deterministic scoping.
+  - Isolate static variable persistence across repeated fiber calls vs. request-scoped lifecycle resets.
+
+---
+
+### Phase 13: Framework & CLI Runtime (Artisan, Queue, Horizon, Scheduler, Migrations)
+
+- [ ] **Artisan CLI Runner & Console Subsystem:**
+  - Native CLI entrypoint (`rhp artisan ...`) capable of bootstrapping the framework and running Symfony Console / Laravel Artisan commands without code changes.
+  - Support interactive prompts, ANSI color formatting, arguments, and options parsing.
+
+- [ ] **Long-Running Queue Workers & Laravel Horizon Compatibility:**
+  - Robust execution loop for queue workers (`rhp artisan queue:work`).
+  - Process isolation and worker recycling after processing $N$ jobs or exceeding memory thresholds.
+  - Signal handling (`SIGTERM`, `SIGINT`, `SIGUSR2`, `SIGHUP`) for graceful worker stopping, active job completion, and Horizon supervisor communication.
+  - Job timeout timers with preemptive fiber cancellation.
+
+- [ ] **Artisan Task Scheduler Daemon:**
+  - Built-in cron runner for `schedule:run` and `schedule:work` executing background tasks concurrently without blocking the main scheduler process.
+
+- [ ] **Database Migrations Subsystem:**
+  - Full compatibility with Laravel database migrations, schema builders, Blueprint DSL, foreign keys, and migration rollbacks.
+
+---
+
+### Phase 14: Blade Template Engine & Dynamic Eval Pipeline
+
+- [ ] **Dynamic String Compilation & `eval()` Support:**
+  - Blade templates compile dynamically into PHP code containing embedded echo statements, control flow (`@if`, `@foreach`), and component directives.
+  - Support on-the-fly string compilation and execution (`eval()` / `Engine::eval_string()`) through the bytecode compiler, with cached AST/bytecode reuse.
+
+- [ ] **Blade AOT Pre-Compilation & Bytecode Caching:**
+  - CLI pre-compilation command (`rhp blade:compile`) to parse and lower all `.blade.php` templates into native RHP bytecode or AST chunks at build time.
+  - Store compiled Blade artifacts in the persistent parent process cache (`Arc<EngineState>`), eliminating disk I/O and runtime evaluation overhead entirely in production.
+
+---
+
+### Phase 15: Testing, Tooling & Developer Ergonomics (PHPUnit, Pest, Debugger, Profiler, LSP, PHPStan)
+
+- [ ] **PHPUnit & Pest Testing Framework Support:**
+  - Ensure full compatibility to run PHPUnit and Pest test suites on the RHP engine.
+  - Support test mocking, data providers, test lifecycle hooks, and process isolation runner modes.
+
+- [ ] **Accurate Stack Traces & Source Mapping:**
+  - Generate precise stack traces with line numbers, column offsets, and source code previews for both interpreter and Cranelift JIT-compiled frames.
+  - Source-map translation for AOT pre-compiled templates (e.g. Blade) back to original template line numbers.
+
+- [ ] **Native Debugger Protocol (Xdebug Equivalent / DAP):**
+  - Implement a Debug Adapter Protocol (DAP) or DBGp engine listener directly inside the VM.
+  - Support line breakpoints, conditional breakpoints, step-in/step-over/step-out, call stack inspection, and runtime variable watches in VS Code and PhpStorm.
+
+- [ ] **Integrated Low-Overhead Sampling Profiler:**
+  - Low-overhead sampling profiler tracking CPU execution time and heap memory allocations per function/fiber.
+  - Export profile dumps in standard Speedscope and pprof flamegraph formats for immediate performance diagnosis.
+
+- [ ] **Language Server Protocol (LSP) & Static Analysis Tooling:**
+  - Standalone `rhp-lsp` binary providing language intelligence: auto-completion, hover definitions, go-to-definition, and real-time syntax/type diagnostics.
+  - Compatibility with PHPStan and Larastan: Expose AST and reflection metadata or provide a drop-in static analyzer engine.
+
+---
+
+### Phase 16: Native Observability & OpenTelemetry Integration
+
+- [ ] **OpenTelemetry (OTel) Distributed Tracing & Metrics Engine:**
+  - Traditional PHP APM extensions (Sentry, Datadog, New Relic) rely on C extensions (`ext-sentry`, `ddtrace`, `newrelic.so`) that hook Zend engine internal C pointers; these cannot run on a custom Rust VM.
+  - Integrate native Rust OpenTelemetry SDK (`opentelemetry`, `opentelemetry-otlp`) with zero performance penalty.
+  - Automatic distributed trace context propagation (W3C `traceparent` / `baggage`).
+  - Auto-instrumentation spans for HTTP requests, database queries, cache operations, queue jobs, and outbound HTTP client calls.
+  - Real-time OTLP export over gRPC or HTTP/protobuf to Datadog, Honeycomb, New Relic, Jaeger, and OpenTelemetry Collector.
+
+- [ ] **Native Error Tracking & Exception Reporting (Sentry / Datadog Bridges):**
+  - Native in-memory exception capture pipeline dispatching crash reports and stack traces directly to Sentry and Datadog APIs without legacy C extensions.
+  - High-precision runtime metrics: Request latency percentiles ($p50$, $p95$, $p99$), fiber queue depths, active connections, JIT compile times, and memory allocations.
+
+---
+
+### Phase 17: Process Failure Isolation, Crash Protection & JIT Sandboxing
+
+- [ ] **Process-Level Failure Isolation (Defending Against Panics & Segfaults):**
+  - In a purely multi-threaded model, a single fatal native crash (e.g. a segfault in a Tier 2 C/Rust native plugin, or an unsafe pointer bug in Cranelift JIT codegen) kills the entire process and drops all in-flight requests across all threads.
+  - In contrast, PHP-FPM provides process isolation where a worker crash only affects a single request.
+  - Architect a resilient multi-process supervisor model (`WorkerModel::ProcessCow` / Supervisor-Worker topology):
+    - Long-lived parent supervisor maintains shared immutable application state (`Arc<EngineState>`) and manages a pool of worker processes.
+    - If a worker process segfaults or panics, the supervisor immediately logs the failure, restarts the worker in milliseconds, and returns a clean 500 error to that single client, leaving all other concurrent worker processes completely unharmed.
+
+- [ ] **JIT Memory Safety & RCE Protection:**
+  - JIT compiler bugs can potentially produce invalid memory accesses or Remote Code Execution (RCE) vulnerabilities.
+  - Enforce strict $W \oplus X$ (Write XOR Execute) memory protections on Cranelift code pages (pages are never simultaneously writable and executable).
+  - Implement JIT execution bounds validation, memory limit enforcement on native codegen buffers, and fallback to interpreter upon native trap detection.
+
+---
+
+### Phase 18: Production Operations, Resource Limiting & Zero-Downtime Reload
+
+- [ ] **Per-Request Resource Limiting (Memory & Execution Time):**
+  - Preemptive execution time limits (`max_execution_time`) enforced via fiber cancellation timers that abort runaway loops without thread freezing.
+  - Per-request memory allocation limits (`memory_limit`) tracking fiber allocations and aborting requests before they trigger process-wide Out-Of-Memory (OOM) kills.
+
+- [ ] **Backpressure & Overload Protection:**
+  - Bounded concurrency and queue limits: reject incoming requests with HTTP 503 Service Unavailable or HTTP 429 Too Many Requests when worker capacity is saturated.
+  - Adaptive rate limiting and request shedder to maintain low latency under traffic spikes.
+
+- [ ] **Graceful Shutdown & Zero-Downtime Reloading:**
+  - Handle `SIGTERM` and `SIGINT` signals gracefully: immediately stop accepting new HTTP connections, allow in-flight requests a configurable grace period (e.g. 30 seconds) to complete, and flush all deferred logs and metrics.
+  - Zero-downtime rolling reload: Socket file-descriptor handoff (`SO_REUSEPORT` / Unix domain socket passing), enabling seamless binary updates and config changes without dropping a single active TCP connection.
+
+- [ ] **Development Hot Reload (`rhp run dev`):**
+  - Integrated file watcher (`notify` crate) monitoring codebase directories, performing incremental recompilation and instant worker pool recycling upon file save.
+
+---
+
+### Phase 19: Tier 2 AOT Native Plugins: Compilation, Distribution & ABI
+
+- [ ] **Plugin ABI & Dynamic Library Loading (`cdylib`):**
+  - In a static-only AOT architecture, adding or modifying a plugin requires full recompilation of the entire RHP binary.
+  - Define a stable C-ABI / dynamic plugin interface (`rhp_plugin_api`) allowing Tier 2 plugins to be compiled into dynamic shared libraries (`.so`, `.dylib`, `.dll`) loaded at runtime via `libloading`.
+  - ABI version verification: Prevent crashes by verifying engine and plugin version hashes at load time.
+
+- [ ] **Cross-Compilation & Binary Distribution Tooling:**
+  - Eliminate the requirement for end-users to have a full Rust toolchain installed.
+  - Implement `rhp plugin install <vendor/package>` CLI command to fetch pre-compiled native binaries from a registry for the host platform (Linux x86_64/aarch64, macOS, Windows).
+
+- [ ] **Sandboxed WebAssembly (Wasm) Plugin Alternative:**
+  - Support high-performance WebAssembly (Wasm/WASI via `wasmtime`) as an isolated, portable Tier 2 plugin target, providing near-native execution speed with zero native compilation risk and zero process crash risk.
+
+---
+
+### Phase 20: Future Cancellation Mechanics & In-Flight Cleanup (`Future::any`)
+
+- [ ] **Cancellation Token Architecture:**
+  - When `Future::any([$f1, $f2])` resolves with the earliest winner, the remaining in-flight futures must be cancelled immediately to prevent runaway CPU waste and resource leaks.
+  - Introduce thread-safe `CancellationToken` hierarchies propagated through every `Future` and Fiber task.
+
+- [ ] **Cooperative Cancellation Points:**
+  - Insert low-overhead cancellation checkpoints at loop headers, function call entries, and async fiber yields (`fiber.check_cancelled()`).
+  - If a cancellation token is tripped, the fiber aborts execution and unwinds cleanly.
+
+- [ ] **In-Flight Query & I/O Abort Cleanup:**
+  - When a `Future` is cancelled, immediately trigger abort signals on underlying network connections (e.g. closing HTTP client sockets).
+  - Issue asynchronous SQL query cancellation packets (`pg_cancel_backend` / connection drop) to database servers to abort long-running queries on the database server.
+  - Deterministically execute `finally` blocks and RAII cleanup handlers to avoid leaking file descriptors, memory locks, or connections.
+
 ---
 
 ## 3. Progress Tracking
@@ -211,3 +437,15 @@ This document outlines the engineering roadmap and architectural improvements fo
 | **IR Lowering** | Compact 32-bit packed instruction format | Pending | **P2** |
 | **JIT Engine** | High threshold + OSR entry/exit bailout | Pending | **P2** |
 | **Type System** | SSA-based local type specialization & monomorphic call stubs | Pending | **P2** |
+| **Regex** | PCRE2 / `fancy-regex` with lookaround, backreferences, & `preg_*` parity | Pending | **P0** |
+| **HTTP Server** | Built-in async server with `hyper`, TLS, HTTP/2, SSE, WebSockets, & file uploads | Pending | **P0** |
+| **Web Lifecycle** | Sessions, cookies, CSRF, superglobals CoW, `exit`/`die` unwinding, output buffering | Pending | **P0** |
+| **Modules & Composer** | PSR-4 autoloading, namespaces, traits, enums, attributes, readonly, static vars | Pending | **P0** |
+| **CLI & Ecosystem** | Artisan CLI, Queue workers, Horizon signals, Task Scheduler, Migrations | Pending | **P1** |
+| **Blade Engine** | In-memory dynamic `eval()` / string compilation & Blade AOT pre-compiler | Pending | **P1** |
+| **Testing & Tooling** | PHPUnit/Pest compatibility, source-mapped stack traces, DAP debugger, profiler, LSP | Pending | **P1** |
+| **Observability** | Native OpenTelemetry (OTel) traces/metrics/logs & Sentry/Datadog bridges | Pending | **P1** |
+| **Failure Isolation** | Process supervisor (`ProcessCow`), panic boundaries, JIT memory safety ($W \oplus X$) | Pending | **P0** |
+| **Operations** | Per-request memory/time limits, backpressure, graceful shutdown, zero-downtime reload | Pending | **P1** |
+| **Plugin System** | Tier 2 dynamic plugin ABI (`cdylib`), cross-compilation tooling, Wasm fallback | Pending | **P1** |
+| **Concurrency** | `Future::any` cancellation tokens, cooperative cancel points, & in-flight query aborts | Pending | **P1** |

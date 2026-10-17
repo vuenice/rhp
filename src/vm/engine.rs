@@ -14,6 +14,7 @@ use crate::jit::{JitConfig, JitEngine};
 use crate::lexer::facade::{is_static_facade, is_static_only};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
+use crate::vm::arena::{RequestArena, RequestDropStats};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 use crate::vm::facade::{
     arr_get_dot, arr_has_dot, dispatch_facade_call, extract_array_elements, extract_dict_elements,
@@ -131,6 +132,8 @@ pub struct VM {
     jit_engine: Option<JitEngine>,
     /// Indicates whether this VM is running as the parent process during boot.
     pub is_parent_process: bool,
+    /// Request-scoped bump arena providing instantaneous O(1) bulk deallocation.
+    pub arena: RequestArena,
 }
 
 impl VM {
@@ -159,7 +162,19 @@ impl VM {
             max_call_depth: DEFAULT_MAX_CALL_DEPTH,
             jit_engine,
             is_parent_process: false,
+            arena: RequestArena::new(),
         }
+    }
+
+    /// Complete a request lifecycle: instant O(1) arena drop and register file reset.
+    pub fn finish_request(&mut self) -> RequestDropStats {
+        self.registers.clear();
+        self.frames.clear();
+        self.arg_buffer.clear();
+        self.upvalue_buffer.clear();
+        self.defer_queue.clear();
+        self.output_buffer.clear();
+        self.arena.drop_request()
     }
 
     /// Mark this VM as running in persistent parent process boot mode.
@@ -2568,10 +2583,19 @@ impl VM {
             match method {
                 "scope" => {
                     if let Some(PhpValue::Closure(cb)) = args.first() {
+                        let marker = self.arena.mark();
                         let _scope = crate::vm::memory::MemoryScope::new();
                         let res = self.invoke_closure_sync(cb, Vec::new(), span)?;
+                        self.arena.reset_to_marker(marker);
                         return Ok(res);
                     }
+                }
+                "arenaStats" => {
+                    return Ok(self.arena.stats().to_dict());
+                }
+                "resetArena" => {
+                    let stats = self.arena.drop_request();
+                    return Ok(PhpValue::Int(stats.bytes_reclaimed as i32));
                 }
                 "assertThreadSafe" => {
                     if let Some(val) = args.first() {
@@ -4641,6 +4665,26 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         match (class_name, method) {
+            ("WeakReference", "get") => {
+                if let PhpValue::Object(rc) = receiver {
+                    let obj = rc.borrow();
+                    if let Some(ref weak) = obj.weak_target {
+                        if let Some(target_rc) = weak.upgrade() {
+                            return Ok(PhpValue::Object(target_rc));
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
+            }
+            ("WeakReference", "isValid") => {
+                if let PhpValue::Object(rc) = receiver {
+                    let obj = rc.borrow();
+                    if let Some(ref weak) = obj.weak_target {
+                        return Ok(PhpValue::Bool(weak.upgrade().is_some()));
+                    }
+                }
+                Ok(PhpValue::Bool(false))
+            }
             ("HTTPResponse", "json") => {
                 let mut entries = Vec::new();
                 entries.push(("status".to_string(), PhpValue::string("ok")));

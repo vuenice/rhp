@@ -60,6 +60,20 @@ pub enum TypeErrorKind {
     },
 
     #[error(
+        "Type Error: Closure capture of '$this' into property '{target}' is forbidden due to cyclic reference risk. Use 'Weak::to($this)' or a static closure ('static fn() => ...')."
+    )]
+    CyclicClosureCaptureForbidden {
+        target: String,
+    },
+
+    #[error(
+        "Type Error: Bidirectional object link on '{target}' is forbidden due to cyclic reference risk. Use an explicit weak reference wrapper ('Weak::to(...)') to prevent memory cycles."
+    )]
+    CyclicReferenceRisk {
+        target: String,
+    },
+
+    #[error(
         "Type Error: {method_name} in class '{class_name}' cannot declare a return type ('{found_type}')."
     )]
     ConstructorReturnTypeForbidden {

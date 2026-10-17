@@ -100,6 +100,19 @@ impl MemoryStats {
         map.insert("gc_pause_ms".to_string(), PhpValue::Float(0.0));
         map.insert("tracing_gc_enabled".to_string(), PhpValue::Bool(false));
         map.insert("thread_safe".to_string(), PhpValue::Bool(true));
+        let arena_stats = crate::vm::arena::get_global_arena_stats();
+        map.insert(
+            "arena_allocated_bytes".to_string(),
+            PhpValue::Int(arena_stats.allocated_bytes as i32),
+        );
+        map.insert(
+            "arena_capacity_bytes".to_string(),
+            PhpValue::Int(arena_stats.capacity_bytes as i32),
+        );
+        map.insert(
+            "arena_reset_count".to_string(),
+            PhpValue::Int(arena_stats.reset_count as i32),
+        );
         map.insert(
             "model".to_string(),
             PhpValue::string("rust_ownership_raii"),

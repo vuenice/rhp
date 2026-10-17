@@ -7,6 +7,7 @@ use crate::ast::{
         PropertyDecl, Stmt, StmtKind, TraitDecl,
     },
     types::{CastType, Visibility},
+    visitor::AstVisitor,
     Program,
 };
 use crate::lexer::{
@@ -1511,6 +1512,7 @@ impl TypeChecker {
             }
 
             ExprKind::Assign { op, target, value } => {
+                self.check_cyclic_reference_assignment(target, value, expr.span)?;
                 let rhs_ty = self.infer_expr(value, env, ctx, None)?;
                 self.check_assignment(*op, target, rhs_ty, expr.span, env, ctx)?
             }
@@ -1674,6 +1676,14 @@ impl TypeChecker {
                         return Err(TypeError::new(
                             TypeErrorKind::ClosureReferenceCaptureForbidden {
                                 var_name: u.var.name.to_string(),
+                            },
+                            u.span,
+                        ));
+                    }
+                    if u.var.name == "$this" || u.var.name == "this" {
+                        return Err(TypeError::new(
+                            TypeErrorKind::CyclicClosureCaptureForbidden {
+                                target: "$this".to_string(),
                             },
                             u.span,
                         ));
@@ -2639,10 +2649,131 @@ impl TypeChecker {
             _ => false,
         }
     }
+
+    /// Static AST pass preventing circular references at compile time.
+    ///
+    /// 1. Closure Capture Inspection: Detect closures or arrow functions capturing `$this`
+    ///    that are assigned into `$this->property`, forming direct strong cycles.
+    /// 2. Bidirectional Object Links: Require explicit `Weak::to($parent)` wrappers
+    ///    on parent/owner object links to break circular reference graphs.
+    fn check_cyclic_reference_assignment(
+        &self,
+        target: &Expr<'_>,
+        value: &Expr<'_>,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if let ExprKind::PropertyFetch { object, property, .. } = &target.kind {
+            let is_target_this = matches!(&object.kind, ExprKind::Variable(v) if v.name == "$this" || v.name == "this");
+
+            // 1. Inspect closures assigned to $this->prop
+            if is_target_this {
+                let captures_this = match &value.kind {
+                    ExprKind::Closure { is_static, body, .. } => {
+                        !*is_static && stmts_contain_this(body)
+                    }
+                    ExprKind::ArrowFunction { body, .. } => {
+                        expr_contains_this(body)
+                    }
+                    _ => false,
+                };
+
+                if captures_this {
+                    return Err(TypeError::new(
+                        TypeErrorKind::CyclicClosureCaptureForbidden {
+                            target: format!("$this->{}", property.name),
+                        },
+                        span,
+                    ));
+                }
+            }
+
+            // 2. Bidirectional parent-child relationship check
+            if matches!(property.name, "parent" | "owner" | "container") {
+                let is_weak = is_weak_reference_expression(value);
+                if !is_weak {
+                    let obj_name = match &object.kind {
+                        ExprKind::Variable(v) => v.name,
+                        _ => "child",
+                    };
+                    return Err(TypeError::new(
+                        TypeErrorKind::CyclicReferenceRisk {
+                            target: format!("${}->{}", obj_name.trim_start_matches('$'), property.name),
+                        },
+                        span,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for TypeChecker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+struct ThisFinder {
+    found: bool,
+}
+
+impl<'s> crate::ast::visitor::AstVisitor<'s> for ThisFinder {
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        if self.found {
+            return;
+        }
+        if let ExprKind::Variable(v) = &expr.kind {
+            if v.name == "$this" || v.name == "this" {
+                self.found = true;
+                return;
+            }
+        }
+        crate::ast::visitor::walk_expr(self, expr);
+    }
+}
+
+fn expr_contains_this(expr: &Expr<'_>) -> bool {
+    let mut finder = ThisFinder { found: false };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+fn stmts_contain_this(stmts: &[crate::ast::stmt::Stmt<'_>]) -> bool {
+    let mut finder = ThisFinder { found: false };
+    for stmt in stmts {
+        finder.visit_stmt(stmt);
+        if finder.found {
+            return true;
+        }
+    }
+    finder.found
+}
+
+fn is_weak_reference_expression(expr: &Expr<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::StaticCall { target, method, .. } => {
+            if method.name == "to" {
+                if let ExprKind::Ident(id) = &target.kind {
+                    return id.name == "Weak";
+                }
+            }
+            false
+        }
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::StaticPropertyFetch { class, property } => {
+                class.name == "Weak" && property.name == "to"
+            }
+            ExprKind::StaticCall { target, method, .. } => {
+                if method.name == "to" {
+                    if let ExprKind::Ident(id) = &target.kind {
+                        return id.name == "Weak";
+                    }
+                }
+                false
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }

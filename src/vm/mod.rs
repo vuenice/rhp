@@ -11,6 +11,7 @@
 //!   (`Int::i64()`, `Float::f64()`, etc.), copy-on-write strings, explicit collection subtypes
 //!   (`Arr::list`, `Arr::dict`, `Arr::set`, `Arr::hashMap`), closures, objects, and futures.
 
+pub mod arena;
 pub mod encoding;
 pub mod engine;
 pub mod error;
@@ -31,6 +32,10 @@ use crate::ast::{
 use crate::ir::{compile_to_bytecode, lower_typed_program, CompilationError, IrModule};
 use crate::type_system::{parse_and_check, parse_and_check_with_file_id};
 
+pub use arena::{
+    get_global_arena_stats, reset_global_arena_stats, ArenaMarker, RequestArena, RequestArenaStats,
+    RequestDropStats,
+};
 pub use engine::{CallFrame, DEFAULT_MAX_CALL_DEPTH, VM};
 pub use error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 pub use facade::{

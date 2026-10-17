@@ -32,6 +32,7 @@ use crate::ir::lower_typed_program_with_base;
 use crate::lexer::span::Span;
 use crate::type_system::parse_and_check_with_hierarchy;
 use crate::type_system::types::{RustFloatKind, RustIntKind};
+use crate::vm::arena::RequestDropStats;
 use crate::vm::engine::VM;
 use crate::vm::fiber::{enter_fiber, Fiber, FiberId, FiberStats};
 use crate::vm::parent_process::{EngineState, FrozenValue};
@@ -298,6 +299,8 @@ pub struct WorkerResponse {
     pub worker_id: usize,
     /// Execution telemetry of the local fiber that ran this request.
     pub fiber_stats: Option<FiberStats>,
+    /// Instantaneous O(1) request arena drop telemetry.
+    pub arena_drop: Option<RequestDropStats>,
 }
 
 impl WorkerResponse {
@@ -305,6 +308,12 @@ impl WorkerResponse {
     #[inline]
     pub fn is_success(&self) -> bool {
         self.status == WorkerResponseStatus::Success
+    }
+
+    /// Access request arena drop telemetry.
+    #[inline]
+    pub fn arena_drop(&self) -> Option<&RequestDropStats> {
+        self.arena_drop.as_ref()
     }
 
     /// Alias for `is_success`.
@@ -575,6 +584,7 @@ impl WorkerPool {
                     error: Some(e.to_string()),
                     worker_id: 0,
                     fiber_stats: None,
+                    arena_drop: None,
                 }),
                 None => handle.recv().unwrap_or_else(|e| WorkerResponse {
                     request_id: "error".to_string(),
@@ -585,6 +595,7 @@ impl WorkerPool {
                     error: Some(e.to_string()),
                     worker_id: 0,
                     fiber_stats: None,
+                    arena_drop: None,
                 }),
             },
             Err(err) => WorkerResponse {
@@ -596,6 +607,7 @@ impl WorkerPool {
                 error: Some(err.to_string()),
                 worker_id: 0,
                 fiber_stats: None,
+                arena_drop: None,
             },
         }
     }
@@ -637,6 +649,7 @@ impl WorkerPool {
                         error: Some(e.to_string()),
                         worker_id: 0,
                         fiber_stats: None,
+                        arena_drop: None,
                     }),
                     None => handle.recv().unwrap_or_else(|e| WorkerResponse {
                         request_id: "batch_recv_error".to_string(),
@@ -647,6 +660,7 @@ impl WorkerPool {
                         error: Some(e.to_string()),
                         worker_id: 0,
                         fiber_stats: None,
+                        arena_drop: None,
                     }),
                 },
                 None => WorkerResponse {
@@ -658,6 +672,7 @@ impl WorkerPool {
                     error: Some("Failed to dispatch request to worker pool".to_string()),
                     worker_id: 0,
                     fiber_stats: None,
+                    arena_drop: None,
                 },
             })
             .collect()
@@ -773,6 +788,7 @@ pub fn execute_isolated_request(
                 error: Some(panic_msg),
                 worker_id,
                 fiber_stats: None,
+                arena_drop: None,
             }
         }
     }
@@ -800,6 +816,7 @@ fn execute_isolated_request_inner(
                         error: Some(e.to_string()),
                         worker_id,
                         fiber_stats: None,
+                        arena_drop: None,
                     };
                 }
             };
@@ -818,6 +835,7 @@ fn execute_isolated_request_inner(
                             error: Some(e.to_string()),
                             worker_id,
                             fiber_stats: None,
+                            arena_drop: None,
                         };
                     }
                 };
@@ -847,26 +865,32 @@ fn execute_isolated_request_inner(
                 (res, f.stats)
             };
 
+            let output = vm.output().to_string();
+            // Instantaneous O(1) request arena drop and register file flush
+            let arena_drop = vm.finish_request();
+
             match run_res {
                 Ok(val) => WorkerResponse {
                     request_id: request.id.clone(),
                     status: WorkerResponseStatus::Success,
                     value: FrozenValue::from_php_value(&val),
-                    output: vm.output().to_string(),
+                    output,
                     duration: start.elapsed(),
                     error: None,
                     worker_id,
                     fiber_stats: Some(stats),
+                    arena_drop: Some(arena_drop),
                 },
                 Err(err) => WorkerResponse {
                     request_id: request.id.clone(),
                     status: WorkerResponseStatus::RuntimeError,
                     value: FrozenValue::Null,
-                    output: vm.output().to_string(),
+                    output,
                     duration: start.elapsed(),
                     error: Some(err.to_string()),
                     worker_id,
                     fiber_stats: Some(stats),
+                    arena_drop: Some(arena_drop),
                 },
             }
         }
@@ -888,16 +912,21 @@ fn execute_isolated_request_inner(
                 (res, f.stats)
             };
 
+            let output = vm.output().to_string();
+            // Instantaneous O(1) request arena drop and register file flush
+            let arena_drop = vm.finish_request();
+
             match run_res {
                 Ok(val) => WorkerResponse {
                     request_id: request.id.clone(),
                     status: WorkerResponseStatus::Success,
                     value: FrozenValue::from_php_value(&val),
-                    output: vm.output().to_string(),
+                    output,
                     duration: start.elapsed(),
                     error: None,
                     worker_id,
                     fiber_stats: Some(stats),
+                    arena_drop: Some(arena_drop),
                 },
                 Err(err) => WorkerResponse {
                     request_id: request.id.clone(),
@@ -908,6 +937,7 @@ fn execute_isolated_request_inner(
                     error: Some(err.to_string()),
                     worker_id,
                     fiber_stats: Some(stats),
+                    arena_drop: Some(arena_drop),
                 },
             }
         }
@@ -993,6 +1023,7 @@ pub fn execute_process_cow(
             error: Some("Failed to create IPC pipe for process-level worker".to_string()),
             worker_id,
             fiber_stats: None,
+            arena_drop: None,
         };
     }
 
@@ -1012,6 +1043,7 @@ pub fn execute_process_cow(
             error: Some("Failed to fork worker process".to_string()),
             worker_id,
             fiber_stats: None,
+            arena_drop: None,
         };
     }
 
@@ -1065,6 +1097,7 @@ pub fn execute_process_cow(
                 error: Some("libc::waitpid failed".to_string()),
                 worker_id,
                 fiber_stats: None,
+                arena_drop: None,
             };
         }
 
@@ -1097,6 +1130,7 @@ pub fn execute_process_cow(
                 )),
                 worker_id,
                 fiber_stats: None,
+                arena_drop: None,
             };
         }
 
@@ -1116,6 +1150,7 @@ pub fn execute_process_cow(
                 error: Some("Failed to read header from worker process pipe".to_string()),
                 worker_id,
                 fiber_stats: None,
+                arena_drop: None,
             };
         }
 
@@ -1151,6 +1186,7 @@ pub fn execute_process_cow(
                 error: Some("Incomplete response read from worker process pipe".to_string()),
                 worker_id,
                 fiber_stats: None,
+                arena_drop: None,
             };
         }
 
@@ -1163,6 +1199,7 @@ pub fn execute_process_cow(
             error: Some(format!("Failed to deserialize worker response: {}", e)),
             worker_id,
             fiber_stats: None,
+            arena_drop: None,
         })
     }
 }
@@ -1218,6 +1255,17 @@ pub fn serialize_response(resp: &WorkerResponse) -> Vec<u8> {
             let stats_val = stats.to_php_value();
             let frozen = FrozenValue::from_php_value(&stats_val);
             write_frozen(&mut buf, &frozen);
+        }
+        None => buf.push(0),
+    }
+
+    // 9. Request arena drop telemetry
+    match &resp.arena_drop {
+        Some(stats) => {
+            buf.push(1);
+            buf.extend_from_slice(&(stats.bytes_reclaimed as u64).to_le_bytes());
+            buf.extend_from_slice(&(stats.reset_count as u64).to_le_bytes());
+            buf.extend_from_slice(&(stats.resources_closed as u64).to_le_bytes());
         }
         None => buf.push(0),
     }
@@ -1300,6 +1348,24 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         None
     };
 
+    let arena_drop = if cursor < data.len() {
+        let has_arena = read_u8(data, &mut cursor)?;
+        if has_arena == 1 {
+            let bytes_reclaimed = read_u64(data, &mut cursor)? as usize;
+            let reset_count = read_u64(data, &mut cursor)? as usize;
+            let resources_closed = read_u64(data, &mut cursor)? as usize;
+            Some(RequestDropStats {
+                bytes_reclaimed,
+                reset_count,
+                resources_closed,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Ok(WorkerResponse {
         request_id,
         status,
@@ -1309,6 +1375,7 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         error,
         worker_id,
         fiber_stats,
+        arena_drop,
     })
 }
 

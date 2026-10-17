@@ -341,6 +341,7 @@ fn test_ipc_binary_serialization_round_trip() {
         error: None,
         worker_id: 3,
         fiber_stats: None,
+        arena_drop: None,
     };
 
     let serialized = serialize_response(&sample_resp);

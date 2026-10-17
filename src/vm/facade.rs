@@ -198,6 +198,7 @@ pub fn dispatch_facade_call(
         "phpFun" => dispatch_php_fun(method, args),
         "Fiber" => dispatch_fiber(method, args),
         "Memory" => dispatch_memory(method, args),
+        "Weak" => dispatch_weak(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -1352,8 +1353,60 @@ fn dispatch_memory(method: &str, args: &[PhpValue]) -> FacadeResult {
             let val = args.first().cloned().unwrap_or(PhpValue::Null);
             Ok(val)
         }
+        "arenaStats" => {
+            let stats = crate::vm::arena::get_global_arena_stats();
+            Ok(stats.to_dict())
+        }
+        "resetArena" => {
+            let stats = crate::vm::arena::get_global_arena_stats();
+            crate::vm::arena::reset_global_arena_stats();
+            Ok(PhpValue::Int(stats.allocated_bytes as i32))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Memory".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Weak Facade (Compile-Time & Runtime Reference Cycle Breaking)
+// =========================================================================
+
+fn dispatch_weak(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "to" => {
+            if let Some(target) = args.first() {
+                match target {
+                    PhpValue::Object(rc) => Ok(PhpValue::weak_ref(rc)),
+                    _ => Ok(PhpValue::Null),
+                }
+            } else {
+                Ok(PhpValue::Null)
+            }
+        }
+        "get" => {
+            if let Some(PhpValue::Object(rc)) = args.first() {
+                let obj = rc.borrow();
+                if let Some(ref weak) = obj.weak_target {
+                    if let Some(target_rc) = weak.upgrade() {
+                        return Ok(PhpValue::Object(target_rc));
+                    }
+                }
+            }
+            Ok(PhpValue::Null)
+        }
+        "isValid" => {
+            if let Some(PhpValue::Object(rc)) = args.first() {
+                let obj = rc.borrow();
+                if let Some(ref weak) = obj.weak_target {
+                    return Ok(PhpValue::Bool(weak.upgrade().is_some()));
+                }
+            }
+            Ok(PhpValue::Bool(false))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Weak".to_string(),
             method: method.to_string(),
         }),
     }

@@ -396,6 +396,8 @@ pub struct VmObject {
     pub slots: Vec<PhpValue>,
     pub properties: HashMap<String, PhpValue>,
     pub readonly_props: HashMap<String, bool>,
+    /// Optional weak reference target for breaking circular reference cycles.
+    pub weak_target: Option<std::rc::Weak<RefCell<VmObject>>>,
 }
 
 impl VmObject {
@@ -406,6 +408,19 @@ impl VmObject {
             slots: Vec::new(),
             properties: HashMap::new(),
             readonly_props: HashMap::new(),
+            weak_target: None,
+        }
+    }
+
+    /// Construct a weak reference object wrapper (`Weak::to($parent)`).
+    pub fn weak_reference(target: &Rc<RefCell<VmObject>>) -> Self {
+        Self {
+            class_name: "WeakReference".to_string(),
+            shape: Rc::new(RefCell::new(Shape::new())),
+            slots: Vec::new(),
+            properties: HashMap::new(),
+            readonly_props: HashMap::new(),
+            weak_target: Some(Rc::downgrade(target)),
         }
     }
 
@@ -772,6 +787,11 @@ impl PhpValue {
         crate::vm::memory::record_alloc(bytes);
         crate::vm::memory::record_live_object();
         Self::Object(Rc::new(RefCell::new(obj)))
+    }
+
+    #[inline]
+    pub fn weak_ref(target: &Rc<RefCell<VmObject>>) -> Self {
+        Self::Object(Rc::new(RefCell::new(VmObject::weak_reference(target))))
     }
 
     #[inline]

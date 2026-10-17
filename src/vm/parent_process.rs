@@ -272,7 +272,8 @@ impl EngineState {
     /// The request code is parsed and type-checked against the pre-existing parent [`TypeHierarchy`],
     /// and lowered into a request entry chunk linked with the parent's pre-compiled [`IrModule`].
     pub fn execute_request(&self, request_source: &str) -> Result<PhpValue, ExecutionError> {
-        let (_, result) = self.execute_request_with_vm(request_source)?;
+        let (mut vm, result) = self.execute_request_with_vm(request_source)?;
+        let _ = vm.finish_request();
         Ok(result)
     }
 
@@ -312,7 +313,9 @@ impl EngineState {
         args: Vec<PhpValue>,
     ) -> Result<PhpValue, RuntimeError> {
         let mut vm = self.create_worker_vm();
-        vm.invoke_function_by_name(func_name, args, Span::default())
+        let res = vm.invoke_function_by_name(func_name, args, Span::default());
+        let _ = vm.finish_request();
+        res
     }
 
     /// Rehydrate static properties map into active [`PhpValue`]s.

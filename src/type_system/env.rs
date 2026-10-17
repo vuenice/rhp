@@ -558,6 +558,12 @@ pub fn resolve_facade_static_call(
             )))),
             _ => Ok(RhpType::Mixed),
         },
+        "Weak" => match method {
+            "to" => Ok(RhpType::Class("WeakReference".to_string())),
+            "get" => Ok(RhpType::Nullable(Box::new(RhpType::Mixed))),
+            "isValid" => Ok(RhpType::Bool),
+            _ => Ok(RhpType::Mixed),
+        },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 resolve_facade_static_call(
@@ -744,6 +750,11 @@ pub fn resolve_builtin_fluent_method(
                 )))),
                 "find" | "first" => Some(RhpType::Dynamic),
                 "count" => Some(RhpType::Int),
+                _ => Some(RhpType::Dynamic),
+            },
+            "WeakReference" => match method {
+                "get" => Some(RhpType::Nullable(Box::new(RhpType::Mixed))),
+                "isValid" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),
             },
             _ => None,

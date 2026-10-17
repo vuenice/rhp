@@ -521,3 +521,32 @@ pub fn eval_expr(node: &ASTNode, env: &mut Environment) -> Result<Value, Runtime
 | `Memory::assertThreadSafe($val)` | `bool` | Asserts that `$val` satisfies cross-thread boundary safety without data races |
 | `Memory::resetPeak()` | `void` | Resets peak memory tracking to current usage |
 | `Memory::leakCheck()` | `dict` | Asserts zero memory leaks in the current scope |
+| `Memory::arenaStats()` | `dict` | Telemetry on request arena allocation, capacity, reset count, and zero-GC invariant |
+| `Memory::resetArena()` | `dict` | Explicitly drops and resets the request arena, running any pending DropList resource hooks |
+
+---
+
+### Deep Dive: Compile-Time Cycle Prevention & Request-Scoped Arena Allocation
+
+#### 1. Compile-Time AST Linting Against Cyclic References
+- **Closure Capture Inspection (`CyclicClosureCaptureForbidden`):** During AST type checking and static analysis, the compiler inspects closures and arrow functions. If a closure assigned to an object property captures `$this` (either explicitly via `use ($this)` or implicitly via `$this->...` property access in arrow functions), the compiler flags a static error (`CyclicClosureCaptureForbidden`).
+- **Static Closures Allowed:** Closures declared with `static fn(...) => ...` or `static function(...) { ... }` cannot capture `$this` and are safely permitted as property callbacks.
+- **Explicit Weak References for Circular Links (`CyclicReferenceRisk`):** Bidirectional relationships (e.g. parent-child tree nodes, listener lists) cannot directly store strong owning references back to their parent. Direct assignments like `$child->parent = $this;` trigger `CyclicReferenceRisk` at compile time.
+- **Tier 1 Native `Weak` Facade:** To form valid bidirectional links, developers wrap the target using `Weak::to($obj)`.
+  - `Weak::to($obj)`: Wraps an object in an ephemeral `WeakReference` backed by Rust's `std::rc::Weak<RefCell<VmObject>>`, incrementing the weak reference count without incrementing the strong reference count.
+  - `Weak::get($ref)`: Rehydrates the target object if still allocated, or returns `null` if dropped.
+  - `Weak::isValid($ref)`: Fast boolean check returning whether the referenced object is still alive.
+
+#### 2. Request-Scoped Arena Allocation (`RequestArena`)
+- **Fast Bump Allocation:** Temporary per-request allocations (byte buffers, slices, intermediate strings) are allocated sequentially from continuous pre-allocated memory chunks via bump pointers with 8-byte alignment.
+- **Instantaneous $O(1)$ Bulk Drop:** When a request completes in a child worker, the entire arena buffer is reset in $O(1)$ time (`finish_request()`), resetting the bump pointer to 0 without individual object traversal.
+- **Chunk Retention & Zero Fragmentation:** Chunks allocated during high-water requests are retained across requests, avoiding expensive OS heap re-allocations (`mmap`/`malloc`) and heap fragmentation.
+- **Deterministic Non-Memory Resource Cleanup (`DropList`):** Non-memory OS resources (database transactions, open file descriptors, network sockets) are registered in the arena's `DropList` and cleanly closed upon request termination before memory pointers are reset.
+
+#### 3. Parent vs. Child Worker Process Tiering
+- **Immutable Parent Framework State:** The parent process boots, parses, and compiles framework code once into immutable `Arc<EngineState>` (bytecode IR, type hierarchy, class definitions, and constants).
+- **Zero-GC Worker Execution:** Child worker VMs inherit the pre-compiled parent state and execute requests using a fresh `RequestArena`. Cleanup at request completion is instantaneous and zero-overhead:
+  - `gc_runs`: strictly 0
+  - `gc_pause_ms`: strictly 0.0
+  - `zero_gc_drop`: strictly true
+  - Telemetry is automatically captured in `WorkerResponse::arena_drop()`.
