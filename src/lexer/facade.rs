@@ -131,6 +131,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "phpFun",
         "Backward-compatibility static facade bridging legacy PHP functions (e.g., phpFun::array_merge() -> Arr::merge())",
     ),
+    FacadeInfo::native(
+        "Fiber",
+        "Local cooperative execution fiber facade (current, isFiber, yield, stats, context, all)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites

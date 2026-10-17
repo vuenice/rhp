@@ -160,6 +160,54 @@ impl FrozenValue {
     }
 }
 
+impl Default for FrozenValue {
+    fn default() -> Self {
+        FrozenValue::Null
+    }
+}
+
+impl From<PhpValue> for FrozenValue {
+    fn from(val: PhpValue) -> Self {
+        FrozenValue::from_php_value(&val)
+    }
+}
+
+impl From<&PhpValue> for FrozenValue {
+    fn from(val: &PhpValue) -> Self {
+        FrozenValue::from_php_value(val)
+    }
+}
+
+impl From<i32> for FrozenValue {
+    fn from(n: i32) -> Self {
+        FrozenValue::Int(n)
+    }
+}
+
+impl From<bool> for FrozenValue {
+    fn from(b: bool) -> Self {
+        FrozenValue::Bool(b)
+    }
+}
+
+impl From<f32> for FrozenValue {
+    fn from(f: f32) -> Self {
+        FrozenValue::Float(f)
+    }
+}
+
+impl From<String> for FrozenValue {
+    fn from(s: String) -> Self {
+        FrozenValue::String(s)
+    }
+}
+
+impl From<&str> for FrozenValue {
+    fn from(s: &str) -> Self {
+        FrozenValue::String(s.to_string())
+    }
+}
+
 /// Immutable pre-bootstrapped memory state of the persistent parent process.
 ///
 /// Shared across concurrent worker threads or fibers (`Arc<EngineState>`), eliminating
@@ -281,6 +329,48 @@ impl EngineState {
             .map(|(k, v)| (k.clone(), v.to_php_value()))
             .collect()
     }
+
+    /// Spawn a concurrent multi-threaded worker pool pre-seeded with this immutable parent memory state.
+    pub fn spawn_worker_pool(
+        self: &Arc<Self>,
+        config: crate::vm::worker::WorkerPoolConfig,
+    ) -> Result<crate::vm::worker::WorkerPool, crate::vm::worker::WorkerError> {
+        crate::vm::worker::WorkerPool::new(Arc::clone(self), config)
+    }
+
+    /// Spawn a multi-threaded worker pool with `num_workers` threads.
+    pub fn spawn_worker_threads(
+        self: &Arc<Self>,
+        num_workers: usize,
+    ) -> Result<crate::vm::worker::WorkerPool, crate::vm::worker::WorkerError> {
+        let config = crate::vm::worker::WorkerPoolConfig::new(num_workers)
+            .with_model(crate::vm::worker::WorkerModel::MultiThreaded);
+        self.spawn_worker_pool(config)
+    }
+
+    /// Spawn a process-level copy-on-write worker pool with `num_workers` workers.
+    pub fn spawn_cow_workers(
+        self: &Arc<Self>,
+        num_workers: usize,
+    ) -> Result<crate::vm::worker::WorkerPool, crate::vm::worker::WorkerError> {
+        let config = crate::vm::worker::WorkerPoolConfig::new(num_workers)
+            .with_model(crate::vm::worker::WorkerModel::ProcessCow);
+        self.spawn_worker_pool(config)
+    }
+
+    /// Execute a set of requests concurrently across workers against the shared parent state.
+    pub fn execute_concurrent(
+        self: &Arc<Self>,
+        requests: Vec<&str>,
+    ) -> Result<Vec<crate::vm::worker::WorkerResponse>, crate::vm::worker::WorkerError> {
+        let pool = self.spawn_worker_threads(requests.len().max(1))?;
+        let worker_requests = requests
+            .into_iter()
+            .enumerate()
+            .map(|(i, src)| crate::vm::worker::WorkerRequest::new(src).with_id(format!("req_{}", i)))
+            .collect();
+        Ok(pool.execute_batch(worker_requests))
+    }
 }
 
 /// Long-lived Parent Process orchestrator managing framework boot and immutable [`EngineState`].
@@ -298,6 +388,15 @@ impl ParentProcess {
     /// Current cached [`EngineState`] if booted.
     pub fn state(&self) -> Option<&Arc<EngineState>> {
         self.state.as_ref()
+    }
+
+    /// Spawn a worker pool from the current booted parent process state.
+    pub fn spawn_worker_pool(
+        &self,
+        config: crate::vm::worker::WorkerPoolConfig,
+    ) -> Result<crate::vm::worker::WorkerPool, crate::vm::worker::WorkerError> {
+        let state = self.state.as_ref().ok_or(crate::vm::worker::WorkerError::PoolShutdown)?;
+        state.spawn_worker_pool(config)
     }
 
     /// Boot, parse, and compile application code inside the long-lived parent process

@@ -14,8 +14,10 @@
 pub mod engine;
 pub mod error;
 pub mod facade;
+pub mod fiber;
 pub mod parent_process;
 pub mod value;
+pub mod worker;
 
 use std::collections::HashMap;
 
@@ -37,9 +39,21 @@ pub use facade::{
     register_tier2_plugin, register_tier2_plugin_handler, FacadeResult, LogRecord, PluginFacade,
     Tier2PluginHandler,
 };
+pub use fiber::{
+    current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, enter_fiber,
+    get_fiber_local, is_current_fiber, record_fiber_io_finish, record_fiber_io_start,
+    record_fiber_yield, set_fiber_local, with_current_fiber, Fiber, FiberContext, FiberId,
+    FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, IoKind, IoWaitInfo,
+    SchedulerStats,
+};
 pub use indexmap::IndexMap;
-pub use parent_process::{EngineState, ParentProcess};
+pub use parent_process::{EngineState, FrozenValue, ParentProcess};
 pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
+pub use worker::{
+    deserialize_response, execute_isolated_request, serialize_response, WorkerError, WorkerHandle,
+    WorkerModel, WorkerPayload, WorkerPool, WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats,
+    WorkerRequest, WorkerResponse, WorkerResponseStatus,
+};
 
 /// Type alias matching the architecture specification sketch (`Result<Value, RuntimeError>`).
 pub type Value = PhpValue;
@@ -305,4 +319,33 @@ pub fn run_expr(expr: &Expr<'_>) -> Result<PhpValue, ExecutionError> {
     let chunk = compile_to_bytecode(expr).map_err(CompilationError::from)?;
     let val = VM::new(chunk, false).run()?;
     Ok(val)
+}
+
+/// Compile and execute an RHP source program inside a local execution fiber, returning
+/// both the final return value and the collected fiber execution telemetry and statistics.
+pub fn run_source_in_fiber(
+    source: &str,
+    fiber_name: &str,
+) -> Result<(PhpValue, FiberStats), ExecutionError> {
+    let typed = parse_and_check(source).map_err(CompilationError::from)?;
+    let hierarchy = typed.type_info.hierarchy.clone();
+    let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
+    let mut vm = VM::new(module, false).with_type_hierarchy(hierarchy);
+    let (result, stats) = vm.run_in_fiber(fiber_name)?;
+    Ok((result, stats))
+}
+
+/// Compile and execute an RHP source program inside a local execution fiber with pre-populated
+/// fiber-local context storage.
+pub fn run_source_in_fiber_with_context(
+    source: &str,
+    fiber_name: &str,
+    context: IndexMap<String, PhpValue>,
+) -> Result<(PhpValue, FiberStats), ExecutionError> {
+    let typed = parse_and_check(source).map_err(CompilationError::from)?;
+    let hierarchy = typed.type_info.hierarchy.clone();
+    let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
+    let mut vm = VM::new(module, false).with_type_hierarchy(hierarchy);
+    let (result, stats) = vm.run_in_fiber_with_context(fiber_name, context)?;
+    Ok((result, stats))
 }

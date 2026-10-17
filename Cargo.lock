@@ -420,6 +420,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "indexmap",
+ "libc",
  "logos",
  "thiserror",
 ]

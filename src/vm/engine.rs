@@ -267,6 +267,22 @@ impl VM {
         self.globals = globals;
     }
 
+    /// Mutable reference to top-level globals map.
+    pub fn globals_mut(&mut self) -> &mut HashMap<String, PhpValue> {
+        &mut self.globals
+    }
+
+    /// Mutable reference to static class properties map.
+    pub fn static_properties_mut(&mut self) -> &mut HashMap<(String, String), PhpValue> {
+        &mut self.static_properties
+    }
+
+    /// Set or update a single global variable.
+    pub fn set_global(&mut self, name: impl Into<String>, value: PhpValue) {
+        let key = name.into();
+        self.globals.insert(key, value);
+    }
+
     /// Check whether a loop backedge has exceeded hotness thresholds and conditionally
     /// compile and execute the loop body natively via Cranelift.
     fn check_and_run_hot_loop(
@@ -334,6 +350,50 @@ impl VM {
         }
 
         Ok(main_result)
+    }
+
+    /// Run the bytecode program inside an isolated local execution fiber, tracking
+    /// sequential I/O calls (`File::read()`, `DB::table()`, etc.), cooperative yields,
+    /// and elapsed CPU/IO durations.
+    pub fn run_in_fiber(
+        &mut self,
+        fiber_name: impl Into<String>,
+    ) -> Result<(PhpValue, crate::vm::fiber::FiberStats), RuntimeError> {
+        let fiber = crate::vm::fiber::Fiber::new(fiber_name);
+        let guard = crate::vm::fiber::enter_fiber(fiber);
+        match self.run() {
+            Ok(val) => {
+                let finished = guard.finish(val.clone());
+                Ok((val, finished.stats))
+            }
+            Err(err) => {
+                let _ = guard.fail(err.to_string());
+                Err(err)
+            }
+        }
+    }
+
+    /// Run the bytecode program inside a local execution fiber pre-populated with fiber-local context.
+    pub fn run_in_fiber_with_context(
+        &mut self,
+        fiber_name: impl Into<String>,
+        context: IndexMap<String, PhpValue>,
+    ) -> Result<(PhpValue, crate::vm::fiber::FiberStats), RuntimeError> {
+        let mut fiber = crate::vm::fiber::Fiber::new(fiber_name);
+        for (k, v) in context {
+            fiber.context.set(k, v);
+        }
+        let guard = crate::vm::fiber::enter_fiber(fiber);
+        match self.run() {
+            Ok(val) => {
+                let finished = guard.finish(val.clone());
+                Ok((val, finished.stats))
+            }
+            Err(err) => {
+                let _ = guard.fail(err.to_string());
+                Err(err)
+            }
+        }
     }
 
     // =========================================================================
@@ -2097,6 +2157,10 @@ impl VM {
                     )))));
                 }
                 "delayed" => {
+                    let ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
+                    crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::Timer { milliseconds: ms });
+                    crate::vm::fiber::record_fiber_yield();
+                    crate::vm::fiber::record_fiber_io_finish();
                     let resolved = match args.get(1) {
                         Some(PhpValue::Closure(c)) => self.invoke_closure_sync(c, Vec::new(), span)?,
                         Some(other) => other.clone(),
@@ -3998,22 +4062,41 @@ impl VM {
             ("DBQuery", "find") => {
                 let id = args.first().cloned().unwrap_or(PhpValue::Int(1));
                 let mut record = VmObject::new("ModelRecord");
-                record.set_property("id", id);
-                if let PhpValue::Object(o) = receiver {
+                record.set_property("id", id.clone());
+                let tbl = if let PhpValue::Object(o) = receiver {
                     if let Some(t) = o.borrow().get_property("table") {
                         record.set_property("table", t.clone());
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
                     }
-                }
+                } else {
+                    "unknown".to_string()
+                };
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbFind {
+                    table: tbl,
+                    id: id.to_php_string(),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
                 Ok(PhpValue::object(record))
             }
             ("DBQuery", "first") => {
                 let mut record = VmObject::new("ModelRecord");
                 record.set_property("id", PhpValue::Int(1));
-                if let PhpValue::Object(o) = receiver {
+                let tbl = if let PhpValue::Object(o) = receiver {
                     if let Some(t) = o.borrow().get_property("table") {
                         record.set_property("table", t.clone());
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
                     }
-                }
+                } else {
+                    "unknown".to_string()
+                };
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: format!("SELECT * FROM {} LIMIT 1", tbl),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
                 Ok(PhpValue::object(record))
             }
             ("DBQuery", "where" | "orderBy" | "limit" | "offset" | "select") => {
@@ -4022,16 +4105,43 @@ impl VM {
             ("DBQuery", "get" | "all") => {
                 let mut record = VmObject::new("ModelRecord");
                 record.set_property("id", PhpValue::Int(1));
-                if let PhpValue::Object(o) = receiver {
+                let tbl = if let PhpValue::Object(o) = receiver {
                     if let Some(t) = o.borrow().get_property("table") {
                         record.set_property("table", t.clone());
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
                     }
-                }
+                } else {
+                    "unknown".to_string()
+                };
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: format!("SELECT * FROM {}", tbl),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
                 Ok(PhpValue::list(vec![PhpValue::object(record)]))
             }
-            ("DBQuery", "count") => Ok(PhpValue::Int(1)),
-            ("DBQuery", "insert") => Ok(PhpValue::Int(1)),
-            ("DBQuery", "update" | "delete") => Ok(PhpValue::Int(1)),
+            ("DBQuery", "count") => {
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: "SELECT COUNT(*) FROM table".to_string(),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
+                Ok(PhpValue::Int(1))
+            }
+            ("DBQuery", "insert") => {
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: "INSERT INTO table".to_string(),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
+                Ok(PhpValue::Int(1))
+            }
+            ("DBQuery", "update" | "delete") => {
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: format!("{} FROM table", method.to_uppercase()),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
+                Ok(PhpValue::Int(1))
+            }
             ("LoggerChannel", "info" | "error" | "debug" | "warning" | "warn" | "notice"
             | "alert" | "critical" | "emergency") => {
                 let ch = if let PhpValue::Object(o) = receiver {

@@ -149,8 +149,19 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Enforce invocation invariants: one can use both static and non-static methods of a singleton class within other singleton classes, but can only use static methods of a singleton class inside non-singleton classes.
   - Workers execute requests concurrently against shared immutable `Arc<EngineState>` without per-request bootstrap overhead.
 
-- [ ] **Cooperative Tokio Fiber Concurrency:**
-  - Ensure synchronous-by-default standard library facades (`File::read`, `DB::table`, `HTTP::get`) yield execution fibers cooperatively without blocking underlying OS worker threads.
+- [x] **Worker Process Isolation & Concurrency (Step 14):**
+  - Spawn multi-threaded worker tasks (`WorkerModel::MultiThreaded`) or process-level copy-on-write workers (`WorkerModel::ProcessCow` via Unix `fork()` and anonymous pipe IPC).
+  - Guarantee Copy-on-Write (CoW) state isolation: mutations to static properties, globals, or superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`) inside a request VM do not leak to the parent or concurrent/subsequent requests.
+  - Implement fault isolation and panic boundaries: unhandled runtime errors, division by zero, and panics are safely caught and return isolated error responses without crashing the worker pool or parent server.
+  - Support high-throughput pre-compiled function calls (`WorkerPayload::Call`) with zero parsing overhead.
+  - Worker pool builder, batch execution, throughput metrics (`WorkerPoolStats`), and graceful shutdown.
+
+- [x] **Synchronous-by-Default Execution Model & Cooperative Fiber Concurrency (Step 16):**
+  - Standard helpers and I/O calls (`File::read()`, `DB::table()`, `HTTP::get()`) run sequentially and blocking by default for linear developer ergonomics.
+  - Local execution fibers (`Fiber`) track execution lifecycle (`Created`, `Running`, `Yielded`, `WaitingIo`, `Completed`, `Failed`) with high-resolution CPU and I/O duration metrics.
+  - Native `Fiber` Tier 1 facade provides `Fiber::current()`, `Fiber::isFiber()`, `Fiber::yield()`, `Fiber::stats()`, `Fiber::context()`, and `Fiber::all()`.
+  - Cooperative `FiberScheduler` coordinates multi-task fiber scheduling and non-blocking timer/IO yields without blocking underlying OS worker threads.
+  - Worker pool requests automatically execute within isolated request fibers, populating `WorkerResponse::fiber_stats()`.
 
 - [ ] **Lock-Free Asynchronous Logging:**
   - Offload `Log::info()` payloads over a lock-free `mpsc` ring buffer to a dedicated background logging worker.

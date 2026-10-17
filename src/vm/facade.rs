@@ -9,6 +9,10 @@ use crate::lexer::facade::{get_macro, register_tier2_facade, FacadeRegistry};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
+use crate::vm::fiber::{
+    current_fiber_stats, get_fiber_local, is_current_fiber, record_fiber_io_finish,
+    record_fiber_io_start, record_fiber_yield, set_fiber_local, with_current_fiber, IoKind,
+};
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Handler closure for Tier 2 custom Rust plugins.
@@ -192,6 +196,7 @@ pub fn dispatch_facade_call(
         "URL" => dispatch_url(method, args),
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
+        "Fiber" => dispatch_fiber(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -852,30 +857,45 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "read" => {
             let path = get_arg_str(args, 0, "File::read")?;
-            match std::fs::read_to_string(&path) {
+            record_fiber_io_start(IoKind::FileRead { path: path.clone() });
+            let res = match std::fs::read_to_string(&path) {
                 Ok(content) => Ok(PhpValue::string(content)),
                 Err(err) => Err(RuntimeErrorKind::Custom {
                     message: format!("File::read failed: {}", err),
                 }),
-            }
+            };
+            record_fiber_io_finish();
+            res
         }
         "write" => {
             let path = get_arg_str(args, 0, "File::write")?;
             let content = get_arg_str(args, 1, "File::write")?;
-            match std::fs::write(&path, content) {
+            record_fiber_io_start(IoKind::FileWrite {
+                path: path.clone(),
+                bytes: content.len(),
+            });
+            let res = match std::fs::write(&path, content) {
                 Ok(_) => Ok(PhpValue::Bool(true)),
                 Err(err) => Err(RuntimeErrorKind::Custom {
                     message: format!("File::write failed: {}", err),
                 }),
-            }
+            };
+            record_fiber_io_finish();
+            res
         }
         "exists" => {
             let path = get_arg_str(args, 0, "File::exists")?;
-            Ok(PhpValue::Bool(std::path::Path::new(&path).exists()))
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let exists = std::path::Path::new(&path).exists();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(exists))
         }
         "delete" => {
             let path = get_arg_str(args, 0, "File::delete")?;
-            Ok(PhpValue::Bool(std::fs::remove_file(&path).is_ok()))
+            record_fiber_io_start(IoKind::FileDelete { path: path.clone() });
+            let ok = std::fs::remove_file(&path).is_ok();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "File".to_string(),
@@ -888,10 +908,17 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "get" | "post" => {
             let url = get_arg_str(args, 0, "HTTP::request")?;
+            let kind = if method == "post" {
+                IoKind::HttpPost { url: url.clone() }
+            } else {
+                IoKind::HttpGet { url: url.clone() }
+            };
+            record_fiber_io_start(kind);
             let mut obj = VmObject::new("HTTPResponse");
             obj.set_property("url", PhpValue::string(url));
             obj.set_property("status", PhpValue::Int(200));
             obj.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
+            record_fiber_io_finish();
             Ok(PhpValue::object(obj))
         }
         "withHeaders" => {
@@ -967,30 +994,124 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "table" => {
             let tbl = get_arg_str(args, 0, "DB::table")?;
+            record_fiber_io_start(IoKind::DbTable { table: tbl.clone() });
             let mut obj = VmObject::new("DBQuery");
             obj.set_property("table", PhpValue::string(tbl));
+            record_fiber_io_finish();
             Ok(PhpValue::object(obj))
         }
         "raw" => {
             let sql = get_arg_str(args, 0, "DB::raw")?;
+            record_fiber_io_start(IoKind::DbQuery { sql: sql.clone() });
             let mut obj = VmObject::new("DBRaw");
             obj.set_property("sql", PhpValue::string(sql));
+            record_fiber_io_finish();
             Ok(PhpValue::object(obj))
         }
-        "select" => Ok(PhpValue::list(Vec::new())),
-        "insert" => Ok(PhpValue::Int(1)),
-        "update" => Ok(PhpValue::Int(1)),
-        "delete" => Ok(PhpValue::Int(1)),
+        "select" => {
+            record_fiber_io_start(IoKind::DbQuery { sql: "DB::select".to_string() });
+            record_fiber_io_finish();
+            Ok(PhpValue::list(Vec::new()))
+        }
+        "insert" => {
+            record_fiber_io_start(IoKind::DbQuery { sql: "DB::insert".to_string() });
+            record_fiber_io_finish();
+            Ok(PhpValue::Int(1))
+        }
+        "update" => {
+            record_fiber_io_start(IoKind::DbQuery { sql: "DB::update".to_string() });
+            record_fiber_io_finish();
+            Ok(PhpValue::Int(1))
+        }
+        "delete" => {
+            record_fiber_io_start(IoKind::DbQuery { sql: "DB::delete".to_string() });
+            record_fiber_io_finish();
+            Ok(PhpValue::Int(1))
+        }
         "find" => {
             let tbl = get_arg_str(args, 0, "DB::find")?;
             let id = args.get(1).cloned().unwrap_or(PhpValue::Int(1));
+            record_fiber_io_start(IoKind::DbFind {
+                table: tbl.clone(),
+                id: id.to_php_string(),
+            });
             let mut record = VmObject::new("ModelRecord");
             record.set_property("id", id);
             record.set_property("table", PhpValue::string(tbl));
+            record_fiber_io_finish();
             Ok(PhpValue::object(record))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "DB".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn dispatch_fiber(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "current" => {
+            let mut dict = IndexMap::new();
+            if is_current_fiber() {
+                with_current_fiber(|fiber| {
+                    dict.insert("id".to_string(), PhpValue::Int(fiber.id.0 as i32));
+                    dict.insert("name".to_string(), PhpValue::string(fiber.name.clone()));
+                    dict.insert("state".to_string(), PhpValue::string(fiber.state.status_name()));
+                    dict.insert("is_fiber".to_string(), PhpValue::Bool(true));
+                    dict.insert("yield_count".to_string(), PhpValue::Int(fiber.stats.yield_count as i32));
+                    dict.insert("io_count".to_string(), PhpValue::Int(fiber.stats.io_count as i32));
+                });
+            } else {
+                dict.insert("is_fiber".to_string(), PhpValue::Bool(false));
+            }
+            Ok(PhpValue::dict_from_map(dict))
+        }
+        "isFiber" => Ok(PhpValue::Bool(is_current_fiber())),
+        "yield" => {
+            record_fiber_yield();
+            Ok(PhpValue::Bool(true))
+        }
+        "stats" => {
+            if let Some(stats) = current_fiber_stats() {
+                Ok(stats.to_php_value())
+            } else {
+                Ok(PhpValue::dict_from_map(IndexMap::new()))
+            }
+        }
+        "context" => {
+            if args.is_empty() {
+                let mut dict = IndexMap::new();
+                with_current_fiber(|fiber| {
+                    for (k, v) in &fiber.context.locals {
+                        dict.insert(k.clone(), v.clone());
+                    }
+                });
+                Ok(PhpValue::dict_from_map(dict))
+            } else if args.len() == 1 {
+                let key = args[0].to_php_string();
+                Ok(get_fiber_local(&key).unwrap_or(PhpValue::Null))
+            } else {
+                let key = args[0].to_php_string();
+                let val = args[1].clone();
+                set_fiber_local(key, val.clone());
+                Ok(val)
+            }
+        }
+        "all" => {
+            let mut list = Vec::new();
+            if is_current_fiber() {
+                let mut dict = IndexMap::new();
+                with_current_fiber(|fiber| {
+                    dict.insert("id".to_string(), PhpValue::Int(fiber.id.0 as i32));
+                    dict.insert("name".to_string(), PhpValue::string(fiber.name.clone()));
+                    dict.insert("state".to_string(), PhpValue::string(fiber.state.status_name()));
+                });
+                list.push(PhpValue::dict_from_map(dict));
+            }
+            Ok(PhpValue::list(list))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Fiber".to_string(),
             method: method.to_string(),
         }),
     }

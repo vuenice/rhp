@@ -547,6 +547,17 @@ pub fn resolve_facade_static_call(
             "customHelper" => Ok(RhpType::Dynamic),
             _ => Ok(RhpType::Dynamic),
         },
+        "Fiber" => match method {
+            "current" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            "isFiber" => Ok(RhpType::Bool),
+            "yield" => Ok(RhpType::Bool),
+            "stats" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            "context" => Ok(RhpType::Mixed),
+            "all" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
+                RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+            )))),
+            _ => Ok(RhpType::Mixed),
+        },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 resolve_facade_static_call(
