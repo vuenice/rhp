@@ -102,7 +102,16 @@ impl FrozenValue {
                     properties: props,
                 }
             }
-            PhpValue::Closure(_) | PhpValue::Future(_) | PhpValue::Resource(_) => FrozenValue::Null,
+            PhpValue::Future(fut) => {
+                let mut b = fut.borrow_mut();
+                b.poll_completion();
+                if let Some(ref inner) = b.value {
+                    Self::from_php_value(inner)
+                } else {
+                    FrozenValue::Null
+                }
+            }
+            PhpValue::Closure(_) | PhpValue::Resource(_) => FrozenValue::Null,
         }
     }
 

@@ -20,6 +20,7 @@ use crate::vm::facade::{
     extract_dict_map, flatten_elements, get_runtime_closure_macro, php_value_to_json,
     register_runtime_closure_macro,
 };
+use crate::vm::parent_process::FrozenValue;
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Default maximum call stack depth before throwing `StackOverflowError`.
@@ -2118,6 +2119,79 @@ impl VM {
         self.dispatch_loop(depth_before)
     }
 
+    /// Spawn a background task executing a [`VmClosure`] concurrently on an OS thread pool,
+    /// returning a channel receiver for the task's evaluated result.
+    pub fn spawn_closure_future(
+        &self,
+        closure: &VmClosure,
+    ) -> std::sync::mpsc::Receiver<Result<FrozenValue, String>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let module = self.module.clone();
+        let func_id = closure.func_id;
+        let name = closure.name.clone();
+        let is_static = closure.is_static;
+        let frozen_upvalues: Vec<FrozenValue> = closure
+            .upvalues
+            .iter()
+            .map(FrozenValue::from_php_value)
+            .collect();
+        let static_props: HashMap<(String, String), FrozenValue> = self
+            .static_properties
+            .iter()
+            .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+            .collect();
+        let class_consts: HashMap<(String, String), FrozenValue> = self
+            .class_constants
+            .iter()
+            .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+            .collect();
+        let hierarchy = self.type_hierarchy.clone();
+
+        std::thread::Builder::new()
+            .name(format!("rhp-future-{}", name))
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut child_vm = VM::new(module, false);
+                    for ((cls, prop), val) in static_props {
+                        child_vm.static_properties.insert((cls, prop), val.to_php_value());
+                    }
+                    for ((cls, cst), val) in class_consts {
+                        child_vm.class_constants.insert((cls, cst), val.to_php_value());
+                    }
+                    if let Some(h) = hierarchy {
+                        child_vm = child_vm.with_type_hierarchy(h);
+                    }
+                    let upvalues: Vec<PhpValue> = frozen_upvalues
+                        .into_iter()
+                        .map(|f| f.to_php_value())
+                        .collect();
+                    let vm_closure = VmClosure {
+                        func_id,
+                        name,
+                        upvalues,
+                        is_static,
+                    };
+                    child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
+                }));
+
+                match outcome {
+                    Ok(Ok(val)) => {
+                        let _ = tx.send(Ok(FrozenValue::from_php_value(&val)));
+                    }
+                    Ok(Err(err)) => {
+                        let _ = tx.send(Err(err.to_string()));
+                    }
+                    Err(panic_payload) => {
+                        let msg = crate::vm::worker::extract_panic_message(&panic_payload);
+                        let _ = tx.send(Err(format!("Future background task panicked: {}", msg)));
+                    }
+                }
+            })
+            .expect("Failed to spawn Future background worker thread");
+
+        rx
+    }
+
     // =========================================================================
     // Facade & Fluent Method Execution
     // =========================================================================
@@ -2147,61 +2221,338 @@ impl VM {
         if facade == "Future" {
             match method {
                 "run" => {
-                    let resolved = match args.first() {
-                        Some(PhpValue::Closure(c)) => self.invoke_closure_sync(c, Vec::new(), span)?,
-                        Some(other) => other.clone(),
-                        None => PhpValue::Null,
-                    };
-                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
-                        resolved,
-                    )))));
+                    match args.first() {
+                        Some(PhpValue::Closure(c)) => {
+                            let rx = self.spawn_closure_future(c);
+                            return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
+                        }
+                        Some(PhpValue::Future(f)) => {
+                            return Ok(PhpValue::Future(f.clone()));
+                        }
+                        Some(other) => {
+                            return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                other.clone(),
+                            )))));
+                        }
+                        None => {
+                            return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                PhpValue::Null,
+                            )))));
+                        }
+                    }
                 }
                 "delayed" => {
                     let ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
                     crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::Timer { milliseconds: ms });
                     crate::vm::fiber::record_fiber_yield();
                     crate::vm::fiber::record_fiber_io_finish();
-                    let resolved = match args.get(1) {
-                        Some(PhpValue::Closure(c)) => self.invoke_closure_sync(c, Vec::new(), span)?,
-                        Some(other) => other.clone(),
-                        None => PhpValue::Null,
-                    };
-                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
-                        resolved,
-                    )))));
+
+                    match args.get(1) {
+                        Some(PhpValue::Closure(c)) => {
+                            if ms > 0 {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                let module = self.module.clone();
+                                let func_id = c.func_id;
+                                let name = c.name.clone();
+                                let is_static = c.is_static;
+                                let frozen_upvalues: Vec<FrozenValue> = c
+                                    .upvalues
+                                    .iter()
+                                    .map(FrozenValue::from_php_value)
+                                    .collect();
+                                let static_props: HashMap<(String, String), FrozenValue> = self
+                                    .static_properties
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+                                    .collect();
+                                let class_consts: HashMap<(String, String), FrozenValue> = self
+                                    .class_constants
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+                                    .collect();
+                                let hierarchy = self.type_hierarchy.clone();
+
+                                std::thread::Builder::new()
+                                    .name(format!("rhp-delayed-{}", name))
+                                    .spawn(move || {
+                                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                                        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                            let mut child_vm = VM::new(module, false);
+                                            for ((cls, prop), val) in static_props {
+                                                child_vm.static_properties.insert((cls, prop), val.to_php_value());
+                                            }
+                                            for ((cls, cst), val) in class_consts {
+                                                child_vm.class_constants.insert((cls, cst), val.to_php_value());
+                                            }
+                                            if let Some(h) = hierarchy {
+                                                child_vm = child_vm.with_type_hierarchy(h);
+                                            }
+                                            let upvalues: Vec<PhpValue> = frozen_upvalues
+                                                .into_iter()
+                                                .map(|f| f.to_php_value())
+                                                .collect();
+                                            let vm_closure = VmClosure {
+                                                func_id,
+                                                name,
+                                                upvalues,
+                                                is_static,
+                                            };
+                                            child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
+                                        }));
+
+                                        match outcome {
+                                            Ok(Ok(val)) => {
+                                                let _ = tx.send(Ok(FrozenValue::from_php_value(&val)));
+                                            }
+                                            Ok(Err(err)) => {
+                                                let _ = tx.send(Err(err.to_string()));
+                                            }
+                                            Err(panic_payload) => {
+                                                let msg = crate::vm::worker::extract_panic_message(&panic_payload);
+                                                let _ = tx.send(Err(format!("Future delayed task panicked: {}", msg)));
+                                            }
+                                        }
+                                    })
+                                    .expect("Failed to spawn Future delayed worker thread");
+
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
+                            } else {
+                                let resolved = self.invoke_closure_sync(c, Vec::new(), span)?;
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                    resolved,
+                                )))));
+                            }
+                        }
+                        Some(other) => {
+                            if ms > 0 {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                let frozen = FrozenValue::from_php_value(other);
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                                    let _ = tx.send(Ok(frozen));
+                                });
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
+                            } else {
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                    other.clone(),
+                                )))));
+                            }
+                        }
+                        None => {
+                            if ms > 0 {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                                    let _ = tx.send(Ok(FrozenValue::Null));
+                                });
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
+                            } else {
+                                return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                    PhpValue::Null,
+                                )))));
+                            }
+                        }
+                    }
                 }
-                "wait" => {
-                    let mut out = Vec::new();
+                "wait" | "all" => {
+                    let mut handles: Vec<Rc<RefCell<VmFuture>>> = Vec::new();
                     if let Some(first) = args.first() {
                         for task in Self::extract_items(first) {
                             match task {
                                 PhpValue::Closure(c) => {
-                                    out.push(self.invoke_closure_sync(&c, Vec::new(), span)?);
+                                    let rx = self.spawn_closure_future(&c);
+                                    handles.push(Rc::new(RefCell::new(VmFuture::pending(rx))));
                                 }
                                 PhpValue::Future(f) => {
-                                    out.push(f.borrow().value.clone().unwrap_or(PhpValue::Null));
+                                    handles.push(f.clone());
                                 }
-                                other => out.push(other),
+                                other => {
+                                    handles.push(Rc::new(RefCell::new(VmFuture::resolved(other))));
+                                }
+                            }
+                        }
+                    }
+
+                    let mut out = Vec::with_capacity(handles.len());
+                    for handle in handles {
+                        let mut b = handle.borrow_mut();
+                        match b.wait_result() {
+                            Ok(val) => out.push(val),
+                            Err(err) => {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::Custom { message: err },
+                                    span,
+                                ));
                             }
                         }
                     }
                     return Ok(PhpValue::list(out));
                 }
                 "any" => {
-                    if let Some(first) = args.first() {
-                        if let Some(first_task) = Self::extract_items(first).into_iter().next() {
-                            return match first_task {
-                                PhpValue::Closure(c) => {
-                                    self.invoke_closure_sync(&c, Vec::new(), span)
+                    let items = if let Some(first) = args.first() {
+                        Self::extract_items(first)
+                    } else {
+                        Vec::new()
+                    };
+
+                    if items.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let mut immediate_result: Option<PhpValue> = None;
+
+                    for (idx, task) in items.into_iter().enumerate() {
+                        match task {
+                            PhpValue::Closure(c) => {
+                                let tx_clone = tx.clone();
+                                let module = self.module.clone();
+                                let func_id = c.func_id;
+                                let name = c.name.clone();
+                                let is_static = c.is_static;
+                                let frozen_upvalues: Vec<FrozenValue> = c
+                                    .upvalues
+                                    .iter()
+                                    .map(FrozenValue::from_php_value)
+                                    .collect();
+                                let static_props: HashMap<(String, String), FrozenValue> = self
+                                    .static_properties
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+                                    .collect();
+                                let class_consts: HashMap<(String, String), FrozenValue> = self
+                                    .class_constants
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
+                                    .collect();
+                                let hierarchy = self.type_hierarchy.clone();
+
+                                std::thread::Builder::new()
+                                    .name(format!("rhp-any-race-{}", idx))
+                                    .spawn(move || {
+                                        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                            let mut child_vm = VM::new(module, false);
+                                            for ((cls, prop), val) in static_props {
+                                                child_vm.static_properties.insert((cls, prop), val.to_php_value());
+                                            }
+                                            for ((cls, cst), val) in class_consts {
+                                                child_vm.class_constants.insert((cls, cst), val.to_php_value());
+                                            }
+                                            if let Some(h) = hierarchy {
+                                                child_vm = child_vm.with_type_hierarchy(h);
+                                            }
+                                            let upvalues: Vec<PhpValue> = frozen_upvalues
+                                                .into_iter()
+                                                .map(|f| f.to_php_value())
+                                                .collect();
+                                            let vm_closure = VmClosure {
+                                                func_id,
+                                                name,
+                                                upvalues,
+                                                is_static,
+                                            };
+                                            child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
+                                        }));
+
+                                        let res = match outcome {
+                                            Ok(Ok(val)) => Ok(FrozenValue::from_php_value(&val)),
+                                            Ok(Err(e)) => Err(e.to_string()),
+                                            Err(p) => Err(crate::vm::worker::extract_panic_message(&p)),
+                                        };
+                                        let _ = tx_clone.send((idx, res));
+                                    })
+                                    .expect("Failed to spawn race thread");
+                            }
+                            PhpValue::Future(f) => {
+                                let rx_opt = {
+                                    let mut b = f.borrow_mut();
+                                    b.poll_completion();
+                                    if b.is_completed && b.receiver.is_none() {
+                                        if immediate_result.is_none() {
+                                            if let Some(ref err) = b.error {
+                                                return Err(self.make_error(
+                                                    RuntimeErrorKind::Custom { message: err.clone() },
+                                                    span,
+                                                ));
+                                            }
+                                            immediate_result = Some(b.value.clone().unwrap_or(PhpValue::Null));
+                                        }
+                                        None
+                                    } else {
+                                        b.receiver.clone()
+                                    }
+                                };
+
+                                if let Some(rx_arc) = rx_opt {
+                                    let tx_clone = tx.clone();
+                                    std::thread::Builder::new()
+                                        .name(format!("rhp-any-wait-{}", idx))
+                                        .spawn(move || {
+                                            let res = if let Ok(rx) = rx_arc.lock() {
+                                                match rx.recv() {
+                                                    Ok(frozen_res) => frozen_res,
+                                                    Err(_) => Err("Background future thread disconnected".to_string()),
+                                                }
+                                            } else {
+                                                Err("Future mutex poisoned".to_string())
+                                            };
+                                            let _ = tx_clone.send((idx, res));
+                                        })
+                                        .expect("Failed to spawn race waiter thread");
                                 }
-                                PhpValue::Future(f) => {
-                                    Ok(f.borrow().value.clone().unwrap_or(PhpValue::Null))
+                            }
+                            other => {
+                                if immediate_result.is_none() {
+                                    immediate_result = Some(other);
                                 }
-                                other => Ok(other),
-                            };
+                            }
                         }
                     }
-                    return Ok(PhpValue::Null);
+                    drop(tx);
+
+                    if let Some(res) = immediate_result {
+                        return Ok(res);
+                    }
+
+                    let (_winner_idx, outcome) = match rx.recv() {
+                        Ok(first) => {
+                            let mut best = first;
+                            // Settle window: if another task finishes in the same microsecond quantum,
+                            // tie-break by submission order (lower index wins).
+                            std::thread::yield_now();
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            while let Ok(candidate) = rx.try_recv() {
+                                if candidate.0 < best.0 {
+                                    best = candidate;
+                                }
+                            }
+                            best
+                        }
+                        Err(_) => return Ok(PhpValue::Null),
+                    };
+
+                    return match outcome {
+                        Ok(frozen) => Ok(frozen.to_php_value()),
+                        Err(err) => Err(self.make_error(
+                            RuntimeErrorKind::Custom { message: err },
+                            span,
+                        )),
+                    };
+                }
+                "value" => {
+                    let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                        val,
+                    )))));
+                }
+                "error" => {
+                    let msg = args
+                        .first()
+                        .map(|v| v.to_php_string())
+                        .unwrap_or_else(|| "Future rejected".to_string());
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::rejected(
+                        msg,
+                    )))));
                 }
                 "defer" => {
                     if let Some(PhpValue::Closure(c)) = args.first() {
@@ -3978,22 +4329,30 @@ impl VM {
                 Ok(PhpValue::Float(next_val))
             }
 
-            // 4. Future fluent methods (`->wait()`, `->then()`)
+            // 4. Future fluent methods (`->wait()`, `->then()`, `->catch()`, `->isCompleted()`, etc.)
             PhpValue::Future(fut_rc) => match method {
                 "wait" => {
-                    let b = fut_rc.borrow();
-                    if let Some(ref err) = b.error {
-                        return Err(self.make_error(
-                            RuntimeErrorKind::Custom {
-                                message: err.clone(),
-                            },
+                    let mut b = fut_rc.borrow_mut();
+                    match b.wait_result() {
+                        Ok(val) => Ok(val),
+                        Err(err) => Err(self.make_error(
+                            RuntimeErrorKind::Custom { message: err },
                             span,
-                        ));
+                        )),
                     }
-                    Ok(b.value.clone().unwrap_or(PhpValue::Null))
                 }
                 "then" => {
-                    let val = fut_rc.borrow().value.clone().unwrap_or(PhpValue::Null);
+                    let mut b = fut_rc.borrow_mut();
+                    let val = match b.wait_result() {
+                        Ok(v) => v,
+                        Err(err) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom { message: err },
+                                span,
+                            ));
+                        }
+                    };
+                    drop(b);
                     if let Some(PhpValue::Closure(cb)) = args.first() {
                         let mapped = self.invoke_closure_sync(cb, vec![val], span)?;
                         Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
@@ -4001,6 +4360,65 @@ impl VM {
                         )))))
                     } else {
                         Ok(receiver.clone())
+                    }
+                }
+                "catch" | "catchError" => {
+                    let mut b = fut_rc.borrow_mut();
+                    let outcome = b.wait_result();
+                    drop(b);
+                    match outcome {
+                        Ok(_) => Ok(receiver.clone()),
+                        Err(err_msg) => {
+                            if let Some(PhpValue::Closure(cb)) = args.first() {
+                                let recovered = self.invoke_closure_sync(cb, vec![PhpValue::string(err_msg)], span)?;
+                                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(recovered)))))
+                            } else {
+                                Ok(receiver.clone())
+                            }
+                        }
+                    }
+                }
+                "isCompleted" => {
+                    let mut b = fut_rc.borrow_mut();
+                    let completed = b.poll_completion();
+                    Ok(PhpValue::Bool(completed))
+                }
+                "hasError" => {
+                    let mut b = fut_rc.borrow_mut();
+                    b.poll_completion();
+                    Ok(PhpValue::Bool(b.error.is_some()))
+                }
+                "value" => {
+                    let mut b = fut_rc.borrow_mut();
+                    b.poll_completion();
+                    Ok(b.value.clone().unwrap_or(PhpValue::Null))
+                }
+                "error" => {
+                    let mut b = fut_rc.borrow_mut();
+                    b.poll_completion();
+                    match &b.error {
+                        Some(e) => Ok(PhpValue::string(e.clone())),
+                        None => Ok(PhpValue::Null),
+                    }
+                }
+                "timeout" => {
+                    let ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
+                    let duration = std::time::Duration::from_millis(ms);
+                    let mut b = fut_rc.borrow_mut();
+                    let res = b.wait_timeout(duration);
+                    drop(b);
+                    match res {
+                        Ok(val) => Ok(val),
+                        Err(err) => {
+                            if let Some(PhpValue::Closure(on_timeout)) = args.get(1) {
+                                self.invoke_closure_sync(on_timeout, Vec::new(), span)
+                            } else {
+                                Err(self.make_error(
+                                    RuntimeErrorKind::Custom { message: err },
+                                    span,
+                                ))
+                            }
+                        }
                     }
                 }
                 other => Err(self.make_error(
@@ -4012,13 +4430,18 @@ impl VM {
                 )),
             },
 
-            other => Err(self.make_error(
-                RuntimeErrorKind::UndefinedMethod {
-                    class: other.type_name().to_string(),
-                    method: method.to_string(),
-                },
-                span,
-            )),
+            other => {
+                if method == "wait" {
+                    return Ok(receiver.clone());
+                }
+                Err(self.make_error(
+                    RuntimeErrorKind::UndefinedMethod {
+                        class: other.type_name().to_string(),
+                        method: method.to_string(),
+                    },
+                    span,
+                ))
+            }
         }
     }
 

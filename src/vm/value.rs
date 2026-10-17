@@ -5,12 +5,13 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
 use crate::ir::opcode::FunctionId;
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
+use crate::vm::parent_process::FrozenValue;
 
 /// Maximum byte length for an inlined Small String (SSO).
 pub const SSO_CAPACITY: usize = 23;
@@ -363,12 +364,14 @@ pub struct VmClosure {
     pub is_static: bool,
 }
 
-/// Runtime asynchronous Future handle supporting sync resolution and delayed evaluation.
-#[derive(Debug, Clone)]
+/// Runtime asynchronous Future handle supporting non-blocking background task execution,
+/// sync resolution, timers, parallel joins, and races.
+#[derive(Clone)]
 pub struct VmFuture {
     pub is_completed: bool,
     pub value: Option<PhpValue>,
     pub error: Option<String>,
+    pub(crate) receiver: Option<Arc<Mutex<std::sync::mpsc::Receiver<Result<FrozenValue, String>>>>>,
 }
 
 impl VmFuture {
@@ -377,6 +380,7 @@ impl VmFuture {
             is_completed: true,
             value: Some(val),
             error: None,
+            receiver: None,
         }
     }
 
@@ -385,7 +389,172 @@ impl VmFuture {
             is_completed: true,
             value: None,
             error: Some(err.into()),
+            receiver: None,
         }
+    }
+
+    pub fn pending(receiver: std::sync::mpsc::Receiver<Result<FrozenValue, String>>) -> Self {
+        Self {
+            is_completed: false,
+            value: None,
+            error: None,
+            receiver: Some(Arc::new(Mutex::new(receiver))),
+        }
+    }
+
+    /// Check if background execution has completed without blocking.
+    pub fn poll_completion(&mut self) -> bool {
+        if self.is_completed && self.receiver.is_none() {
+            return true;
+        }
+        let rx_mutex = match &self.receiver {
+            Some(m) => m.clone(),
+            None => return self.is_completed,
+        };
+        if let Ok(rx) = rx_mutex.lock() {
+            match rx.try_recv() {
+                Ok(Ok(frozen)) => {
+                    self.value = Some(frozen.to_php_value());
+                    self.is_completed = true;
+                    self.error = None;
+                    drop(rx);
+                    self.receiver = None;
+                    return true;
+                }
+                Ok(Err(err)) => {
+                    self.error = Some(err);
+                    self.is_completed = true;
+                    self.value = None;
+                    drop(rx);
+                    self.receiver = None;
+                    return true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    return false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.error = Some("Background future worker thread disconnected".to_string());
+                    self.is_completed = true;
+                    self.value = None;
+                    drop(rx);
+                    self.receiver = None;
+                    return true;
+                }
+            }
+        }
+        self.is_completed
+    }
+
+    /// Block until completed and return the resolved [`PhpValue`] or error message.
+    pub fn wait_result(&mut self) -> Result<PhpValue, String> {
+        if self.poll_completion() && self.receiver.is_none() {
+            if let Some(ref err) = self.error {
+                return Err(err.clone());
+            }
+            return Ok(self.value.clone().unwrap_or(PhpValue::Null));
+        }
+
+        if let Some(rx_mutex) = self.receiver.take() {
+            if let Ok(rx) = rx_mutex.lock() {
+                match rx.recv() {
+                    Ok(Ok(frozen)) => {
+                        let val = frozen.to_php_value();
+                        self.value = Some(val.clone());
+                        self.is_completed = true;
+                        self.error = None;
+                        return Ok(val);
+                    }
+                    Ok(Err(err)) => {
+                        self.error = Some(err.clone());
+                        self.is_completed = true;
+                        self.value = None;
+                        return Err(err);
+                    }
+                    Err(_) => {
+                        let err = "Background future worker thread disconnected".to_string();
+                        self.error = Some(err.clone());
+                        self.is_completed = true;
+                        self.value = None;
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        if let Some(ref err) = self.error {
+            return Err(err.clone());
+        }
+        Ok(self.value.clone().unwrap_or(PhpValue::Null))
+    }
+
+    /// Block until completed with a maximum timeout duration.
+    pub fn wait_timeout(&mut self, timeout: std::time::Duration) -> Result<PhpValue, String> {
+        if self.poll_completion() && self.receiver.is_none() {
+            if let Some(ref err) = self.error {
+                return Err(err.clone());
+            }
+            return Ok(self.value.clone().unwrap_or(PhpValue::Null));
+        }
+
+        let rx_mutex = match &self.receiver {
+            Some(m) => m.clone(),
+            None => {
+                if let Some(ref err) = self.error {
+                    return Err(err.clone());
+                }
+                return Ok(self.value.clone().unwrap_or(PhpValue::Null));
+            }
+        };
+
+        if let Ok(rx) = rx_mutex.lock() {
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(frozen)) => {
+                    let val = frozen.to_php_value();
+                    drop(rx);
+                    self.value = Some(val.clone());
+                    self.is_completed = true;
+                    self.error = None;
+                    self.receiver = None;
+                    return Ok(val);
+                }
+                Ok(Err(err)) => {
+                    drop(rx);
+                    self.error = Some(err.clone());
+                    self.is_completed = true;
+                    self.value = None;
+                    self.receiver = None;
+                    return Err(err);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(format!("Future timed out after {:?}", timeout));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    drop(rx);
+                    let err = "Background future worker thread disconnected".to_string();
+                    self.error = Some(err.clone());
+                    self.is_completed = true;
+                    self.value = None;
+                    self.receiver = None;
+                    return Err(err);
+                }
+            }
+        }
+
+        if let Some(ref err) = self.error {
+            return Err(err.clone());
+        }
+        Ok(self.value.clone().unwrap_or(PhpValue::Null))
+    }
+}
+
+impl fmt::Debug for VmFuture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VmFuture")
+            .field("is_completed", &self.is_completed)
+            .field("value", &self.value)
+            .field("error", &self.error)
+            .field("has_receiver", &self.receiver.is_some())
+            .finish()
     }
 }
 

@@ -174,6 +174,12 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Three-Tier Facade Architecture: Tier 1 (Native Engine Facades), Tier 2 (Custom Rust Plugins/Crates via AOT), and Tier 3 (Script-land Static Facades).
   - Engine-level `is_static_only` flag halting illegal instantiation attempts (`new Int()`, dynamic `new $cls()`) with fatal error at compile-time and runtime.
 
+- [x] **Dart-Style Future Concurrency Core (`Future` Facade) (Step 19):**
+  - Provide non-blocking background task execution via the native `Future` class (`Future::run`, `Future::delayed`, `Future::wait`, `Future::any`, `Future::value`, `Future::error`, `Future::defer`).
+  - Directly accept closures (`fn() => ...`, `function() { ... }`) to evaluate parallel task joins (`Future::wait`) and races (`Future::any`) cleanly without redundant `->wait()` chains.
+  - Full Dart-style fluent instance methods: `->wait()`, `->then()`, `->catch()`, `->isCompleted()`, `->hasError()`, `->value()`, `->error()`, and `->timeout()`.
+  - Multi-threaded task execution with isolated VM sandbox, panic boundaries, upvalue capture, and fiber timer telemetry integration.
+
 ---
 
 ## 3. Progress Tracking

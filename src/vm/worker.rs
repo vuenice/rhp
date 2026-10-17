@@ -963,7 +963,7 @@ fn inject_superglobals(vm: &mut VM, request: &WorkerRequest) {
 }
 
 /// Extract human-readable string message from panic payload.
-fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
+pub(crate) fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {

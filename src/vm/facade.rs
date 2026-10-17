@@ -765,19 +765,16 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
                 VmFuture::resolved(val),
             ))))
         }
-        "wait" => {
+        "wait" | "all" => {
             // Eagerly resolve array of tasks/values
             let mut resolved = Vec::new();
             if let Some(first) = args.first() {
                 for item in extract_array_elements(first) {
                     match item {
-                        PhpValue::Future(f) => {
-                            if let Some(ref val) = f.borrow().value {
-                                resolved.push(val.clone());
-                            } else {
-                                resolved.push(PhpValue::Null);
-                            }
-                        }
+                        PhpValue::Future(f) => match f.borrow_mut().wait_result() {
+                            Ok(val) => resolved.push(val),
+                            Err(err) => return Err(RuntimeErrorKind::Custom { message: err }),
+                        },
                         other => resolved.push(other),
                     }
                 }
@@ -792,7 +789,10 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Null
             };
             match first_val {
-                PhpValue::Future(f) => Ok(f.borrow().value.clone().unwrap_or(PhpValue::Null)),
+                PhpValue::Future(f) => match f.borrow_mut().wait_result() {
+                    Ok(val) => Ok(val),
+                    Err(err) => Err(RuntimeErrorKind::Custom { message: err }),
+                },
                 other => Ok(other),
             }
         }

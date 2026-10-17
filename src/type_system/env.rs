@@ -691,7 +691,7 @@ pub fn resolve_builtin_fluent_method(
             }
         },
 
-        // Future handle (`$future->wait()`, `$future->then(...)`)
+        // Future handle (`$future->wait()`, `$future->then(...)`, etc.)
         RhpType::Future(inner) => match method {
             "wait" => Some((**inner).clone()),
             "then" => {
@@ -707,6 +707,12 @@ pub fn resolve_builtin_fluent_method(
                     .unwrap_or(RhpType::Mixed);
                 Some(RhpType::Future(Box::new(next_ty)))
             }
+            "catch" | "catchError" => Some(RhpType::Future(inner.clone())),
+            "isCompleted" => Some(RhpType::Bool),
+            "hasError" => Some(RhpType::Bool),
+            "value" => Some((**inner).clone()),
+            "error" => Some(RhpType::String),
+            "timeout" => Some((**inner).clone()),
             _ => Some(RhpType::Dynamic),
         },
 
@@ -743,6 +749,7 @@ pub fn resolve_builtin_fluent_method(
             _ => None,
         },
 
+        _ if method == "wait" => Some(receiver_type.clone()),
         _ => None,
     }
 }
