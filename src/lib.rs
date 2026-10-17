@@ -8,6 +8,7 @@ pub mod ast;
 pub mod ir;
 pub mod jit;
 pub mod lexer;
+pub mod lint;
 pub mod parser;
 pub mod type_system;
 pub mod vm;
@@ -79,4 +80,10 @@ pub use vm::{
     record_cow_detachment, record_dealloc, record_live_object, release_live_object,
     reset_memory_tracker, reset_peak, MemoryScope, MemoryStats, OwnershipEnforcer,
     DEFAULT_MAX_CALL_DEPTH, VM,
+};
+pub use lint::{
+    add_variable_types, apply_casing, check_casing, format_source, lint_file, lint_path,
+    lint_source, lint_source_with_options, run_typecheck, to_camel_case, to_pascal_case,
+    to_snake_case, type_error_to_code, Issue, IssueLevel, IssueSpan, LintOptions, LintReport,
+    LintResult,
 };

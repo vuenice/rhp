@@ -289,7 +289,7 @@ impl RhpType {
                     "List" | "list" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
                     "Dict" | "dict" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
                     "Set" | "set" => Ok(RhpType::Collection(CollectionSubtype::Set(Box::new(RhpType::Mixed)))),
-                    "HashMap" | "hashmap" | "Map" | "map" => Ok(RhpType::Collection(CollectionSubtype::HashMap(
+                    "HashMap" | "hashMap" | "hashmap" | "Map" | "map" => Ok(RhpType::Collection(CollectionSubtype::HashMap(
                         Box::new(RhpType::Mixed),
                         Box::new(RhpType::Mixed),
                     ))),

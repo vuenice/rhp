@@ -1417,7 +1417,7 @@ impl<'a> IrLowerer<'a> {
                             "list" => Some(IrCollectionKind::List),
                             "dict" => Some(IrCollectionKind::Dict),
                             "set" if args.len() <= 1 => Some(IrCollectionKind::Set),
-                            "hashMap" | "map_collection" => Some(IrCollectionKind::HashMap),
+                            "hashMap" | "hashmap" | "map_collection" | "map" => Some(IrCollectionKind::HashMap),
                             _ => None,
                         };
                         if let Some(kind) = col_kind {

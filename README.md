@@ -19,7 +19,8 @@ Most applications do not require extreme performance from day one, but businesse
 
 RHP combines a dynamic, developer-friendly interface with a robust, multi-threaded Rust execution backend.
 
-- **Dual-Engine Execution Modes:**
+- **Execution & Tooling Modes:**
+  - **Lint & Auto-Format Mode (`rhp run lint`):** Auto-applies standard 4-space indentation, formats operators/braces (inspired by Carthage Mago), automatically infers and adds variable type signatures (`$x = '';` -> `string $x = '';`), runs the static type checker, and outputs diagnostic issues in JSON format.
   - **Development Mode (`rhp run dev`):** Uses a direct tree-walking AST interpreter for sub-millisecond hot-reloading, instant cold starts, and immediate stack traces.
   - **Production Mode (`rhp run build`):** Lowers code into a register-based Bytecode VM with optional Cranelift JIT compilation, running on a multi-worker Tokio execution pool for maximum throughput.
 - **Asynchronous & Synchronous Flexibility:** RHP is dynamically typed and supports both synchronous and asynchronous execution. Most database queries and file reads execute sequentially in local fibers without extra boilerplate, but you can explicitly offload tasks when needed.
@@ -84,6 +85,41 @@ $data = $fileFuture->wait();
 
 - **Use `defer()` to execute post-response hooks after the payload has been flushed to the client, ensuring background logging or cleanup tasks never delay user response times.**
 
+### 4. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
+
+Inspired by Carthage Software Mago, `rhp run lint` combines an AST-guided auto-formatter, static type annotator, and boundary type checker into a single command:
+
+```bash
+# Auto-format, infer types, enforce casing, and output diagnostics
+rhp run lint [PATH]
+
+# Dry run: check and report issues in JSON without writing files
+rhp run lint [PATH] --check
+# or
+rhp run lint [PATH] --no-fix
+
+# Skip naming convention transformations:
+rhp run lint [PATH] --no-case-change
+```
+
+- **Naming Conventions:**
+  - Variables to `snake_case` (`$myVar` $\rightarrow$ `$my_var`, preserving `$this` and superglobals `$_GET`, `$_POST`, etc.).
+  - Classes, interfaces, traits, and enums to `PascalCase` (`class user_account` $\rightarrow$ `class UserAccount`, `new user_account()` $\rightarrow$ `new UserAccount()`).
+  - Functions and methods to `camelCase` (`function calculate_tax()` $\rightarrow$ `function calculateTax()`).
+  - **Test Function Exception:** Any function or method starting with `test` is kept/converted to `snake_case` (`function testUserLogin()` $\rightarrow$ `function test_user_login()`).
+- **Formatting:** Enforces standard 4-space indentation, normalized brace positioning, and operator spacing while preserving comments and strings verbatim.
+- **Auto-Typing:**
+  - Infers scalar primitives (`string $x = '';`, `int $y = 1;`, `float $f = 3.14;`, `bool $b = true;`).
+  - Classifies array literals declared and initialized with values:
+    - Sequential values (`[1, 2, 3]`) $\rightarrow$ `list`
+    - String-keyed pairs (`['name' => 'Alice']`) $\rightarrow$ `dict`
+    - Non-string keys (`[1 => 'val']`) $\rightarrow$ `hashMap`
+    - Empty arrays (`[]`) $\rightarrow$ `array`
+  - Infers types for function/method parameters with default values (`function foo(int $x = 1)`).
+  - Preserves already written type annotations without modifying them.
+- **JSON Diagnostic Output:** Reports remaining typecheck violations, casing issues (in `--no-fix` mode), and mismatches in machine-readable JSON format matching Mago's schema.
+
 ---
 
 Have any questions or ready to test your first RHP script?
+
