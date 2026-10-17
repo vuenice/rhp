@@ -135,6 +135,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Fiber",
         "Local cooperative execution fiber facade (current, isFiber, yield, stats, context, all)",
     ),
+    FacadeInfo::native(
+        "Memory",
+        "Memory ownership, deterministic RAII safety, and zero-GC telemetry facade (usage, peak, stats, isGcFree, scope, assertThreadSafe)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites

@@ -15,6 +15,7 @@ pub mod engine;
 pub mod error;
 pub mod facade;
 pub mod fiber;
+pub mod memory;
 pub mod parent_process;
 pub mod value;
 pub mod worker;
@@ -47,6 +48,12 @@ pub use fiber::{
     SchedulerStats,
 };
 pub use indexmap::IndexMap;
+pub use memory::{
+    cow_detachments, current_usage, estimate_value_size, gc_pause_ms, gc_runs, get_memory_stats,
+    is_gc_free, live_objects, peak_usage, record_alloc, record_cow_detachment, record_dealloc,
+    record_live_object, release_live_object, reset_memory_tracker, reset_peak, MemoryScope,
+    MemoryStats, OwnershipEnforcer,
+};
 pub use parent_process::{EngineState, FrozenValue, ParentProcess};
 pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
 pub use worker::{

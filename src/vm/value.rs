@@ -565,16 +565,26 @@ impl PhpValue {
 
     #[inline]
     pub fn string(s: impl Into<RhpString>) -> Self {
-        Self::String(s.into())
+        let rs = s.into();
+        if rs.is_heap() {
+            crate::vm::memory::record_alloc(rs.as_str().len() + 24);
+        }
+        Self::String(rs)
     }
 
     #[inline]
     pub fn array(items: Vec<PhpValue>) -> Self {
+        let bytes = 32 + items.capacity() * std::mem::size_of::<PhpValue>();
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::Array(Rc::new(RefCell::new(items)))
     }
 
     #[inline]
     pub fn list(items: Vec<PhpValue>) -> Self {
+        let bytes = 32 + items.capacity() * std::mem::size_of::<PhpValue>();
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::List(Rc::new(RefCell::new(items)))
     }
 
@@ -584,22 +594,28 @@ impl PhpValue {
         for (k, v) in entries {
             map.insert(k, v);
         }
-        Self::Dict(Rc::new(RefCell::new(map)))
+        Self::dict_from_map(map)
     }
 
     #[inline]
     pub fn dict_from_map(map: IndexMap<String, PhpValue>) -> Self {
+        let bytes = 48 + map.capacity() * 48;
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::Dict(Rc::new(RefCell::new(map)))
     }
 
     #[inline]
     pub fn set(items: impl IntoIterator<Item = PhpValue>) -> Self {
         let set: HashSet<PhpValue> = items.into_iter().collect();
-        Self::Set(Rc::new(RefCell::new(set)))
+        Self::set_from_hash_set(set)
     }
 
     #[inline]
     pub fn set_from_hash_set(set: HashSet<PhpValue>) -> Self {
+        let bytes = 48 + set.capacity() * 32;
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::Set(Rc::new(RefCell::new(set)))
     }
 
@@ -609,16 +625,22 @@ impl PhpValue {
         for (k, v) in entries {
             map.insert(k, v);
         }
-        Self::HashMap(Rc::new(RefCell::new(map)))
+        Self::hash_map_from_map(map)
     }
 
     #[inline]
     pub fn hash_map_from_map(map: HashMap<PhpValue, PhpValue>) -> Self {
+        let bytes = 48 + map.capacity() * 48;
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::HashMap(Rc::new(RefCell::new(map)))
     }
 
     #[inline]
     pub fn object(obj: VmObject) -> Self {
+        let bytes = 64 + obj.properties.len() * 32;
+        crate::vm::memory::record_alloc(bytes);
+        crate::vm::memory::record_live_object();
         Self::Object(Rc::new(RefCell::new(obj)))
     }
 
@@ -912,6 +934,7 @@ impl PhpValue {
                 if Rc::strong_count(rc) > 1 {
                     let cloned = rc.borrow().clone();
                     *rc = Rc::new(RefCell::new(cloned));
+                    crate::vm::memory::record_cow_detachment();
                 }
                 true
             }
@@ -919,6 +942,7 @@ impl PhpValue {
                 if Rc::strong_count(rc) > 1 {
                     let cloned = rc.borrow().clone();
                     *rc = Rc::new(RefCell::new(cloned));
+                    crate::vm::memory::record_cow_detachment();
                 }
                 true
             }
@@ -933,6 +957,7 @@ impl PhpValue {
             if Rc::strong_count(rc) > 1 {
                 let cloned = rc.borrow().clone();
                 *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
             }
             true
         } else {
@@ -998,6 +1023,7 @@ impl PhpValue {
             if Rc::strong_count(rc) > 1 {
                 let cloned = rc.borrow().clone();
                 *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
             }
             true
         } else {
@@ -1072,6 +1098,7 @@ impl PhpValue {
             if Rc::strong_count(rc) > 1 {
                 let cloned = rc.borrow().clone();
                 *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
             }
             true
         } else {
@@ -1128,6 +1155,7 @@ impl PhpValue {
             if Rc::strong_count(rc) > 1 {
                 let cloned = rc.borrow().clone();
                 *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
             }
             true
         } else {

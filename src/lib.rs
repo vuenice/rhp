@@ -74,5 +74,9 @@ pub use vm::{
     RuntimeErrorKind, SchedulerStats, StackTraceEntry, Tier2PluginHandler, Value, VmClosure,
     VmFuture, VmObject, WorkerError, WorkerHandle, WorkerModel, WorkerPayload, WorkerPool,
     WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats, WorkerRequest, WorkerResponse,
-    WorkerResponseStatus, DEFAULT_MAX_CALL_DEPTH, VM,
+    WorkerResponseStatus, cow_detachments, current_usage, estimate_value_size, gc_pause_ms,
+    gc_runs, get_memory_stats, is_gc_free, live_objects, peak_usage, record_alloc,
+    record_cow_detachment, record_dealloc, record_live_object, release_live_object,
+    reset_memory_tracker, reset_peak, MemoryScope, MemoryStats, OwnershipEnforcer,
+    DEFAULT_MAX_CALL_DEPTH, VM,
 };

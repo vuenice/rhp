@@ -100,6 +100,21 @@ fn test_tier1_native_facades_execution() {
     "#;
     let (vm_fut, _) = run_source_with_vm(src_fut).expect("Future facade execution should succeed");
     assert_eq!(vm_fut.get_main_variable("$res"), Some(&PhpValue::Int(84)));
+
+    // 7. Memory Ownership & Safety Facade (Technical Point #20)
+    let src_mem = r#"
+        $isGcFree = Memory::isGcFree();
+        $gcRuns = Memory::gcRuns();
+        $gcPause = Memory::gcPauseMs();
+        $safe = Memory::assertThreadSafe([1, 2, 3]);
+        $stats = Memory::stats();
+    "#;
+    let (vm_mem, _) = run_source_with_vm(src_mem).expect("Memory facade execution should succeed");
+    assert_eq!(vm_mem.get_main_variable("$isGcFree"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm_mem.get_main_variable("$gcRuns"), Some(&PhpValue::Int(0)));
+    assert_eq!(vm_mem.get_main_variable("$gcPause"), Some(&PhpValue::Float(0.0)));
+    assert_eq!(vm_mem.get_main_variable("$safe"), Some(&PhpValue::Bool(true)));
+    assert!(vm_mem.get_main_variable("$stats").is_some());
 }
 
 // Custom Tier 2 Rust Plugin
@@ -244,7 +259,7 @@ fn test_instantiation_guard_static_compile_time() {
     // All static facades across Tier 1, Tier 2, and Tier 3 must halt instantiation attempts
     let static_classes = [
         "Int", "Float", "Arr", "Str", "Future", "HTTP", "File", "Log", "DB", "Sys",
-        "CustomCrypto", "MathUtil",
+        "Memory", "CustomCrypto", "MathUtil",
     ];
 
     for name in static_classes {
@@ -279,7 +294,7 @@ fn test_instantiation_guard_dynamic_runtime() {
     let setup_script = "static class MathUtil { public static function foo(): int { return 1; } }";
     let _ = run_source(setup_script).expect("Static class setup should pass");
 
-    let dynamic_cases = ["Int", "Arr", "Str", "DB", "Log", "Future", "CustomCrypto", "MathUtil"];
+    let dynamic_cases = ["Int", "Arr", "Str", "DB", "Log", "Future", "Memory", "CustomCrypto", "MathUtil"];
 
     for name in dynamic_cases {
         let code = format!(
@@ -313,7 +328,7 @@ fn test_inheritance_guard_across_all_tiers() {
     let def_script = "static class MathUtil { public static function square(int $x): int { return $x * $x; } }";
     let _ = parse(def_script).expect("Static class setup should pass");
 
-    let static_classes = ["Int", "Str", "Arr", "DB", "Log", "CustomCrypto", "MathUtil"];
+    let static_classes = ["Int", "Str", "Arr", "DB", "Log", "Memory", "CustomCrypto", "MathUtil"];
 
     for name in static_classes {
         let code = format!("class SubClass extends {} {{}}", name);

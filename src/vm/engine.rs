@@ -2564,6 +2564,26 @@ impl VM {
             }
         }
 
+        if facade == "Memory" {
+            match method {
+                "scope" => {
+                    if let Some(PhpValue::Closure(cb)) = args.first() {
+                        let _scope = crate::vm::memory::MemoryScope::new();
+                        let res = self.invoke_closure_sync(cb, Vec::new(), span)?;
+                        return Ok(res);
+                    }
+                }
+                "assertThreadSafe" => {
+                    if let Some(val) = args.first() {
+                        crate::vm::memory::OwnershipEnforcer::assert_thread_safe(val, span)?;
+                        return Ok(PhpValue::Bool(true));
+                    }
+                    return Ok(PhpValue::Bool(true));
+                }
+                _ => {}
+            }
+        }
+
         if facade == "Sys" && method == "print" {
             for arg in args {
                 self.output_buffer.push_str(&arg.to_php_string());

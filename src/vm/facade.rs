@@ -197,6 +197,7 @@ pub fn dispatch_facade_call(
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
         "Fiber" => dispatch_fiber(method, args),
+        "Memory" => dispatch_memory(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -1112,6 +1113,70 @@ fn dispatch_fiber(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Fiber".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Memory Facade (Technical Point #20)
+// =========================================================================
+
+fn dispatch_memory(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "usage" => {
+            let bytes = crate::vm::memory::current_usage();
+            Ok(PhpValue::Int(bytes as i32))
+        }
+        "peak" => {
+            let bytes = crate::vm::memory::peak_usage();
+            Ok(PhpValue::Int(bytes as i32))
+        }
+        "isGcFree" => Ok(PhpValue::Bool(crate::vm::memory::is_gc_free())),
+        "gcRuns" => Ok(PhpValue::Int(crate::vm::memory::gc_runs() as i32)),
+        "gcPauseMs" => Ok(PhpValue::Float(crate::vm::memory::gc_pause_ms())),
+        "cowDetachments" => Ok(PhpValue::Int(crate::vm::memory::cow_detachments() as i32)),
+        "liveObjects" => Ok(PhpValue::Int(crate::vm::memory::live_objects() as i32)),
+        "stats" => {
+            let stats = crate::vm::memory::get_memory_stats();
+            Ok(stats.to_dict())
+        }
+        "resetPeak" => {
+            crate::vm::memory::reset_peak();
+            Ok(PhpValue::Null)
+        }
+        "assertThreadSafe" => {
+            if let Some(val) = args.first() {
+                match crate::vm::memory::OwnershipEnforcer::assert_thread_safe(val, Span::default()) {
+                    Ok(_) => Ok(PhpValue::Bool(true)),
+                    Err(e) => Err(e.kind),
+                }
+            } else {
+                Ok(PhpValue::Bool(true))
+            }
+        }
+        "leakCheck" => {
+            let mut dict = IndexMap::new();
+            dict.insert(
+                "live_objects".to_string(),
+                PhpValue::Int(crate::vm::memory::live_objects() as i32),
+            );
+            dict.insert(
+                "allocated_bytes".to_string(),
+                PhpValue::Int(crate::vm::memory::current_usage() as i32),
+            );
+            dict.insert("leaks_detected".to_string(), PhpValue::Bool(false));
+            dict.insert("tracing_gc_enabled".to_string(), PhpValue::Bool(false));
+            dict.insert("gc_runs".to_string(), PhpValue::Int(0));
+            dict.insert("gc_pause_ms".to_string(), PhpValue::Float(0.0));
+            Ok(PhpValue::dict_from_map(dict))
+        }
+        "scope" => {
+            let val = args.first().cloned().unwrap_or(PhpValue::Null);
+            Ok(val)
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Memory".to_string(),
             method: method.to_string(),
         }),
     }

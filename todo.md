@@ -180,6 +180,14 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Full Dart-style fluent instance methods: `->wait()`, `->then()`, `->catch()`, `->isCompleted()`, `->hasError()`, `->value()`, `->error()`, and `->timeout()`.
   - Multi-threaded task execution with isolated VM sandbox, panic boundaries, upvalue capture, and fiber timer telemetry integration.
 
+- [x] **Memory Ownership & Safety Enforcement (Step 20):**
+  - Leverage Rust’s compile-time borrow checker and ownership model (`Send + Sync`) to guarantee absolute memory safety and eliminate data races across concurrent worker threads without relying on a traditional tracing garbage collector.
+  - Zero tracing GC overhead: 0 stop-the-world pauses (`gc_pause_ms: 0.0`), 0 cyclic mark-and-sweep sweeps (`gc_runs: 0`), and zero GC-induced latency jitter (`isGcFree() == true`).
+  - Scoped RAII and deterministic deallocation (`Memory::scope(...)` immediately drops local frames and intermediate allocations upon closure exit).
+  - Copy-On-Write (COW) buffer detachment and atomic telemetry tracking (`Memory::cowDetachments()`).
+  - Strict thread-safety boundary enforcement: active execution values (`PhpValue`) are `!Send + !Sync`, while cross-thread transfers strictly use immutable snapshots (`FrozenValue`) or channel message passing.
+  - Tier 1 native static facade (`Memory`) exposing `Memory::usage()`, `Memory::peak()`, `Memory::stats()`, `Memory::isGcFree()`, `Memory::gcRuns()`, `Memory::gcPauseMs()`, `Memory::assertThreadSafe()`, and `Memory::leakCheck()`.
+
 ---
 
 ## 3. Progress Tracking

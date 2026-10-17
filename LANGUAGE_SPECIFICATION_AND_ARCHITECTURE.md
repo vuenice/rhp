@@ -425,3 +425,61 @@ pub fn eval_expr(node: &ASTNode, env: &mut Environment) -> Result<Value, Runtime
 
 ---
 
+## Technical Language Construction Architecture (20 Technical Points)
+
+1. **Frontend Lexical Analysis Engine**: Implement a deterministic finite automaton (DFA) based lexer using the `logos` crate to tokenize source code files with zero-copy string slicing.
+2. **Grammar & Expression Parsing**: Build a custom Pratt parser combined with combinator parsing to construct a strongly-typed Abstract Syntax Tree (AST) representing the program's logical structure.
+3. **Type System Strategy (Medium / Gradual)**: Enforce strict type signatures across function and method boundaries while utilizing dynamic type inference within function bodies to preserve clean developer ergonomics.
+4. **Intermediate Representation (IR) Lowering**: Translate the typed AST into flat, compact linear bytecode instructions optimized for execution within a custom virtual machine.
+5. **Virtual Machine Execution Engine**: Design a native Rust register-based bytecode VM loop to achieve fast startup times and efficient low-level instruction dispatching.
+6. **Just-In-Time (JIT) Compilation Pipeline**: Integrate the `Cranelift` compiler backend to conditionally compile hot execution loops and long-lived functions into native machine code at runtime.
+7. **Dynamic Value Enum Representation**: Define a unified core `PhpValue` Rust enum capable of representing primitive and complex types, utilizing copy-on-write semantics for strings and arrays.
+8. **Subtyped Collection Architecture (Arr::list)**: Map sequential lists directly to underlying Rust `Vec<PhpValue>` structures to maximize CPU cache locality during iteration.
+9. **Subtyped Collection Architecture (Arr::dict)**: Map key-value dictionaries with strict insertion ordering to Rust `IndexMap<String, PhpValue>` structures.
+10. **Subtyped Collection Architecture (Arr::set)**: Map unique collections directly to Rust `HashSet<PhpValue>` structures.
+11. **Subtyped Collection Architecture (Arr::map)**: Implement universal general key-value dictionaries supporting complex keys using Rust `HashMap<PhpValue, PhpValue>` structures.
+12. **Three-Tier Facade Architecture & Instantiation Guard**: Establish an object-oriented facade standard library organized into **Tier 1** (built-in native engine facades like `Str`, `Arr`, `Future`, `Log`, `DB`, `Memory`), **Tier 2** (custom Rust plugins/crates included via AOT builds), and **Tier 3** (script-land static facades), protected by an engine-level `is_static_only` flag that halts illegal instantiation attempts (e.g., `new Int()`) with a fatal error.
+13. **Persistent Parent Process Architecture**: Boot, parse, and compile application code inside a long-lived parent process into an immutable memory state (`Arc<EngineState>`) to avoid per-request bootstrap overhead.
+14. **Worker Process Isolation & Concurrency**: Spawn multi-threaded worker tasks or use process-level copy-on-write models to handle incoming requests concurrently against the shared parent state.
+15. **Database Connection Pooling**: Manage persistent database connection pools centrally within the parent process, allowing workers to check out connections instantly during active requests.
+16. **Synchronous-by-Default Execution Model**: Design local execution fibers to run standard helpers and I/O calls (`File::read()`, `DB::table()`) sequentially and blocking by default for predictable, linear developer ergonomics.
+17. **Asynchronous Non-Blocking Logging Channel**: Decouple `Log::info()` calls by pushing structured log payloads into an in-memory lock-free multi-producer single-consumer (`mpsc`) channel consumed by a background worker.
+18. **Post-Response Defer Execution Hooks (`Future::defer`)**: Implement `Future::defer()` to register post-response callbacks in a dedicated request queue executed strictly *after* the HTTP response payload has been flushed to the client, preventing background tasks from impacting request latency.
+19. **Dart-Style Future Concurrency Core (`Future` Facade)**: Provide non-blocking background task execution via the `Future` class (`Future::run`, `Future::delayed`, `Future::wait`, `Future::any`) which accepts closures directly to evaluate parallel task joins and races cleanly without redundant `->wait()` chains.
+20. **Memory Ownership & Safety Enforcement**: Leverage Rust’s compile-time borrow checker and ownership model (`Send + Sync`) to guarantee absolute memory safety and eliminate data races across concurrent worker threads without relying on a traditional tracing garbage collector.
+
+### Deep Dive: Memory Ownership & Safety Enforcement (Technical Point #20)
+
+#### 1. Zero Tracing Garbage Collector & Deterministic RAII
+- **Zero GC Overhead & Pause Times:** Unlike legacy runtimes (PHP, JVM, Node.js, Go) that incur stop-the-world pauses and background cyclic GC sweeps, RHP operates 100% free of a tracing garbage collector (`Memory::isGcFree() == true`, `Memory::gcRuns() == 0`, `Memory::gcPauseMs() == 0.0`).
+- **Deterministic Scoped Destruction ($O(1)$ Cleanup):** Variables, collections, and call frame registers are deallocated immediately upon exiting their lexical block, fiber, or worker request via Rust's RAII drop semantics.
+- **Memory Scopes (`Memory::scope`):** User code can execute intensive sub-routines inside `Memory::scope(fn() => ...)`; intermediate values allocated within the scope are dropped instantly upon return, returning only the desired result.
+
+#### 2. Copy-On-Write (COW) Memory Architecture
+- **Immutable Sharing:** Assigning collections (`$copy = $orig;`) shares the underlying heap buffer (`Rc<RefCell<...>>`) with zero allocation overhead.
+- **Detachment on Mutation:** Hot mutations (`$copy[0] = 99;` or `$copy[] = 100;`) detect `strong_count > 1` and transparently detach into an independent buffer, recording telemetry (`Memory::cowDetachments()`).
+- **Small-String-Optimization (SSO):** Strings up to 23 bytes (`RhpString::Inline`) are stored directly on the stack without heap allocation.
+
+#### 3. Compile-Time Data Race Elimination Across Worker Threads
+- **Thread Boundary Isolation:** Active execution values (`PhpValue`) are strictly `!Send` and `!Sync` due to thread-local reference counting. The Rust compiler statically forbids sending active VM values directly across threads.
+- **Immutable Snapshots (`FrozenValue`):** Cross-thread data sharing (e.g., `WorkerRequest`, `Future::run`, `ParentProcess` state) requires conversion to `FrozenValue` (`Send + Sync + 'static'`), eliminating data races at compile time.
+- **Worker Isolation:** Each worker thread in `WorkerPool` executes an isolated VM with thread-local CoW states (`CoWState`). Mutations to static properties or globals are scoped to the individual request and never leak across threads.
+
+#### 4. Prevention of Cyclic Leaks at the Language Boundary
+- Pass-by-reference (`&$param`) and closure capture-by-reference (`use (&$var)`) are strictly forbidden at the type checker level (`PassByReferenceForbidden`, `ClosureReferenceCaptureForbidden`).
+- By eliminating reference variables and mutable closure upvalues, cyclic reference graphs between closures and collections are impossible, removing the primary cause of memory leaks in dynamic languages without requiring a cyclic GC.
+
+#### 5. Tier 1 Native Static Facade: `Memory`
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `Memory::usage()` | `int` | Current estimated allocated memory in bytes |
+| `Memory::peak()` | `int` | Peak allocated memory in bytes |
+| `Memory::isGcFree()` | `bool` | Returns `true`, verifying complete absence of a tracing GC |
+| `Memory::gcRuns()` | `int` | Always returns `0` (zero GC cycles) |
+| `Memory::gcPauseMs()` | `float` | Always returns `0.0` (zero GC pause time) |
+| `Memory::cowDetachments()` | `int` | Total number of Copy-On-Write detachments executed |
+| `Memory::stats()` | `dict` | Comprehensive dictionary of memory, ownership, and GC metrics |
+| `Memory::scope(callable)` | `mixed` | Executes closure in a scoped arena, reclaiming intermediate allocations immediately |
+| `Memory::assertThreadSafe($val)` | `bool` | Asserts that `$val` satisfies cross-thread boundary safety without data races |
+| `Memory::resetPeak()` | `void` | Resets peak memory tracking to current usage |
+| `Memory::leakCheck()` | `dict` | Asserts zero memory leaks in the current scope |
