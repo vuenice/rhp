@@ -242,19 +242,57 @@ $coordsMap[[30, 40]] = 'Beta Outpost';
 $loc = $coordsMap[[10, 20]]; // 'Alpha Base'
 ```
 
-### 2. Str Facade
+### 2. Str Facade & Binary-Safe String Architecture
 
-Utility methods for UTF-8 string transformation and string inspection:
+In RHP, strings are fundamentally **binary-safe raw byte structures** (`RhpString` backed by an inline 23-byte small string buffer or a reference-counted heap vector `Rc<Vec<u8>>`), matching Zend Engine's binary safety while retaining Rust's memory safety:
 
-- **Key Methods:** `Str::contains()`, `Str::slug()`, `Str::random()`, `Str::upper()`, `Str::lower()`.
+#### 1. Binary Safety & Raw Byte Storage
+- **Arbitrary Payloads:** Reads binary files, images, network buffers, or arbitrary payloads without engine panics or UTF-8 validation rejections.
+- **Legacy Japanese Multi-Byte Support:** Safely stores legacy Japanese encodings such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** without triggering Rust UTF-8 panics.
+
+#### 2. Utilizing the `Str` Facade & Explicit Constructors
+Following RHP's design philosophy—where developers do not instantiate helper classes with `new Str()`—developers use **static factory methods and explicit encoding facades** to handle text safely:
 
 ```php
-$slug = Str::slug('Laravel Style Facades'); // 'laravel-style-facades'
+// 1. Creating a standard string (treated as raw bytes / UTF-8 safe)
+$greeting = "こんにちは世界"; // Stored natively as raw UTF-8 bytes in Vec<u8>
 
-$token = Str::random(32);
+// 2. Explicitly declaring or converting from a specific encoding (e.g., Shift-JIS)
+$jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
 
-$hasWord = Str::contains('Runtime engine', 'engine'); // true
+// 3. Ensuring UTF-8 compliance via explicit facade constructors
+$safeText = Str::utf8($userInput);
+
+// 4. Converting back to raw encoding bytes
+$rawJis = Str::toEncoding($greeting, 'Shift-JIS');
 ```
+
+#### 3. Immutable Helpers & Explicit Reassignment
+Consistent with array and collection design rules, string helper methods are **immutable by default** (returning a new instance rather than mutating buffers in place), ensuring clean data flows. Developers update variables via **explicit reassignment** leveraging RHP’s Copy-On-Write (COW) and pointer semantics:
+
+```php
+$text = "  hello world  ";
+
+// Method chaining returns a new instance; original $text is untouched
+$trimmed = $text->trim()->upper(); 
+
+// Explicit reassignment to update the variable in place cleanly
+$text = $text->trim()->upper(); 
+```
+
+#### 4. Summary of String Architecture
+
+| Feature | Implementation Strategy | Benefit |
+| :--- | :--- | :--- |
+| **Internal Storage** | `Vec<u8>` with 23-byte SSO inside `PhpValue::String` | Binary safe; handles arbitrary bytes, images, network streams, and legacy Japanese encodings natively without panics. |
+| **Instantiation** | Static facades (`Str::utf8()`, `Str::fromEncoding()`) | Avoids `new Str()` object header overhead; keeps syntax clean and performant. |
+| **Mutations** | Immutable helpers + explicit reassignment (`$str = $str->method()`) | Predictable side-effect-free data manipulation combined with zero-garbage memory replacement. |
+
+#### 5. Key Facade & Instance Methods
+- **Inspection & Validation:** `Str::contains()`, `Str::startsWith()`, `Str::endsWith()`, `Str::isUtf8()`, `Str::byteLength()`, `Str::encoding()`.
+- **Transformation:** `Str::slug()`, `Str::upper()`, `Str::lower()`, `Str::trim()`, `Str::ltrim()`, `Str::rtrim()`, `Str::replace()`, `Str::substr()`, `Str::reverse()`, `Str::repeat()`.
+- **Encoding & Conversion:** `Str::fromEncoding()`, `Str::toEncoding()`, `Str::utf8()`, `Str::fromBytes()`, `Str::bytes()`.
+- **Dynamic Macros:** `Str::macro('method', fn() => ...)` binds custom helper methods to all string instances.
 
 ### 3. HTTP Facade
 

@@ -2836,6 +2836,9 @@ impl<'a> IrLowerer<'a> {
             parent.inferred_var_types.clone(),
         );
 
+        // Reserve r0 for `$this` to support instance method receivers and dynamic macros
+        let _ = fb.get_or_alloc_local("$this", None, false, false, span);
+
         let mut param_names = HashSet::new();
         let mut compiled_params = Vec::with_capacity(params.len());
         for param in params {
@@ -2898,7 +2901,8 @@ impl<'a> IrLowerer<'a> {
 
         let mut upvalues = Vec::new();
         for var_name in referenced_vars {
-            if !param_names.contains(&var_name)
+            if var_name != "this"
+                && !param_names.contains(&var_name)
                 && parent.chunk.local_map.contains_key(&var_name)
                 && !upvalues.contains(&var_name)
             {

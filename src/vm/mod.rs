@@ -11,6 +11,7 @@
 //!   (`Int::i64()`, `Float::f64()`, etc.), copy-on-write strings, explicit collection subtypes
 //!   (`Arr::list`, `Arr::dict`, `Arr::set`, `Arr::hashMap`), closures, objects, and futures.
 
+pub mod encoding;
 pub mod engine;
 pub mod error;
 pub mod facade;

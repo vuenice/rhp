@@ -188,6 +188,13 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Strict thread-safety boundary enforcement: active execution values (`PhpValue`) are `!Send + !Sync`, while cross-thread transfers strictly use immutable snapshots (`FrozenValue`) or channel message passing.
   - Tier 1 native static facade (`Memory`) exposing `Memory::usage()`, `Memory::peak()`, `Memory::stats()`, `Memory::isGcFree()`, `Memory::gcRuns()`, `Memory::gcPauseMs()`, `Memory::assertThreadSafe()`, and `Memory::leakCheck()`.
 
+- [x] **Binary-Safe String Architecture & Legacy Japanese Multi-Byte Support:**
+  - Back `PhpValue::String` with binary-safe byte structure (`RhpString` storing up to 23 bytes inline via SSO and `Rc<Vec<u8>>` for heap strings).
+  - Solve the binary safety problem: read arbitrary binary payloads, image streams, and null bytes without engine panics.
+  - Accommodate legacy Japanese character sets (**Shift-JIS**, **EUC-JP**, **ISO-2022-JP / JIS**, and UTF-8) natively.
+  - Implement static facade constructors on `Str` (`Str::fromEncoding`, `Str::toEncoding`, `Str::utf8`, `Str::fromBytes`, `Str::bytes`, `Str::byteLength`, `Str::isUtf8`).
+  - Immutable fluent string helper methods with explicit reassignment (`$str = $str->trim()->upper()`) with COW semantics.
+
 ---
 
 ## 3. Progress Tracking

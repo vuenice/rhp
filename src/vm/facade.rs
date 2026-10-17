@@ -313,10 +313,187 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let subject = get_arg_str(args, 2, "Str::replace")?;
             Ok(PhpValue::string(subject.replace(&search, &replace)))
         }
+        "fromEncoding" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::fromEncoding".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let encoding = get_arg_str(args, 1, "Str::fromEncoding").unwrap_or_else(|_| "UTF-8".to_string());
+            let raw_bytes = extract_raw_byte_payload(target);
+            let decoded = crate::vm::encoding::decode_to_utf8(&raw_bytes, &encoding)
+                .map_err(|msg| RuntimeErrorKind::Custom { message: msg })?;
+            Ok(PhpValue::string(decoded))
+        }
+        "toEncoding" => {
+            let target = get_arg_str(args, 0, "Str::toEncoding")?;
+            let encoding = get_arg_str(args, 1, "Str::toEncoding").unwrap_or_else(|_| "UTF-8".to_string());
+            let encoded_bytes = crate::vm::encoding::encode_from_utf8(&target, &encoding)
+                .map_err(|msg| RuntimeErrorKind::Custom { message: msg })?;
+            Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(encoded_bytes)))
+        }
+        "utf8" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::utf8".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let raw_bytes = extract_raw_byte_payload(target);
+            let clean = String::from_utf8_lossy(&raw_bytes).into_owned();
+            Ok(PhpValue::string(clean))
+        }
+        "isUtf8" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::isUtf8".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let is_valid = match target {
+                PhpValue::String(s) => s.is_utf8(),
+                _ => true,
+            };
+            Ok(PhpValue::Bool(is_valid))
+        }
+        "fromBytes" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::fromBytes".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let bytes = match target {
+                PhpValue::Array(a) | PhpValue::List(a) => {
+                    a.borrow().iter().map(|v| v.to_i64().unwrap_or(0) as u8).collect::<Vec<u8>>()
+                }
+                PhpValue::String(s) => s.as_bytes().to_vec(),
+                _ => target.to_php_string().into_bytes(),
+            };
+            Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(bytes)))
+        }
+        "bytes" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::bytes".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let bytes_vec: Vec<PhpValue> = match target {
+                PhpValue::String(s) => s.as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect(),
+                _ => target.to_php_string().as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect(),
+            };
+            Ok(PhpValue::list(bytes_vec))
+        }
+        "byteLength" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::byteLength".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let len = match target {
+                PhpValue::String(s) => s.len(),
+                _ => target.to_php_string().len(),
+            };
+            Ok(PhpValue::Int(len as i32))
+        }
+        "encoding" | "detectEncoding" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::encoding".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let raw_bytes = extract_raw_byte_payload(target);
+            let detected = crate::vm::encoding::detect_encoding(&raw_bytes);
+            Ok(PhpValue::string(detected))
+        }
+        "ltrim" => {
+            let s = get_arg_str(args, 0, "Str::ltrim")?;
+            let chars = if let Some(arg1) = args.get(1) {
+                arg1.to_php_string()
+            } else {
+                " \t\n\r\0\x0B".to_string()
+            };
+            let trimmed = s.trim_start_matches(|c| chars.contains(c));
+            Ok(PhpValue::string(trimmed))
+        }
+        "rtrim" => {
+            let s = get_arg_str(args, 0, "Str::rtrim")?;
+            let chars = if let Some(arg1) = args.get(1) {
+                arg1.to_php_string()
+            } else {
+                " \t\n\r\0\x0B".to_string()
+            };
+            let trimmed = s.trim_end_matches(|c| chars.contains(c));
+            Ok(PhpValue::string(trimmed))
+        }
+        "substr" => {
+            let s = get_arg_str(args, 0, "Str::substr")?;
+            let start = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let length = args.get(2).and_then(|v| v.to_i64());
+            let chars: Vec<char> = s.chars().collect();
+            let total_len = chars.len() as i64;
+            let actual_start = if start < 0 {
+                (total_len + start).max(0) as usize
+            } else {
+                start.min(total_len) as usize
+            };
+            let sub: String = if let Some(len) = length {
+                let actual_len = if len < 0 {
+                    (total_len - actual_start as i64 + len).max(0) as usize
+                } else {
+                    len as usize
+                };
+                chars.iter().skip(actual_start).take(actual_len).collect()
+            } else {
+                chars.iter().skip(actual_start).collect()
+            };
+            Ok(PhpValue::string(sub))
+        }
+        "repeat" => {
+            let s = get_arg_str(args, 0, "Str::repeat")?;
+            let times = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+            Ok(PhpValue::string(s.repeat(times)))
+        }
+        "reverse" => {
+            let s = get_arg_str(args, 0, "Str::reverse")?;
+            let rev: String = s.chars().rev().collect();
+            Ok(PhpValue::string(rev))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Str".to_string(),
             method: method.to_string(),
         }),
+    }
+}
+
+pub fn extract_raw_byte_payload(val: &PhpValue) -> Vec<u8> {
+    match val {
+        PhpValue::String(s) => {
+            if !s.is_utf8() {
+                s.as_bytes().to_vec()
+            } else {
+                let mut maybe_latin1 = true;
+                let mut bytes_from_chars = Vec::new();
+                for ch in s.as_str().chars() {
+                    let cp = ch as u32;
+                    if cp <= 0xFF {
+                        bytes_from_chars.push(cp as u8);
+                    } else {
+                        maybe_latin1 = false;
+                        break;
+                    }
+                }
+                if maybe_latin1 && bytes_from_chars.len() < s.len() {
+                    bytes_from_chars
+                } else {
+                    s.as_bytes().to_vec()
+                }
+            }
+        }
+        PhpValue::Array(a) | PhpValue::List(a) => {
+            a.borrow()
+                .iter()
+                .map(|item| item.to_i64().unwrap_or(0) as u8)
+                .collect()
+        }
+        other => other.to_php_string().into_bytes(),
     }
 }
 

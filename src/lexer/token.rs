@@ -908,6 +908,27 @@ impl<'s> Token<'s> {
                     Some('`') => result.push('`'),
                     Some('$') => result.push('$'),
                     Some('0') => result.push('\0'),
+                    Some('x') | Some('X') => {
+                        let mut hex_str = String::new();
+                        if let Some(&c1) = chars.peek() {
+                            if c1.is_ascii_hexdigit() {
+                                hex_str.push(c1);
+                                chars.next();
+                                if let Some(&c2) = chars.peek() {
+                                    if c2.is_ascii_hexdigit() {
+                                        hex_str.push(c2);
+                                        chars.next();
+                                    }
+                                }
+                            }
+                        }
+                        if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                            result.push(byte as char);
+                        } else {
+                            result.push('\\');
+                            result.push('x');
+                        }
+                    }
                     Some(other) => {
                         result.push('\\');
                         result.push(other);

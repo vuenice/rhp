@@ -16,41 +16,96 @@ use crate::vm::parent_process::FrozenValue;
 /// Maximum byte length for an inlined Small String (SSO).
 pub const SSO_CAPACITY: usize = 23;
 
-/// Small-String-Optimized (SSO) string representation inspired by Bun and JavaScriptCore.
+/// Small-String-Optimized (SSO) binary-safe string representation.
 ///
-/// Strings with length <= 23 bytes are stored inline on the stack with zero heap allocations.
-/// Larger strings fall back to reference-counted heap buffers (`Rc<String>`).
+/// Under the hood, RHP strings are raw byte buffers with a known length:
+/// - Strings with length <= 23 bytes are stored inline on the stack with zero heap allocations (`Inline`).
+/// - Larger strings are reference-counted byte buffers (`Rc<Vec<u8>>`) with Copy-on-Write semantics.
+/// - 100% binary-safe: naturally accommodates arbitrary binary payloads (images, streams) and
+///   legacy multi-byte character sets (Shift-JIS, EUC-JP, ISO-2022-JP) without triggering Rust UTF-8 panics.
 #[derive(Clone)]
 pub enum RhpString {
     Inline { len: u8, buf: [u8; SSO_CAPACITY] },
-    Heap(Rc<String>),
+    Heap(Rc<Vec<u8>>),
 }
 
 impl RhpString {
     #[inline]
     pub fn new(s: &str) -> Self {
-        let len = s.len();
+        Self::from_bytes(s.as_bytes())
+    }
+
+    #[inline]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let len = bytes.len();
         if len <= SSO_CAPACITY {
             let mut buf = [0u8; SSO_CAPACITY];
-            buf[..len].copy_from_slice(s.as_bytes());
+            buf[..len].copy_from_slice(bytes);
             Self::Inline {
                 len: len as u8,
                 buf,
             }
         } else {
-            Self::Heap(Rc::new(s.to_string()))
+            Self::Heap(Rc::new(bytes.to_vec()))
         }
+    }
+
+    #[inline]
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        let len = bytes.len();
+        if len <= SSO_CAPACITY {
+            let mut buf = [0u8; SSO_CAPACITY];
+            buf[..len].copy_from_slice(&bytes);
+            Self::Inline {
+                len: len as u8,
+                buf,
+            }
+        } else {
+            Self::Heap(Rc::new(bytes))
+        }
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Inline { len, buf } => &buf[..*len as usize],
+            Self::Heap(rc) => rc.as_slice(),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Inline { len, .. } => *len as usize,
+            Self::Heap(rc) => rc.len(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     #[inline]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Inline { len, buf } => {
-                // Safety: bytes originated from a valid UTF-8 &str
-                unsafe { std::str::from_utf8_unchecked(&buf[..*len as usize]) }
+                std::str::from_utf8(&buf[..*len as usize]).unwrap_or("")
             }
-            Self::Heap(rc) => rc.as_str(),
+            Self::Heap(rc) => {
+                std::str::from_utf8(rc.as_slice()).unwrap_or("")
+            }
         }
+    }
+
+    #[inline]
+    pub fn to_str_lossy(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(self.as_bytes())
+    }
+
+    #[inline]
+    pub fn is_utf8(&self) -> bool {
+        std::str::from_utf8(self.as_bytes()).is_ok()
     }
 
     #[inline]
@@ -80,11 +135,11 @@ impl RhpString {
     }
 
     /// Mutably access or promote string buffer using Copy-On-Write semantics.
-    pub fn make_mut(&mut self) -> &mut String {
+    pub fn make_mut(&mut self) -> &mut Vec<u8> {
         match self {
             Self::Inline { len, buf } => {
-                let s = unsafe { std::str::from_utf8_unchecked(&buf[..*len as usize]) }.to_string();
-                *self = Self::Heap(Rc::new(s));
+                let v = buf[..*len as usize].to_vec();
+                *self = Self::Heap(Rc::new(v));
                 match self {
                     Self::Heap(rc) => Rc::make_mut(rc),
                     _ => unreachable!(),
@@ -94,26 +149,31 @@ impl RhpString {
         }
     }
 
-    /// Append a string slice utilizing SSO when possible or Copy-On-Write heap mutation.
-    pub fn push_str(&mut self, s: &str) {
+    /// Append a byte slice utilizing SSO when possible or Copy-On-Write heap mutation.
+    pub fn push_bytes(&mut self, b: &[u8]) {
         match self {
             Self::Inline { len, buf } => {
                 let current_len = *len as usize;
-                let add_len = s.len();
+                let add_len = b.len();
                 if current_len + add_len <= SSO_CAPACITY {
-                    buf[current_len..current_len + add_len].copy_from_slice(s.as_bytes());
+                    buf[current_len..current_len + add_len].copy_from_slice(b);
                     *len = (current_len + add_len) as u8;
                 } else {
-                    let mut owned = String::with_capacity(current_len + add_len);
-                    owned.push_str(unsafe { std::str::from_utf8_unchecked(&buf[..current_len]) });
-                    owned.push_str(s);
+                    let mut owned = Vec::with_capacity(current_len + add_len);
+                    owned.extend_from_slice(&buf[..current_len]);
+                    owned.extend_from_slice(b);
                     *self = Self::Heap(Rc::new(owned));
                 }
             }
             Self::Heap(rc) => {
-                Rc::make_mut(rc).push_str(s);
+                Rc::make_mut(rc).extend_from_slice(b);
             }
         }
+    }
+
+    /// Append a string slice utilizing SSO when possible or Copy-On-Write heap mutation.
+    pub fn push_str(&mut self, s: &str) {
+        self.push_bytes(s.as_bytes());
     }
 
     /// Append a single character with COW semantics.
@@ -123,14 +183,34 @@ impl RhpString {
         self.push_str(encoded);
     }
 
+    /// Append a single raw byte.
+    pub fn push_byte(&mut self, b: u8) {
+        self.push_bytes(&[b]);
+    }
+
+    /// Mutate a byte at index using COW semantics.
+    pub fn set_byte(&mut self, index: usize, b: u8) {
+        if index < self.len() {
+            self.make_mut()[index] = b;
+        }
+    }
+
     /// Mutate a character at a byte/char index using COW semantics.
     pub fn set_char(&mut self, index: usize, ch: char) {
         if index < self.len() {
-            let mut chars: Vec<char> = self.as_str().chars().collect();
-            if index < chars.len() {
-                chars[index] = ch;
-                let new_str: String = chars.into_iter().collect();
-                *self = Self::new(&new_str);
+            if self.is_utf8() {
+                let mut chars: Vec<char> = self.as_str().chars().collect();
+                if index < chars.len() {
+                    chars[index] = ch;
+                    let new_str: String = chars.into_iter().collect();
+                    *self = Self::new(&new_str);
+                }
+            } else {
+                let mut buf = [0u8; 4];
+                let enc = ch.encode_utf8(&mut buf).as_bytes();
+                if !enc.is_empty() {
+                    self.set_byte(index, enc[0]);
+                }
             }
         }
     }
@@ -151,36 +231,57 @@ impl AsRef<str> for RhpString {
     }
 }
 
+impl AsRef<[u8]> for RhpString {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 impl fmt::Display for RhpString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
+        write!(f, "{}", self.to_str_lossy())
     }
 }
 
 impl fmt::Debug for RhpString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.as_str())
+        write!(f, "{:?}", self.to_str_lossy())
     }
 }
 
 impl PartialEq for RhpString {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.as_str() == other.as_str()
+        self.as_bytes() == other.as_bytes()
     }
 }
 
 impl PartialEq<str> for RhpString {
     #[inline]
     fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
+        self.as_bytes() == other.as_bytes()
     }
 }
 
 impl PartialEq<&str> for RhpString {
     #[inline]
     fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl PartialEq<[u8]> for RhpString {
+    #[inline]
+    fn eq(&self, other: &[u8]) -> bool {
+        self.as_bytes() == other
+    }
+}
+
+impl PartialEq<&[u8]> for RhpString {
+    #[inline]
+    fn eq(&self, other: &&[u8]) -> bool {
+        self.as_bytes() == *other
     }
 }
 
@@ -196,14 +297,14 @@ impl PartialOrd for RhpString {
 impl Ord for RhpString {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.as_str().cmp(other.as_str())
+        self.as_bytes().cmp(other.as_bytes())
     }
 }
 
 impl Hash for RhpString {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_str().hash(state);
+        self.as_bytes().hash(state);
     }
 }
 
@@ -217,10 +318,38 @@ impl From<&str> for RhpString {
 impl From<String> for RhpString {
     #[inline]
     fn from(s: String) -> Self {
-        if s.len() <= SSO_CAPACITY {
-            Self::new(&s)
+        Self::from_vec(s.into_bytes())
+    }
+}
+
+impl From<&String> for RhpString {
+    #[inline]
+    fn from(s: &String) -> Self {
+        Self::from_bytes(s.as_bytes())
+    }
+}
+
+impl From<&[u8]> for RhpString {
+    #[inline]
+    fn from(bytes: &[u8]) -> Self {
+        Self::from_bytes(bytes)
+    }
+}
+
+impl From<Vec<u8>> for RhpString {
+    #[inline]
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::from_vec(bytes)
+    }
+}
+
+impl From<Rc<Vec<u8>>> for RhpString {
+    #[inline]
+    fn from(rc: Rc<Vec<u8>>) -> Self {
+        if rc.len() <= SSO_CAPACITY {
+            Self::from_bytes(&rc)
         } else {
-            Self::Heap(Rc::new(s))
+            Self::Heap(rc)
         }
     }
 }
@@ -228,11 +357,7 @@ impl From<String> for RhpString {
 impl From<Rc<String>> for RhpString {
     #[inline]
     fn from(rc: Rc<String>) -> Self {
-        if rc.len() <= SSO_CAPACITY {
-            Self::new(&rc)
-        } else {
-            Self::Heap(rc)
-        }
+        Self::from_bytes(rc.as_bytes())
     }
 }
 
@@ -567,9 +692,14 @@ impl PhpValue {
     pub fn string(s: impl Into<RhpString>) -> Self {
         let rs = s.into();
         if rs.is_heap() {
-            crate::vm::memory::record_alloc(rs.as_str().len() + 24);
+            crate::vm::memory::record_alloc(rs.len() + 24);
         }
         Self::String(rs)
+    }
+
+    #[inline]
+    pub fn bytes(b: impl Into<Vec<u8>>) -> Self {
+        Self::string(b.into())
     }
 
     #[inline]
@@ -773,6 +903,15 @@ impl PhpValue {
             Self::Closure(c) => format!("Closure({})", c.name),
             Self::Future(_) => "Future".to_string(),
             Self::Resource(_) => "Resource".to_string(),
+        }
+    }
+
+    /// Access raw byte slice if this value is a binary string.
+    #[inline]
+    pub fn raw_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::String(s) => Some(s.as_bytes()),
+            _ => None,
         }
     }
 

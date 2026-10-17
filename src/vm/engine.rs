@@ -4450,6 +4450,172 @@ impl VM {
                 )),
             },
 
+            // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
+            // String helper methods are immutable by default, returning a new instance.
+            PhpValue::String(s) => match method {
+                "trim" => {
+                    let str_val = s.to_str_lossy();
+                    let chars = if let Some(arg1) = args.first() {
+                        arg1.to_php_string()
+                    } else {
+                        " \t\n\r\0\x0B".to_string()
+                    };
+                    let trimmed = str_val.trim_matches(|c| chars.contains(c));
+                    Ok(PhpValue::string(trimmed))
+                }
+                "ltrim" => {
+                    let str_val = s.to_str_lossy();
+                    let chars = if let Some(arg1) = args.first() {
+                        arg1.to_php_string()
+                    } else {
+                        " \t\n\r\0\x0B".to_string()
+                    };
+                    let trimmed = str_val.trim_start_matches(|c| chars.contains(c));
+                    Ok(PhpValue::string(trimmed))
+                }
+                "rtrim" => {
+                    let str_val = s.to_str_lossy();
+                    let chars = if let Some(arg1) = args.first() {
+                        arg1.to_php_string()
+                    } else {
+                        " \t\n\r\0\x0B".to_string()
+                    };
+                    let trimmed = str_val.trim_end_matches(|c| chars.contains(c));
+                    Ok(PhpValue::string(trimmed))
+                }
+                "upper" | "toUpper" => {
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(str_val.to_uppercase()))
+                }
+                "lower" | "toLower" => {
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(str_val.to_lowercase()))
+                }
+                "slug" => {
+                    let str_val = s.to_str_lossy();
+                    let mut slug = String::with_capacity(str_val.len());
+                    let mut last_was_dash = false;
+                    for c in str_val.chars() {
+                        if c.is_alphanumeric() {
+                            slug.extend(c.to_lowercase());
+                            last_was_dash = false;
+                        } else if !last_was_dash && !slug.is_empty() {
+                            slug.push('-');
+                            last_was_dash = true;
+                        }
+                    }
+                    if slug.ends_with('-') {
+                        slug.pop();
+                    }
+                    Ok(PhpValue::string(slug))
+                }
+                "contains" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    Ok(PhpValue::Bool(s.to_str_lossy().contains(&needle)))
+                }
+                "startsWith" => {
+                    let prefix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    Ok(PhpValue::Bool(s.to_str_lossy().starts_with(&prefix)))
+                }
+                "endsWith" => {
+                    let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    Ok(PhpValue::Bool(s.to_str_lossy().ends_with(&suffix)))
+                }
+                "length" => {
+                    Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i32))
+                }
+                "byteLength" | "bytesCount" => {
+                    Ok(PhpValue::Int(s.len() as i32))
+                }
+                "split" => {
+                    let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let str_val = s.to_str_lossy();
+                    let parts: Vec<PhpValue> = if sep.is_empty() {
+                        str_val.chars().map(|c| PhpValue::string(c.to_string())).collect()
+                    } else {
+                        str_val.split(&sep).map(PhpValue::string).collect()
+                    };
+                    Ok(PhpValue::list(parts))
+                }
+                "replace" => {
+                    let search = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let replace = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(str_val.replace(&search, &replace)))
+                }
+                "substr" => {
+                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let length = args.get(1).and_then(|v| v.to_i64());
+                    let str_val = s.to_str_lossy();
+                    let chars: Vec<char> = str_val.chars().collect();
+                    let total_len = chars.len() as i64;
+                    let actual_start = if start < 0 {
+                        (total_len + start).max(0) as usize
+                    } else {
+                        start.min(total_len) as usize
+                    };
+                    let sub: String = if let Some(len) = length {
+                        let actual_len = if len < 0 {
+                            (total_len - actual_start as i64 + len).max(0) as usize
+                        } else {
+                            len as usize
+                        };
+                        chars.iter().skip(actual_start).take(actual_len).collect()
+                    } else {
+                        chars.iter().skip(actual_start).collect()
+                    };
+                    Ok(PhpValue::string(sub))
+                }
+                "reverse" => {
+                    let str_val = s.to_str_lossy();
+                    let rev: String = str_val.chars().rev().collect();
+                    Ok(PhpValue::string(rev))
+                }
+                "repeat" => {
+                    let times = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(str_val.repeat(times)))
+                }
+                "toEncoding" => {
+                    let encoding = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "UTF-8".to_string());
+                    let encoded_bytes = crate::vm::encoding::encode_from_utf8(&s.to_str_lossy(), &encoding)
+                        .map_err(|msg| self.make_error(RuntimeErrorKind::Custom { message: msg }, span))?;
+                    Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(encoded_bytes)))
+                }
+                "utf8" => {
+                    let clean = String::from_utf8_lossy(s.as_bytes()).into_owned();
+                    Ok(PhpValue::string(clean))
+                }
+                "bytes" => {
+                    let byte_list: Vec<PhpValue> = s.as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect();
+                    Ok(PhpValue::list(byte_list))
+                }
+                "isUtf8" => {
+                    Ok(PhpValue::Bool(s.is_utf8()))
+                }
+                "isEmpty" => {
+                    Ok(PhpValue::Bool(s.is_empty()))
+                }
+                other => {
+                    if let Some(macro_closure) = get_runtime_closure_macro("Str", other) {
+                        self.invoke_closure_sync_with_this(
+                            &macro_closure,
+                            Some(receiver.clone()),
+                            args.to_vec(),
+                            span,
+                        )
+                    } else {
+                        Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: "string".to_string(),
+                                method: other.to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                }
+            },
+
             other => {
                 if method == "wait" {
                     return Ok(receiver.clone());
