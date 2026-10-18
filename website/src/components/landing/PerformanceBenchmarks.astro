@@ -1,0 +1,108 @@
+---
+// PerformanceBenchmarks.astro
+---
+
+<section id="benchmarks" class="py-20 bg-slate-50/50 dark:bg-[#0A0E17]/50 border-y border-slate-200/80 dark:border-slate-800/80 transition-colors">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    
+    <!-- Header -->
+    <div class="text-center max-w-3xl mx-auto mb-12 space-y-4">
+      <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+        Empirical Evaluation
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+        Benchmark Comparison Architecture
+      </h2>
+      <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+        Comparing persistent parent process memory and Rust native collection performance against traditional runtimes.
+      </p>
+
+      <!-- Mandatory Placeholder Warning Banner -->
+      <div class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-mono">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        <span>DISCLAIMER: Benchmark metrics below contain template placeholders marked <strong>[REPLACE WITH REAL DATA]</strong>. Benchmarking suite currently running in CI.</span>
+      </div>
+    </div>
+
+    <!-- Table of Benchmarks -->
+    <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D121C] shadow-lg overflow-hidden">
+      
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-50 dark:bg-[#0A0E17] border-b border-slate-200 dark:border-slate-800 text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 font-mono">
+            <tr>
+              <th scope="col" class="py-4 px-6">Runtime / Environment</th>
+              <th scope="col" class="py-4 px-6">Bootstrap Time</th>
+              <th scope="col" class="py-4 px-6">Throughput (Req/sec)</th>
+              <th scope="col" class="py-4 px-6">p99 Latency</th>
+              <th scope="col" class="py-4 px-6">GC Pause Time</th>
+              <th scope="col" class="py-4 px-6">Memory Footprint</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 dark:divide-slate-800/80 font-mono text-xs sm:text-sm">
+            
+            <!-- RHP (Production Mode) -->
+            <tr class="bg-brand-500/5 hover:bg-brand-500/10 transition-colors">
+              <td class="py-4 px-6 font-sans font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-brand-500"></span>
+                <span>RHP (Cranelift JIT)</span>
+                <span class="text-[10px] font-mono bg-brand-500/20 text-brand-500 px-2 py-0.5 rounded">Target</span>
+              </td>
+              <td class="py-4 px-6 text-emerald-600 dark:text-emerald-400 font-semibold">0.0ms (Persistent)</td>
+              <td class="py-4 px-6 text-slate-900 dark:text-white font-bold">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-emerald-600 dark:text-emerald-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-emerald-600 dark:text-emerald-400 font-semibold">0.0ms (Zero-GC)</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-300">[REPLACE WITH REAL DATA]</td>
+            </tr>
+
+            <!-- PHP 8.3 FPM -->
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+              <td class="py-4 px-6 font-sans font-medium text-slate-700 dark:text-slate-300">
+                PHP 8.3 (PHP-FPM)
+              </td>
+              <td class="py-4 px-6 text-rose-500 dark:text-rose-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-rose-500 dark:text-rose-400">Cyclic GC Cycles</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+            </tr>
+
+            <!-- Node.js v22 -->
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+              <td class="py-4 px-6 font-sans font-medium text-slate-700 dark:text-slate-300">
+                Node.js v22 (Fastify)
+              </td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">Persistent</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-amber-500 dark:text-amber-400">V8 Mark-Sweep</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+            </tr>
+
+            <!-- Go 1.23 -->
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+              <td class="py-4 px-6 font-sans font-medium text-slate-700 dark:text-slate-300">
+                Go 1.23 (net/http)
+              </td>
+              <td class="py-4 px-6 text-emerald-600 dark:text-emerald-400">Compiled AOT</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">Concurrent Tri-color</td>
+              <td class="py-4 px-6 text-slate-600 dark:text-slate-400">[REPLACE WITH REAL DATA]</td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Test Protocol Footnote -->
+      <div class="p-4 bg-slate-50 dark:bg-[#080B12] border-t border-slate-200 dark:border-slate-800/80 text-xs text-slate-500 dark:text-slate-400">
+        <p>
+          <strong>Test Environment Methodology:</strong> Benchmarks executed via <code class="font-mono text-slate-400">wrk -t8 -c100 -d30s</code> targeting single JSON payload endpoints on standard c6i.2xlarge Linux instances (8 vCPU, 16 GB RAM). Real empirical figures will be populated upon completion of the official RHP v0.2 automated test harness.
+        </p>
+      </div>
+
+    </div>
+
+  </div>
+</section>

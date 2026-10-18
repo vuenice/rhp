@@ -564,6 +564,46 @@ pub fn resolve_facade_static_call(
             "isValid" => Ok(RhpType::Bool),
             _ => Ok(RhpType::Mixed),
         },
+        "Trace" | "Telemetry" => match method {
+            "startSpan" | "currentSpan" | "extractContext" | "injectContext" | "metrics"
+            | "metricSummary" => {
+                Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
+            }
+            "traceId" | "spanId" | "parentSpanId" | "exportOtlp" | "exportOtlpMetrics"
+            | "exportSentry" | "exportDatadog" => Ok(RhpType::String),
+            "spans" | "crashes" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
+                RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+            )))),
+            "endSpan" => Ok(RhpType::Nullable(Box::new(RhpType::Collection(
+                CollectionSubtype::Dict(Box::new(RhpType::Mixed)),
+            )))),
+            "span" => {
+                let ret = arg_types
+                    .get(1)
+                    .and_then(|t| match t {
+                        RhpType::Callable {
+                            return_type: Some(r),
+                            ..
+                        } => Some((**r).clone()),
+                        _ => None,
+                    })
+                    .unwrap_or(RhpType::Mixed);
+                Ok(ret)
+            }
+            "baggage" => {
+                if arg_types.len() == 1 {
+                    Ok(RhpType::Nullable(Box::new(RhpType::String)))
+                } else if arg_types.len() > 1 {
+                    Ok(RhpType::Void)
+                } else {
+                    Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::String))))
+                }
+            }
+            "setAttribute" | "setAttributes" | "addEvent" | "recordException" | "setStatus"
+            | "counter" | "gauge" | "histogram" | "clearSpans" | "clearMetrics"
+            | "clearCrashes" | "configure" => Ok(RhpType::Void),
+            _ => Ok(RhpType::Mixed),
+        },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 resolve_facade_static_call(

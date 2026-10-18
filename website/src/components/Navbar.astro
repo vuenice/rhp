@@ -1,0 +1,114 @@
+---
+import ThemeToggle from './ThemeToggle.astro';
+---
+
+<header class="sticky top-0 z-40 w-full backdrop-blur-md bg-white/80 dark:bg-[#080B10]/80 border-b border-slate-200 dark:border-slate-800/80 transition-colors">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between h-16">
+      
+      <!-- Logo & Brand -->
+      <div class="flex items-center space-x-3">
+        <a href="/" class="flex items-center space-x-3 group">
+          <img src="/rhp-logo.svg" alt="RHP Logo" class="w-8 h-8 group-hover:scale-105 transition-transform" />
+          <div class="flex items-center space-x-2">
+            <span class="text-xl font-bold tracking-tight text-slate-900 dark:text-white group-hover:text-brand-500 transition-colors">RHP</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20 font-mono">
+              v0.1.0-alpha
+            </span>
+          </div>
+        </a>
+      </div>
+
+      <!-- Center Nav Links (Desktop) -->
+      <nav class="hidden md:flex items-center space-x-7 text-sm font-medium text-slate-600 dark:text-slate-300">
+        <a href="/docs/getting-started/installation" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Docs</a>
+        <a href="/#features" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Features</a>
+        <a href="/#showcase" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Showcase</a>
+        <a href="/#benchmarks" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Benchmarks</a>
+        <a href="/#playground" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Playground</a>
+        <a href="/#roadmap" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Roadmap</a>
+      </nav>
+
+      <!-- Right Actions: Search, GitHub, Theme, Mobile toggle -->
+      <div class="flex items-center space-x-2 sm:space-x-3">
+        
+        <!-- Search trigger button -->
+        <button
+          type="button"
+          onclick="window.openRhpSearch && window.openRhpSearch()"
+          class="flex items-center gap-2 px-3 py-1.5 text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700/60 transition-colors"
+          aria-label="Search documentation"
+        >
+          <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <span class="hidden sm:inline">Search docs...</span>
+          <kbd class="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 bg-white dark:bg-slate-900 rounded border border-slate-200 dark:border-slate-700">⌘K</kbd>
+        </button>
+
+        <!-- Theme Toggle -->
+        <ThemeToggle />
+
+        <!-- GitHub Link -->
+        <a
+          href="https://github.com/vuenice/rhp"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          aria-label="GitHub Repository"
+        >
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+          </svg>
+        </a>
+
+        <!-- Mobile Menu Toggle Button -->
+        <button
+          id="mobile-nav-toggle"
+          type="button"
+          class="md:hidden p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          aria-label="Open mobile menu"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
+          </svg>
+        </button>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Drawer Menu -->
+  <div id="mobile-menu" class="hidden md:hidden border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0A0D14] px-4 pt-2 pb-4 space-y-2">
+    <a href="/docs/getting-started/installation" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Documentation</a>
+    <a href="/#features" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Features</a>
+    <a href="/#showcase" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Showcase</a>
+    <a href="/#benchmarks" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Benchmarks</a>
+    <a href="/#playground" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Playground</a>
+    <a href="/#roadmap" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Roadmap</a>
+    <div class="pt-2 border-t border-slate-200 dark:border-slate-800">
+      <a href="https://github.com/vuenice/rhp" target="_blank" rel="noopener noreferrer" class="flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium text-brand-500 hover:bg-brand-500/10">
+        <span>GitHub Repository</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<script>
+  const toggleBtn = document.getElementById('mobile-nav-toggle');
+  const menu = document.getElementById('mobile-menu');
+
+  if (toggleBtn && menu) {
+    toggleBtn.addEventListener('click', () => {
+      menu.classList.toggle('hidden');
+    });
+
+    // Close when clicking nav items
+    menu.querySelectorAll('a').forEach(link => {
+      link.addEventListener('click', () => {
+        menu.classList.add('hidden');
+      });
+    });
+  }
+</script>

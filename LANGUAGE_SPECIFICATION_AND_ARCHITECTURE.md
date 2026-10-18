@@ -19,6 +19,7 @@
   - [5. Session Facade](#5-session-facade)
   - [6. Image Facade](#6-image-facade)
   - [7. URL Facade](#7-url-facade)
+  - [8. Trace & Telemetry Facades (OpenTelemetry Observability)](#8-trace--telemetry-facades-opentelemetry-observability)
 - [Asynchronous Non-Blocking Concurrent Core](#asynchronous-non-blocking-concurrent-core)
 - [Process Model & Database Pooling](#process-model--database-pooling)
 - [Dual-Engine Execution Modes (Development vs Production Mode)](#dual-engine-execution-modes-development-vs-production-mode)
@@ -335,6 +336,36 @@ Image::make('photo.jpg')
 URL generation, route inspection, and request URL analysis:
 
 - **Key Methods:** `URL::to()`, `URL::route()`, `URL::current()`, `URL::full()`.
+
+### 8. Trace & Telemetry Facades (OpenTelemetry Observability)
+
+Native Tier 1 static facades providing enterprise-grade, zero-overhead distributed tracing and metrics conforming strictly to the OpenTelemetry specifications and W3C Distributed Tracing standards:
+
+- **W3C Distributed Trace Context:** Automatic extraction and injection of W3C `traceparent` (`00-{trace_id}-{span_id}-{flags}`) and `baggage` headers across incoming worker requests and outbound HTTP client calls.
+- **Hierarchical Span Lifecycle:**
+  - `Trace::startSpan(string $name, ?array $options = null)`: Starts a new active span with kind (`SERVER`, `CLIENT`, `INTERNAL`, `PRODUCER`, `CONSUMER`), attributes, and parent linking.
+  - `Trace::endSpan(?array $status = null)`: Closes the current active span, calculates nanosecond duration, and moves it to the completed spans store.
+  - `Trace::span(string $name, callable $fn, ?array $attributes = null)`: Helper closure wrapper that automatically starts a span, enters it as active, executes `$fn`, records uncaught exceptions or panics as semantic error events, sets status to `OK` or `ERROR`, and ends the span.
+  - `Trace::setAttribute(string $key, mixed $value)`: Associates string, numeric, boolean, or array attributes to the active span.
+  - `Trace::addEvent(string $name, ?array $attributes = null)`: Records a timestamped event with metadata on the active span.
+  - `Trace::recordException(string $type, string $message, ?string $stackTrace = null)`: Records a semantic exception event and marks the span status as `ERROR`.
+  - `Trace::traceId()`, `Trace::spanId()`, `Trace::parentSpanId()`, `Trace::isRecording()`: Contextual distributed ID inspection.
+- **High-Precision Metrics Engine:**
+  - `Trace::counter(string $name, float $delta = 1.0, ?array $attributes = null)`: Monotonically increasing or decreasable counters.
+  - `Trace::gauge(string $name, float $value, ?array $attributes = null)`: Instantaneous point-in-time value tracking (e.g. queue depth, memory usage).
+  - `Trace::histogram(string $name, float $value, ?array $attributes = null)`: High-precision distribution tracking computing count, sum, min, max, avg, and exact percentiles ($p50$, $p90$, $p95$, $p99$).
+  - `Trace::metricSummary(string $name)`: Returns a structured summary dict with calculated statistics and percentiles.
+- **OpenTelemetry Protocol (OTLP) Exporters:**
+  - `Trace::exportOtlp()`: Canonical OTLP/HTTP JSON `/v1/traces` export.
+  - `Trace::exportOtlpMetrics()`: Canonical OTLP/HTTP JSON `/v1/metrics` export.
+  - Direct compatibility with OpenTelemetry Collector, Jaeger, Honeycomb, Datadog, and New Relic.
+- **Native Sentry & Datadog APM Bridges:**
+  - `Trace::exportSentry(string $type, string $message)`: Emits Sentry event JSON including exception metadata, stack frames, and active trace context.
+  - `Trace::exportDatadog()`: Emits Datadog APM trace JSON format.
+- **Auto-Instrumentation Hooks:**
+  - Incoming requests: `WorkerRequest` extracts `traceparent` and starts a root `SERVER` span, recording status and populating `WorkerResponse::trace_id` and `span_id`.
+  - Outgoing HTTP client: `HTTP::get` and `HTTP::post` auto-instrument `CLIENT` spans and inject the active W3C `traceparent` header.
+  - Database queries: `DB::*` auto-instruments `CLIENT` spans with semantic attributes.
 
 ---
 

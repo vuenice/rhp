@@ -1,0 +1,27 @@
+{
+  "name": "website",
+  "version": "1.0.0",
+  "description": "Marketing landing page and documentation site for RHP programming language",
+  "scripts": {
+    "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
+  },
+  "keywords": [
+    "rhp",
+    "rust",
+    "php",
+    "programming-language",
+    "compiler",
+    "astro",
+    "documentation"
+  ],
+  "author": "RHP Core Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@astrojs/sitemap": "^3.7.4",
+    "@astrojs/tailwind": "^6.0.2",
+    "astro": "^7.4.0",
+    "tailwindcss": "^3.4.19"
+  }
+}

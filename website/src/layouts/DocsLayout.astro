@@ -1,0 +1,313 @@
+---
+import Layout from './Layout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import SearchModal from '../components/SearchModal.astro';
+import { docsNavigation, getPrevNextDocs } from '../data/docsNav';
+
+interface Heading {
+  depth: number;
+  slug: string;
+  text: string;
+}
+
+interface Props {
+  title: string;
+  description?: string;
+  section?: string;
+  slug: string;
+  headings?: Heading[];
+}
+
+const { title, description, section, slug, headings = [] } = Astro.props;
+
+const currentPath = Astro.url.pathname.replace(/\/$/, '');
+const { prev, next } = getPrevNextDocs(slug);
+
+const githubEditUrl = `https://github.com/vuenice/rhp/edit/main/website/src/content/docs/${slug}.md`;
+const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
+---
+
+<Layout title={`${title} · RHP Docs`} description={description}>
+  <Navbar />
+  <SearchModal />
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full flex-1">
+    <div class="flex flex-col lg:flex-row gap-8 py-8 lg:py-10">
+      
+      <!-- Mobile Sidebar Toggle -->
+      <div class="lg:hidden flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 mb-2">
+        <button
+          id="docs-sidebar-toggle"
+          type="button"
+          class="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200"
+        >
+          <svg class="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+          <span>Menu &bull; {section || 'Documentation'}</span>
+        </button>
+        <span class="text-xs text-slate-400 font-mono">v0.1.0-alpha</span>
+      </div>
+
+      <!-- Left Sidebar (Desktop fixed/sticky, Mobile drawer) -->
+      <aside
+        id="docs-sidebar"
+        class="hidden lg:block w-full lg:w-64 flex-shrink-0 lg:sticky lg:top-24 h-auto lg:h-[calc(100vh-8rem)] overflow-y-auto pr-4 space-y-6 text-sm"
+      >
+        <!-- Version Selector Stub -->
+        <div class="pb-3 border-b border-slate-200 dark:border-slate-800">
+          <label for="version-select" class="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Language Version</label>
+          <select
+            id="version-select"
+            class="w-full bg-slate-100 dark:bg-[#0E1420] border border-slate-300 dark:border-slate-700/80 text-slate-800 dark:text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500 font-mono"
+          >
+            <option value="v0.1.0-alpha" selected>v0.1.0-alpha (current)</option>
+            <option value="v0.2.0-dev">v0.2.0-dev (preview)</option>
+            <option value="v0.0.9">v0.0.9 (legacy)</option>
+          </select>
+        </div>
+
+        <!-- Navigation Sections -->
+        <nav class="space-y-6">
+          {docsNavigation.map((sec) => (
+            <div>
+              <h4 class="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white mb-2.5">
+                {sec.title}
+              </h4>
+              <ul class="space-y-1 border-l border-slate-200 dark:border-slate-800">
+                {sec.items.map((item) => {
+                  const isActive = currentPath === item.href || currentPath.endsWith(item.slug);
+                  return (
+                    <li>
+                      <a
+                        href={item.href}
+                        class={`group -ml-px flex items-center pl-3 py-1.5 text-xs transition-colors border-l-2 ${
+                          isActive
+                            ? 'font-semibold text-brand-500 border-brand-500 bg-brand-500/5'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border-transparent hover:border-slate-300 dark:hover:border-slate-700'
+                        }`}
+                      >
+                        {item.title}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <!-- Center Content Area -->
+      <main class="flex-1 min-w-0 max-w-3xl">
+        
+        <!-- Breadcrumbs -->
+        <nav class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mb-6 font-mono">
+          <a href="/docs/getting-started/installation" class="hover:text-brand-500">Docs</a>
+          <span>/</span>
+          {section && (
+            <>
+              <span class="text-slate-400 dark:text-slate-500">{section}</span>
+              <span>/</span>
+            </>
+          )}
+          <span class="text-brand-500 font-medium truncate">{title}</span>
+        </nav>
+
+        <!-- Document Heading -->
+        <header class="mb-8 pb-6 border-b border-slate-200 dark:border-slate-800">
+          <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3">
+            {title}
+          </h1>
+          {description && (
+            <p class="text-base text-slate-600 dark:text-slate-400 leading-relaxed">
+              {description}
+            </p>
+          )}
+        </header>
+
+        <!-- Markdown Body -->
+        <article class="prose prose-slate dark:prose-invert max-w-none prose-headings:scroll-mt-28 prose-a:text-brand-500 hover:prose-a:underline prose-code:font-mono prose-pre:rounded-xl prose-pre:border prose-pre:border-slate-800/80 prose-pre:bg-[#0B0F19]">
+          <slot />
+        </article>
+
+        <!-- Document Footer: Edit on GitHub & Previous/Next Navigation -->
+        <div class="mt-12 pt-6 border-t border-slate-200 dark:border-slate-800 space-y-8">
+          
+          <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+            <a
+              href={githubEditUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 hover:text-brand-500 transition-colors"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+              <span>Edit this page on GitHub</span>
+            </a>
+            <span>Last verified for RHP v0.1.0-alpha</span>
+          </div>
+
+          <!-- Prev / Next Navigation Cards -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {prev ? (
+              <a
+                href={prev.href}
+                class="group p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D121C] hover:border-brand-500/50 transition-all text-left"
+              >
+                <span class="block text-[11px] font-mono text-slate-400 group-hover:text-brand-500 transition-colors">&larr; Previous</span>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white mt-0.5 block">{prev.title}</span>
+              </a>
+            ) : <div />}
+
+            {next ? (
+              <a
+                href={next.href}
+                class="group p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0D121C] hover:border-brand-500/50 transition-all text-right sm:col-start-2"
+              >
+                <span class="block text-[11px] font-mono text-slate-400 group-hover:text-brand-500 transition-colors">Next &rarr;</span>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white mt-0.5 block">{next.title}</span>
+              </a>
+            ) : null}
+          </div>
+
+        </div>
+
+      </main>
+
+      <!-- Right "On this page" Table of Contents (TOC) -->
+      <aside class="hidden xl:block w-60 flex-shrink-0 sticky top-24 h-[calc(100vh-8rem)] overflow-y-auto pl-4 text-xs">
+        <div class="border-l border-slate-200 dark:border-slate-800 pl-4 py-1 space-y-3">
+          <h5 class="font-bold uppercase tracking-wider text-slate-900 dark:text-white text-[11px]">
+            On this page
+          </h5>
+          {tocHeadings.length > 0 ? (
+            <ul class="space-y-2">
+              {tocHeadings.map(h => (
+                <li class={h.depth === 3 ? 'pl-2' : ''}>
+                  <a
+                    href={`#${h.slug}`}
+                    class="toc-link block text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors leading-snug"
+                    data-slug={h.slug}
+                  >
+                    {h.text}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="text-slate-400">Overview topic</p>
+          )}
+
+          <div class="pt-4 border-t border-slate-200 dark:border-slate-800">
+            <a href="#top" class="text-slate-400 hover:text-slate-200 flex items-center gap-1 font-mono">
+              &uarr; Back to top
+            </a>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+
+  <Footer />
+</Layout>
+
+<script>
+  // Mobile drawer toggle
+  const sidebarBtn = document.getElementById('docs-sidebar-toggle');
+  const sidebar = document.getElementById('docs-sidebar');
+  if (sidebarBtn && sidebar) {
+    sidebarBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('hidden');
+    });
+  }
+
+  // Code block copy button and language tag injection
+  function enhanceCodeBlocks() {
+    document.querySelectorAll('pre').forEach(pre => {
+      if (pre.querySelector('.code-copy-btn')) return;
+
+      // Extract language from code class (e.g. language-rhp)
+      const code = pre.querySelector('code');
+      const langClass = Array.from(code?.classList || []).find(c => c.startsWith('language-'));
+      const lang = langClass ? langClass.replace('language-', '') : '';
+
+      pre.classList.add('relative', 'group');
+
+      const header = document.createElement('div');
+      header.className = 'absolute top-2 right-2 flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity';
+
+      if (lang) {
+        const langBadge = document.createElement('span');
+        langBadge.className = 'text-[10px] font-mono uppercase bg-slate-800/80 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700/60';
+        langBadge.textContent = lang;
+        header.appendChild(langBadge);
+      }
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'code-copy-btn p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded border border-slate-700 transition-colors';
+      copyBtn.innerHTML = `
+        <svg class="w-3.5 h-3.5 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      `;
+
+      copyBtn.addEventListener('click', async () => {
+        const text = code?.textContent || pre.textContent || '';
+        await navigator.clipboard.writeText(text);
+        copyBtn.innerHTML = `
+          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          </svg>
+        `;
+        setTimeout(() => {
+          copyBtn.innerHTML = `
+            <svg class="w-3.5 h-3.5 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          `;
+        }, 1800);
+      });
+
+      header.appendChild(copyBtn);
+      pre.appendChild(header);
+    });
+  }
+
+  // Scrollspy for TOC
+  function setupScrollspy() {
+    const links = document.querySelectorAll('.toc-link');
+    const headingElements = Array.from(document.querySelectorAll('article h2, article h3'));
+
+    if (headingElements.length === 0 || links.length === 0) return;
+
+    window.addEventListener('scroll', () => {
+      let activeId = '';
+      for (const el of headingElements) {
+        const top = el.getBoundingClientRect().top;
+        if (top <= 120) {
+          activeId = el.id;
+        } else {
+          break;
+        }
+      }
+
+      links.forEach(l => {
+        if (l.getAttribute('data-slug') === activeId) {
+          l.classList.add('text-brand-500', 'font-semibold');
+          l.classList.remove('text-slate-600', 'dark:text-slate-400');
+        } else {
+          l.classList.remove('text-brand-500', 'font-semibold');
+          l.classList.add('text-slate-600', 'dark:text-slate-400');
+        }
+      });
+    }, { passive: true });
+  }
+
+  enhanceCodeBlocks();
+  setupScrollspy();
+  document.addEventListener('astro:after-swap', () => {
+    enhanceCodeBlocks();
+    setupScrollspy();
+  });
+</script>

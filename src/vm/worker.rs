@@ -301,9 +301,47 @@ pub struct WorkerResponse {
     pub fiber_stats: Option<FiberStats>,
     /// Instantaneous O(1) request arena drop telemetry.
     pub arena_drop: Option<RequestDropStats>,
+    /// Distributed OpenTelemetry trace ID for this request.
+    pub trace_id: Option<String>,
+    /// Distributed OpenTelemetry root span ID for this request.
+    pub span_id: Option<String>,
 }
 
 impl WorkerResponse {
+    /// Retrieve the distributed OpenTelemetry trace ID, if recorded.
+    #[inline]
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
+    }
+
+    /// Retrieve the distributed OpenTelemetry span ID, if recorded.
+    #[inline]
+    pub fn span_id(&self) -> Option<&str> {
+        self.span_id.as_deref()
+    }
+
+    /// Construct a standardized error [`WorkerResponse`].
+    pub fn error_response(
+        request_id: impl Into<String>,
+        status: WorkerResponseStatus,
+        error_msg: impl Into<String>,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            request_id: request_id.into(),
+            status,
+            value: FrozenValue::Null,
+            output: String::new(),
+            duration,
+            error: Some(error_msg.into()),
+            worker_id: 0,
+            fiber_stats: None,
+            arena_drop: None,
+            trace_id: None,
+            span_id: None,
+        }
+    }
+
     /// Check whether the request finished with `WorkerResponseStatus::Success`.
     #[inline]
     pub fn is_success(&self) -> bool {
@@ -575,40 +613,19 @@ impl WorkerPool {
         let timeout = self.config.request_timeout;
         match self.dispatch(request) {
             Ok(handle) => match timeout {
-                Some(dur) => handle.recv_timeout(dur).unwrap_or_else(|e| WorkerResponse {
-                    request_id: "timeout".to_string(),
-                    status: WorkerResponseStatus::Timeout,
-                    value: FrozenValue::Null,
-                    output: String::new(),
-                    duration: dur,
-                    error: Some(e.to_string()),
-                    worker_id: 0,
-                    fiber_stats: None,
-                    arena_drop: None,
+                Some(dur) => handle.recv_timeout(dur).unwrap_or_else(|e| {
+                    WorkerResponse::error_response("timeout", WorkerResponseStatus::Timeout, e.to_string(), dur)
                 }),
-                None => handle.recv().unwrap_or_else(|e| WorkerResponse {
-                    request_id: "error".to_string(),
-                    status: WorkerResponseStatus::RuntimeError,
-                    value: FrozenValue::Null,
-                    output: String::new(),
-                    duration: Duration::default(),
-                    error: Some(e.to_string()),
-                    worker_id: 0,
-                    fiber_stats: None,
-                    arena_drop: None,
+                None => handle.recv().unwrap_or_else(|e| {
+                    WorkerResponse::error_response("error", WorkerResponseStatus::RuntimeError, e.to_string(), Duration::default())
                 }),
             },
-            Err(err) => WorkerResponse {
-                request_id: "dispatch_error".to_string(),
-                status: WorkerResponseStatus::RuntimeError,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: Duration::default(),
-                error: Some(err.to_string()),
-                worker_id: 0,
-                fiber_stats: None,
-                arena_drop: None,
-            },
+            Err(err) => WorkerResponse::error_response(
+                "dispatch_error",
+                WorkerResponseStatus::RuntimeError,
+                err.to_string(),
+                Duration::default(),
+            ),
         }
     }
 
@@ -640,40 +657,19 @@ impl WorkerPool {
             .into_iter()
             .map(|h_opt| match h_opt {
                 Some(handle) => match timeout {
-                    Some(dur) => handle.recv_timeout(dur).unwrap_or_else(|e| WorkerResponse {
-                        request_id: "timeout".to_string(),
-                        status: WorkerResponseStatus::Timeout,
-                        value: FrozenValue::Null,
-                        output: String::new(),
-                        duration: dur,
-                        error: Some(e.to_string()),
-                        worker_id: 0,
-                        fiber_stats: None,
-                        arena_drop: None,
+                    Some(dur) => handle.recv_timeout(dur).unwrap_or_else(|e| {
+                        WorkerResponse::error_response("timeout", WorkerResponseStatus::Timeout, e.to_string(), dur)
                     }),
-                    None => handle.recv().unwrap_or_else(|e| WorkerResponse {
-                        request_id: "batch_recv_error".to_string(),
-                        status: WorkerResponseStatus::RuntimeError,
-                        value: FrozenValue::Null,
-                        output: String::new(),
-                        duration: Duration::default(),
-                        error: Some(e.to_string()),
-                        worker_id: 0,
-                        fiber_stats: None,
-                        arena_drop: None,
+                    None => handle.recv().unwrap_or_else(|e| {
+                        WorkerResponse::error_response("batch_recv_error", WorkerResponseStatus::RuntimeError, e.to_string(), Duration::default())
                     }),
                 },
-                None => WorkerResponse {
-                    request_id: "batch_dispatch_error".to_string(),
-                    status: WorkerResponseStatus::RuntimeError,
-                    value: FrozenValue::Null,
-                    output: String::new(),
-                    duration: Duration::default(),
-                    error: Some("Failed to dispatch request to worker pool".to_string()),
-                    worker_id: 0,
-                    fiber_stats: None,
-                    arena_drop: None,
-                },
+                None => WorkerResponse::error_response(
+                    "batch_dispatch_error",
+                    WorkerResponseStatus::RuntimeError,
+                    "Failed to dispatch request to worker pool",
+                    Duration::default(),
+                ),
             })
             .collect()
     }
@@ -779,17 +775,20 @@ pub fn execute_isolated_request(
         Ok(resp) => resp,
         Err(panic_payload) => {
             let panic_msg = extract_panic_message(&panic_payload);
-            WorkerResponse {
-                request_id: request.id.clone(),
-                status: WorkerResponseStatus::Panic,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: start.elapsed(),
-                error: Some(panic_msg),
-                worker_id,
-                fiber_stats: None,
-                arena_drop: None,
-            }
+            crate::telemetry::counter("rhp.request.total", 1.0);
+            crate::telemetry::counter("rhp.request.error", 1.0);
+            crate::telemetry::record_active_span_error(&panic_msg);
+            crate::telemetry::capture_exception("Panic", &panic_msg, &[], None);
+            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(&panic_msg)));
+
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::Panic,
+                panic_msg,
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            resp
         }
     }
 }
@@ -800,6 +799,33 @@ fn execute_isolated_request_inner(
     worker_id: usize,
     start: Instant,
 ) -> WorkerResponse {
+    // OpenTelemetry Distributed Tracing: Extract W3C traceparent and baggage
+    let (parent_ctx, baggage) = crate::telemetry::extract_trace_context(&request.headers);
+    if let Some(b) = baggage {
+        crate::telemetry::set_active_baggage(b);
+    }
+    let mut attrs = IndexMap::new();
+    attrs.insert(
+        "worker.id".to_string(),
+        crate::telemetry::AttributeValue::Int(worker_id as i64),
+    );
+    attrs.insert(
+        "request.id".to_string(),
+        crate::telemetry::AttributeValue::String(request.id.clone()),
+    );
+    let root_span_name = match &request.payload {
+        WorkerPayload::Source(_) => "HTTP Request".to_string(),
+        WorkerPayload::Call { func_name, .. } => format!("Call {}", func_name),
+    };
+    let root_ctx = crate::telemetry::start_span(
+        root_span_name,
+        crate::telemetry::SpanKind::Server,
+        parent_ctx.as_ref(),
+        attrs,
+    );
+    let trace_id_str = root_ctx.trace_id.to_hex();
+    let span_id_str = root_ctx.span_id.to_hex();
+
     match &request.payload {
         WorkerPayload::Source(source) => {
             // Parse & check against parent type hierarchy with zero framework bootstrap overhead
@@ -807,17 +833,23 @@ fn execute_isolated_request_inner(
             {
                 Ok(t) => t,
                 Err(e) => {
-                    return WorkerResponse {
-                        request_id: request.id.clone(),
-                        status: WorkerResponseStatus::CompilationError,
-                        value: FrozenValue::Null,
-                        output: String::new(),
-                        duration: start.elapsed(),
-                        error: Some(e.to_string()),
-                        worker_id,
-                        fiber_stats: None,
-                        arena_drop: None,
-                    };
+                    let err_msg = e.to_string();
+                    crate::telemetry::counter("rhp.request.total", 1.0);
+                    crate::telemetry::counter("rhp.request.error", 1.0);
+                    crate::telemetry::record_active_span_error(&err_msg);
+                    crate::telemetry::capture_exception("CompilationError", &err_msg, &[], None);
+                    crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(&err_msg)));
+
+                    let mut resp = WorkerResponse::error_response(
+                        request.id.clone(),
+                        WorkerResponseStatus::CompilationError,
+                        err_msg,
+                        start.elapsed(),
+                    );
+                    resp.worker_id = worker_id;
+                    resp.trace_id = Some(trace_id_str);
+                    resp.span_id = Some(span_id_str);
+                    return resp;
                 }
             };
 
@@ -826,17 +858,23 @@ fn execute_isolated_request_inner(
                 match lower_typed_program_with_base(&typed, (*state.module).clone()) {
                     Ok(m) => m,
                     Err(e) => {
-                        return WorkerResponse {
-                            request_id: request.id.clone(),
-                            status: WorkerResponseStatus::CompilationError,
-                            value: FrozenValue::Null,
-                            output: String::new(),
-                            duration: start.elapsed(),
-                            error: Some(e.to_string()),
-                            worker_id,
-                            fiber_stats: None,
-                            arena_drop: None,
-                        };
+                        let err_msg = e.to_string();
+                        crate::telemetry::counter("rhp.request.total", 1.0);
+                        crate::telemetry::counter("rhp.request.error", 1.0);
+                        crate::telemetry::record_active_span_error(&err_msg);
+                        crate::telemetry::capture_exception("CompilationError", &err_msg, &[], None);
+                        crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(&err_msg)));
+
+                        let mut resp = WorkerResponse::error_response(
+                            request.id.clone(),
+                            WorkerResponseStatus::CompilationError,
+                            err_msg,
+                            start.elapsed(),
+                        );
+                        resp.worker_id = worker_id;
+                        resp.trace_id = Some(trace_id_str);
+                        resp.span_id = Some(span_id_str);
+                        return resp;
                     }
                 };
 
@@ -869,29 +907,50 @@ fn execute_isolated_request_inner(
             // Instantaneous O(1) request arena drop and register file flush
             let arena_drop = vm.finish_request();
 
+            // Record request latency percentiles & counters in OpenTelemetry metrics
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            crate::telemetry::histogram("rhp.request.duration_ms", elapsed_ms);
+            crate::telemetry::counter("rhp.request.total", 1.0);
+
             match run_res {
-                Ok(val) => WorkerResponse {
-                    request_id: request.id.clone(),
-                    status: WorkerResponseStatus::Success,
-                    value: FrozenValue::from_php_value(&val),
-                    output,
-                    duration: start.elapsed(),
-                    error: None,
-                    worker_id,
-                    fiber_stats: Some(stats),
-                    arena_drop: Some(arena_drop),
-                },
-                Err(err) => WorkerResponse {
-                    request_id: request.id.clone(),
-                    status: WorkerResponseStatus::RuntimeError,
-                    value: FrozenValue::Null,
-                    output,
-                    duration: start.elapsed(),
-                    error: Some(err.to_string()),
-                    worker_id,
-                    fiber_stats: Some(stats),
-                    arena_drop: Some(arena_drop),
-                },
+                Ok(val) => {
+                    crate::telemetry::counter("rhp.request.success", 1.0);
+                    crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::ok()));
+                    WorkerResponse {
+                        request_id: request.id.clone(),
+                        status: WorkerResponseStatus::Success,
+                        value: FrozenValue::from_php_value(&val),
+                        output,
+                        duration: start.elapsed(),
+                        error: None,
+                        worker_id,
+                        fiber_stats: Some(stats),
+                        arena_drop: Some(arena_drop),
+                        trace_id: Some(trace_id_str),
+                        span_id: Some(span_id_str),
+                    }
+                }
+                Err(err) => {
+                    let err_msg = err.to_string();
+                    crate::telemetry::counter("rhp.request.error", 1.0);
+                    crate::telemetry::record_active_span_error(&err_msg);
+                    crate::telemetry::capture_exception("RuntimeError", &err_msg, &[], None);
+                    crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(&err_msg)));
+
+                    WorkerResponse {
+                        request_id: request.id.clone(),
+                        status: WorkerResponseStatus::RuntimeError,
+                        value: FrozenValue::Null,
+                        output,
+                        duration: start.elapsed(),
+                        error: Some(err_msg),
+                        worker_id,
+                        fiber_stats: Some(stats),
+                        arena_drop: Some(arena_drop),
+                        trace_id: Some(trace_id_str),
+                        span_id: Some(span_id_str),
+                    }
+                }
             }
         }
         WorkerPayload::Call { func_name, args } => {
@@ -916,29 +975,49 @@ fn execute_isolated_request_inner(
             // Instantaneous O(1) request arena drop and register file flush
             let arena_drop = vm.finish_request();
 
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            crate::telemetry::histogram("rhp.request.duration_ms", elapsed_ms);
+            crate::telemetry::counter("rhp.request.total", 1.0);
+
             match run_res {
-                Ok(val) => WorkerResponse {
-                    request_id: request.id.clone(),
-                    status: WorkerResponseStatus::Success,
-                    value: FrozenValue::from_php_value(&val),
-                    output,
-                    duration: start.elapsed(),
-                    error: None,
-                    worker_id,
-                    fiber_stats: Some(stats),
-                    arena_drop: Some(arena_drop),
-                },
-                Err(err) => WorkerResponse {
-                    request_id: request.id.clone(),
-                    status: WorkerResponseStatus::RuntimeError,
-                    value: FrozenValue::Null,
-                    output: vm.output().to_string(),
-                    duration: start.elapsed(),
-                    error: Some(err.to_string()),
-                    worker_id,
-                    fiber_stats: Some(stats),
-                    arena_drop: Some(arena_drop),
-                },
+                Ok(val) => {
+                    crate::telemetry::counter("rhp.request.success", 1.0);
+                    crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::ok()));
+                    WorkerResponse {
+                        request_id: request.id.clone(),
+                        status: WorkerResponseStatus::Success,
+                        value: FrozenValue::from_php_value(&val),
+                        output,
+                        duration: start.elapsed(),
+                        error: None,
+                        worker_id,
+                        fiber_stats: Some(stats),
+                        arena_drop: Some(arena_drop),
+                        trace_id: Some(trace_id_str),
+                        span_id: Some(span_id_str),
+                    }
+                }
+                Err(err) => {
+                    let err_msg = err.to_string();
+                    crate::telemetry::counter("rhp.request.error", 1.0);
+                    crate::telemetry::record_active_span_error(&err_msg);
+                    crate::telemetry::capture_exception("RuntimeError", &err_msg, &[], None);
+                    crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(&err_msg)));
+
+                    WorkerResponse {
+                        request_id: request.id.clone(),
+                        status: WorkerResponseStatus::RuntimeError,
+                        value: FrozenValue::Null,
+                        output: vm.output().to_string(),
+                        duration: start.elapsed(),
+                        error: Some(err_msg),
+                        worker_id,
+                        fiber_stats: Some(stats),
+                        arena_drop: Some(arena_drop),
+                        trace_id: Some(trace_id_str),
+                        span_id: Some(span_id_str),
+                    }
+                }
             }
         }
     }
@@ -1014,17 +1093,14 @@ pub fn execute_process_cow(
     let mut pipe_fds = [0i32; 2];
 
     if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-        return WorkerResponse {
-            request_id: request.id.clone(),
-            status: WorkerResponseStatus::ProcessTerminated,
-            value: FrozenValue::Null,
-            output: String::new(),
-            duration: start.elapsed(),
-            error: Some("Failed to create IPC pipe for process-level worker".to_string()),
-            worker_id,
-            fiber_stats: None,
-            arena_drop: None,
-        };
+        let mut resp = WorkerResponse::error_response(
+            request.id.clone(),
+            WorkerResponseStatus::ProcessTerminated,
+            "Failed to create IPC pipe for process-level worker",
+            start.elapsed(),
+        );
+        resp.worker_id = worker_id;
+        return resp;
     }
 
     let pid = unsafe { libc::fork() };
@@ -1034,17 +1110,14 @@ pub fn execute_process_cow(
             libc::close(pipe_fds[0]);
             libc::close(pipe_fds[1]);
         }
-        return WorkerResponse {
-            request_id: request.id.clone(),
-            status: WorkerResponseStatus::ProcessTerminated,
-            value: FrozenValue::Null,
-            output: String::new(),
-            duration: start.elapsed(),
-            error: Some("Failed to fork worker process".to_string()),
-            worker_id,
-            fiber_stats: None,
-            arena_drop: None,
-        };
+        let mut resp = WorkerResponse::error_response(
+            request.id.clone(),
+            WorkerResponseStatus::ProcessTerminated,
+            "Failed to fork worker process",
+            start.elapsed(),
+        );
+        resp.worker_id = worker_id;
+        return resp;
     }
 
     if pid == 0 {
@@ -1088,17 +1161,14 @@ pub fn execute_process_cow(
             unsafe {
                 libc::close(pipe_fds[0]);
             }
-            return WorkerResponse {
-                request_id: request.id.clone(),
-                status: WorkerResponseStatus::ProcessTerminated,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: start.elapsed(),
-                error: Some("libc::waitpid failed".to_string()),
-                worker_id,
-                fiber_stats: None,
-                arena_drop: None,
-            };
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::ProcessTerminated,
+                "libc::waitpid failed",
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            return resp;
         }
 
         let exited_normally = libc::WIFEXITED(status);
@@ -1118,20 +1188,17 @@ pub fn execute_process_cow(
             unsafe {
                 libc::close(pipe_fds[0]);
             }
-            return WorkerResponse {
-                request_id: request.id.clone(),
-                status: WorkerResponseStatus::ProcessTerminated,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: start.elapsed(),
-                error: Some(format!(
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::ProcessTerminated,
+                format!(
                     "Worker process terminated abnormally: signaled={}, signal={}, exit_code={}",
                     signaled, term_sig, exit_code
-                )),
-                worker_id,
-                fiber_stats: None,
-                arena_drop: None,
-            };
+                ),
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            return resp;
         }
 
         // Read 4-byte length prefix
@@ -1141,17 +1208,14 @@ pub fn execute_process_cow(
             unsafe {
                 libc::close(pipe_fds[0]);
             }
-            return WorkerResponse {
-                request_id: request.id.clone(),
-                status: WorkerResponseStatus::ProcessTerminated,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: start.elapsed(),
-                error: Some("Failed to read header from worker process pipe".to_string()),
-                worker_id,
-                fiber_stats: None,
-                arena_drop: None,
-            };
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::ProcessTerminated,
+                "Failed to read header from worker process pipe",
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            return resp;
         }
 
         let total_len = u32::from_le_bytes(len_buf) as usize;
@@ -1177,29 +1241,25 @@ pub fn execute_process_cow(
         }
 
         if read_bytes != total_len {
-            return WorkerResponse {
-                request_id: request.id.clone(),
-                status: WorkerResponseStatus::ProcessTerminated,
-                value: FrozenValue::Null,
-                output: String::new(),
-                duration: start.elapsed(),
-                error: Some("Incomplete response read from worker process pipe".to_string()),
-                worker_id,
-                fiber_stats: None,
-                arena_drop: None,
-            };
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::ProcessTerminated,
+                "Incomplete response read from worker process pipe",
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            return resp;
         }
 
-        deserialize_response(&data).unwrap_or_else(|e| WorkerResponse {
-            request_id: request.id.clone(),
-            status: WorkerResponseStatus::RuntimeError,
-            value: FrozenValue::Null,
-            output: String::new(),
-            duration: start.elapsed(),
-            error: Some(format!("Failed to deserialize worker response: {}", e)),
-            worker_id,
-            fiber_stats: None,
-            arena_drop: None,
+        deserialize_response(&data).unwrap_or_else(|e| {
+            let mut resp = WorkerResponse::error_response(
+                request.id.clone(),
+                WorkerResponseStatus::RuntimeError,
+                format!("Failed to deserialize worker response: {}", e),
+                start.elapsed(),
+            );
+            resp.worker_id = worker_id;
+            resp
         })
     }
 }
@@ -1266,6 +1326,24 @@ pub fn serialize_response(resp: &WorkerResponse) -> Vec<u8> {
             buf.extend_from_slice(&(stats.bytes_reclaimed as u64).to_le_bytes());
             buf.extend_from_slice(&(stats.reset_count as u64).to_le_bytes());
             buf.extend_from_slice(&(stats.resources_closed as u64).to_le_bytes());
+        }
+        None => buf.push(0),
+    }
+
+    // 10. Distributed OpenTelemetry trace ID
+    match &resp.trace_id {
+        Some(tid) => {
+            buf.push(1);
+            write_string(&mut buf, tid);
+        }
+        None => buf.push(0),
+    }
+
+    // 11. Distributed OpenTelemetry span ID
+    match &resp.span_id {
+        Some(sid) => {
+            buf.push(1);
+            write_string(&mut buf, sid);
         }
         None => buf.push(0),
     }
@@ -1366,6 +1444,28 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         None
     };
 
+    let trace_id = if cursor < data.len() {
+        let has_trace = read_u8(data, &mut cursor)?;
+        if has_trace == 1 {
+            Some(read_string(data, &mut cursor)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let span_id = if cursor < data.len() {
+        let has_span = read_u8(data, &mut cursor)?;
+        if has_span == 1 {
+            Some(read_string(data, &mut cursor)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Ok(WorkerResponse {
         request_id,
         status,
@@ -1376,6 +1476,8 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         worker_id,
         fiber_stats,
         arena_drop,
+        trace_id,
+        span_id,
     })
 }
 

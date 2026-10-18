@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" fill="none">
+  <defs>
+    <linearGradient id="rhp-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F06543" />
+      <stop offset="60%" stop-color="#DC4A26" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+    <linearGradient id="rhp-glow" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF8A65" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#818CF8" stop-opacity="0.8" />
+    </linearGradient>
+  </defs>
+  <rect width="40" height="40" rx="10" fill="#0E131F" stroke="#252D3F" stroke-width="1.5" />
+  <!-- Hexagon / Bolt R glyph -->
+  <path d="M12 10H22C25.3137 10 28 12.6863 28 16C28 19.0304 25.7483 21.536 22.8203 21.9424L28.5 30H23.5L18.5 22H16V30H12V10ZM16 13.8V18.2H21.5C22.8255 18.2 23.9 17.1255 23.9 15.8C23.9 14.4745 22.8255 13.8 21.5 13.8H16Z" fill="url(#rhp-grad)" />
+  <!-- Speed lightning accent -->
+  <polygon points="21,11 25,18 20.5,18 24.5,26 19,20 23,20" fill="url(#rhp-glow)" opacity="0.35" />
+</svg>

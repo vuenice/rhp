@@ -1,0 +1,90 @@
+---
+title: "Operators"
+description: "Reference guide for arithmetic, logical, null-coalescing, and comparison operators in RHP."
+section: "Language Guide"
+order: 2
+---
+
+## Arithmetic Operators
+
+RHP supports standard mathematical operators with compile-time type validation:
+
+| Operator | Name | Example | Description |
+| :--- | :--- | :--- | :--- |
+| `+` | Addition | `$a + $b` | Sum of operands |
+| `-` | Subtraction | `$a - $b` | Difference of operands |
+| `*` | Multiplication | `$a * $b` | Product of operands |
+| `/` | Division | `$a / $b` | Quotient of operands |
+| `%` | Modulo | `$a % $b` | Remainder of division |
+| `**` | Exponentiation | `$a ** $b` | Base raised to exponent |
+
+---
+
+## Assignment Operators
+
+```php
+<?rhp
+
+int $x = 10;
+$x += 5;   // 15
+$x *= 2;   // 30
+$x -= 10;  // 20
+$x /= 4;   // 5
+```
+
+---
+
+## Comparison Operators
+
+RHP distinguishes between value equivalence (`==`) and strict identity (`===`):
+
+```php
+<?rhp
+
+int $a = 10;
+int $b = 10;
+
+// Strict identity check (type and value)
+if ($a === $b) {
+    Sys::print("Values and types match exactly");
+}
+
+// Spaceship operator (<=>) for sorting
+int $cmp = $a <=> 5; // returns 1
+```
+
+---
+
+## Null-Coalescing and Ternary Operators
+
+The null-coalescing operator (`??`) and null-coalescing assignment (`??=`) provide concise handling of optional or fallback values:
+
+```php
+<?rhp
+
+// Null coalescing fallback
+dict $config = Arr::dict(['env' => 'production']);
+string $mode = $config->get('debug') ?? 'false';
+
+// Null coalescing assignment
+string $cache_dir = null;
+$cache_dir ??= '/tmp/rhp_cache';
+
+// Ternary expression
+bool $is_admin = true;
+string $role = $is_admin ? 'SuperAdmin' : 'Member';
+```
+
+---
+
+## String Concatenation Operator (`.`)
+
+Consistent with PHP syntax, strings are concatenated using the dot (`.`) operator:
+
+```php
+<?rhp
+
+string $first = "Fast";
+string $second = "Backend";
+string $full = $first . " " . $second;
+```

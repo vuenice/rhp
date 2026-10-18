@@ -1,0 +1,169 @@
+---
+// EcosystemRoadmap.astro
+const milestones = [
+  {
+    version: "v0.1.0 Alpha",
+    date: "Current Release",
+    status: "completed",
+    title: "Language Foundation & AST Engine",
+    items: [
+      "Logos zero-copy DFA lexer and Pratt expression parser",
+      "Tier 1 native facades (Arr, Str, Future, Memory, Sys)",
+      "Direct AST dev interpreter (<5ms cold start)",
+      "AST auto-formatter & boundary typing (rhp run lint)"
+    ]
+  },
+  {
+    version: "v0.2.0 Beta",
+    date: "Q1 2027",
+    status: "in-progress",
+    title: "Register VM & JIT Pipeline",
+    items: [
+      "Compact register-based linear IR bytecode emission",
+      "Cranelift JIT hot-path native compilation",
+      "Multi-worker Tokio fiber execution pool",
+      "Persistent parent process immutable Arc<EngineState>"
+    ]
+  },
+  {
+    version: "v0.3.0 Preview",
+    date: "Q2 2027",
+    status: "planned",
+    title: "Package Ecosystem & Composer Bridge",
+    items: [
+      "Dedicated RHP package registry and dependency solver",
+      "Transparent Composer autoload bridge for legacy vendor packages",
+      "Full Debug Adapter Protocol (DAP) server for IDEs",
+      "WebAssembly browser-compiler distribution"
+    ]
+  },
+  {
+    version: "v1.0.0 Production",
+    date: "Late 2027",
+    status: "planned",
+    title: "LTS Release & Framework Kernel",
+    items: [
+      "Complete Laravel-compatible drop-in HTTP router & ORM",
+      "Long-term API stability and strict semver guarantee",
+      "Automated migration toolchain from PHP 8.x codebase",
+      "Enterprise production benchmarking harness"
+    ]
+  }
+];
+
+const tooling = [
+  {
+    title: "Command-Line Toolchain",
+    description: "Single static binary rhp handling direct dev interpretation, production bytecode JIT compilation, and linting.",
+    status: "Available"
+  },
+  {
+    title: "VS Code & Neovim Extensions",
+    description: "Syntax highlighting grammars, semantic tokens, and Tree-sitter parsers for modern code editors.",
+    status: "Available"
+  },
+  {
+    title: "Language Server (LSP)",
+    description: "Real-time diagnostic checks, symbol completion, type inference tooltips, and jump-to-definition.",
+    status: "In Development"
+  },
+  {
+    title: "Rust FFI & Tier 2 Plugins",
+    description: "Include custom high-speed Rust crates and compile native shared libraries directly into your engine.",
+    status: "Preview"
+  }
+];
+---
+
+<section id="roadmap" class="py-20 bg-slate-50/50 dark:bg-[#0A0E17]/50 border-y border-slate-200/80 dark:border-slate-800/80 transition-colors">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    
+    <!-- Header -->
+    <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+      <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+        Vision & Progress
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+        Ecosystem & Development Roadmap
+      </h2>
+      <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+        Transparent progress from initial language design to register VM execution and enterprise production stability.
+      </p>
+    </div>
+
+    <!-- Tooling Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-20">
+      {tooling.map(tool => (
+        <div class="p-5 rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 shadow-sm space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+              {tool.status}
+            </span>
+          </div>
+          <h3 class="text-base font-bold text-slate-900 dark:text-white pt-1">
+            {tool.title}
+          </h3>
+          <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+            {tool.description}
+          </p>
+        </div>
+      ))}
+    </div>
+
+    <!-- Milestone Timeline -->
+    <div class="relative">
+      <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-8 text-center sm:text-left">
+        Milestone Timeline
+      </h3>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {milestones.map((m) => (
+          <div class={`relative rounded-2xl p-6 border ${
+            m.status === 'completed'
+              ? 'bg-white dark:bg-[#0D121C] border-emerald-500/40 shadow-sm'
+              : m.status === 'in-progress'
+              ? 'bg-white dark:bg-[#0D121C] border-brand-500/50 shadow-md ring-1 ring-brand-500/20'
+              : 'bg-slate-100/60 dark:bg-[#0B0F17]/60 border-slate-200 dark:border-slate-800/80'
+          }`}>
+            
+            <!-- Badge & Version -->
+            <div class="flex items-center justify-between mb-3">
+              <span class={`text-xs font-mono font-bold px-2.5 py-0.5 rounded-full ${
+                m.status === 'completed'
+                  ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                  : m.status === 'in-progress'
+                  ? 'bg-brand-500/10 text-brand-500 border border-brand-500/20'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+              }`}>
+                {m.version}
+              </span>
+              <span class="text-xs font-mono text-slate-400">{m.date}</span>
+            </div>
+
+            <!-- Title -->
+            <h4 class="text-base font-bold text-slate-900 dark:text-white mb-4">
+              {m.title}
+            </h4>
+
+            <!-- Checklist -->
+            <ul class="space-y-2 text-xs text-slate-600 dark:text-slate-400">
+              {m.items.map(item => (
+                <li class="flex items-start gap-2">
+                  <span class={`mt-0.5 flex-shrink-0 ${
+                    m.status === 'completed' ? 'text-emerald-500' : 'text-slate-400'
+                  }`}>
+                    {m.status === 'completed' ? '✓' : '•'}
+                  </span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+
+          </div>
+        ))}
+      </div>
+
+    </div>
+
+  </div>
+</section>

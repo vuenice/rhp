@@ -10,6 +10,7 @@ pub mod jit;
 pub mod lexer;
 pub mod lint;
 pub mod parser;
+pub mod telemetry;
 pub mod type_system;
 pub mod vm;
 
@@ -87,3 +88,16 @@ pub use lint::{
     to_snake_case, type_error_to_code, Issue, IssueLevel, IssueSpan, LintOptions, LintReport,
     LintResult,
 };
+pub use telemetry::{
+    capture_exception, clear_captured_crashes, clear_completed_spans, clear_metrics, counter,
+    current_parent_span_id, current_span, current_span_id, current_trace_id, dispatch_trace,
+    end_active_span, export_active_otlp_traces, export_datadog_traces, export_otlp_metrics,
+    export_otlp_traces, extract_trace_context, gauge, get_active_baggage, get_all_metrics,
+    get_captured_crashes, get_completed_spans, get_histogram_summary, get_service_name, histogram,
+    inject_trace_context, now_unix_nanos, record_active_span_error, record_completed_span,
+    set_active_baggage, set_active_span_attribute, set_active_span_attributes, set_baggage_item,
+    set_sample_rate, set_service_name, start_span, with_active_span, AttributeValue, Baggage,
+    CrashReport, HistogramSummary, MetricsRegistry, Span as OtelSpan, SpanContext, SpanEvent, SpanId, SpanKind,
+    SpanLink, SpanStatus, SpanStatusCode, TraceFlags, TraceId, TraceState, TracerConfig,
+};
+

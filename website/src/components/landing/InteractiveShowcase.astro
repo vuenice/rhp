@@ -1,0 +1,229 @@
+---
+// InteractiveShowcase.astro
+const rhpCode = `// RHP: Clean expressive syntax, Tokio non-blocking fibers, zero GC
+function getUserDashboard(int $user_id): dict {
+    // Run both network & DB queries concurrently without thread locking
+    [$profile, $orders] = Future::wait([
+        fn() => DB::table('users')->find($user_id),
+        fn() => HTTP::get("https://api.orders.internal/{$user_id}")->json()
+    ]);
+
+    // Native Rust list filtering & transformation
+    list $high_value = Arr::list($orders)->filter(fn($o) => $o['total'] > 100);
+
+    // Post-response hook: flushes to client first, logs in background
+    Future::defer(fn() => Log::info("Dashboard rendered for {$user_id}"));
+
+    return Arr::dict(['user' => $profile, 'recent_orders' => $high_value]);
+}`;
+
+const phpCode = `// Traditional PHP: Blocking sequential I/O by default; curl_multi requires verbose boilerplate
+function getUserDashboard(int $userId): array {
+    // Sequential blocking: First query takes 30ms...
+    $profile = DB::table('users')->find($userId);
+
+    // ...Then HTTP call takes 70ms. Total = 100ms latency
+    $ch = curl_init("https://api.orders.internal/{$userId}");
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $response = curl_exec($ch);
+    $orders = json_decode($response, true);
+    curl_close($ch);
+
+    // Array filter in PHP requires array_values to re-index keys
+    $highValue = array_values(array_filter($orders, function($o) {
+        return $o['total'] > 100;
+    }));
+
+    // Post-response hooks in PHP-FPM require fastcgi_finish_request() (fragile) or queue workers
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+        Log::info("Dashboard rendered for {$userId}");
+    }
+
+    return ['user' => $profile, 'recent_orders' => $highValue];
+}`;
+
+const nodeCode = `// Node.js: Async/await with Promise.all
+async function getUserDashboard(userId) {
+    // Concurrent fetch using Promise.all
+    const [profile, orders] = await Promise.all([
+        db.users.findOne({ id: userId }),
+        fetch("https://api.orders.internal/" + userId).then(res => res.json())
+    ]);
+
+    // JavaScript array filter
+    const highValue = orders.filter(o => o.total > 100);
+
+    // Post-response cleanup hook requires setImmediate or res.on('finish')
+    setImmediate(() => {
+        logger.info("Dashboard rendered for " + userId);
+    });
+
+    return { user: profile, recentOrders: highValue };
+}`;
+
+const goCode = `// Go: Goroutines with channels & waitgroups
+func getUserDashboard(userId int) (*Dashboard, error) {
+    var wg sync.WaitGroup
+    var profile *User
+    var orders []Order
+    var errUser, errOrders error
+
+    wg.Add(2)
+    go func() {
+        defer wg.Done()
+        profile, errUser = db.FindUser(userId)
+    }()
+    go func() {
+        defer wg.Done()
+        orders, errOrders = httpGetOrders(userId)
+    }()
+    wg.Wait()
+
+    if errUser != nil || errOrders != nil {
+        return nil, fmt.Errorf("fetch failed")
+    }
+
+    var highValue []Order
+    for _, o := range orders {
+        if o.Total > 100 {
+            highValue = append(highValue, o)
+        }
+    }
+
+    go logger.Info(fmt.Sprintf("Dashboard rendered for %d", userId))
+    return &Dashboard{User: profile, RecentOrders: highValue}, nil
+}`;
+---
+
+<section id="showcase" class="py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  <div class="text-center max-w-3xl mx-auto mb-12 space-y-4">
+    <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+      Syntax & Ergonomics Comparison
+    </div>
+    <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+      The Same Backend Task, Compared
+    </h2>
+    <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+      See how RHP balances Laravel's developer velocity with Rust's thread-safe concurrency and memory guarantees.
+    </p>
+  </div>
+
+  <!-- Showcase Container -->
+  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0B0F19] shadow-2xl overflow-hidden">
+    
+    <!-- Top Bar: Task Description & Language Tabs -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800/80 bg-[#0E1422] px-4 py-3 gap-3">
+      <div class="flex items-center space-x-2">
+        <span class="text-xs font-medium text-slate-400">Task:</span>
+        <span class="text-xs font-semibold text-white bg-slate-800 px-2.5 py-1 rounded-md">
+          Concurrent API Fetch + Filter + Post-Response Hook
+        </span>
+      </div>
+
+      <!-- Tab Buttons -->
+      <div class="flex items-center space-x-1 overflow-x-auto" id="showcase-tabs">
+        <button
+          type="button"
+          data-target="tab-rhp"
+          class="tab-btn active px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-brand-500 text-white font-mono"
+        >
+          RHP (11 lines)
+        </button>
+        <button
+          type="button"
+          data-target="tab-php"
+          class="tab-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-slate-400 hover:text-white hover:bg-slate-800 font-mono"
+        >
+          Traditional PHP (27 lines)
+        </button>
+        <button
+          type="button"
+          data-target="tab-node"
+          class="tab-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-slate-400 hover:text-white hover:bg-slate-800 font-mono"
+        >
+          Node.js (19 lines)
+        </button>
+        <button
+          type="button"
+          data-target="tab-go"
+          class="tab-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-slate-400 hover:text-white hover:bg-slate-800 font-mono"
+        >
+          Go (34 lines)
+        </button>
+      </div>
+    </div>
+
+    <!-- Code Panes -->
+    <div class="p-5 font-mono text-xs sm:text-sm text-slate-300 overflow-x-auto min-h-[340px]">
+      
+      <!-- Tab 1: RHP -->
+      <div id="tab-rhp" class="tab-pane block">
+        <pre class="leading-relaxed"><code>{rhpCode}</code></pre>
+      </div>
+
+      <!-- Tab 2: PHP -->
+      <div id="tab-php" class="tab-pane hidden">
+        <pre class="leading-relaxed"><code>{phpCode}</code></pre>
+      </div>
+
+      <!-- Tab 3: Node.js -->
+      <div id="tab-node" class="tab-pane hidden">
+        <pre class="leading-relaxed"><code>{nodeCode}</code></pre>
+      </div>
+
+      <!-- Tab 4: Go -->
+      <div id="tab-go" class="tab-pane hidden">
+        <pre class="leading-relaxed"><code>{goCode}</code></pre>
+      </div>
+
+    </div>
+
+    <!-- Bottom Honest Trade-offs Note -->
+    <div class="px-5 py-4 bg-[#080C14] border-t border-slate-800/80 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-400">
+      <div>
+        <span class="font-semibold text-slate-200 block mb-0.5">RHP Trade-off</span>
+        <span>Alpha status (v0.1.0). Native syntax guarantees, but ecosystem and community packages are actively developing.</span>
+      </div>
+      <div>
+        <span class="font-semibold text-slate-200 block mb-0.5">Execution Model</span>
+        <span>Tokio worker fiber pool with persistent <code class="text-brand-400 font-mono">Arc&lt;EngineState&gt;</code> memory.</span>
+      </div>
+      <div>
+        <span class="font-semibold text-slate-200 block mb-0.5">Memory Lifecycle</span>
+        <span>Scoped bump arenas. 0% GC cycles, 0ms pause times, and zero cyclic reference leaks.</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<script>
+  const tabButtons = document.querySelectorAll('#showcase-tabs .tab-btn');
+  const panes = document.querySelectorAll('.tab-pane');
+
+  tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      
+      // Update buttons
+      tabButtons.forEach(b => {
+        b.classList.remove('active', 'bg-brand-500', 'text-white');
+        b.classList.add('text-slate-400', 'hover:text-white', 'hover:bg-slate-800');
+      });
+      btn.classList.add('active', 'bg-brand-500', 'text-white');
+      btn.classList.remove('text-slate-400', 'hover:text-white', 'hover:bg-slate-800');
+
+      // Update panes
+      panes.forEach(pane => {
+        if (pane.id === targetId) {
+          pane.classList.remove('hidden');
+          pane.classList.add('block');
+        } else {
+          pane.classList.add('hidden');
+          pane.classList.remove('block');
+        }
+      });
+    });
+  });
+</script>

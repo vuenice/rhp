@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A0D12" />
+      <stop offset="50%" stop-color="#111622" />
+      <stop offset="100%" stop-color="#0A0D12" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F06543" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="40" result="blur" />
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)" />
+
+  <!-- Subtle glow circles -->
+  <circle cx="200" cy="150" r="160" fill="#F06543" opacity="0.12" filter="url(#glow)" />
+  <circle cx="1000" cy="480" r="200" fill="#6366F1" opacity="0.12" filter="url(#glow)" />
+
+  <!-- Subtle grid lines -->
+  <g stroke="#1F293D" stroke-width="1" opacity="0.4">
+    <line x1="100" y1="0" x2="100" y2="630" />
+    <line x1="300" y1="0" x2="300" y2="630" />
+    <line x1="500" y1="0" x2="500" y2="630" />
+    <line x1="700" y1="0" x2="700" y2="630" />
+    <line x1="900" y1="0" x2="900" y2="630" />
+    <line x1="1100" y1="0" x2="1100" y2="630" />
+    <line x1="0" y1="100" x2="1200" y2="100" />
+    <line x1="0" y1="250" x2="1200" y2="250" />
+    <line x1="0" y1="400" x2="1200" y2="400" />
+    <line x1="0" y1="550" x2="1200" y2="550" />
+  </g>
+
+  <!-- Logo Mark -->
+  <rect x="120" y="100" width="80" height="80" rx="20" fill="#161D2B" stroke="#252D3F" stroke-width="2" />
+  <path d="M144 120H164C170.6 120 176 125.4 176 132C176 138.1 171.5 143.1 165.6 143.9L177 160H167L157 144H152V160H144V120ZM152 127.6V136.4H163C165.7 136.4 167.8 134.3 167.8 131.6C167.8 128.9 165.7 127.6 163 127.6H152Z" fill="url(#accent)" />
+
+  <text x="225" y="155" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="44" font-weight="800" letter-spacing="-1">RHP</text>
+  <text x="330" y="153" fill="#F06543" font-family="Inter, sans-serif" font-size="20" font-weight="700" letter-spacing="2">v0.1.0-alpha</text>
+
+  <!-- Title & Subtitle -->
+  <text x="120" y="270" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="58" font-weight="800" letter-spacing="-1.5">
+    A Rust-Powered, PHP-Family Language
+  </text>
+  <text x="120" y="340" fill="url(#accent)" font-family="Inter, sans-serif" font-size="44" font-weight="700">
+    for High-Performance Web Backends
+  </text>
+
+  <text x="120" y="420" fill="#94A3B8" font-family="Inter, sans-serif" font-size="24" font-weight="400">
+    Persistent memory engine · Native Rust collections · Zero tracing GC pauses · Async fibers
+  </text>
+
+  <!-- Terminal badge -->
+  <rect x="120" y="490" width="460" height="52" rx="12" fill="#161D2B" stroke="#1F293D" stroke-width="1.5" />
+  <text x="145" y="523" fill="#64748B" font-family="JetBrains Mono, monospace" font-size="18">$</text>
+  <text x="170" y="523" fill="#F1F5F9" font-family="JetBrains Mono, monospace" font-size="18">curl -fsSL https://rhp.dev/install.sh | bash</text>
+</svg>

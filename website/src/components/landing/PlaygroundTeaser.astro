@@ -1,0 +1,229 @@
+---
+// PlaygroundTeaser.astro
+---
+
+<section id="playground" class="py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  <div class="text-center max-w-3xl mx-auto mb-12 space-y-4">
+    <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+      Interactive Playground
+    </div>
+    <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+      Try RHP in Your Browser
+    </h2>
+    <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+      Test out syntax, collection subtypes, and async futures directly in this sandbox interface.
+    </p>
+  </div>
+
+  <!-- Playground Editor Card -->
+  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0B0F19] shadow-2xl overflow-hidden">
+    
+    <!-- Editor Header: Presets, Actions, and Run Button -->
+    <div class="flex flex-wrap items-center justify-between border-b border-slate-800/80 bg-[#0E1422] px-4 py-3 gap-3">
+      
+      <!-- Preset Select -->
+      <div class="flex items-center space-x-3">
+        <label for="code-preset-select" class="text-xs text-slate-400 font-medium hidden sm:inline">Template:</label>
+        <select
+          id="code-preset-select"
+          class="bg-slate-900 border border-slate-700/80 text-slate-200 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500 font-mono"
+        >
+          <option value="hello">1. Hello World & Str Facade</option>
+          <option value="collections">2. Native Arr Subtypes & COW</option>
+          <option value="concurrency">3. Tokio Concurrency (Future::wait)</option>
+          <option value="memory">4. Zero-GC Memory & Arena Scope</option>
+        </select>
+      </div>
+
+      <!-- Right Actions: Run Button & Reset -->
+      <div class="flex items-center space-x-2">
+        <button
+          id="reset-code-btn"
+          type="button"
+          class="px-3 py-1.5 rounded-lg text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+        >
+          Reset
+        </button>
+
+        <button
+          id="run-code-btn"
+          type="button"
+          class="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-md shadow-brand-500/20 transition-all active:scale-95"
+        >
+          <svg id="run-icon" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          <span id="run-text">Run (Ctrl+↵)</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Main Playground Workspace: Editor + Terminal Output -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[380px]">
+      
+      <!-- Left: Code Editor (7 cols) -->
+      <div class="lg:col-span-7 flex flex-col border-b lg:border-b-0 lg:border-r border-slate-800/80 bg-[#0A0D15]">
+        <div class="px-4 py-2 bg-[#080B12] border-b border-slate-800/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
+          <span>main.rhp</span>
+          <span class="text-slate-500">UTF-8 &bull; 4-space indent</span>
+        </div>
+        <textarea
+          id="playground-editor"
+          class="w-full flex-1 p-4 bg-transparent text-slate-200 font-mono text-xs sm:text-sm resize-none focus:outline-none leading-relaxed selection:bg-brand-500/30 min-h-[280px]"
+          spellcheck="false"
+          placeholder="Type your RHP code here..."
+        ></textarea>
+      </div>
+
+      <!-- Right: Output Terminal & Telemetry (5 cols) -->
+      <div class="lg:col-span-5 flex flex-col bg-[#07090F]">
+        <div class="px-4 py-2 bg-[#090C14] border-b border-slate-800/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
+          <span class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            Terminal Output
+          </span>
+          <span id="output-timing" class="text-emerald-400 font-mono">Ready</span>
+        </div>
+
+        <!-- Terminal Output Text -->
+        <div class="flex-1 p-4 overflow-y-auto font-mono text-xs text-slate-300 leading-relaxed min-h-[220px]">
+          <pre id="output-stdout" class="whitespace-pre-wrap text-emerald-400/90 font-mono">[RHP Runtime Ready]
+Click "Run" or press Ctrl+Enter to execute.</pre>
+        </div>
+
+        <!-- Telemetry Bottom Bar -->
+        <div class="px-4 py-2.5 bg-[#05070C] border-t border-slate-800/80 grid grid-cols-3 gap-2 text-[10px] font-mono text-slate-400">
+          <div>
+            <span class="text-slate-500 block">GC Pause</span>
+            <span id="telemetry-gc" class="text-emerald-400 font-semibold">0.0 ms</span>
+          </div>
+          <div>
+            <span class="text-slate-500 block">Memory</span>
+            <span id="telemetry-mem" class="text-slate-300 font-semibold">1,024 B</span>
+          </div>
+          <div>
+            <span class="text-slate-500 block">COW Detach</span>
+            <span id="telemetry-cow" class="text-slate-300 font-semibold">0</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Stub Extension Developer Notice -->
+    <div class="px-4 py-2 bg-[#05070C] border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
+      <span>Interface client: <code class="font-mono text-brand-400">src/lib/playgroundClient.ts</code></span>
+      <span class="hidden sm:inline text-slate-400">Wire to WebAssembly compiler / Tokio HTTP endpoint</span>
+    </div>
+
+  </div>
+</section>
+
+<script>
+  import { defaultExecutionClient } from '../../lib/playgroundClient';
+
+  const snippets = {
+    hello: `<?rhp
+// 1. Basic greeting with string transformation
+string $name = "Developer";
+string $greeting = Str::slug("Hello {$$name} to RHP");
+
+Sys::print("Greeting: " . $greeting);
+Sys::print("RHP Version: " . Sys::version());`,
+
+    collections: `<?rhp
+// Subtyped collections backed by Rust heap structures
+list $raw = Arr::list([10, 45, 120, 95, 330]);
+
+list $filtered = $raw
+    ->filter(fn($n) => $n > 50)
+    ->map(fn($n) => $n * 1.08);
+
+Sys::print("Filtered high-order list: " . $filtered->toJson());`,
+
+    concurrency: `<?rhp
+// Non-blocking concurrent execution on Tokio thread pool
+[$user, $orders] = Future::wait([
+    fn() => DB::table('users')->find(42),
+    fn() => HTTP::get('https://api.internal/metrics')->json()
+]);
+
+Future::defer(fn() => Log::info("Post-response deferred hook"));
+Sys::print("User and metrics resolved concurrently!");`,
+
+    memory: `<?rhp
+// Zero-GC deterministic memory management
+Memory::scope(function() {
+    $temp = Str::repeat("RHP_FAST_BUFFER_", 1000);
+    Sys::print("Allocated in scoped bump arena: " . Memory::usage() . " bytes");
+});
+
+Sys::print("GC cycles recorded: " . Memory::gcRuns());
+Sys::print("Total GC pause duration: " . Memory::gcPauseMs() . " ms");`
+  };
+
+  const editor = document.getElementById('playground-editor') as HTMLTextAreaElement;
+  const presetSelect = document.getElementById('code-preset-select') as HTMLSelectElement;
+  const runBtn = document.getElementById('run-code-btn');
+  const runText = document.getElementById('run-text');
+  const resetBtn = document.getElementById('reset-code-btn');
+  const stdoutPre = document.getElementById('output-stdout');
+  const timingSpan = document.getElementById('output-timing');
+  const gcSpan = document.getElementById('telemetry-gc');
+  const memSpan = document.getElementById('telemetry-mem');
+  const cowSpan = document.getElementById('telemetry-cow');
+
+  // Load initial preset
+  if (editor && presetSelect) {
+    editor.value = snippets.hello;
+
+    presetSelect.addEventListener('change', () => {
+      const key = presetSelect.value as keyof typeof snippets;
+      if (snippets[key]) {
+        editor.value = snippets[key];
+      }
+    });
+
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        const key = presetSelect.value as keyof typeof snippets;
+        editor.value = snippets[key] || snippets.hello;
+      });
+    }
+
+    async function execute() {
+      if (!runBtn || !editor || !stdoutPre) return;
+
+      runBtn.setAttribute('disabled', 'true');
+      if (runText) runText.textContent = 'Running...';
+      if (timingSpan) timingSpan.textContent = 'Compiling...';
+
+      try {
+        const result = await defaultExecutionClient.run(editor.value);
+
+        stdoutPre.textContent = result.stdout;
+        if (timingSpan) timingSpan.textContent = `${result.durationMs}ms`;
+        if (gcSpan) gcSpan.textContent = `${result.gcPauseMs.toFixed(1)} ms`;
+        if (memSpan) memSpan.textContent = `${result.memoryUsageBytes.toLocaleString()} B`;
+        if (cowSpan) cowSpan.textContent = `${result.cowDetachments}`;
+      } catch (err: any) {
+        stdoutPre.textContent = `Execution Error: ${err.message || err}`;
+      } finally {
+        runBtn.removeAttribute('disabled');
+        if (runText) runText.textContent = 'Run (Ctrl+↵)';
+      }
+    }
+
+    if (runBtn) {
+      runBtn.addEventListener('click', execute);
+    }
+
+    // Shortcut Ctrl+Enter or Cmd+Enter
+    editor.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        execute();
+      }
+    });
+  }
+</script>

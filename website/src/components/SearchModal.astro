@@ -1,0 +1,182 @@
+---
+import { searchIndex } from '../data/searchIndex';
+---
+
+<div id="search-modal-container" class="relative z-50 hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+  <!-- Backdrop -->
+  <div id="search-backdrop" class="fixed inset-0 bg-slate-900/60 dark:bg-black/80 backdrop-blur-sm transition-opacity"></div>
+
+  <div class="fixed inset-0 z-10 overflow-y-auto p-4 sm:p-6 md:p-20">
+    <div id="search-dialog" class="mx-auto max-w-2xl transform divide-y divide-slate-100 dark:divide-slate-800 rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 shadow-2xl transition-all">
+      <!-- Input Header -->
+      <div class="relative flex items-center px-4">
+        <svg class="w-5 h-5 text-slate-400 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input
+          id="search-input"
+          type="text"
+          class="h-14 w-full bg-transparent border-0 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-0 sm:text-base"
+          placeholder="Search documentation, guides, and API..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <kbd class="hidden sm:inline-block px-2 py-0.5 text-xs font-semibold text-slate-400 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700">ESC</kbd>
+      </div>
+
+      <!-- Results Container -->
+      <div id="search-results-list" class="max-h-96 overflow-y-auto p-2 space-y-1">
+        <!-- Results injected dynamically via JS -->
+      </div>
+
+      <!-- Footer / Keyboard hints -->
+      <div class="flex items-center justify-between px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-[#0A0E17] rounded-b-2xl">
+        <div class="flex items-center space-x-3">
+          <span><kbd class="font-semibold text-slate-400 bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded">↑</kbd> <kbd class="font-semibold text-slate-400 bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded">↓</kbd> Navigate</span>
+          <span><kbd class="font-semibold text-slate-400 bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded">↵</kbd> Select</span>
+        </div>
+        <span>RHP Docs Index</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script define:vars={{ searchIndex }}>
+  let isOpen = false;
+  let selectedIndex = 0;
+  let currentResults = [];
+
+  const modal = document.getElementById('search-modal-container');
+  const backdrop = document.getElementById('search-backdrop');
+  const input = document.getElementById('search-input');
+  const resultsContainer = document.getElementById('search-results-list');
+
+  function openSearch() {
+    isOpen = true;
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    input.value = '';
+    renderResults(searchIndex.slice(0, 8));
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function closeSearch() {
+    isOpen = false;
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  function renderResults(items) {
+    currentResults = items;
+    selectedIndex = 0;
+
+    if (items.length === 0) {
+      resultsContainer.innerHTML = `
+        <div class="py-10 text-center text-sm text-slate-400">
+          No matching documentation topics found.
+        </div>
+      `;
+      return;
+    }
+
+    resultsContainer.innerHTML = items.map((item, index) => `
+      <a
+        href="${item.url}"
+        class="search-item group flex items-start gap-3 p-3 rounded-xl hover:bg-brand-500/10 dark:hover:bg-brand-500/10 transition-colors ${index === 0 ? 'bg-slate-100 dark:bg-slate-800/60' : ''}"
+        data-index="${index}"
+      >
+        <div class="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 group-hover:bg-brand-500/20 text-slate-600 dark:text-slate-300 group-hover:text-brand-500 transition-colors mt-0.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-semibold text-slate-900 dark:text-white group-hover:text-brand-500 transition-colors">
+              ${item.title}
+            </span>
+            <span class="text-xs text-brand-600 dark:text-brand-400 font-mono bg-brand-50 dark:bg-brand-950/60 px-2 py-0.5 rounded-full border border-brand-200 dark:border-brand-800/40">
+              ${item.section}
+            </span>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+            ${item.description}
+          </p>
+        </div>
+      </a>
+    `).join('');
+
+    // Attach click handlers
+    document.querySelectorAll('.search-item').forEach(el => {
+      el.addEventListener('mouseenter', (e) => {
+        const idx = parseInt(el.getAttribute('data-index') || '0', 10);
+        updateSelection(idx);
+      });
+    });
+  }
+
+  function updateSelection(newIndex) {
+    const items = document.querySelectorAll('.search-item');
+    if (items.length === 0) return;
+
+    if (items[selectedIndex]) {
+      items[selectedIndex].classList.remove('bg-slate-100', 'dark:bg-slate-800/60');
+    }
+    selectedIndex = (newIndex + items.length) % items.length;
+    if (items[selectedIndex]) {
+      items[selectedIndex].classList.add('bg-slate-100', 'dark:bg-slate-800/60');
+      items[selectedIndex].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  // Keyboard navigation & global shortcuts
+  document.addEventListener('keydown', (e) => {
+    // Cmd+K or Ctrl+K opens modal
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (isOpen) closeSearch();
+      else openSearch();
+    }
+
+    if (!isOpen) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSearch();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      updateSelection(selectedIndex + 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      updateSelection(selectedIndex - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (currentResults[selectedIndex]) {
+        window.location.href = currentResults[selectedIndex].url;
+      }
+    }
+  });
+
+  input.addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase().trim();
+    if (!query) {
+      renderResults(searchIndex.slice(0, 8));
+      return;
+    }
+
+    const filtered = searchIndex.filter(item => {
+      const matchTitle = item.title.toLowerCase().includes(query);
+      const matchDesc = item.description.toLowerCase().includes(query);
+      const matchSection = item.section.toLowerCase().includes(query);
+      const matchKeywords = item.keywords.some(k => k.toLowerCase().includes(query));
+      return matchTitle || matchDesc || matchSection || matchKeywords;
+    });
+
+    renderResults(filtered);
+  });
+
+  backdrop.addEventListener('click', closeSearch);
+
+  // Expose global open helper for navbar search button
+  window.openRhpSearch = openSearch;
+</script>

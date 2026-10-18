@@ -1,0 +1,118 @@
+---
+// WhyRhp.astro
+const features = [
+  {
+    title: "Persistent Parent Architecture",
+    description: "Eliminates PHP-FPM's per-request bootstrap overhead. Your application code, routing, and framework state are compiled once into immutable Arc<EngineState>.",
+    badge: "0ms Per-Request Re-parse",
+    code: `// Bootstrapped once in Parent Process
+singleton class AppEngine {
+    public static function boot(): void {
+        DB::pool(min: 10, max: 100);
+    }
+}`
+  },
+  {
+    title: "Native Rust Collection Subtypes",
+    description: "Standard arrays map directly to high-performance Rust heap structures with Copy-On-Write (COW) semantics and CPU cache locality.",
+    badge: "Cache-Friendly Heap",
+    code: `// Explicit Rust collection subtypes
+list $nums = Arr::list([1, 2, 3]);
+dict $user = Arr::dict(['name' => 'Alice']);
+set  $tags = Arr::set(['fast', 'rust']);`
+  },
+  {
+    title: "Tokio Async Concurrency & Fibers",
+    description: "Synchronous by default on local fibers, but non-blocking when needed. Run background tasks or parallel queries with Dart-inspired Futures.",
+    badge: "Tokio Thread Pool",
+    code: `// Parallel queries evaluated cleanly
+[$orders, $stats] = Future::wait([
+    fn() => DB::table('orders')->recent(),
+    fn() => HTTP::get('https://analytics')->json()
+]);`
+  },
+  {
+    title: "Dual-Engine Execution Strategy",
+    description: "Tree-walking AST interpreter for sub-millisecond dev cold starts and hot-reload. Lowers to Register Bytecode VM with Cranelift JIT in production.",
+    badge: "Dev & Prod Engines",
+    code: `// Development (Instant hot-reload)
+rhp run dev server.rhp
+
+// Production (Bytecode VM + Cranelift JIT)
+rhp run build server.rhp`
+  },
+  {
+    title: "Zero-GC Deterministic RAII",
+    description: "No stop-the-world garbage collection sweeps or pause times. Request memory is deallocated in O(1) time via bump arena resets.",
+    badge: "0.0ms GC Pause Time",
+    code: `// Bump arena reclaimed in O(1)
+Memory::scope(function() {
+    $temp = File::read('heavy.csv');
+    // Drops instantly on return
+});
+Sys::print(Memory::gcPauseMs()); // 0.0`
+  },
+  {
+    title: "AST-Guided Lint & Auto-Typing",
+    description: "Integrated toolchain inspired by Mago. Formats code to 4-space standard, automatically infers variable type hints, and normalizes casing.",
+    badge: "Built-in Toolchain",
+    code: `// Before: $name = 'alice';
+// After 'rhp run lint':
+string $name = 'alice';
+
+// Validates boundaries & exports JSON`
+  }
+];
+---
+
+<section id="features" class="py-20 bg-slate-50/50 dark:bg-[#0A0E17]/50 border-y border-slate-200/80 dark:border-slate-800/80 transition-colors">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    
+    <!-- Section Header -->
+    <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+      <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+        Engine Fundamentals
+      </div>
+      <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+        Why RHP? Built from the ground up in Rust
+      </h2>
+      <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+        Solve the core scalability and architectural limits of traditional dynamic runtimes without sacrificing developer velocity.
+      </p>
+    </div>
+
+    <!-- 6 Feature Cards Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
+      {features.map((feat) => (
+        <div class="flex flex-col justify-between rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 p-6 shadow-sm hover:shadow-md hover:border-brand-500/40 dark:hover:border-brand-500/40 transition-all group">
+          
+          <div>
+            <!-- Header: Title & Badge -->
+            <div class="flex items-center justify-between gap-2 mb-3">
+              <h3 class="text-lg font-bold text-slate-900 dark:text-white group-hover:text-brand-500 transition-colors">
+                {feat.title}
+              </h3>
+            </div>
+            
+            <div class="mb-3">
+              <span class="inline-block text-[11px] font-mono font-medium text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-brand-950/60 px-2.5 py-0.5 rounded-full border border-brand-200 dark:border-brand-900/50">
+                {feat.badge}
+              </span>
+            </div>
+
+            <p class="text-sm text-slate-600 dark:text-slate-400 leading-relaxed mb-5">
+              {feat.description}
+            </p>
+          </div>
+
+          <!-- Tiny Code Snippet -->
+          <div class="rounded-xl bg-slate-950 dark:bg-[#06080D] border border-slate-800/80 p-3.5 font-mono text-xs overflow-x-auto text-slate-300">
+            <pre class="leading-relaxed"><code>{feat.code}</code></pre>
+          </div>
+
+        </div>
+      ))}
+    </div>
+
+  </div>
+</section>

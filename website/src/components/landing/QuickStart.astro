@@ -1,0 +1,74 @@
+---
+// QuickStart.astro
+---
+
+<section id="quickstart" class="py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+    <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+      Quick Start
+    </div>
+    <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+      Up and Running in 30 Seconds
+    </h2>
+    <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
+      Three simple steps to install the toolchain, write your first script, and run it at sub-millisecond speeds.
+    </p>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+    
+    <!-- Step 1: Install -->
+    <div class="flex flex-col rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 p-6 shadow-sm relative">
+      <div class="w-8 h-8 rounded-full bg-brand-500 text-white font-bold flex items-center justify-center text-sm mb-4 shadow-md shadow-brand-500/20">
+        1
+      </div>
+      <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">
+        Install the CLI Toolchain
+      </h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 mb-4 leading-relaxed">
+        Download the standalone RHP binary for Linux or macOS. No global runtime dependencies required.
+      </p>
+      <div class="mt-auto rounded-xl bg-slate-950 p-3.5 border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto">
+        <span class="text-brand-500">$</span> curl -fsSL https://rhp.dev/install.sh | bash
+      </div>
+    </div>
+
+    <!-- Step 2: Write Code -->
+    <div class="flex flex-col rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 p-6 shadow-sm relative">
+      <div class="w-8 h-8 rounded-full bg-brand-500 text-white font-bold flex items-center justify-center text-sm mb-4 shadow-md shadow-brand-500/20">
+        2
+      </div>
+      <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">
+        Write hello.rhp
+      </h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 mb-4 leading-relaxed">
+        Write clean PHP-style syntax utilizing Rust-backed static facades like <code class="text-brand-400 font-mono">Str</code> and <code class="text-brand-400 font-mono">Sys</code>.
+      </p>
+      <div class="mt-auto rounded-xl bg-slate-950 p-3.5 border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto">
+        <pre><code><span class="text-slate-500">&lt;?rhp</span>
+<span class="text-brand-400">string</span> <span class="text-cyan-300">$slug</span> = <span class="text-amber-300">Str::slug</span>(<span class="text-emerald-300">"Hello RHP"</span>);
+<span class="text-amber-300">Sys::print</span>(<span class="text-cyan-300">$slug</span>);</code></pre>
+      </div>
+    </div>
+
+    <!-- Step 3: Run -->
+    <div class="flex flex-col rounded-2xl bg-white dark:bg-[#0D121C] border border-slate-200 dark:border-slate-800 p-6 shadow-sm relative">
+      <div class="w-8 h-8 rounded-full bg-brand-500 text-white font-bold flex items-center justify-center text-sm mb-4 shadow-md shadow-brand-500/20">
+        3
+      </div>
+      <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">
+        Execute with rhp CLI
+      </h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 mb-4 leading-relaxed">
+        Run instantly with the AST development interpreter, or compile to bytecode VM via production mode.
+      </p>
+      <div class="mt-auto rounded-xl bg-slate-950 p-3.5 border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto">
+        <div class="text-slate-400"># Development mode</div>
+        <div><span class="text-brand-500">$</span> rhp run dev hello.rhp</div>
+        <div class="text-slate-400 mt-1"># Format & typecheck</div>
+        <div><span class="text-brand-500">$</span> rhp run lint hello.rhp</div>
+      </div>
+    </div>
+
+  </div>
+</section>

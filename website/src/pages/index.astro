@@ -1,0 +1,53 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import SearchModal from '../components/SearchModal.astro';
+
+// Landing Sections (in required order)
+import Hero from '../components/landing/Hero.astro';
+import WhyRhp from '../components/landing/WhyRhp.astro';
+import InteractiveShowcase from '../components/landing/InteractiveShowcase.astro';
+import PerformanceBenchmarks from '../components/landing/PerformanceBenchmarks.astro';
+import PlaygroundTeaser from '../components/landing/PlaygroundTeaser.astro';
+import EcosystemRoadmap from '../components/landing/EcosystemRoadmap.astro';
+import QuickStart from '../components/landing/QuickStart.astro';
+import CommunitySection from '../components/landing/CommunitySection.astro';
+---
+
+<Layout
+  title="RHP · Rust-Powered High-Performance PHP-Family Language"
+  description="A Rust-powered, PHP-like language for fast web backends. Native collections, persistent framework memory, Tokio async fibers, and zero GC pause times."
+>
+  <Navbar />
+  <SearchModal />
+
+  <main class="flex-1">
+    <!-- 1. Hero -->
+    <Hero />
+
+    <!-- 2. Why RHP -->
+    <WhyRhp />
+
+    <!-- 3. Interactive Code Showcase -->
+    <InteractiveShowcase />
+
+    <!-- 4. Performance Benchmarks -->
+    <PerformanceBenchmarks />
+
+    <!-- 5. Playground Teaser -->
+    <PlaygroundTeaser />
+
+    <!-- 6. Ecosystem and Roadmap -->
+    <EcosystemRoadmap />
+
+    <!-- 7. Quick Start -->
+    <QuickStart />
+
+    <!-- 8. Community -->
+    <CommunitySection />
+  </main>
+
+  <!-- 9. Footer -->
+  <Footer />
+</Layout>

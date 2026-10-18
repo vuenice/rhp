@@ -199,6 +199,7 @@ pub fn dispatch_facade_call(
         "Fiber" => dispatch_fiber(method, args),
         "Memory" => dispatch_memory(method, args),
         "Weak" => dispatch_weak(method, args),
+        "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -1093,11 +1094,46 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
                 IoKind::HttpGet { url: url.clone() }
             };
             record_fiber_io_start(kind);
+
+            // OpenTelemetry Client Span & W3C Traceparent injection
+            let span_name = format!("HTTP {}", method.to_ascii_uppercase());
+            let mut attrs = IndexMap::new();
+            attrs.insert(
+                "http.method".to_string(),
+                crate::telemetry::AttributeValue::String(method.to_ascii_uppercase()),
+            );
+            attrs.insert(
+                "http.url".to_string(),
+                crate::telemetry::AttributeValue::String(url.clone()),
+            );
+            let ctx = crate::telemetry::start_span(
+                span_name,
+                crate::telemetry::SpanKind::Client,
+                None,
+                attrs,
+            );
+
+            let mut outbound_headers = IndexMap::new();
+            let baggage = crate::telemetry::get_active_baggage();
+            crate::telemetry::inject_trace_context(&mut outbound_headers, &ctx, Some(&baggage));
+
             let mut obj = VmObject::new("HTTPResponse");
             obj.set_property("url", PhpValue::string(url));
             obj.set_property("status", PhpValue::Int(200));
             obj.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
+
+            let mut headers_dict = IndexMap::new();
+            for (hk, hv) in outbound_headers {
+                headers_dict.insert(hk, PhpValue::string(hv));
+            }
+            obj.set_property("headers", PhpValue::dict_from_map(headers_dict));
+
             record_fiber_io_finish();
+            crate::telemetry::set_active_span_attribute(
+                "http.status_code",
+                crate::telemetry::AttributeValue::Int(200),
+            );
+            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::ok()));
             Ok(PhpValue::object(obj))
         }
         "withHeaders" => {
@@ -1170,9 +1206,30 @@ fn dispatch_log(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
-    match method {
+    let span_name = format!("DB::{}", method);
+    let mut attrs = IndexMap::new();
+    attrs.insert(
+        "db.system".to_string(),
+        crate::telemetry::AttributeValue::String("rhp".to_string()),
+    );
+    attrs.insert(
+        "db.operation".to_string(),
+        crate::telemetry::AttributeValue::String(method.to_string()),
+    );
+    crate::telemetry::start_span(
+        span_name,
+        crate::telemetry::SpanKind::Client,
+        None,
+        attrs,
+    );
+
+    let res = match method {
         "table" => {
             let tbl = get_arg_str(args, 0, "DB::table")?;
+            crate::telemetry::set_active_span_attribute(
+                "db.sql.table",
+                crate::telemetry::AttributeValue::String(tbl.clone()),
+            );
             record_fiber_io_start(IoKind::DbTable { table: tbl.clone() });
             let mut obj = VmObject::new("DBQuery");
             obj.set_property("table", PhpValue::string(tbl));
@@ -1181,6 +1238,10 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "raw" => {
             let sql = get_arg_str(args, 0, "DB::raw")?;
+            crate::telemetry::set_active_span_attribute(
+                "db.statement",
+                crate::telemetry::AttributeValue::String(sql.clone()),
+            );
             record_fiber_io_start(IoKind::DbQuery { sql: sql.clone() });
             let mut obj = VmObject::new("DBRaw");
             obj.set_property("sql", PhpValue::string(sql));
@@ -1210,6 +1271,10 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
         "find" => {
             let tbl = get_arg_str(args, 0, "DB::find")?;
             let id = args.get(1).cloned().unwrap_or(PhpValue::Int(1));
+            crate::telemetry::set_active_span_attribute(
+                "db.sql.table",
+                crate::telemetry::AttributeValue::String(tbl.clone()),
+            );
             record_fiber_io_start(IoKind::DbFind {
                 table: tbl.clone(),
                 id: id.to_php_string(),
@@ -1224,7 +1289,19 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
             facade: "DB".to_string(),
             method: method.to_string(),
         }),
+    };
+
+    match &res {
+        Ok(_) => {
+            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::ok()));
+        }
+        Err(e) => {
+            crate::telemetry::record_active_span_error(&format!("{:?}", e));
+            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(format!("{:?}", e))));
+        }
     }
+
+    res
 }
 
 fn dispatch_fiber(method: &str, args: &[PhpValue]) -> FacadeResult {

@@ -342,6 +342,8 @@ fn test_ipc_binary_serialization_round_trip() {
         worker_id: 3,
         fiber_stats: None,
         arena_drop: None,
+        trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_string()),
+        span_id: Some("00f067aa0ba902b7".to_string()),
     };
 
     let serialized = serialize_response(&sample_resp);
@@ -354,6 +356,8 @@ fn test_ipc_binary_serialization_round_trip() {
     assert_eq!(deserialized.duration, Duration::from_micros(450));
     assert_eq!(deserialized.error, None);
     assert_eq!(deserialized.worker_id, 3);
+    assert_eq!(deserialized.trace_id(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
+    assert_eq!(deserialized.span_id(), Some("00f067aa0ba902b7"));
 
     // Verify complex rehydrated value
     let php_val = deserialized.to_php_value();

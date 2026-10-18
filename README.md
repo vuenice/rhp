@@ -119,6 +119,32 @@ rhp run lint [PATH] --no-case-change
   - Preserves already written type annotations without modifying them.
 - **JSON Diagnostic Output:** Reports remaining typecheck violations, casing issues (in `--no-fix` mode), and mismatches in machine-readable JSON format matching Mago's schema.
 
+### 5. Native OpenTelemetry & Distributed Observability (`Trace` / `Telemetry`)
+
+RHP eliminates legacy Zend C APM extensions (`ext-sentry`, `ddtrace`, `newrelic.so`) by embedding a zero-overhead native OpenTelemetry engine directly into the runtime:
+
+- **W3C Distributed Trace Context:** Automatic propagation of `traceparent` (`00-{trace_id}-{span_id}-{flags}`) and `baggage` across incoming worker requests and outgoing HTTP/DB calls.
+- **Hierarchical Spans:** `Trace::startSpan()`, `Trace::endSpan()`, and closure wrapper `Trace::span($name, fn() => ...)` with automatic exception capture.
+- **High-Precision Metrics:** `Trace::counter()`, `Trace::gauge()`, and `Trace::histogram()` with exact percentiles ($p50$, $p90$, $p95$, $p99$).
+- **Standard Exporters:** Canonical OTLP/HTTP JSON for `/v1/traces` and `/v1/metrics`, plus Sentry crash reporting and Datadog APM trace bridges:
+
+```php
+// Distributed span with attributes & metrics
+Trace::span('checkout.process', function() {
+    Trace::setAttribute('order.amount', 99.99);
+    Trace::counter('orders.processed', 1);
+
+    // Outgoing HTTP call auto-instruments client span & injects traceparent
+    $payment = HTTP::post('https://api.gateway.internal/charge', ['amount' => 99.99]);
+
+    Trace::addEvent('payment_received', Arr::dict(['gateway' => 'stripe']));
+    return $payment->status();
+});
+
+// Export OTLP payload directly to collector
+$otlpTracesJson = Trace::exportOtlp();
+```
+
 ---
 
 Have any questions or ready to test your first RHP script?

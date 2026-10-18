@@ -2608,6 +2608,33 @@ impl VM {
             }
         }
 
+        if (facade == "Trace" || facade == "Telemetry") && method == "span" {
+            if let Some(name_val) = args.first() {
+                let name = name_val.to_php_string();
+                if let Some(PhpValue::Closure(cb)) = args.get(1) {
+                    let mut attrs = indexmap::IndexMap::new();
+                    if let Some(PhpValue::Dict(d)) = args.get(2) {
+                        for (k, v) in d.borrow().iter() {
+                            attrs.insert(k.clone(), crate::telemetry::AttributeValue::from_php_value(v));
+                        }
+                    }
+                    crate::telemetry::start_span(&name, crate::telemetry::SpanKind::Internal, None, attrs);
+                    let res = self.invoke_closure_sync(cb, Vec::new(), span);
+                    match res {
+                        Ok(val) => {
+                            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::ok()));
+                            return Ok(val);
+                        }
+                        Err(err) => {
+                            crate::telemetry::record_active_span_error(&err.to_string());
+                            crate::telemetry::end_active_span(Some(crate::telemetry::SpanStatus::error(err.to_string())));
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+
         if facade == "Sys" && method == "print" {
             for arg in args {
                 self.output_buffer.push_str(&arg.to_php_string());

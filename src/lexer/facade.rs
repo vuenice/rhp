@@ -143,6 +143,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Weak",
         "Weak reference facade for breaking circular reference graphs (Weak::to, Weak::get, Weak::isValid)",
     ),
+    FacadeInfo::native(
+        "Trace",
+        "OpenTelemetry distributed tracing, metrics, and APM facade (startSpan, endSpan, span, currentSpan, setAttribute, addEvent, recordException, injectContext, extractContext, counter, histogram, exportOtlp, exportSentry, exportDatadog)",
+    ),
+    FacadeInfo::native(
+        "Telemetry",
+        "OpenTelemetry distributed tracing and metrics alias facade",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites

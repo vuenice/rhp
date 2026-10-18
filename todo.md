@@ -342,16 +342,19 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 ### Phase 16: Native Observability & OpenTelemetry Integration
 
-- [ ] **OpenTelemetry (OTel) Distributed Tracing & Metrics Engine:**
-  - Traditional PHP APM extensions (Sentry, Datadog, New Relic) rely on C extensions (`ext-sentry`, `ddtrace`, `newrelic.so`) that hook Zend engine internal C pointers; these cannot run on a custom Rust VM.
-  - Integrate native Rust OpenTelemetry SDK (`opentelemetry`, `opentelemetry-otlp`) with zero performance penalty.
-  - Automatic distributed trace context propagation (W3C `traceparent` / `baggage`).
-  - Auto-instrumentation spans for HTTP requests, database queries, cache operations, queue jobs, and outbound HTTP client calls.
-  - Real-time OTLP export over gRPC or HTTP/protobuf to Datadog, Honeycomb, New Relic, Jaeger, and OpenTelemetry Collector.
+- [x] **OpenTelemetry (OTel) Distributed Tracing & Metrics Engine:**
+  - High-performance native zero-dependency OpenTelemetry core built in Rust for RHP VM fibers and request lifecycles.
+  - Automatic W3C Distributed Trace Context propagation (`traceparent` format `00-{trace_id}-{span_id}-{flags}` and `baggage`).
+  - Hierarchical span model (`SpanContext`, `SpanId` 64-bit, `TraceId` 128-bit, `SpanKind::Server/Client/Internal/Producer/Consumer`, `SpanStatus`, `SpanEvent`, nanosecond timestamps, and `AttributeValue`).
+  - Thread-local active span stack supporting arbitrary nesting, parent-child linking, and completed spans buffer.
+  - Native Tier 1 static facades `Trace` and `Telemetry` with `startSpan`, `endSpan`, `span` (closure with automatic lifecycle and error capture), `setAttribute`, `addEvent`, `recordException`, `traceId`, `spanId`, `parentSpanId`, `isRecording`.
+  - Auto-instrumentation hooks for incoming worker requests (`WorkerRequest` / `WorkerResponse`), outbound `HTTP` client calls, and `DB` database operations.
+  - Real-time canonical OTLP/HTTP JSON export for `/v1/traces` and `/v1/metrics` (compatible with OTel Collector, Jaeger, Honeycomb, Datadog, New Relic).
 
-- [ ] **Native Error Tracking & Exception Reporting (Sentry / Datadog Bridges):**
-  - Native in-memory exception capture pipeline dispatching crash reports and stack traces directly to Sentry and Datadog APIs without legacy C extensions.
-  - High-precision runtime metrics: Request latency percentiles ($p50$, $p95$, $p99$), fiber queue depths, active connections, JIT compile times, and memory allocations.
+- [x] **Native Error Tracking & Exception Reporting (Sentry / Datadog Bridges):**
+  - Native in-memory exception capture pipeline dispatching crash reports and stack traces directly to Sentry (Sentry event JSON payload with exception type, value, and stack frames) and Datadog APM trace exporter (`export_datadog_traces`).
+  - High-precision runtime metrics registry: `Counter`, `Gauge`, and `Histogram` with count, sum, min, max, average, and exact percentiles ($p50$, $p90$, $p95$, $p99$).
+  - Auto-instrumented request latency tracking (`rhp.request.duration_ms`, `rhp.request.total`, `rhp.request.success`, `rhp.request.error`).
 
 ---
 
