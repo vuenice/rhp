@@ -26,9 +26,20 @@ RHP is written natively in Rust from the ground up:
 
 ---
 
-## Can I run existing Laravel applications on RHP today?
+## Is RHP drop-in compatible with standard PHP or Laravel?
 
-Not yet out of the box. RHP is currently at version **v0.1.0 Alpha**. While core language syntax and facades (`Arr`, `Str`, `DB`, `Future`) match Laravel conventions, full drop-in compatibility for all Laravel internals and Composer packages is scheduled across the v0.2 and v0.3 milestones.
+**No. RHP is not PHP-compatible.** Running unmodified PHP or Laravel applications is **explicitly out of scope for v1**.
+
+Instead, existing PHP applications and frameworks are ported or rewritten using the `rhp migrate` tool. RHP eliminates PHP's legacy dynamic quirks—such as pass-by-reference (`&$var`), variable variables (`$$var`), runtime `eval()`, and loose equality (`==`)—in order to guarantee memory safety, unboxed fast paths, and zero-GC request execution.
+
+---
+
+## What is the RHP runtime model?
+
+RHP runs as **one process with many worker threads**, hosted by a native Rust engine (Tokio for HTTP):
+- **`server.rhp` runs once at boot:** It sets up environment, config, routing tables, and the dependency container, and freezes the compiled classes into an immutable boot heap (`Arc<EngineState>`), shared read-only across all threads.
+- **`index.rhp` runs once per request:** Each request gets an isolated bump allocation arena (`RequestArena`). Everything allocated during the request is dropped in one $O(1)$ step at the end. There is no fork and no IPC between boot and request code.
+
 
 ---
 

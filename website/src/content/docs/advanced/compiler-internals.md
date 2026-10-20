@@ -34,10 +34,10 @@ The lexer leverages the `logos` Rust crate to produce deterministic finite autom
 ```rust
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
-    #[token("<?rhp")]
-    RhpOpenTag,
     #[token("fn")]
     Fn,
+    #[token("function")]
+    Function,
     #[token("singleton")]
     Singleton,
     #[regex(r"\$[a-zA-Z_][a-zA-Z0-9_]*")]
@@ -49,7 +49,11 @@ pub enum Token {
 
 ## 2. Pratt Expression Parser & Combinators
 
-Operator precedence is resolved using a custom Pratt parser. The parser automatically rewrites legacy symbols and intrinsics (such as rewriting `env()` $\rightarrow$ `Sys::env()`) directly in the AST, tracking exact byte spans (`Span { file_id, start, end, line, col }`).
+Operator precedence is resolved using a custom Pratt parser. The parser automatically rewrites symbols, intrinsics, and global helper calls directly in the AST:
+- System intrinsics (`print()`, `env()`, `dd()`) $\rightarrow$ `Sys::*`
+- Global PHP helper functions $\rightarrow$ `Glob::helperFunctions` (such as `Glob::customHelper()`)
+
+Exact source spans (`Span { file_id, start, end, line, col }`) are preserved for zero-overhead diagnostics.
 
 ---
 

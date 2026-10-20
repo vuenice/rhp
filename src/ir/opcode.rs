@@ -443,6 +443,12 @@ pub enum OpCode {
     /// Await an asynchronous `Future` handle (`await $future`).
     Await { dst: Reg, future: Reg },
 
+    /// Import a Rust file helper (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`).
+    ImportRust {
+        path: ConstantId,
+        alias: Option<ConstantId>,
+    },
+
     /// Yield a value (and optional key) from a generator (`yield $k => $v` or `yield from $gen`).
     Yield {
         dst: Reg,
@@ -661,6 +667,9 @@ impl fmt::Display for OpCode {
             OpCode::Echo { src } => write!(f, "ECHO            {}", src),
             OpCode::Defer { func_id } => write!(f, "DEFER           {}", func_id),
             OpCode::Await { dst, future } => write!(f, "AWAIT           {}, {}", dst, future),
+            OpCode::ImportRust { path, alias } => {
+                write!(f, "IMPORT_RUST     {}, alias={:?}", path, alias)
+            }
             OpCode::Yield {
                 dst,
                 key,

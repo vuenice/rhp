@@ -2,7 +2,7 @@
 title: "CLI Reference"
 description: "Complete command-line interface documentation for the rhp binary."
 section: "Getting Started"
-order: 4
+order: 5
 ---
 
 ## Overview
@@ -26,33 +26,46 @@ rhp [COMMAND] [PATH] [OPTIONS]
 
 ## Commands
 
-### `rhp run dev [PATH]`
+### `rhp run dev [PATH] [OPTIONS]`
 
-Executes the target script or directory using the direct tree-walking AST interpreter.
+Executes the target script or directory using the direct tree-walking AST interpreter. Automatically defaults to `index.rhp` in the current working directory (`pwd`) if no file is provided.
 
 - **Primary Use Case:** Daily local development, rapid feedback loops, and unit tests.
 - **Cold Start Latency:** Less than 5 milliseconds.
 - **Hot Reloading:** Watches project files and invalidates in-memory AST cache nodes without restarting server state.
 
 ```bash
-# Execute single file in Development Mode
-rhp run dev src/main.rhp
+# Execute index.rhp in current working directory (default)
+rhp run dev
 
-# Start development server on custom port with file watcher
-rhp run dev src/main.rhp --watch
+# Execute specified file via --file argument
+rhp run dev --file="/your-path/server.rhp"
+# or
+rhp run dev --file="server.rhp"
+
+# Execute single file via positional path
+rhp run dev src/main.rhp
 ```
 
 ---
 
-### `rhp run build [PATH]`
+### `rhp run build [PATH] [OPTIONS]`
 
-Lowers source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Tokio VM with Cranelift JIT compilation enabled.
+Lowers source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Tokio VM with Cranelift JIT compilation enabled. Automatically defaults to `index.rhp` in the current working directory (`pwd`) if no file is provided.
 
 - **Primary Use Case:** Production deployments, background workers, and performance benchmarks.
 - **Optimizations:** JIT compiles hot loops directly to machine code (`opt_level: 2`).
 
 ```bash
-# Execute in Production Mode
+# Execute index.rhp in current working directory (default)
+rhp run build
+
+# Execute specified file via --file argument
+rhp run build --file="/your-path/server.rhp"
+# or
+rhp run build --file="server.rhp"
+
+# Execute single file via positional path
 rhp run build src/main.rhp
 ```
 

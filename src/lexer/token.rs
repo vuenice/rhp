@@ -230,6 +230,9 @@ pub enum Token<'s> {
     #[token("use")]
     Use,
 
+    #[token("import")]
+    Import,
+
     #[token("declare")]
     Declare,
 
@@ -635,6 +638,7 @@ impl<'s> Token<'s> {
             Token::Instanceof => "instanceof",
             Token::Namespace => "namespace",
             Token::Use => "use",
+            Token::Import => "import",
             Token::Declare => "declare",
             Token::Global => "global",
             Token::Try => "try",
@@ -786,6 +790,7 @@ impl<'s> Token<'s> {
                 | Token::Instanceof
                 | Token::Namespace
                 | Token::Use
+                | Token::Import
                 | Token::Declare
                 | Token::Global
                 | Token::Try

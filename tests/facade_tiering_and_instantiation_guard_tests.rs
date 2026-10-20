@@ -263,6 +263,11 @@ fn test_instantiation_guard_static_compile_time() {
     ];
 
     for name in static_classes {
+        if name == "CustomCrypto" && !is_static_facade("CustomCrypto") {
+            register_tier2_plugin(CustomCryptoPlugin);
+        } else if name == "MathUtil" && !is_static_facade("MathUtil") {
+            let _ = parse(def_script);
+        }
         let code = format!("$obj = new {}();", name);
         let result = parse(&code);
         assert!(result.is_err(), "Expected parse error instantiating static facade '{}'", name);

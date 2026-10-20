@@ -10,8 +10,6 @@ order: 6
 RHP uses structured exception handling for recoverable runtime faults:
 
 ```php
-<?rhp
-
 class RecordNotFoundException extends Exception {}
 
 function findUser(int $id): dict {

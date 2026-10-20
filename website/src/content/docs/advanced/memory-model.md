@@ -10,11 +10,9 @@ order: 1
 Unlike legacy runtimes (PHP Zend Engine, Go, Node.js V8, JVM) that incur stop-the-world pauses and cyclic GC sweeps, RHP is **100% free of a tracing garbage collector**:
 
 ```php
-<?rhp
-
-Sys::print("Is GC Free: " . (Memory::isGcFree() ? 'true' : 'false')); // true
-Sys::print("GC Total Runs: " . Memory::gcRuns());                    // 0
-Sys::print("GC Pause Duration: " . Memory::gcPauseMs() . " ms");      // 0.0 ms
+print("Is GC Free: " . (Memory::isGcFree() ? 'true' : 'false')); // true
+print("GC Total Runs: " . Memory::gcRuns());                    // 0
+print("GC Pause Duration: " . Memory::gcPauseMs() . " ms");      // 0.0 ms
 ```
 
 ---
@@ -39,8 +37,6 @@ RHP prevents cycles statically at compile time:
 3. **Weak References (`Weak::to`):** Bidirectional graph relationships (e.g., parent-child nodes) must use explicit weak references:
 
 ```php
-<?rhp
-
 class Node {
     public ?WeakReference $parent = null;
     public list $children;
@@ -58,11 +54,38 @@ class Node {
 For compute-intensive operations, isolate allocations inside a lexical memory scope:
 
 ```php
-<?rhp
-
 $result = Memory::scope(function(): int {
     $buffer = Str::repeat("DATA", 100000);
     return Str::byteLength($buffer);
     // $buffer is reclaimed immediately upon scope exit
 });
 ```
+
+---
+
+## Memory & State Rules
+
+### 1. Boot Heap Immutability (`server.rhp` $\rightarrow$ `Arc`)
+The boot script (`server.rhp`) executes once at startup. All parsed routes, compiled classes, and container singletons are frozen into an immutable boot heap (`Arc<EngineState>`), shared read-only across all worker threads. 
+- **Read-Only Invariant:** Request code cannot mutate boot-time structures. Any attempt to write to boot data throws a fatal runtime error.
+- **Shared Mutable State:** Any state that must be shared across requests or threads must pass through explicit host-provided native APIs.
+
+### 2. Execution Invariant: Everything Finishes Before Arena Drop
+- **Deferred Work:** Callbacks registered via `Future::defer()` execute strictly *before* the request arena is dropped and reset.
+- **Job Queues:** Asynchronous or queued tasks are serialized into the host queue before teardown.
+- **Bulk Reclamation:** Once all deferred logic completes, the entire request arena drops in a single $O(1)$ step, leaving no leaks and requiring no GC traversal.
+
+### 3. Host-Owned Resource Handles
+- Operating system resources (database connections, raw sockets, log file descriptors) live in persistent, host-owned pools.
+- Request code holds lightweight handles rather than raw OS objects.
+- Borrowed connections are automatically sanitized and reset upon return to the pool, and are reclaimed on timeout.
+
+### 4. Cache Data Invariant (`Cache::get/set`)
+- The cache accepts **plain data only**: primitive scalars (integers, floats, strings, booleans) and arrays/dictionaries.
+- Live object instances, closures, and resource handles cannot be cached, guaranteeing zero cross-request pointer corruption.
+- Supported cache drivers include file, database, and Redis, with an optional in-memory L1 cache in front.
+
+### 5. VM Deadlines and Memory Caps
+- The VM checks execution deadlines at loop headers and function invocations.
+- A per-arena memory cap kills runaway requests before they exceed system capacity.
+

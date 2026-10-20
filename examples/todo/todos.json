@@ -1,0 +1,33 @@
+{
+  "todos": [
+    {
+      "id": 1,
+      "title": "Learn RHP Language & Architecture",
+      "completed": true,
+      "category": "Core",
+      "createdAt": "2026-10-18"
+    },
+    {
+      "id": 2,
+      "title": "Build HTMX + Alpine.js Reactive UI",
+      "completed": true,
+      "category": "Frontend",
+      "createdAt": "2026-10-18"
+    },
+    {
+      "id": 3,
+      "title": "Implement Fast Register Bytecode VM",
+      "completed": false,
+      "category": "Engine",
+      "createdAt": "2026-10-18"
+    },
+    {
+      "id": 4,
+      "title": "Deploy RHP High-Performance App",
+      "completed": false,
+      "category": "DevOps",
+      "createdAt": "2026-10-18"
+    }
+  ],
+  "updatedAt": "2026-10-18T20:00:00Z"
+}

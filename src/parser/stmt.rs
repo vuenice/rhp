@@ -1,4 +1,5 @@
 use crate::ast::{
+    expr::Expr,
     stmt::{
         Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind,
         ElseIfBranch, EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, PropertyDecl,
@@ -339,8 +340,91 @@ impl<'s> CombinatorStream<'s> {
             }
         }
 
+        // 14b. Import statement (`import "./Cache.rs";`, `import "./Cache.rs" as Cache;`, `import Cache from "./Cache.rs";`)
+        if self.matches(&Token::Import) {
+            let (path, alias) = if let Some(spanned) = self.peek() {
+                if let Some(path_str) = spanned
+                    .token
+                    .unescape_string()
+                    .or_else(|| spanned.token.raw_string_content().map(|s| s.to_string()))
+                {
+                    self.advance();
+                    let alias = if self.matches(&Token::As) {
+                        Some(self.expect_ident()?)
+                    } else {
+                        None
+                    };
+                    (path_str, alias)
+                } else {
+                    let alias_ident = self.expect_ident()?;
+                    let from_ident = self.expect_ident()?;
+                    if from_ident.name != "from" {
+                        return Err(ParseError::new(
+                            ParseErrorKind::UnexpectedToken {
+                                expected: "'from'".to_string(),
+                                found: from_ident.name.to_string(),
+                            },
+                            from_ident.span,
+                        ));
+                    }
+                    let path_spanned = self.advance().ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorKind::UnexpectedEof {
+                                expected: "string literal path".to_string(),
+                            },
+                            self.current_span(),
+                        )
+                    })?;
+                    let path_str = path_spanned
+                        .token
+                        .unescape_string()
+                        .or_else(|| path_spanned.token.raw_string_content().map(|s| s.to_string()))
+                        .ok_or_else(|| {
+                            ParseError::new(
+                                ParseErrorKind::UnexpectedToken {
+                                    expected: "string literal path".to_string(),
+                                    found: path_spanned.token.as_str().to_string(),
+                                },
+                                path_spanned.span,
+                            )
+                        })?;
+                    (path_str, Some(alias_ident))
+                }
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorKind::UnexpectedEof {
+                        expected: "import path or identifier".to_string(),
+                    },
+                    self.current_span(),
+                ));
+            };
+
+            self.expect_statement_terminator()?;
+            let span = start_span.merge(self.current_span());
+            return Ok(Stmt::new(StmtKind::RustImport { path, alias }, span));
+        }
+
         // 15. Use statement
         if self.matches(&Token::Use) {
+            // Check if this is a file import (`use "./Cache.rs";` or `use "./Cache.rs" as Cache;`)
+            if let Some(spanned) = self.peek() {
+                if let Some(path_str) = spanned
+                    .token
+                    .unescape_string()
+                    .or_else(|| spanned.token.raw_string_content().map(|s| s.to_string()))
+                {
+                    self.advance();
+                    let alias = if self.matches(&Token::As) {
+                        Some(self.expect_ident()?)
+                    } else {
+                        None
+                    };
+                    self.expect_statement_terminator()?;
+                    let span = start_span.merge(self.current_span());
+                    return Ok(Stmt::new(StmtKind::RustImport { path: path_str, alias }, span));
+                }
+            }
+
             let imports = self.separated_by(
                 |s| {
                     let imp_start = s.current_span();
@@ -373,8 +457,27 @@ impl<'s> CombinatorStream<'s> {
             return Ok(Stmt::new(StmtKind::Global(vars), span));
         }
 
-        // 17. Echo statement
+        // 17. Echo statement or echo(...) / echo!(...) invocation
         if self.matches(&Token::Echo) {
+            if self.check(&Token::Bang) {
+                self.advance(); // consume '!'
+                let open_paren = self.expect(Token::OpenParen)?;
+                let args = self.parse_call_arguments()?;
+                let close_paren = self.expect(Token::CloseParen)?;
+                self.expect_statement_terminator()?;
+                let span = start_span.merge(close_paren.span);
+                let call_expr = Expr::static_call("Sys", "echo", args, open_paren.span, span);
+                return Ok(Stmt::new(StmtKind::Expr(call_expr), span));
+            }
+            if self.check(&Token::OpenParen) {
+                let open_paren = self.advance().unwrap();
+                let args = self.parse_call_arguments()?;
+                let close_paren = self.expect(Token::CloseParen)?;
+                self.expect_statement_terminator()?;
+                let span = start_span.merge(close_paren.span);
+                let call_expr = Expr::static_call("Sys", "echo", args, open_paren.span, span);
+                return Ok(Stmt::new(StmtKind::Expr(call_expr), span));
+            }
             let exprs = self.separated_by(
                 |s| s.parse_expr_lowest(),
                 Token::Comma,

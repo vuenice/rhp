@@ -14,10 +14,10 @@ abstract    as          async       break       case        catch
 class       const       continue    default     defer       do
 else        elseif      enum        extends     final       finally
 fn          for         foreach     function    if          implements
-interface   macro       match       namespace   new         private
-protected   public      readonly    return      singleton   static
-switch      throw       trait       try         use         while
-yield
+interface   import      macro       match       namespace   new
+private     protected   public      readonly    return      singleton
+static      switch      throw       trait       try         use
+while       yield
 ```
 
 ---

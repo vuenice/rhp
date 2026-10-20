@@ -35,11 +35,11 @@ set  $tags = Arr::set(['fast', 'rust']);`
     title: "Dual-Engine Execution Strategy",
     description: "Tree-walking AST interpreter for sub-millisecond dev cold starts and hot-reload. Lowers to Register Bytecode VM with Cranelift JIT in production.",
     badge: "Dev & Prod Engines",
-    code: `// Development (Instant hot-reload)
-rhp run dev server.rhp
+    code: `// Development (picks index.rhp in pwd)
+rhp run dev
 
-// Production (Bytecode VM + Cranelift JIT)
-rhp run build server.rhp`
+// Production (specify target via --file)
+rhp run build --file="/your-path/server.rhp"`
   },
   {
     title: "Zero-GC Deterministic RAII",
@@ -50,17 +50,15 @@ Memory::scope(function() {
     $temp = File::read('heavy.csv');
     // Drops instantly on return
 });
-Sys::print(Memory::gcPauseMs()); // 0.0`
+print(Memory::gcPauseMs()); // 0.0`
   },
   {
     title: "AST-Guided Lint & Auto-Typing",
     description: "Integrated toolchain inspired by Mago. Formats code to 4-space standard, automatically infers variable type hints, and normalizes casing.",
     badge: "Built-in Toolchain",
-    code: `// Before: $name = 'alice';
+    code: `// Before: $fullName = 'alice';
 // After 'rhp run lint':
-string $name = 'alice';
-
-// Validates boundaries & exports JSON`
+string $full_name = 'alice';`
   }
 ];
 ---

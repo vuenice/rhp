@@ -22,8 +22,6 @@ Unlike JavaScript Promises which eagerly execute on creation, or Go goroutines w
 Spawns an asynchronous task on the Tokio background thread pool:
 
 ```php
-<?rhp
-
 $future = Future::run(function(): string {
     return File::read('report.csv');
 });
@@ -38,8 +36,6 @@ string $data = $future->wait();
 Evaluates an array of closures (or Futures) concurrently and returns an array of resolved values:
 
 ```php
-<?rhp
-
 [$user, $orders, $metrics] = Future::wait([
     fn() => DB::table('users')->find(42),
     fn() => DB::table('orders')->where('user_id', 42)->get(),
@@ -55,8 +51,6 @@ All three tasks run concurrently on separate Tokio worker fibers. Total latency 
 Returns the result of whichever task finishes first:
 
 ```php
-<?rhp
-
 $fastestMirror = Future::any([
     fn() => HTTP::get('https://mirror-us.cdn.org/data')->json(),
     fn() => HTTP::get('https://mirror-eu.cdn.org/data')->json()
@@ -69,8 +63,6 @@ $fastestMirror = Future::any([
 Yields the fiber using Tokio timers (`tokio::time::sleep`) without blocking OS worker threads:
 
 ```php
-<?rhp
-
 $delayedResult = Future::delayed(500, fn() => 'Resumed after 500ms');
 ```
 
@@ -80,14 +72,21 @@ $delayedResult = Future::delayed(500, fn() => 'Resumed after 500ms');
 
 In high-throughput web applications, user response latency must not be delayed by analytics logging, metrics collection, or cache warming.
 
-`Future::defer()` registers a hook in the request queue that executes **strictly after** the HTTP response payload has been flushed to the network socket:
+`Future::defer()` registers a hook in the request queue that executes **strictly after** the HTTP response payload has been flushed to the network socket, but **before** the request arena drops:
 
 ```php
-<?rhp
-
-// Flush user response immediately, then run background task
+// Flush user response immediately, then run background task before arena drop
 Future::defer(function() use ($userId) {
     Log::info("Request served for user {$userId}");
     Analytics::recordHit("/dashboard");
 });
 ```
+
+---
+
+## Concurrency Scope for v1
+
+In line with RHP's v1 core architecture decisions:
+- **Single-request execution is strictly sequential:** Fine-grained concurrency inside an individual HTTP request is explicitly out of scope for v1.
+- **High-throughput request concurrency:** Concurrency is achieved at the host level, where the Rust runtime executes many concurrent HTTP requests across a thread pool against the frozen immutable boot heap (`Arc<EngineState>`).
+

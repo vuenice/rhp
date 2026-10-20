@@ -20,9 +20,9 @@ Most applications do not require extreme performance from day one, but businesse
 RHP combines a dynamic, developer-friendly interface with a robust, multi-threaded Rust execution backend.
 
 - **Execution & Tooling Modes:**
+  - **Development Mode (`rhp run dev`):** Uses a direct tree-walking AST interpreter for sub-millisecond hot-reloading, instant cold starts, and immediate stack traces. Automatically targets `index.rhp` in current working directory (`pwd`) by default, or an explicit file via `--file="/your-path/server.rhp"`.
+  - **Production Mode (`rhp run build`):** Lowers code into a register-based Bytecode VM with optional Cranelift JIT compilation, running on a multi-worker Tokio execution pool for maximum throughput. Automatically targets `index.rhp` in `pwd` by default, or an explicit file via `--file="/your-path/server.rhp"`.
   - **Lint & Auto-Format Mode (`rhp run lint`):** Auto-applies standard 4-space indentation, formats operators/braces (inspired by Carthage Mago), automatically infers and adds variable type signatures (`$x = '';` -> `string $x = '';`), runs the static type checker, and outputs diagnostic issues in JSON format.
-  - **Development Mode (`rhp run dev`):** Uses a direct tree-walking AST interpreter for sub-millisecond hot-reloading, instant cold starts, and immediate stack traces.
-  - **Production Mode (`rhp run build`):** Lowers code into a register-based Bytecode VM with optional Cranelift JIT compilation, running on a multi-worker Tokio execution pool for maximum throughput.
 - **Asynchronous & Synchronous Flexibility:** RHP is dynamically typed and supports both synchronous and asynchronous execution. Most database queries and file reads execute sequentially in local fibers without extra boilerplate, but you can explicitly offload tasks when needed.
 - **Rust-Powered Reliability:** RHP is built on Rust to guarantee memory safety, eliminate crashes from isolated user requests, and provide top-tier request handling speeds.
 
@@ -85,7 +85,27 @@ $data = $fileFuture->wait();
 
 - **Use `defer()` to execute post-response hooks after the payload has been flushed to the client, ensuring background logging or cleanup tasks never delay user response times.**
 
-### 4. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
+### 4. Executing Scripts (`rhp run dev` & `rhp run build`)
+
+Execute RHP programs in either Development Mode (direct AST interpretation with sub-millisecond startup) or Production Mode (register bytecode VM with Cranelift JIT compilation).
+
+Both commands automatically pick `index.rhp` in the current working directory (`pwd`) by default, or an explicit file passed via the `--file` argument:
+
+```bash
+# Execute index.rhp in current working directory (default)
+rhp run dev
+rhp run build
+
+# Execute specific script via --file argument
+rhp run dev --file="/your-path/server.rhp"
+rhp run build --file="/your-path/server.rhp"
+
+# Execute specific script via positional path
+rhp run dev server.rhp
+rhp run build server.rhp
+```
+
+### 5. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
 
 Inspired by Carthage Software Mago, `rhp run lint` combines an AST-guided auto-formatter, static type annotator, and boundary type checker into a single command:
 
@@ -119,7 +139,7 @@ rhp run lint [PATH] --no-case-change
   - Preserves already written type annotations without modifying them.
 - **JSON Diagnostic Output:** Reports remaining typecheck violations, casing issues (in `--no-fix` mode), and mismatches in machine-readable JSON format matching Mago's schema.
 
-### 5. Native OpenTelemetry & Distributed Observability (`Trace` / `Telemetry`)
+### 6. Native OpenTelemetry & Distributed Observability (`Trace` / `Telemetry`)
 
 RHP eliminates legacy Zend C APM extensions (`ext-sentry`, `ddtrace`, `newrelic.so`) by embedding a zero-overhead native OpenTelemetry engine directly into the runtime:
 

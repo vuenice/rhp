@@ -121,7 +121,7 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "Sys",
-        "System environment, output, and debugging intrinsics facade (env, print, dd, os)",
+        "System environment, output, and debugging intrinsics facade (env, echo, print, println, dd, os, version, timestamp)",
     ),
     FacadeInfo::native(
         "Glob",
@@ -154,8 +154,8 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
-/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::dd()`).
-pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "dd"];
+/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`).
+pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "println", "echo", "dd"];
 
 /// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`).
 #[inline]
@@ -387,7 +387,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "file_put_contents",
         rhp_facade: "File",
         rhp_method: "write",
-        rhp_signature: "File::write(string $path, string $contents): int",
+        rhp_signature: "File::write(string $path, string $contents): bool",
     },
     LegacyPhpFunctionMapping {
         php_name: "file_exists",
@@ -431,6 +431,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "Glob",
         rhp_method: "match",
         rhp_signature: "Glob::match(string $pattern, string $subject): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "json_encode",
+        rhp_facade: "phpFun",
+        rhp_method: "json_encode",
+        rhp_signature: "phpFun::json_encode(mixed $value): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "json_decode",
+        rhp_facade: "phpFun",
+        rhp_method: "json_decode",
+        rhp_signature: "phpFun::json_decode(string $json, bool $associative = true): mixed",
     },
 ];
 

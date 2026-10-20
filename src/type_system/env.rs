@@ -418,7 +418,7 @@ pub fn resolve_facade_static_call(
                     call_span,
                     hierarchy,
                 )?;
-                Ok(RhpType::Int)
+                Ok(RhpType::Bool)
             }
             "exists" | "delete" => {
                 check_arg_type(
@@ -536,9 +536,10 @@ pub fn resolve_facade_static_call(
         "DB" => Ok(RhpType::Class("QueryBuilder".to_string())),
         "Log" => Ok(RhpType::Void),
         "Sys" => match method {
-            "print" | "dd" => Ok(RhpType::Void),
+            "print" | "println" | "echo" | "dd" => Ok(RhpType::Void),
             "env" => Ok(RhpType::Mixed),
-            "os" => Ok(RhpType::String),
+            "os" | "version" => Ok(RhpType::String),
+            "timestamp" => Ok(RhpType::Int),
             _ => Ok(RhpType::Mixed),
         },
         "Glob" => match method {
@@ -606,13 +607,17 @@ pub fn resolve_facade_static_call(
         },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
-                resolve_facade_static_call(
-                    mapping.rhp_facade,
-                    mapping.rhp_method,
-                    arg_types,
-                    call_span,
-                    hierarchy,
-                )
+                if mapping.rhp_facade != "phpFun" {
+                    resolve_facade_static_call(
+                        mapping.rhp_facade,
+                        mapping.rhp_method,
+                        arg_types,
+                        call_span,
+                        hierarchy,
+                    )
+                } else {
+                    Ok(RhpType::Dynamic)
+                }
             } else {
                 Ok(RhpType::Dynamic)
             }

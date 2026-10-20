@@ -1854,6 +1854,13 @@ impl VM {
                     self.registers[base_reg + dst.index()] = resolved;
                 }
 
+                OpCode::ImportRust { path, alias } => {
+                    let chunk = self.chunk_for_func(func_id);
+                    let path_str = chunk.get_string_constant(path).unwrap_or_default().to_string();
+                    let alias_str = alias.and_then(|a| chunk.get_string_constant(a)).map(|s| s.to_string());
+                    let _ = crate::vm::rust_loader::load_and_register_rust_file(&path_str, alias_str.as_deref(), None);
+                }
+
                 OpCode::Yield { dst, value, .. } => {
                     let yielded = value
                         .map(|r| self.registers[base_reg + r.index()].clone())
@@ -2635,11 +2642,21 @@ impl VM {
             }
         }
 
-        if facade == "Sys" && method == "print" {
-            for arg in args {
-                self.output_buffer.push_str(&arg.to_php_string());
+        if facade == "Sys" {
+            match method {
+                "echo" => {
+                    let text = crate::vm::format::format_sys_args(args);
+                    self.output_buffer.push_str(&text);
+                    return Ok(PhpValue::Null);
+                }
+                "print" | "println" => {
+                    let mut text = crate::vm::format::format_sys_args(args);
+                    text.push('\n');
+                    self.output_buffer.push_str(&text);
+                    return Ok(PhpValue::Null);
+                }
+                _ => {}
             }
-            return Ok(PhpValue::Null);
         }
 
         if facade == "Arr" {
@@ -4265,6 +4282,7 @@ impl VM {
                         rev.reverse();
                         Ok(PhpValue::list(rev))
                     }
+                    "toJson" => Ok(PhpValue::string(php_value_to_json(receiver))),
                     other => {
                         if let Some(macro_closure) = get_runtime_closure_macro("Arr", other) {
                             self.invoke_closure_sync_with_this(
@@ -4691,6 +4709,9 @@ impl VM {
         args: &[PhpValue],
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
+        if method == "toJson" {
+            return Ok(PhpValue::string(php_value_to_json(receiver)));
+        }
         match (class_name, method) {
             ("WeakReference", "get") => {
                 if let PhpValue::Object(rc) = receiver {
@@ -5369,58 +5390,14 @@ impl VM {
         }
     }
 
+    #[inline]
     fn strict_eq(a: &PhpValue, b: &PhpValue) -> bool {
-        match (a, b) {
-            (PhpValue::Null, PhpValue::Null) => true,
-            (PhpValue::Bool(x), PhpValue::Bool(y)) => x == y,
-            (PhpValue::Int(x), PhpValue::Int(y)) => x == y,
-            (PhpValue::Float(x), PhpValue::Float(y)) => x == y,
-            (
-                PhpValue::RustInt {
-                    kind: k1,
-                    value: v1,
-                },
-                PhpValue::RustInt {
-                    kind: k2,
-                    value: v2,
-                },
-            ) => k1 == k2 && v1 == v2,
-            (
-                PhpValue::RustFloat {
-                    kind: k1,
-                    value: v1,
-                },
-                PhpValue::RustFloat {
-                    kind: k2,
-                    value: v2,
-                },
-            ) => k1 == k2 && v1 == v2,
-            (PhpValue::String(x), PhpValue::String(y)) => x == y,
-            (PhpValue::Array(x), PhpValue::Array(y)) | (PhpValue::List(x), PhpValue::List(y)) => {
-                *x.borrow() == *y.borrow()
-            }
-            (PhpValue::Dict(x), PhpValue::Dict(y)) => *x.borrow() == *y.borrow(),
-            (PhpValue::Set(x), PhpValue::Set(y)) => *x.borrow() == *y.borrow(),
-            (PhpValue::HashMap(x), PhpValue::HashMap(y)) => *x.borrow() == *y.borrow(),
-            (PhpValue::Object(x), PhpValue::Object(y)) => Rc::ptr_eq(x, y),
-            (PhpValue::Closure(x), PhpValue::Closure(y)) => Rc::ptr_eq(x, y),
-            _ => false,
-        }
+        a.strict_eq(b)
     }
 
+    #[inline]
     fn loose_eq(a: &PhpValue, b: &PhpValue) -> bool {
-        if a == b {
-            return true;
-        }
-        match (a, b) {
-            (PhpValue::Null, PhpValue::Bool(false)) | (PhpValue::Bool(false), PhpValue::Null) => {
-                true
-            }
-            (PhpValue::Int(i), PhpValue::String(s)) | (PhpValue::String(s), PhpValue::Int(i)) => {
-                s.trim().parse::<i32>().ok() == Some(*i)
-            }
-            _ => false,
-        }
+        a.loose_eq(b)
     }
 
     // =========================================================================

@@ -458,6 +458,9 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let rev: String = s.chars().rev().collect();
             Ok(PhpValue::string(rev))
         }
+        "format" => {
+            Ok(PhpValue::string(crate::vm::format::format_sys_args(args)))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Str".to_string(),
             method: method.to_string(),
@@ -1009,10 +1012,19 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
             }
         }
-        "print" => {
-            for arg in args {
-                print!("{}", arg.to_php_string());
-            }
+        "echo" => {
+            let text = crate::vm::format::format_sys_args(args);
+            print!("{}", text);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            Ok(PhpValue::Null)
+        }
+        "print" | "println" => {
+            let mut text = crate::vm::format::format_sys_args(args);
+            text.push('\n');
+            print!("{}", text);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
             Ok(PhpValue::Null)
         }
         "dd" => {
@@ -1022,6 +1034,13 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::Null)
         }
         "os" => Ok(PhpValue::string(std::env::consts::OS)),
+        "version" => Ok(PhpValue::string(env!("CARGO_PKG_VERSION"))),
+        "timestamp" => Ok(PhpValue::Int(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i32,
+        )),
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Sys".to_string(),
             method: method.to_string(),
@@ -1708,6 +1727,17 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "str_contains" => dispatch_str("contains", args),
         "implode" => dispatch_str("join", args),
         "explode" => dispatch_str("split", args),
+        "json_encode" => {
+            let val = args.first().cloned().unwrap_or(PhpValue::Null);
+            Ok(PhpValue::string(php_value_to_json(&val)))
+        }
+        "json_decode" => {
+            let s = get_arg_str(args, 0, "json_decode")?;
+            match parse_json_value(&s) {
+                Ok(val) => Ok(val),
+                Err(_) => Ok(PhpValue::Null),
+            }
+        }
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),
@@ -2114,5 +2144,209 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
             format!("{{{}}}", entries.join(","))
         }
         _ => "null".to_string(),
+    }
+}
+
+/// Parse a JSON string into a corresponding [`PhpValue`].
+pub fn parse_json_value(input: &str) -> Result<PhpValue, String> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    skip_ws(&chars, &mut i);
+    let val = parse_raw_json(&chars, &mut i)?;
+    Ok(val)
+}
+
+fn skip_ws(chars: &[char], i: &mut usize) {
+    while *i < chars.len() && chars[*i].is_whitespace() {
+        *i += 1;
+    }
+}
+
+fn parse_raw_json(chars: &[char], i: &mut usize) -> Result<PhpValue, String> {
+    skip_ws(chars, i);
+    if *i >= chars.len() {
+        return Ok(PhpValue::Null);
+    }
+    match chars[*i] {
+        'n' => {
+            if chars[*i..].starts_with(&['n', 'u', 'l', 'l']) {
+                *i += 4;
+                Ok(PhpValue::Null)
+            } else {
+                Err("Unexpected token for null".to_string())
+            }
+        }
+        't' => {
+            if chars[*i..].starts_with(&['t', 'r', 'u', 'e']) {
+                *i += 4;
+                Ok(PhpValue::Bool(true))
+            } else {
+                Err("Unexpected token for true".to_string())
+            }
+        }
+        'f' => {
+            if chars[*i..].starts_with(&['f', 'a', 'l', 's', 'e']) {
+                *i += 5;
+                Ok(PhpValue::Bool(false))
+            } else {
+                Err("Unexpected token for false".to_string())
+            }
+        }
+        '"' => {
+            let s = parse_json_string(chars, i)?;
+            Ok(PhpValue::string(s))
+        }
+        '[' => {
+            *i += 1; // skip '['
+            let mut items = Vec::new();
+            skip_ws(chars, i);
+            if *i < chars.len() && chars[*i] == ']' {
+                *i += 1;
+                return Ok(PhpValue::list(items));
+            }
+            while *i < chars.len() {
+                let elem = parse_raw_json(chars, i)?;
+                items.push(elem);
+                skip_ws(chars, i);
+                if *i < chars.len() && chars[*i] == ',' {
+                    *i += 1;
+                    skip_ws(chars, i);
+                } else if *i < chars.len() && chars[*i] == ']' {
+                    *i += 1;
+                    break;
+                } else {
+                    break;
+                }
+            }
+            Ok(PhpValue::list(items))
+        }
+        '{' => {
+            *i += 1; // skip '{'
+            let mut map = IndexMap::new();
+            skip_ws(chars, i);
+            if *i < chars.len() && chars[*i] == '}' {
+                *i += 1;
+                return Ok(PhpValue::dict(map));
+            }
+            while *i < chars.len() {
+                skip_ws(chars, i);
+                if *i >= chars.len() || chars[*i] != '"' {
+                    break;
+                }
+                let key = parse_json_string(chars, i)?;
+                skip_ws(chars, i);
+                if *i < chars.len() && chars[*i] == ':' {
+                    *i += 1;
+                }
+                skip_ws(chars, i);
+                let val = parse_raw_json(chars, i)?;
+                map.insert(key, val);
+                skip_ws(chars, i);
+                if *i < chars.len() && chars[*i] == ',' {
+                    *i += 1;
+                    skip_ws(chars, i);
+                } else if *i < chars.len() && chars[*i] == '}' {
+                    *i += 1;
+                    break;
+                } else {
+                    break;
+                }
+            }
+            Ok(PhpValue::dict(map))
+        }
+        '-' | '0'..='9' => {
+            let start = *i;
+            if chars[*i] == '-' {
+                *i += 1;
+            }
+            let mut is_float = false;
+            while *i < chars.len()
+                && (chars[*i].is_ascii_digit()
+                    || chars[*i] == '.'
+                    || chars[*i] == 'e'
+                    || chars[*i] == 'E'
+                    || chars[*i] == '+'
+                    || chars[*i] == '-')
+            {
+                if chars[*i] == '.' || chars[*i] == 'e' || chars[*i] == 'E' {
+                    is_float = true;
+                }
+                *i += 1;
+            }
+            let num_str: String = chars[start..*i].iter().collect();
+            if is_float {
+                let f: f32 = num_str.parse().unwrap_or(0.0);
+                Ok(PhpValue::Float(f))
+            } else {
+                let n: i32 = num_str.parse().unwrap_or(0);
+                Ok(PhpValue::Int(n))
+            }
+        }
+        _ => Err("Invalid JSON character".to_string()),
+    }
+}
+
+fn parse_json_string(chars: &[char], i: &mut usize) -> Result<String, String> {
+    if *i >= chars.len() || chars[*i] != '"' {
+        return Err("Expected string quote".to_string());
+    }
+    *i += 1; // skip opening quote
+    let mut out = String::new();
+    while *i < chars.len() {
+        let ch = chars[*i];
+        *i += 1;
+        if ch == '"' {
+            return Ok(out);
+        } else if ch == '\\' {
+            if *i < chars.len() {
+                let esc = chars[*i];
+                *i += 1;
+                match esc {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'b' => out.push('\x08'),
+                    'f' => out.push('\x0C'),
+                    'u' => {
+                        if *i + 4 <= chars.len() {
+                            let hex_str: String = chars[*i..*i + 4].iter().collect();
+                            *i += 4;
+                            if let Ok(code) = u32::from_str_radix(&hex_str, 16) {
+                                if let Some(c) = char::from_u32(code) {
+                                    out.push(c);
+                                }
+                            }
+                        }
+                    }
+                    _ => out.push(esc),
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    Err("Unterminated string".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_json_value_basic() {
+        let s = r#"{"name":"Alice","skills":["Rust","RHP","HTMX"],"count":42,"active":true}"#;
+        let res = parse_json_value(s).expect("parse json");
+        match res {
+            PhpValue::Dict(d) => {
+                let borrowed = d.borrow();
+                assert_eq!(borrowed.get("name"), Some(&PhpValue::string("Alice")));
+                assert_eq!(borrowed.get("count"), Some(&PhpValue::Int(42)));
+                assert_eq!(borrowed.get("active"), Some(&PhpValue::Bool(true)));
+            }
+            other => panic!("Expected Dict, got {:?}", other),
+        }
     }
 }

@@ -126,7 +126,7 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
         </header>
 
         <!-- Markdown Body -->
-        <article class="prose prose-slate dark:prose-invert max-w-none prose-headings:scroll-mt-28 prose-a:text-brand-500 hover:prose-a:underline prose-code:font-mono prose-pre:rounded-xl prose-pre:border prose-pre:border-slate-800/80 prose-pre:bg-[#0B0F19]">
+        <article class="prose prose-slate dark:prose-invert max-w-none prose-headings:scroll-mt-28 prose-a:text-brand-500 hover:prose-a:underline prose-code:font-mono">
           <slot />
         </article>
 
@@ -221,33 +221,36 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
     });
   }
 
-  // Code block copy button and language tag injection
+  // Code block copy button and language tag injection (VitePress style)
   function enhanceCodeBlocks() {
     document.querySelectorAll('pre').forEach(pre => {
       if (pre.querySelector('.code-copy-btn')) return;
 
-      // Extract language from code class (e.g. language-rhp)
+      // Extract language from attribute or code class (e.g. data-language="php")
       const code = pre.querySelector('code');
+      const langData = pre.getAttribute('data-language');
       const langClass = Array.from(code?.classList || []).find(c => c.startsWith('language-'));
-      const lang = langClass ? langClass.replace('language-', '') : '';
+      let lang = langData || (langClass ? langClass.replace('language-', '') : '');
+      if (lang === 'text') lang = '';
 
       pre.classList.add('relative', 'group');
 
-      const header = document.createElement('div');
-      header.className = 'absolute top-2 right-2 flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity';
-
+      // VitePress language badge (visible in top-right)
       if (lang) {
         const langBadge = document.createElement('span');
-        langBadge.className = 'text-[10px] font-mono uppercase bg-slate-800/80 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700/60';
+        langBadge.className = 'code-lang-label';
         langBadge.textContent = lang;
-        header.appendChild(langBadge);
+        pre.appendChild(langBadge);
       }
 
+      // VitePress copy button
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
-      copyBtn.className = 'code-copy-btn p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded border border-slate-700 transition-colors';
+      copyBtn.className = 'code-copy-btn';
+      copyBtn.setAttribute('aria-label', 'Copy code to clipboard');
+      copyBtn.setAttribute('title', 'Copy code');
       copyBtn.innerHTML = `
-        <svg class="w-3.5 h-3.5 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
         </svg>
       `;
@@ -255,22 +258,23 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
       copyBtn.addEventListener('click', async () => {
         const text = code?.textContent || pre.textContent || '';
         await navigator.clipboard.writeText(text);
+        copyBtn.classList.add('copied');
         copyBtn.innerHTML = `
-          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
           </svg>
         `;
         setTimeout(() => {
+          copyBtn.classList.remove('copied');
           copyBtn.innerHTML = `
-            <svg class="w-3.5 h-3.5 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           `;
         }, 1800);
       });
 
-      header.appendChild(copyBtn);
-      pre.appendChild(header);
+      pre.appendChild(copyBtn);
     });
   }
 

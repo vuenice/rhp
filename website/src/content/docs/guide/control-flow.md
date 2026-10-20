@@ -10,16 +10,14 @@ order: 3
 Conditionals in RHP support standard boolean evaluations:
 
 ```php
-<?rhp
-
 int $statusCode = 200;
 
 if ($statusCode === 200) {
-    Sys::print("Success: Request completed");
+    print("Success: Request completed");
 } elseif ($statusCode >= 400 && $statusCode < 500) {
-    Sys::print("Client Error");
+    print("Client Error");
 } else {
-    Sys::print("Server Error");
+    print("Server Error");
 }
 ```
 
@@ -30,8 +28,6 @@ if ($statusCode === 200) {
 RHP supports first-class `match` expressions. Unlike `switch`, `match` returns a value, enforces strict `===` type checking, and does not require `break` statements:
 
 ```php
-<?rhp
-
 int $roleId = 1;
 
 string $roleTitle = match ($roleId) {
@@ -41,7 +37,7 @@ string $roleTitle = match ($roleId) {
     default => 'Guest',
 };
 
-Sys::print("User Role: " . $roleTitle);
+print("User Role: " . $roleTitle);
 ```
 
 ---
@@ -51,18 +47,16 @@ Sys::print("User Role: " . $roleTitle);
 The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`):
 
 ```php
-<?rhp
-
 // Iterating over a list
 list $users = Arr::list(['Alice', 'Bob', 'Charlie']);
 foreach ($users as $index => $name) {
-    Sys::print("[{$index}] " . $name);
+    print("[{$index}] " . $name);
 }
 
 // Iterating over an ordered dictionary
 dict $meta = Arr::dict(['region' => 'us-east-1', 'active' => true]);
 foreach ($meta as $key => $value) {
-    Sys::print($key . " => " . (string)$value);
+    print($key . " => " . (string)$value);
 }
 ```
 
@@ -71,12 +65,10 @@ foreach ($meta as $key => $value) {
 ## Loops: `for` and `while`
 
 ```php
-<?rhp
-
 // Standard for loop
 for (int $i = 0; $i < 5; $i++) {
     if ($i === 2) continue;
-    Sys::print("Step: " . (string)$i);
+    print("Step: " . (string)$i);
 }
 
 // While loop

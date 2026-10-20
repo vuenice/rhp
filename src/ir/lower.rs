@@ -892,6 +892,23 @@ impl<'a> IrLowerer<'a> {
                 Ok(())
             }
 
+            StmtKind::RustImport { path, alias } => {
+                let alias_str = alias.as_ref().map(|a| a.name);
+                let facade_name = crate::vm::rust_loader::infer_facade_name(path, alias_str);
+                let _ = crate::vm::rust_loader::load_and_register_rust_file(path, alias_str, None);
+                let path_const = b.intern_string(path);
+                let alias_const = alias.as_ref().map(|a| b.intern_string(a.name));
+                b.emit(
+                    OpCode::ImportRust {
+                        path: path_const,
+                        alias: alias_const,
+                    },
+                    stmt.span,
+                );
+                self.use_aliases.insert(facade_name.clone(), facade_name);
+                Ok(())
+            }
+
             StmtKind::Global(vars) => {
                 for var in vars {
                     let norm = normalize_var_name(var.name);
@@ -910,9 +927,18 @@ impl<'a> IrLowerer<'a> {
             }
 
             StmtKind::Echo(exprs) => {
-                for expr in exprs {
-                    let reg = self.lower_expr(b, expr, None)?;
-                    b.emit(OpCode::Echo { src: reg }, expr.span);
+                if exprs.len() > 1 && matches!(&exprs[0].kind, ExprKind::Literal(crate::ast::expr::Literal::String { value, .. }) if value.contains('{')) {
+                    let mut args = Vec::with_capacity(exprs.len());
+                    for expr in exprs {
+                        args.push(crate::ast::expr::Argument::new(expr.clone(), expr.span));
+                    }
+                    let call = Expr::static_call("Sys", "echo", args, stmt.span, stmt.span);
+                    self.lower_expr(b, &call, None)?;
+                } else {
+                    for expr in exprs {
+                        let reg = self.lower_expr(b, expr, None)?;
+                        b.emit(OpCode::Echo { src: reg }, expr.span);
+                    }
                 }
                 Ok(())
             }

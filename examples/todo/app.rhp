@@ -1,0 +1,533 @@
+class Todo {
+    public int $id;
+    public string $title;
+    public bool $completed;
+    public string $category;
+    public string $createdAt;
+
+    public function __construct(int $id, string $title, string $category = "General", string $createdAt = "Today") {
+        $this->id = $id;
+        $this->title = $title;
+        $this->completed = false;
+        $this->category = $category;
+        $this->createdAt = $createdAt;
+    }
+
+    public function toggle(): bool {
+        $this->completed = !$this->completed;
+        return $this->completed;
+    }
+}
+
+class TodoStore {
+    public array $todos;
+    public int $nextId;
+    public string $filePath;
+
+    public function __construct(string $filePath = "") {
+        $this->todos = [];
+        $this->nextId = 1;
+        if ($filePath == "") {
+            if (File::exists("todos.json")) {
+                $filePath = "todos.json";
+            } else {
+                $filePath = "examples/todo/todos.json";
+            }
+        }
+        $this->filePath = $filePath;
+        $this->load();
+    }
+
+    public function load(): void {
+        if (File::exists($this->filePath)) {
+            $content = File::read($this->filePath);
+            $data = json_decode($content);
+            if ($data != null && $data->has("todos")) {
+                $rawTodos = $data["todos"];
+                $loaded = [];
+                $maxId = 0;
+                foreach ($rawTodos as $item) {
+                    $id = (int)$item["id"];
+                    $title = (string)$item["title"];
+                    $cat = $item->has("category") ? (string)$item["category"] : "General";
+                    $created = $item->has("createdAt") ? (string)$item["createdAt"] : "Today";
+                    $t = new Todo($id, $title, $cat, $created);
+                    if ($item->has("completed") && $item["completed"]) {
+                        $t->completed = true;
+                    }
+                    $loaded[] = $t;
+                    if ($id > $maxId) {
+                        $maxId = $id;
+                    }
+                }
+                $this->todos = $loaded;
+                $this->nextId = $maxId + 1;
+                return;
+            }
+        }
+        $this->seedDefaults();
+        $this->save();
+    }
+
+    public function save(): bool {
+        $serializedList = [];
+        foreach ($this->todos as $t) {
+            $d = Arr::dict([
+                "id" => $t->id,
+                "title" => $t->title,
+                "completed" => $t->completed,
+                "category" => $t->category,
+                "createdAt" => $t->createdAt
+            ]);
+            $serializedList[] = $d;
+        }
+        $payload = Arr::dict([
+            "todos" => $serializedList,
+            "updatedAt" => "Just now"
+        ]);
+        return File::write($this->filePath, $payload->toJson());
+    }
+
+    public function seedDefaults(): void {
+        $this->addInternal("Learn RHP Language & Architecture", "Core", "Done");
+        $this->addInternal("Build HTMX + Alpine.js Reactive UI", "Frontend", "Done");
+        $this->addInternal("Implement Fast Register Bytecode VM", "Engine", "In Progress");
+        $this->addInternal("Deploy RHP High-Performance App", "DevOps", "Upcoming");
+
+        // Mark the first two as completed
+        $this->toggle(1);
+        $this->toggle(2);
+    }
+
+    public function addInternal(string $title, string $category = "General", string $createdAt = "Today"): Todo {
+        $todo = new Todo($this->nextId, $title, $category, $createdAt);
+        $this->nextId = $this->nextId + 1;
+        $items = $this->todos;
+        $items[] = $todo;
+        $this->todos = $items;
+        return $todo;
+    }
+
+    public function add(string $title, string $category = "General", string $createdAt = "Today"): Todo {
+        $todo = $this->addInternal($title, $category, $createdAt);
+        $this->save();
+        return $todo;
+    }
+
+    public function toggle(int $id): bool {
+        $found = false;
+        foreach ($this->todos as $todo) {
+            if ($todo->id == $id) {
+                $todo->toggle();
+                $found = true;
+            }
+        }
+        if ($found) {
+            $this->save();
+        }
+        return $found;
+    }
+
+    public function delete(int $id): bool {
+        $newTodos = [];
+        $found = false;
+        foreach ($this->todos as $todo) {
+            if ($todo->id == $id) {
+                $found = true;
+            } else {
+                $newTodos[] = $todo;
+            }
+        }
+        if ($found) {
+            $this->todos = $newTodos;
+            $this->save();
+        }
+        return $found;
+    }
+
+    public function clearCompleted(): int {
+        $activeOnly = [];
+        $cleared = 0;
+        foreach ($this->todos as $todo) {
+            if ($todo->completed) {
+                $cleared = $cleared + 1;
+            } else {
+                $activeOnly[] = $todo;
+            }
+        }
+        $this->todos = $activeOnly;
+        if ($cleared > 0) {
+            $this->save();
+        }
+        return $cleared;
+    }
+
+    public function getStats(): array {
+        $total = 0;
+        $active = 0;
+        $completed = 0;
+        foreach ($this->todos as $todo) {
+            $total = $total + 1;
+            if ($todo->completed) {
+                $completed = $completed + 1;
+            } else {
+                $active = $active + 1;
+            }
+        }
+        return Arr::dict([
+            "total" => $total,
+            "active" => $active,
+            "completed" => $completed
+        ]);
+    }
+
+    public function getFiltered(string $status): array {
+        if ($status == "active") {
+            $filtered = [];
+            foreach ($this->todos as $todo) {
+                if (!$todo->completed) {
+                    $filtered[] = $todo;
+                }
+            }
+            return $filtered;
+        }
+
+        if ($status == "completed") {
+            $filtered = [];
+            foreach ($this->todos as $todo) {
+                if ($todo->completed) {
+                    $filtered[] = $todo;
+                }
+            }
+            return $filtered;
+        }
+
+        return $this->todos;
+    }
+}
+
+class TodoRenderer {
+    public static function renderItem(Todo $todo): string {
+        $idStr = (string)$todo->id;
+        $checkedAttr = $todo->completed ? "checked" : "";
+        $itemClass = $todo->completed
+            ? "todo-item flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-xl transition duration-200 opacity-70 group"
+            : "todo-item flex items-center justify-between p-4 bg-white border border-gray-100 shadow-sm rounded-xl transition duration-200 hover:shadow-md hover:border-indigo-100 group";
+        $textClass = $todo->completed
+            ? "text-gray-400 line-through text-base font-medium select-none"
+            : "text-gray-800 text-base font-medium select-none group-hover:text-indigo-950";
+
+        // Badges for categories
+        $badgeColor = "bg-gray-100 text-gray-700";
+        if ($todo->category == "Core" || $todo->category == "Engine") {
+            $badgeColor = "bg-purple-100 text-purple-700 border border-purple-200";
+        }
+        if ($todo->category == "Frontend") {
+            $badgeColor = "bg-emerald-100 text-emerald-700 border border-emerald-200";
+        }
+        if ($todo->category == "DevOps") {
+            $badgeColor = "bg-amber-100 text-amber-700 border border-amber-200";
+        }
+
+        $html = "<li id=\"todo-item-" . $idStr . "\" class=\"" . $itemClass . "\" x-data=\"{ editing: false }\">\n";
+        $html = $html . "  <div class=\"flex items-center space-x-3.5 flex-1 min-w-0\">\n";
+        $html = $html . "    <input type=\"checkbox\" " . $checkedAttr . "\n";
+        $html = $html . "      hx-post=\"/todos/toggle?id=" . $idStr . "\"\n";
+        $html = $html . "      hx-target=\"#todo-list-container\"\n";
+        $html = $html . "      hx-swap=\"innerHTML\"\n";
+        $html = $html . "      class=\"w-5 h-5 text-indigo-600 rounded-lg border-gray-300 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer transition\" />\n";
+        $html = $html . "    <span class=\"" . $textClass . " truncate\">" . $todo->title . "</span>\n";
+        $html = $html . "    <span class=\"px-2.5 py-0.5 text-xs font-semibold rounded-full " . $badgeColor . "\">" . $todo->category . "</span>\n";
+        $html = $html . "  </div>\n";
+        $html = $html . "  <div class=\"flex items-center space-x-2\">\n";
+        $html = $html . "    <button\n";
+        $html = $html . "      hx-post=\"/todos/delete?id=" . $idStr . "\"\n";
+        $html = $html . "      hx-target=\"#todo-list-container\"\n";
+        $html = $html . "      hx-swap=\"innerHTML\"\n";
+        $html = $html . "      title=\"Delete todo\"\n";
+        $html = $html . "      class=\"p-1.5 text-gray-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition duration-150\">\n";
+        $html = $html . "      <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16\"></path></svg>\n";
+        $html = $html . "    </button>\n";
+        $html = $html . "  </div>\n";
+        $html = $html . "</li>\n";
+
+        return $html;
+    }
+
+    public static function renderList(array $todos, string $filter, array $stats): string {
+        $html = "<div id=\"todo-list-container\" class=\"space-y-4\">\n";
+        
+        // Counter and stats bar
+        $totalStr = (string)$stats["total"];
+        $activeStr = (string)$stats["active"];
+        $completedStr = (string)$stats["completed"];
+
+        $html = $html . "  <div class=\"grid grid-cols-3 gap-3 mb-6\">\n";
+        $html = $html . "    <div class=\"bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 text-center\">\n";
+        $html = $html . "      <div class=\"text-xs font-semibold text-indigo-600 uppercase tracking-wider\">Total</div>\n";
+        $html = $html . "      <div class=\"text-2xl font-bold text-indigo-900 mt-0.5\">" . $totalStr . "</div>\n";
+        $html = $html . "    </div>\n";
+        $html = $html . "    <div class=\"bg-amber-50/70 border border-amber-100 rounded-xl p-3 text-center\">\n";
+        $html = $html . "      <div class=\"text-xs font-semibold text-amber-600 uppercase tracking-wider\">Active</div>\n";
+        $html = $html . "      <div class=\"text-2xl font-bold text-amber-900 mt-0.5\">" . $activeStr . "</div>\n";
+        $html = $html . "    </div>\n";
+        $html = $html . "    <div class=\"bg-emerald-50/70 border border-emerald-100 rounded-xl p-3 text-center\">\n";
+        $html = $html . "      <div class=\"text-xs font-semibold text-emerald-600 uppercase tracking-wider\">Done</div>\n";
+        $html = $html . "      <div class=\"text-2xl font-bold text-emerald-900 mt-0.5\">" . $completedStr . "</div>\n";
+        $html = $html . "    </div>\n";
+        $html = $html . "  </div>\n";
+
+        // Filter tabs
+        $allTabClass = ($filter == "all")
+            ? "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white shadow-sm"
+            : "px-3.5 py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 transition";
+        $activeTabClass = ($filter == "active")
+            ? "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white shadow-sm"
+            : "px-3.5 py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 transition";
+        $completedTabClass = ($filter == "completed")
+            ? "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white shadow-sm"
+            : "px-3.5 py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 transition";
+
+        $html = $html . "  <div class=\"flex items-center justify-between pb-2 border-b border-gray-100\">\n";
+        $html = $html . "    <div class=\"flex space-x-1.5\">\n";
+        $html = $html . "      <button hx-get=\"/?filter=all\" hx-target=\"#todo-list-container\" hx-swap=\"innerHTML\" class=\"" . $allTabClass . "\">All (" . $totalStr . ")</button>\n";
+        $html = $html . "      <button hx-get=\"/?filter=active\" hx-target=\"#todo-list-container\" hx-swap=\"innerHTML\" class=\"" . $activeTabClass . "\">Active (" . $activeStr . ")</button>\n";
+        $html = $html . "      <button hx-get=\"/?filter=completed\" hx-target=\"#todo-list-container\" hx-swap=\"innerHTML\" class=\"" . $completedTabClass . "\">Completed (" . $completedStr . ")</button>\n";
+        $html = $html . "    </div>\n";
+
+        if ($stats["completed"] > 0) {
+            $html = $html . "    <button hx-post=\"/todos/clear-completed\" hx-target=\"#todo-list-container\" hx-swap=\"innerHTML\" class=\"text-xs font-medium text-rose-500 hover:text-rose-700 transition flex items-center space-x-1\">\n";
+            $html = $html . "      <span>Clear completed</span>\n";
+            $html = $html . "    </button>\n";
+        }
+        $html = $html . "  </div>\n";
+
+        // Todo items or empty state
+        if (count($todos) == 0) {
+            $html = $html . "  <div class=\"text-center py-12 px-4 rounded-xl border border-dashed border-gray-200 bg-gray-50/50\">\n";
+            $html = $html . "    <div class=\"w-12 h-12 mx-auto mb-3 text-indigo-300\">\n";
+            $html = $html . "      <svg fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4\"></path></svg>\n";
+            $html = $html . "    </div>\n";
+            $html = $html . "    <p class=\"text-gray-500 font-medium text-sm\">No tasks found in this view</p>\n";
+            $html = $html . "    <p class=\"text-gray-400 text-xs mt-1\">Add a task above or switch your active filter</p>\n";
+            $html = $html . "  </div>\n";
+        } else {
+            $html = $html . "  <ul class=\"space-y-2.5\">\n";
+            foreach ($todos as $todo) {
+                $html = $html . self::renderItem($todo);
+            }
+            $html = $html . "  </ul>\n";
+        }
+
+        $html = $html . "</div>\n";
+        return $html;
+    }
+
+    public static function renderFullPage(array $todos, string $filter, array $stats): string {
+        $listHtml = self::renderList($todos, $filter, $stats);
+
+        $html = "<!DOCTYPE html>\n";
+        $html = $html . "<html lang=\"en\">\n";
+        $html = $html . "<head>\n";
+        $html = $html . "  <meta charset=\"UTF-8\" />\n";
+        $html = $html . "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n";
+        $html = $html . "  <title>RHP Todo App - Rust-Powered PHP</title>\n";
+        $html = $html . "  <script src=\"https://cdn.tailwindcss.com\"></script>\n";
+        $html = $html . "  <script src=\"https://unpkg.com/htmx.org@1.9.12\"></script>\n";
+        $html = $html . "  <script defer src=\"https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js\"></script>\n";
+        $html = $html . "  <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n";
+        $html = $html . "  <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n";
+        $html = $html . "  <link href=\"https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">\n";
+        $html = $html . "  <style>\n";
+        $html = $html . "    body { font-family: 'Plus Jakarta Sans', sans-serif; }\n";
+        $html = $html . "    .htmx-request .spinner { display: inline-block; }\n";
+        $html = $html . "    .spinner { display: none; }\n";
+        $html = $html . "  </style>\n";
+        $html = $html . "</head>\n";
+        $html = $html . "<body class=\"bg-slate-100 min-h-screen text-slate-800 antialiased selection:bg-indigo-500 selection:text-white\">\n";
+        $html = $html . "  <div class=\"max-w-2xl mx-auto px-4 py-12\">\n";
+
+        // Header section
+        $html = $html . "    <header class=\"mb-8 text-center\">\n";
+        $html = $html . "      <div class=\"inline-flex items-center space-x-2 px-3 py-1 bg-indigo-50 border border-indigo-200/60 rounded-full text-indigo-700 text-xs font-semibold mb-3\">\n";
+        $html = $html . "        <span class=\"flex h-2 w-2 relative\">\n";
+        $html = $html . "          <span class=\"animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75\"></span>\n";
+        $html = $html . "          <span class=\"relative inline-flex rounded-full h-2 w-2 bg-indigo-500\"></span>\n";
+        $html = $html . "        </span>\n";
+        $html = $html . "        <span>RHP Engine • Rust Register VM Bytecode</span>\n";
+        $html = $html . "      </div>\n";
+        $html = $html . "      <h1 class=\"text-4xl font-extrabold text-slate-900 tracking-tight sm:text-5xl\">\n";
+        $html = $html . "        TaskFlow <span class=\"text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500\">RHP</span>\n";
+        $html = $html . "      </h1>\n";
+        $html = $html . "      <p class=\"mt-2.5 text-sm text-slate-600 max-w-md mx-auto\">\n";
+        $html = $html . "        Reactive TODO application powered by <strong>RHP</strong> backend, <strong>HTMX</strong> server-driven partials, and <strong>Alpine.js</strong>.\n";
+        $html = $html . "      </p>\n";
+        $html = $html . "    </header>\n";
+
+        // Main card
+        $html = $html . "    <main class=\"bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden\">\n";
+
+        // Form to add a new task
+        $html = $html . "      <section class=\"p-6 sm:p-8 bg-gradient-to-b from-indigo-50/40 via-white to-white border-b border-slate-100\">\n";
+        $html = $html . "        <form\n";
+        $html = $html . "          hx-post=\"/todos\"\n";
+        $html = $html . "          hx-target=\"#todo-list-container\"\n";
+        $html = $html . "          hx-swap=\"innerHTML\"\n";
+        $html = $html . "          hx-on::after-request=\"this.reset();\"\n";
+        $html = $html . "          class=\"space-y-3\">\n";
+        $html = $html . "          <div class=\"flex flex-col sm:flex-row gap-2.5\">\n";
+        $html = $html . "            <div class=\"relative flex-1\">\n";
+        $html = $html . "              <input\n";
+        $html = $html . "                type=\"text\"\n";
+        $html = $html . "                name=\"title\"\n";
+        $html = $html . "                required\n";
+        $html = $html . "                placeholder=\"What needs to be accomplished today?\"\n";
+        $html = $html . "                class=\"w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition shadow-sm\" />\n";
+        $html = $html . "            </div>\n";
+        $html = $html . "            <select name=\"category\" class=\"px-3.5 py-3 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition shadow-sm\">\n";
+        $html = $html . "              <option value=\"General\">General</option>\n";
+        $html = $html . "              <option value=\"Core\">Core</option>\n";
+        $html = $html . "              <option value=\"Frontend\">Frontend</option>\n";
+        $html = $html . "              <option value=\"DevOps\">DevOps</option>\n";
+        $html = $html . "            </select>\n";
+        $html = $html . "            <button\n";
+        $html = $html . "              type=\"submit\"\n";
+        $html = $html . "              class=\"px-5 py-3 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-sm rounded-xl shadow-md shadow-indigo-500/20 transition duration-150 flex items-center justify-center space-x-1.5 shrink-0\">\n";
+        $html = $html . "              <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2.5\" d=\"M12 4v16m8-8H4\"></path></svg>\n";
+        $html = $html . "              <span>Add Task</span>\n";
+        $html = $html . "            </button>\n";
+        $html = $html . "          </div>\n";
+        $html = $html . "        </form>\n";
+        $html = $html . "      </section>\n";
+
+        // Todo list container
+        $html = $html . "      <section class=\"p-6 sm:p-8\">\n";
+        $html = $html . $listHtml;
+        $html = $html . "      </section>\n";
+
+        $html = $html . "    </main>\n";
+
+        // Footer info
+        $html = $html . "    <footer class=\"mt-8 text-center text-xs text-slate-400 space-y-1.5\">\n";
+        $html = $html . "      <p>Drop-in PHP syntax running on <strong>Rust Register VM Bytecode</strong></p>\n";
+        $html = $html . "      <div class=\"flex justify-center items-center space-x-3 text-indigo-600 font-medium pt-1\">\n";
+        $html = $html . "        <a href=\"/api/todos\" target=\"_blank\" class=\"hover:underline\">Inspect JSON API</a>\n";
+        $html = $html . "        <span>•</span>\n";
+        $html = $html . "        <span>Zero-Bootstrap Worker Pool</span>\n";
+        $html = $html . "      </div>\n";
+        $html = $html . "    </footer>\n";
+
+        $html = $html . "  </div>\n";
+        $html = $html . "</body>\n";
+        $html = $html . "</html>\n";
+
+        return $html;
+    }
+}
+
+// =========================================================================
+// Main Execution & Request Handling
+// =========================================================================
+
+// Read superglobals when invoked via Web/WorkerRequest
+global $_GET, $_POST, $_SERVER;
+
+$filePath = "";
+if ($_SERVER != null && $_SERVER->has("TODOS_FILE")) {
+    $filePath = (string)$_SERVER["TODOS_FILE"];
+}
+$store = new TodoStore($filePath);
+
+$method = "GET";
+$uri = "/";
+$isHtmx = false;
+
+if ($_SERVER != null) {
+    if ($_SERVER->has("REQUEST_METHOD")) {
+        $method = $_SERVER["REQUEST_METHOD"];
+    }
+    if ($_SERVER->has("REQUEST_URI")) {
+        $uri = $_SERVER["REQUEST_URI"];
+    }
+    if ($_SERVER->has("HTTP_HX_REQUEST")) {
+        $isHtmx = true;
+    }
+}
+
+// 1. POST /todos -> Add a new task
+if ($method == "POST" && Str::startsWith($uri, "/todos") && !Str::contains($uri, "toggle") && !Str::contains($uri, "delete") && !Str::contains($uri, "clear-completed")) {
+    $title = "New task";
+    $category = "General";
+    if ($_POST != null) {
+        if ($_POST->has("title")) {
+            $title = $_POST["title"];
+        }
+        if ($_POST->has("category")) {
+            $category = $_POST["category"];
+        }
+    }
+    $store->add($title, $category);
+    $stats = $store->getStats();
+    echo TodoRenderer::renderList($store->todos, "all", $stats);
+    return;
+}
+
+// 2. POST /todos/toggle -> Toggle a task
+if ($method == "POST" && Str::contains($uri, "/todos/toggle")) {
+    $id = 1;
+    if ($_GET != null && $_GET->has("id")) {
+        $id = (int)$_GET["id"];
+    } elseif ($_POST != null && $_POST->has("id")) {
+        $id = (int)$_POST["id"];
+    }
+    $store->toggle($id);
+    $stats = $store->getStats();
+    echo TodoRenderer::renderList($store->todos, "all", $stats);
+    return;
+}
+
+// 3. POST /todos/delete -> Delete a task
+if ($method == "POST" && Str::contains($uri, "/todos/delete")) {
+    $id = 1;
+    if ($_GET != null && $_GET->has("id")) {
+        $id = (int)$_GET["id"];
+    } elseif ($_POST != null && $_POST->has("id")) {
+        $id = (int)$_POST["id"];
+    }
+    $store->delete($id);
+    $stats = $store->getStats();
+    echo TodoRenderer::renderList($store->todos, "all", $stats);
+    return;
+}
+
+// 4. POST /todos/clear-completed -> Clear all completed tasks
+if ($method == "POST" && Str::contains($uri, "/todos/clear-completed")) {
+    $store->clearCompleted();
+    $stats = $store->getStats();
+    echo TodoRenderer::renderList($store->todos, "all", $stats);
+    return;
+}
+
+// 5. GET /api/todos -> JSON representation
+if (Str::startsWith($uri, "/api/todos")) {
+    $stats = $store->getStats();
+    echo $stats->toJson();
+    return;
+}
+
+// 6. Default / GET -> Full page or partial based on filter
+$filter = "all";
+if ($_GET != null && $_GET->has("filter")) {
+    $filter = $_GET["filter"];
+}
+
+$filtered = $store->getFiltered($filter);
+$stats = $store->getStats();
+
+if ($isHtmx) {
+    // If request is from HTMX filter tab, return only the list fragment!
+    echo TodoRenderer::renderList($filtered, $filter, $stats);
+} else {
+    // Standard browser visit: return the complete styled HTML page
+    echo TodoRenderer::renderFullPage($filtered, $filter, $stats);
+}

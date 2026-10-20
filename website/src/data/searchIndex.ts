@@ -23,6 +23,13 @@ export const searchIndex: SearchItem[] = [
     keywords: ["hello world", "script", "first", "quickstart", "run dev"]
   },
   {
+    title: "Core Architecture",
+    section: "Getting Started",
+    description: "Decided runtime model: server.rhp/index.rhp split, bump arenas, zero-GC, and strict language rules.",
+    url: "/docs/getting-started/core-architecture",
+    keywords: ["architecture", "runtime", "server.rhp", "index.rhp", "arena", "zero-gc", "tokio", "boot heap", "milestone", "scope"]
+  },
+  {
     title: "Project Structure",
     section: "Getting Started",
     description: "Standard directory layout, entrypoint conventions, and config files for RHP apps.",

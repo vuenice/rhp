@@ -191,7 +191,7 @@ pub fn walk_stmt<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, stmt: &Stmt<'s
                 }
             }
         }
-        StmtKind::Use(_) | StmtKind::Global(_) => {}
+        StmtKind::Use(_) | StmtKind::RustImport { .. } | StmtKind::Global(_) => {}
         StmtKind::Echo(exprs) => {
             for e in exprs {
                 visitor.visit_expr(e);

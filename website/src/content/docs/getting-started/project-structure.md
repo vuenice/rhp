@@ -2,7 +2,7 @@
 title: "Project Structure"
 description: "Recommended directory layouts and project structure conventions for RHP applications."
 section: "Getting Started"
-order: 3
+order: 4
 ---
 
 ## Standard Application Layout
@@ -11,9 +11,10 @@ A typical RHP project follows a modular, separation-of-concerns layout designed 
 
 ```text
 my-rhp-app/
+├── server.rhp               # Boot entrypoint: runs once at startup (config, routes, container, Arc)
+├── index.rhp                # Request entrypoint: runs once per HTTP request (bump arena, zero-GC)
 ├── rhp.json                 # Project configuration & dependencies
 ├── src/
-│   ├── main.rhp             # Application entrypoint & HTTP bootstrap
 │   ├── Controllers/         # HTTP request handlers
 │   │   ├── UserController.rhp
 │   │   └── OrderController.rhp
@@ -31,32 +32,33 @@ my-rhp-app/
 
 ---
 
-## The Entrypoint (`src/main.rhp`)
+## The Boot & Request Split: `server.rhp` vs `index.rhp`
 
-In RHP, the application entrypoint bootstraps the persistent parent process:
+RHP separates application lifecycle into two distinct execution phases:
+
+### 1. Boot Phase (`server.rhp`)
+Runs **once** when the server process starts up. It evaluates configuration, reads environment variables, registers routes, sets up the dependency container, and compiles application classes. The result is frozen into an immutable boot heap (`Arc<EngineState>`), shared read-only across all worker threads.
 
 ```php
-<?rhp
-
-namespace App;
-
+// server.rhp: Bootstraps global state once at startup
 use App\Services\PaymentGateway;
 
-// Register application singleton services in parent process
-singleton class AppEngine {
-    public static function boot(): void {
-        DB::pool(min: 10, max: 50);
-        Log::info("Parent engine booted with shared connection pool.");
-    }
-}
+// Register routes & container
+Router::get('/health', fn() => ['status' => 'healthy', 'gc_runs' => 0]);
+Router::get('/users', fn() => DB::table('users')->all());
+Router::post('/orders', 'OrderController@store');
 
-AppEngine::boot();
+Log::info("Application boot complete. Immutable heap frozen.");
+```
 
-// Route incoming requests against the pre-compiled parent state
-HTTP::serve(port: 8080, routes: [
-    'GET /health' => fn() => ['status' => 'healthy', 'gc_runs' => Memory::gcRuns()],
-    'GET /users'  => fn() => DB::table('users')->all(),
-]);
+### 2. Request Phase (`index.rhp`)
+Runs **once per HTTP request** across worker threads. Each request receives its own bump arena (`RequestArena`). Every object created during request processing is allocated in this arena. When the response finishes, deferred work (`Future::defer`) runs, and the arena is dropped in one step ($O(1)$), eliminating memory leaks without a garbage collector.
+
+```php
+// index.rhp: Executes per request in an isolated arena
+$response = Router::dispatch(Request::current());
+$response->send();
+
 ```
 
 ---

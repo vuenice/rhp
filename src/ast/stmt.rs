@@ -119,6 +119,12 @@ pub enum StmtKind<'s> {
     /// Use import statement (`use App\Models\User as UserModel;`).
     Use(Vec<UseImport<'s>>),
 
+    /// Rust file import statement (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`).
+    RustImport {
+        path: String,
+        alias: Option<Ident<'s>>,
+    },
+
     /// Global variables declaration (`global $config, $db;`).
     Global(Vec<Variable<'s>>),
 

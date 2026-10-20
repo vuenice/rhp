@@ -163,6 +163,10 @@ impl TypeChecker {
                         .enums
                         .insert(enm.name.name.to_string(), info);
                 }
+                StmtKind::RustImport { path, alias } => {
+                    let alias_str = alias.as_ref().map(|a| a.name);
+                    let _ = crate::vm::rust_loader::load_and_register_rust_file(path, alias_str, None);
+                }
                 StmtKind::ClassDecl(cls) => {
                     let info = self.build_class_info(cls)?;
                     self.result
@@ -807,7 +811,7 @@ impl TypeChecker {
         ctx: Option<&CallableContext>,
     ) -> Result<bool, TypeError> {
         match &stmt.kind {
-            StmtKind::Empty | StmtKind::Use(_) | StmtKind::InterfaceDecl(_) => Ok(false),
+            StmtKind::Empty | StmtKind::Use(_) | StmtKind::RustImport { .. } | StmtKind::InterfaceDecl(_) => Ok(false),
 
             StmtKind::Global(vars) => {
                 for v in vars {

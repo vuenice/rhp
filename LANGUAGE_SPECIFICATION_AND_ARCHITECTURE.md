@@ -134,8 +134,8 @@ Global helper functions are eliminated in favor of object-oriented class facades
 
 ### Facade Tiering Architecture
 
-- **Tier 1 (Built-in Native Facades):** Ship core facades (`Str`, `Arr`, `Future`, `Log`, `DB`) pre-compiled inside the engine.
-- **Tier 2 (Custom Rust Plugins):** Allow developers to include them as Rust crates during an AOT build step.
+- **Tier 1 (Built-in Native Facades):** Ship core facades (`Str`, `Arr`, `Future`, `Memory`, `Sys`, `DB`) pre-compiled inside the engine core.
+- **Tier 2 (Custom Rust Plugins & Direct `.rs` File Imports):** Allows importing `.rs` files directly (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`), exposing high-performance helper classes (such as `Cache`, `Log`, `RateLimiter`, and custom extensions) without polluting the core language with non-core dependencies. These are compiled AOT via `rustc --crate-type cdylib` with SHA-256 caching or executed via the thread-safe in-process engine.
 - **Tier 3 (Script-land Facades):** Allow standard facades written in your class static function for simple, non-performance-critical user utilities.
 
 ### Facade Extensibility: Runtime Macro Registration vs. Class Inheritance
@@ -177,15 +177,19 @@ To preserve strict object-oriented facade consistency while supporting developer
 
 1. **Why Not the Lexer?** The `logos` DFA lexer is strictly responsible for zero-copy tokenization and lacks grammatical context to distinguish variable names, class names, keywords, or function invocations.
 2. **Pratt Parser Symbol Resolution & AST Rewriting:** When the Pratt parser encounters a function call expression (`callee(args)`), it checks:
-   - **Reserved Intrinsics (`env`, `print`, `dd`):** Rewritten directly into `Sys::env(...)`, `Sys::print(...)`, and `Sys::dd(...)` static facade calls (`ExprKind::StaticCall`), ensuring zero-copy engine optimizations and exact source span tracking.
+   - **Reserved Intrinsics (`env`, `print`, `println`, `echo`, `dd`):** Rewritten directly into `Sys::env(...)`, `Sys::print(...)`, `Sys::echo(...)`, and `Sys::dd(...)` static facade calls (`ExprKind::StaticCall`), ensuring zero-copy engine optimizations and exact source span tracking.
    - **Declared User Functions:** Preserved as standard user function call nodes (`ExprKind::Call`).
    - **Legacy PHP Standard Functions (`phpFun::old_php_function()`):** Recognized via a static key-value mapping registry (`LEGACY_PHP_FUNCTIONS` / `php_function_signature_map()`) pairing legacy PHP function names (such as `array_merge`, `implode`, `strlen`, `file_get_contents`) with their canonical RHP facade call signatures (e.g., `"array_merge" => "Arr::merge(array ...$arrays): array"`). The parser rewrites calls like `array_merge($a, $b)` into `phpFun::array_merge($a, $b)` which bridges directly to `Arr::merge($a, $b)`.
    - **Unrecognized Global Helpers (Backward Support):** Automatically intercepted and lowered into `Glob::customHelper('helper_name', ...args)`, routing legacy or dynamically registered custom helpers through the `Glob` namespace container without polluting the global namespace or adding runtime lookup overhead in Development or Production modes.
 
 ```rust
 let call_node = if is_reserved_intrinsic(callee_name) {
-    // Rewrites to Sys::* (Sys::env(), Sys::print(), Sys::dd())
-    Expr::static_call("Sys", callee_name, args, callee_span, span)
+    // Rewrites to Sys::* (Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
+    let method = match callee_name {
+        "println" => "print",
+        other => other,
+    };
+    Expr::static_call("Sys", method, args, callee_span, span)
 } else if self.is_user_defined_function(callee_name) {
     // Calls standard user function
     Expr::user_function_call(callee_name, args, callee_span, span)
@@ -434,6 +438,9 @@ Future::defer(fn() => Log::info('Request processed successfully'));
 
 - **Development Mode (`rhp run dev`):** Direct AST Execution via Tree-Walking Interpreter. Evaluates AST nodes directly in memory using recursive pattern matching without emitting bytecode. Delivers instant cold startup times and sub-millisecond hot reloading.
 - **Production / Build Mode (`rhp run build`):** Register-based Bytecode VM with optional JIT (Cranelift) compilation. Lowers AST into linear IR opcode streams executed within a Tokio multi-worker execution pool for maximum throughput.
+- **Entrypoint & Target File Resolution:**
+  - When running `rhp run dev` or `rhp run build` without a file argument, the CLI automatically picks `index.rhp` in the current working directory (`pwd`).
+  - An explicit script file can be passed via the `--file` flag (e.g., `rhp run build --file="/your-path/server.rhp"`), `-f <path>`, or as a positional path argument.
 
 ### Developer Experience Framework (`rhp run dev`)
 

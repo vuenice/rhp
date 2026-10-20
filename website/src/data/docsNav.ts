@@ -15,6 +15,7 @@ export const docsNavigation: DocNavSection[] = [
     items: [
       { title: "Installation", slug: "getting-started/installation", href: "/docs/getting-started/installation" },
       { title: "Hello World", slug: "getting-started/hello-world", href: "/docs/getting-started/hello-world" },
+      { title: "Core Architecture", slug: "getting-started/core-architecture", href: "/docs/getting-started/core-architecture" },
       { title: "Project Structure", slug: "getting-started/project-structure", href: "/docs/getting-started/project-structure" },
       { title: "CLI Reference", slug: "getting-started/cli-reference", href: "/docs/getting-started/cli-reference" },
     ]

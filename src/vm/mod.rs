@@ -17,8 +17,10 @@ pub mod engine;
 pub mod error;
 pub mod facade;
 pub mod fiber;
+pub mod format;
 pub mod memory;
 pub mod parent_process;
+pub mod rust_loader;
 pub mod value;
 pub mod worker;
 
@@ -42,7 +44,7 @@ pub use facade::{
     append_log, clear_log_history, clear_runtime_closure_macros, clear_tier2_plugins,
     dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,
     extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
-    has_runtime_closure_macro, has_tier2_plugin, register_runtime_closure_macro,
+    has_runtime_closure_macro, has_tier2_plugin, parse_json_value, register_runtime_closure_macro,
     register_tier2_plugin, register_tier2_plugin_handler, FacadeResult, LogRecord, PluginFacade,
     Tier2PluginHandler,
 };
@@ -53,6 +55,7 @@ pub use fiber::{
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, IoKind, IoWaitInfo,
     SchedulerStats,
 };
+pub use format::{format_rust_template, format_sys_args};
 pub use indexmap::IndexMap;
 pub use memory::{
     cow_detachments, current_usage, estimate_value_size, gc_pause_ms, gc_runs, get_memory_stats,
@@ -61,6 +64,11 @@ pub use memory::{
     MemoryStats, OwnershipEnforcer,
 };
 pub use parent_process::{EngineState, FrozenValue, ParentProcess};
+pub use rust_loader::{
+    clear_rust_modules, extract_pub_functions, infer_facade_name, load_and_register_rust_file,
+    resolve_rust_file_path, to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry,
+    RustLogStore,
+};
 pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
 pub use worker::{
     deserialize_response, execute_isolated_request, serialize_response, WorkerError, WorkerHandle,
@@ -238,8 +246,10 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     lhs.to_php_string(),
                     rhs.to_php_string()
                 ))),
-                BinaryOp::Eq | BinaryOp::Identical => Ok(PhpValue::Bool(lhs == rhs)),
-                BinaryOp::NotEq | BinaryOp::NotIdentical => Ok(PhpValue::Bool(lhs != rhs)),
+                BinaryOp::Eq => Ok(PhpValue::Bool(lhs.loose_eq(&rhs))),
+                BinaryOp::NotEq => Ok(PhpValue::Bool(!lhs.loose_eq(&rhs))),
+                BinaryOp::Identical => Ok(PhpValue::Bool(lhs.strict_eq(&rhs))),
+                BinaryOp::NotIdentical => Ok(PhpValue::Bool(!lhs.strict_eq(&rhs))),
                 BinaryOp::Lt => Ok(PhpValue::Bool(lhs < rhs)),
                 BinaryOp::LtEq => Ok(PhpValue::Bool(lhs <= rhs)),
                 BinaryOp::Gt => Ok(PhpValue::Bool(lhs > rhs)),
@@ -300,10 +310,19 @@ pub fn run_source(source: &str) -> Result<PhpValue, ExecutionError> {
 /// Compile and execute an RHP source program inside the Register Bytecode VM, returning both
 /// the [`VM`] instance (to inspect variables, globals, or output) and the `<main>` return value.
 pub fn run_source_with_vm(source: &str) -> Result<(VM, PhpValue), ExecutionError> {
+    run_source_with_vm_and_jit(source, false)
+}
+
+/// Compile and execute an RHP source program inside the Register Bytecode VM with optional JIT,
+/// returning both the [`VM`] instance and the `<main>` return value.
+pub fn run_source_with_vm_and_jit(
+    source: &str,
+    jit_enabled: bool,
+) -> Result<(VM, PhpValue), ExecutionError> {
     let typed = parse_and_check(source).map_err(CompilationError::from)?;
     let hierarchy = typed.type_info.hierarchy.clone();
     let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
-    let mut vm = VM::new(module, false).with_type_hierarchy(hierarchy);
+    let mut vm = VM::new(module, jit_enabled).with_type_hierarchy(hierarchy);
     let result = vm.run()?;
     Ok((vm, result))
 }

@@ -12,8 +12,6 @@ RHP files use either the `.rhp` extension (recommended for standalone projects) 
 Create a new file named `hello.rhp`:
 
 ```php
-<?rhp
-
 // Declare typed variables
 string $target = "World";
 
@@ -21,17 +19,29 @@ string $target = "World";
 string $message = Str::slug("Hello " . $target . " from RHP Engine");
 
 // Standard library output intrinsic
-Sys::print("Output: " . $message);
-Sys::print("RHP Version: " . Sys::version());
+print("Output: " . $message); //automatically compiled to Sys::print()
+print("RHP Version: " . Sys::version()); //automatically compiled to Sys::print()
 ```
+
+> **Automatic Global Function Compilation:**
+> In RHP, opening script tags are not used — files directly begin with statements. The Pratt parser and AST compiler statically resolve and compile global functions:
+> - **System Intrinsics:** Calls to `print()`, `env()`, and `dd()` are automatically lowered to `Sys::print()`, `Sys::env()`, and `Sys::dd()`.
+> - **PHP Global Functions:** Global functions of PHP are automatically compiled into `Glob::helperFunctions` (such as `Glob::customHelper()` and static facade dispatches). This eliminates global namespace lookup overhead and delivers zero-cost direct dispatch while retaining familiar PHP syntax.
 
 ---
 
 ## Executing in Development Mode
 
-During development, you want instantaneous startup and clear stack traces. Execute the script using `rhp run dev`:
+During development, you want instantaneous startup and clear stack traces. If your entry script is named `index.rhp` in the current working directory, simply execute `rhp run dev`:
 
 ```bash
+# Automatically picks index.rhp in current working directory
+rhp run dev
+
+# Or pass a specific file via --file argument
+rhp run dev --file="hello.rhp"
+
+# Or pass as a positional argument
 rhp run dev hello.rhp
 ```
 
@@ -50,6 +60,13 @@ RHP Version: 0.1.0
 When deploying high-throughput microservices or running CPU-intensive algorithms, execute via `rhp run build`:
 
 ```bash
+# Automatically picks index.rhp in current working directory
+rhp run build
+
+# Or pass a specific file via --file argument
+rhp run build --file="/your-path/server.rhp"
+
+# Or pass as a positional argument
 rhp run build hello.rhp
 ```
 

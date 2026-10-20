@@ -936,6 +936,87 @@ impl PhpValue {
     }
 
     // =========================================================================
+    // Strict & Loose Equality
+    // =========================================================================
+
+    /// Strict equality comparison (`===`):
+    /// Returns `true` if and only if types and values strictly match without type coercion.
+    pub fn strict_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(x), Self::Bool(y)) => x == y,
+            (Self::Int(x), Self::Int(y)) => x == y,
+            (Self::Float(x), Self::Float(y)) => x == y,
+            (
+                Self::RustInt {
+                    kind: k1,
+                    value: v1,
+                },
+                Self::RustInt {
+                    kind: k2,
+                    value: v2,
+                },
+            ) => k1 == k2 && v1 == v2,
+            (
+                Self::RustFloat {
+                    kind: k1,
+                    value: v1,
+                },
+                Self::RustFloat {
+                    kind: k2,
+                    value: v2,
+                },
+            ) => k1 == k2 && v1 == v2,
+            (Self::String(x), Self::String(y)) => x == y,
+            (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
+                let a = x.borrow();
+                let b = y.borrow();
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.strict_eq(v2))
+            }
+            (Self::Dict(x), Self::Dict(y)) => {
+                let a = x.borrow();
+                let b = y.borrow();
+                a.len() == b.len() && a.iter().all(|(k, v1)| b.get(k).map_or(false, |v2| v1.strict_eq(v2)))
+            }
+            (Self::Set(x), Self::Set(y)) => *x.borrow() == *y.borrow(),
+            (Self::HashMap(x), Self::HashMap(y)) => *x.borrow() == *y.borrow(),
+            (Self::Object(x), Self::Object(y)) => Rc::ptr_eq(x, y),
+            (Self::Closure(x), Self::Closure(y)) => Rc::ptr_eq(x, y),
+            (Self::Future(x), Self::Future(y)) => Rc::ptr_eq(x, y),
+            (Self::Resource(x), Self::Resource(y)) => Arc::ptr_eq(x, y),
+            _ => false,
+        }
+    }
+
+    /// Loose equality comparison (`==`):
+    /// First performs strict type checking. If that succeeds (returns `true`),
+    /// it returns `true`. If strict type checking fails or returns `false`,
+    /// it converts both sides to string and compares them again.
+    pub fn loose_eq(&self, other: &Self) -> bool {
+        if self.strict_eq(other) {
+            return true;
+        }
+        match (self, other) {
+            (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
+                let a = x.borrow();
+                let b = y.borrow();
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.loose_eq(v2))
+            }
+            (Self::Dict(x), Self::Dict(y)) => {
+                let a = x.borrow();
+                let b = y.borrow();
+                a.len() == b.len() && a.iter().all(|(k, v1)| b.get(k).map_or(false, |v2| v1.loose_eq(v2)))
+            }
+            (Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_), _)
+            | (_, Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)) => {
+                false
+            }
+            _ => self.to_php_string() == other.to_php_string(),
+        }
+    }
+
+
+    // =========================================================================
     // Type Contract Assertion against RhpType
     // =========================================================================
 

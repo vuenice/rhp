@@ -31,8 +31,6 @@ All primitive type keywords are strictly lowercase:
 Capitalized scalar variants (such as `String` or `Integer`) are strictly rejected by the parser.
 
 ```php
-<?rhp
-
 int $count = 42;
 float $pi = 3.14159;
 string $appName = "RHP Engine";
@@ -49,8 +47,6 @@ bool $isProduction = true;
 For low-level system operations, cryptography, and large data structures, RHP provides fluent static wrappers for native Rust numeric types:
 
 ```php
-<?rhp
-
 // Construct and chain 64-bit integer calculations
 $largeNumber = Int::i64(9223372036854775807);
 
@@ -68,36 +64,30 @@ Instead of standard, ambiguous hash tables for every list or map, RHP provides f
 Optimized for sequential numerical indices and maximum CPU cache locality. Backed by `Box<Vec<PhpValue>>`.
 
 ```php
-<?rhp
-
 list $numbers = Arr::list([10, 20, 30, 40])
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 30);
 
-Sys::print($numbers[0]); // 40
+print($numbers[0]); // 40
 ```
 
 ### 2. `Arr::dict` (Insertion-Ordered Maps)
 String-keyed map retaining deterministic insertion order and $O(1)$ lookups. Backed by `Box<IndexMap<String, PhpValue>>`.
 
 ```php
-<?rhp
-
 dict $user = Arr::dict([
     'id' => 1,
     'name' => 'Alice',
     'role' => 'admin'
 ]);
 
-Sys::print($user->get('name')); // 'Alice'
+print($user->get('name')); // 'Alice'
 ```
 
 ### 3. `Arr::set` (Unique Sets)
 Unique collections mapped directly to `HashSet<PhpValue>` with $O(1)$ membership checking and set algebra:
 
 ```php
-<?rhp
-
 set $tags = Arr::set(['fast', 'rust', 'php', 'rust']);
 $tags->add('backend');
 
@@ -109,13 +99,11 @@ $diff = $tags->diff(Arr::set(['php']));
 Universal key-value map mapped to `HashMap<PhpValue, PhpValue>`, allowing arbitrary complex keys such as arrays or object instances:
 
 ```php
-<?rhp
-
 $geoIndex = Arr::hashMap();
 $geoIndex[[40.7128, -74.0060]] = 'New York City';
 $geoIndex[[51.5074, -0.1278]]  = 'London';
 
-Sys::print($geoIndex[[40.7128, -74.0060]]); // 'New York City'
+print($geoIndex[[40.7128, -74.0060]]); // 'New York City'
 ```
 
 ---
@@ -125,8 +113,6 @@ Sys::print($geoIndex[[40.7128, -74.0060]]); // 'New York City'
 To prevent unexpected side effects and eliminate unnecessary heap clones, collections and strings in RHP use Copy-On-Write (COW) semantics:
 
 ```php
-<?rhp
-
 list $original = Arr::list([1, 2, 3]);
 
 // Shares the underlying buffer with zero memory copy
@@ -135,6 +121,6 @@ list $copy = $original;
 // Modifying $copy detaches it into a new buffer transparently
 $copy[] = 4;
 
-Sys::print($original->count()); // 3 (untouched)
-Sys::print($copy->count());     // 4
+print($original->count()); // 3 (untouched)
+print($copy->count());     // 4
 ```

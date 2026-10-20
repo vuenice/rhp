@@ -21,9 +21,123 @@ html {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.3);
+  background: rgba(156, 163, 175, 0.25);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(156, 163, 175, 0.5);
+  background: rgba(156, 163, 175, 0.45);
 }
+
+/* ============================================================
+   VitePress-Style Code Blocks & Typography
+   ============================================================ */
+
+/* Disable prose auto-quotes on inline code */
+.prose code::before,
+.prose code::after {
+  content: "" !important;
+}
+
+/* Inline code (VitePress style) */
+.prose :not(pre) > code {
+  font-family: var(--font-mono) !important;
+  font-size: 0.85em !important;
+  font-weight: 500 !important;
+  padding: 0.2em 0.45em !important;
+  border-radius: 4px !important;
+  background-color: rgba(142, 150, 170, 0.14) !important;
+  color: #e2e8f0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Code block container (VitePress style) */
+.prose pre.astro-code {
+  position: relative !important;
+  background-color: #161618 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 8px !important;
+  padding: 1.25rem 1.5rem !important; /* 20px 24px */
+  margin: 1.25rem 0 !important;
+  overflow-x: auto !important;
+  font-family: var(--font-mono) !important;
+  font-size: 0.875rem !important; /* 14px */
+  line-height: 1.7 !important;
+  tab-size: 4 !important;
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Ensure code within pre doesn't wrap and has VitePress typography */
+.prose pre.astro-code code {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  white-space: pre !important;
+  word-break: normal !important;
+  word-wrap: normal !important;
+  display: block !important;
+  width: fit-content !important;
+  min-width: 100% !important;
+}
+
+/* VitePress language label (top-right badge) */
+.code-lang-label {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(235, 235, 245, 0.38);
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.2s ease;
+  z-index: 2;
+}
+
+/* VitePress copy button */
+.code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background-color: rgba(30, 30, 34, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(235, 235, 245, 0.6);
+  opacity: 0;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.1s ease;
+}
+
+.prose pre:hover .code-copy-btn,
+pre.astro-code:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.code-copy-btn:hover {
+  background-color: rgba(50, 50, 58, 0.95);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.code-copy-btn:active {
+  transform: scale(0.95);
+}
+
+.code-copy-btn.copied {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background-color: rgba(52, 211, 153, 0.1);
+}
+

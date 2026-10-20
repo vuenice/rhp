@@ -23,8 +23,6 @@ RHP supports standard mathematical operators with compile-time type validation:
 ## Assignment Operators
 
 ```php
-<?rhp
-
 int $x = 10;
 $x += 5;   // 15
 $x *= 2;   // 30
@@ -39,14 +37,12 @@ $x /= 4;   // 5
 RHP distinguishes between value equivalence (`==`) and strict identity (`===`):
 
 ```php
-<?rhp
-
 int $a = 10;
 int $b = 10;
 
 // Strict identity check (type and value)
 if ($a === $b) {
-    Sys::print("Values and types match exactly");
+    print("Values and types match exactly");
 }
 
 // Spaceship operator (<=>) for sorting
@@ -60,8 +56,6 @@ int $cmp = $a <=> 5; // returns 1
 The null-coalescing operator (`??`) and null-coalescing assignment (`??=`) provide concise handling of optional or fallback values:
 
 ```php
-<?rhp
-
 // Null coalescing fallback
 dict $config = Arr::dict(['env' => 'production']);
 string $mode = $config->get('debug') ?? 'false';
@@ -82,8 +76,6 @@ string $role = $is_admin ? 'SuperAdmin' : 'Member';
 Consistent with PHP syntax, strings are concatenated using the dot (`.`) operator:
 
 ```php
-<?rhp
-
 string $first = "Fast";
 string $second = "Backend";
 string $full = $first . " " . $second;

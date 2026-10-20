@@ -163,6 +163,12 @@ This document outlines the engineering roadmap and architectural improvements fo
   - Cooperative `FiberScheduler` coordinates multi-task fiber scheduling and non-blocking timer/IO yields without blocking underlying OS worker threads.
   - Worker pool requests automatically execute within isolated request fibers, populating `WorkerResponse::fiber_stats()`.
 
+- [ ] **Epoll-Based Event Loop & Fiber I/O Scheduling:**
+  - Implement OS kernel event-driven scheduling leveraging Linux `epoll` (`epoll_create1`, `epoll_ctl`, `epoll_wait`) with `kqueue` support for macOS/BSD.
+  - Register network sockets, file descriptors, `timerfd`, and `eventfd` directly into an `epoll` interest list (`EPOLLIN`, `EPOLLOUT`, `EPOLLET`).
+  - Park fibers in `WaitingIo` state without busy-polling or CPU spinning, immediately waking and resuming execution upon receiving kernel readiness notifications.
+  - Seamlessly integrate with non-blocking I/O operations (`HTTP`, sockets, pipes, IPC) to achieve ultra-high concurrency with minimal memory and context switch overhead.
+
 - [ ] **Lock-Free Asynchronous Logging:**
   - Offload `Log::info()` payloads over a lock-free `mpsc` ring buffer to a dedicated background logging worker.
 
@@ -395,6 +401,12 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 ### Phase 19: Tier 2 AOT Native Plugins: Compilation, Distribution & ABI
 
+- [x] **Direct Rust File Imports & Helper Class Dynamic Loading (`import "./Cache.rs"`)**:
+  - Support direct import of `.rs` files in RHP scripts using `import "./Cache.rs";`, `import "./Cache.rs" as Cache;`, or `use "./Cache.rs" as Cache;`.
+  - Expose imported Rust files as Tier 2 Static Facades with native performance without core language bloat (`Cache::set()`, `Cache::get()`, `Log::info()`).
+  - Automatic compilation to dynamic shared libraries (`cdylib` / `.so`) via `rustc` with SHA-256 caching and POSIX `dlopen` symbol loading.
+  - Built-in thread-safe in-process native execution fallback with `FrozenValue` state boundary isolation.
+
 - [ ] **Plugin ABI & Dynamic Library Loading (`cdylib`):**
   - In a static-only AOT architecture, adding or modifying a plugin requires full recompilation of the entire RHP binary.
   - Define a stable C-ABI / dynamic plugin interface (`rhp_plugin_api`) allowing Tier 2 plugins to be compiled into dynamic shared libraries (`.so`, `.dylib`, `.dll`) loaded at runtime via `libloading`.
@@ -426,6 +438,27 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 ---
 
+### Phase 21: RHPM Architecture & Process Manager (Supervision, PM2-like Lifecycle & Slow Route Diversion)
+
+- [ ] **Separation into `rhp` and `rhpm`:**
+  - Decouple the codebase into two dedicated roles and binaries:
+    - `rhp`: Core script execution engine and worker instance.
+    - `rhpm` (RHP Manager): Gateway and process supervisor managing HTTP requests and the full request/response lifecycle.
+
+- [ ] **PM2 & Supervisor-Style Process Lifecycle Management:**
+  - Run application worker processes like PM2, assigning incoming HTTP requests to managed worker processes.
+  - Supervisor-style crash recovery: continuously monitor process health and automatically reinitiate/restart crashed or failed processes.
+
+- [ ] **Route Telemetry & SLA Tracking:**
+  - Monitor route execution metrics in real-time, detecting routes taking more than 3 seconds or overutilizing CPU and memory.
+  - Sliding-window tracking: detect anomalies such as 2 slow requests out of 20 for a given route.
+
+- [ ] **Dynamic Traffic Diversion to Secondary Process & Failback:**
+  - **Diverting Slow Routes:** When 2 slow requests out of 20 are detected on a route, automatically divert incoming requests for that route to a secondary process running a second pre-warmed instance of the application, isolating the primary worker pool from degradation.
+  - **Automatic Failback:** Continuously evaluate the redirected route's metrics in the secondary process; once execution times and resource usage return to normal levels, divert traffic back to the main process.
+
+---
+
 ## 3. Progress Tracking
 
 | Subsystem | Planned Improvement | Status | Priority |
@@ -450,5 +483,7 @@ This document outlines the engineering roadmap and architectural improvements fo
 | **Observability** | Native OpenTelemetry (OTel) traces/metrics/logs & Sentry/Datadog bridges | Pending | **P1** |
 | **Failure Isolation** | Process supervisor (`ProcessCow`), panic boundaries, JIT memory safety ($W \oplus X$) | Pending | **P0** |
 | **Operations** | Per-request memory/time limits, backpressure, graceful shutdown, zero-downtime reload | Pending | **P1** |
-| **Plugin System** | Tier 2 dynamic plugin ABI (`cdylib`), cross-compilation tooling, Wasm fallback | Pending | **P1** |
+| **Plugin System** | Direct `.rs` file imports (`import "./Cache.rs"`), Tier 2 dynamic cdylib compilation & in-process fallback | Completed | **P1** |
 | **Concurrency** | `Future::any` cancellation tokens, cooperative cancel points, & in-flight query aborts | Pending | **P1** |
+| **Fiber & I/O Scheduling** | Epoll-based event loop (`epoll_wait`, timerfd, eventfd) for fibers and IPC readiness | Pending | **P1** |
+| **Process Manager (RHPM)** | Separate `rhp`/`rhpm`, PM2/supervisor lifecycle & crash recovery, >3s/resource tracking & secondary route diversion | Pending | **P0** |

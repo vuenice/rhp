@@ -191,7 +191,7 @@ impl<'s> CombinatorStream<'s> {
                 ExprKind::Ident(Ident::new(name, spanned.span)),
                 spanned.span,
             )),
-            Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap => Ok(Expr::new(
+            Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap | Token::Echo => Ok(Expr::new(
                 ExprKind::Ident(Ident::new(spanned.token.as_str(), spanned.span)),
                 spanned.span,
             )),
@@ -675,8 +675,12 @@ impl<'s> CombinatorStream<'s> {
                     let callee_span = callee_ident.span;
 
                     let call_node = if is_reserved_intrinsic(callee_name) {
-                        // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::dd())
-                        Expr::static_call("Sys", callee_name, args, callee_span, span)
+                        // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
+                        let method = match callee_name {
+                            "println" => "print",
+                            other => other,
+                        };
+                        Expr::static_call("Sys", method, args, callee_span, span)
                     } else if self.is_user_defined_function(callee_name) {
                         // Calls standard user function
                         Expr::user_function_call(callee_name, args, callee_span, span)
@@ -916,6 +920,34 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
+            // Macro invocation `ident!(...)` (e.g. `println!(...)`, `print!(...)`, `echo!(...)`)
+            Token::Bang => {
+                if let ExprKind::Ident(ref callee_ident) = left.kind {
+                    let callee_name = callee_ident.name;
+                    let callee_span = callee_ident.span;
+                    self.expect(Token::OpenParen)?;
+                    let args = self.parse_call_arguments()?;
+                    let close_tok = self.expect(Token::CloseParen)?;
+                    let span = left.span.merge(close_tok.span);
+
+                    let method_name = match callee_name {
+                        "println" => "print",
+                        "print" => "echo",
+                        "echo" => "echo",
+                        other => other,
+                    };
+                    Ok(Expr::static_call("Sys", method_name, args, callee_span, span))
+                } else {
+                    Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken {
+                            expected: "identifier preceding '!' macro invocation".to_string(),
+                            found: "!".to_string(),
+                        },
+                        op_tok.span,
+                    ))
+                }
+            }
+
             // Binary & Assignment Operators
             _ => {
                 if let Some(assign_op) = to_assign_op(&op_tok.token) {
@@ -1085,7 +1117,7 @@ fn postfix_binding_power(token: &Token<'_>) -> Option<u8> {
 fn infix_binding_power(token: &Token<'_>) -> Option<(u8, u8)> {
     match token {
         // High precedence accessors
-        Token::OpenParen | Token::OpenBracket | Token::Arrow | Token::NullsafeArrow | Token::DoubleColon => {
+        Token::OpenParen | Token::OpenBracket | Token::Arrow | Token::NullsafeArrow | Token::DoubleColon | Token::Bang => {
             Some((binding_power::CALL_MEMBER_INDEX, binding_power::CALL_MEMBER_INDEX + 1))
         }
 

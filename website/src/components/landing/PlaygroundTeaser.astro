@@ -123,43 +123,39 @@ Click "Run" or press Ctrl+Enter to execute.</pre>
   import { defaultExecutionClient } from '../../lib/playgroundClient';
 
   const snippets = {
-    hello: `<?rhp
-// 1. Basic greeting with string transformation
+    hello: `// 1. Basic greeting with string transformation
 string $name = "Developer";
 string $greeting = Str::slug("Hello {$$name} to RHP");
 
-Sys::print("Greeting: " . $greeting);
-Sys::print("RHP Version: " . Sys::version());`,
+print("Greeting: " . $greeting); //automatically compiled to Sys::print()
+print("RHP Version: " . Sys::version());`,
 
-    collections: `<?rhp
-// Subtyped collections backed by Rust heap structures
+    collections: `// Subtyped collections backed by Rust heap structures
 list $raw = Arr::list([10, 45, 120, 95, 330]);
 
 list $filtered = $raw
     ->filter(fn($n) => $n > 50)
     ->map(fn($n) => $n * 1.08);
 
-Sys::print("Filtered high-order list: " . $filtered->toJson());`,
+print("Filtered high-order list: " . $filtered->toJson());`,
 
-    concurrency: `<?rhp
-// Non-blocking concurrent execution on Tokio thread pool
+    concurrency: `// Non-blocking concurrent execution on Tokio thread pool
 [$user, $orders] = Future::wait([
     fn() => DB::table('users')->find(42),
     fn() => HTTP::get('https://api.internal/metrics')->json()
 ]);
 
 Future::defer(fn() => Log::info("Post-response deferred hook"));
-Sys::print("User and metrics resolved concurrently!");`,
+print("User and metrics resolved concurrently!");`,
 
-    memory: `<?rhp
-// Zero-GC deterministic memory management
+    memory: `// Zero-GC deterministic memory management
 Memory::scope(function() {
     $temp = Str::repeat("RHP_FAST_BUFFER_", 1000);
-    Sys::print("Allocated in scoped bump arena: " . Memory::usage() . " bytes");
+    print("Allocated in scoped bump arena: " . Memory::usage() . " bytes");
 });
 
-Sys::print("GC cycles recorded: " . Memory::gcRuns());
-Sys::print("Total GC pause duration: " . Memory::gcPauseMs() . " ms");`
+print("GC cycles recorded: " . Memory::gcRuns());
+print("Total GC pause duration: " . Memory::gcPauseMs() . " ms");`
   };
 
   const editor = document.getElementById('playground-editor') as HTMLTextAreaElement;

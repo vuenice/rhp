@@ -8,7 +8,7 @@ export default defineConfig({
   site: 'https://rhp.dev',
   markdown: {
     shikiConfig: {
-      theme: 'github-dark-dimmed',
+      theme: 'github-dark',
       langs: [
         {
           ...rhpGrammar,
@@ -16,7 +16,7 @@ export default defineConfig({
           aliases: ['rhp-lang']
         }
       ],
-      wrap: true
+      wrap: false
     }
   }
 });

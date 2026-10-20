@@ -10,8 +10,6 @@ order: 5
 Classes in RHP represent structured types with explicit property typing and visibility modifiers:
 
 ```php
-<?rhp
-
 class UserProfile {
     public int $id;
     public string $name;
@@ -29,7 +27,7 @@ class UserProfile {
 }
 
 $user = new UserProfile(1, "Alice", "alice@example.com");
-Sys::print("User: " . $user->name);
+print("User: " . $user->name);
 ```
 
 ---
@@ -37,8 +35,6 @@ Sys::print("User: " . $user->name);
 ## Interfaces and Traits
 
 ```php
-<?rhp
-
 interface Loggable {
     public function logMessage(string $message): void;
 }
@@ -67,8 +63,6 @@ class AuditLog implements Loggable {
 One of RHP's signature innovations is the `singleton class`. Singletons are instantiated once in the persistent parent process and remain shared across all worker threads via `Arc<EngineState>`:
 
 ```php
-<?rhp
-
 singleton class DatabaseManager {
     private static int $connectionCount = 0;
 
@@ -96,8 +90,6 @@ Native facades (`Arr`, `Str`, `Future`, `Memory`) wrap optimized Rust memory and
 Instead, extend them dynamically at application boot using `::macro()`:
 
 ```php
-<?rhp
-
 // Register custom helper dynamically
 Arr::macro('toCsv', function(string $delimiter = ','): string {
     return implode($delimiter, $this->all());
