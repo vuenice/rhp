@@ -40,6 +40,13 @@ bool $isProduction = true;
 // $count = "forty-two"; // Error: VariableTypeMismatch
 ```
 
+### Binary-Safe Strings & Multi-Byte Encodings
+
+In RHP, strings are fundamentally raw byte buffers (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization and larger buffers via `Rc<Vec<u8>>`):
+* **Binary Safety:** Strings can hold arbitrary binary data, image headers, network payloads, or null bytes (`\0`) without triggering Rust UTF-8 panics.
+* **Legacy Japanese Support:** Legacy multi-byte character sets such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** are preserved as raw bytes. Developers use `Str::fromEncoding($raw, 'Shift-JIS')` or `Str::utf8($raw)` for safe conversions.
+* **Immutable Helpers:** Chained helper methods like `$text->trim()->upper()` are immutable by default, leaving the original variable untouched. Variable updates use explicit reassignment (`$text = $text->trim()->upper();`) with Copy-On-Write (COW) semantics.
+
 ---
 
 ## Variable Declarations (Prefix Type Syntax)
