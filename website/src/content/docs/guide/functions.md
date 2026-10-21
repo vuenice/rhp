@@ -18,6 +18,49 @@ float $finalPrice = calculateDiscount(100.0, 0.15);
 print("Final price: " . (string)$finalPrice);
 ```
 
+### Parameter & Return Type Hints: `array` vs. `list`, `dict`, `set`, `hashmap`
+
+RHP supports both the permissive `array` parent type and strict collection subtypes in function signatures:
+
+```php
+// 1. Permissive parent return type: accepts any collection variant
+function myfuncWhichreturnsArray(): array {
+    return [1, 2, 3]; // or return ['name' => 'yogesh']; or return Arr::list(...);
+}
+
+// 2. Permissive array parameter: accepts List, Dict, Set, HashMap, or standard Array
+function countElements(array $items): int {
+    return $items->count();
+}
+
+$c1 = countElements([1, 2, 3]);                  // Standard array
+$c2 = countElements(['a' => 1, 'b' => 2]);       // Dictionary
+$c3 = countElements(Arr::list([10, 20, 30]));    // Subtyped List
+$c4 = countElements(Arr::set(['a', 'b']));       // Subtyped Set
+
+// 3. Strict collection subtypes: enforce precise memory boundaries
+function process_items(list $my_arr, dict $my_dict) {
+    list $my_new_scoped_arr = [];
+    dict $my_new_scoped_dict = [];
+    
+    // Internal operations with cache-locality
+    $my_new_scoped_arr[] = 100;
+    $my_new_scoped_dict['status'] = 'processed';
+}
+
+function processUsers(list $userIds, dict $options): list {
+    return $userIds->map(fn($id) => $id * 2);
+}
+
+// Incompatible arguments throw compile-time & runtime type errors:
+// process_items('not a list', Arr::dict([])); 
+// Error: Argument #1 ('$my_arr') has incompatible type: expected 'list', found 'string'
+```
+
+* **Compile-Time Verification:** RHP's two-pass type checker validates arguments against declared parameter signatures.
+* **Runtime Guard (`OpCode::AssertType`):** The bytecode compiler injects `OpCode::AssertType` boundary assertions into the function prologue, validating the underlying collection subtype before executing the function body.
+* **Return Type Inference for Void Functions:** When a function omits an explicit return type and contains no value returns (`return <expr>;`), the type checker automatically infers `void`. Functions that return a value must specify an explicit return type hint.
+
 ---
 
 ## Short Arrow Closures (`fn`)

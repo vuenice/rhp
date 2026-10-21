@@ -151,7 +151,35 @@ Global helper functions are eliminated in favor of object-oriented class facades
 - **Tier 2 (Custom Rust Plugins & Direct `.rs` File Imports):** Allows importing `.rs` files directly (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`), exposing high-performance helper classes (such as `Cache`, `Log`, `RateLimiter`, and custom extensions) without polluting the core language with non-core dependencies. These are compiled AOT via `rustc --crate-type cdylib` with SHA-256 caching or executed via the thread-safe in-process engine.
 - **Tier 3 (Script-land Facades):** Allow standard facades written in your class static function for simple, non-performance-critical user utilities.
 
+#### Direct Rust File Import (`import "./Cache.rs"`) for Helper Classes
+
+To keep the core language syntax minimal and unbloated while providing extreme native performance at the framework and application level, RHP allows importing `.rs` files directly into `.rhp` scripts:
+
+```php
+// Direct import of Rust helper files
+import "./Cache.rs";
+import "./Log.rs" as Logger;
+import FastCache from "./Cache.rs";
+use "./Cache.rs";
+
+// Static invocation without instantiation
+Cache::set("session:token", "xyz123", 3600);
+$token = Cache::get("session:token");
+Cache::increment("views", 1);
+
+Logger::info("Cache loaded successfully");
+```
+
+**Key Architectural Invariants:**
+1. **Static Facade Guard:** Imported Rust files register as `Tier2RustPlugin` with `is_static_only: true`. Any attempt to instantiate (`new Cache()`) or extend (`class MyCache extends Cache`) is rejected at compile time.
+2. **Compilation & Caching Pipeline:**
+   - When `rustc` is available, the engine automatically compiles the `.rs` file into a native shared library (`cdylib` / `.so`) with SHA-256 caching in `target/tmp/rhp_cache/`.
+   - Subsequent script boots link via `dlopen`/`dlsym` in microseconds.
+3. **In-Process Fallback Engine:** For fast sub-millisecond cold starts in development (`rhp run dev`) or test environments, RHP includes an in-process thread-safe native engine (`RustCacheStore` & `RustLogStore`).
+4. **FrozenValue State Boundaries:** Data shared across worker threads is stored using `FrozenValue`, ensuring strict thread safety across multi-threaded Tokio execution pools without garbage collection pauses or race conditions.
+
 ### Facade Extensibility: Runtime Macro Registration vs. Class Inheritance
+
 
 #### Why Traditional Class Extension (`extends Arr`) is Forbidden
 
@@ -696,3 +724,76 @@ pub fn eval_expr(node: &ASTNode, env: &mut Environment) -> Result<Value, Runtime
   - `gc_pause_ms`: strictly 0.0
   - `zero_gc_drop`: strictly true
   - Telemetry is automatically captured in `WorkerResponse::arena_drop()`.
+
+---
+
+### Tooling & Code Intelligence Pipeline (`rhp run lint`)
+
+#### 1. Architectural Heritage & Design Principles
+Inspired by [Carthage Software Mago](https://github.com/carthage-software/mago), RHP integrates an AST-guided developer tooling pipeline directly into the compiler binary under `rhp run lint`. Rather than requiring separate external linters (PHPStan, Psalm, PHP-CS-Fixer), RHP provides a single native Rust command that:
+1. Parses source code into concrete ASTs and token streams with span tracking.
+2. Auto-formats code according to PER Coding Style (PER-CS 2.0).
+3. Infers and inserts explicit type signatures before untyped variables, parameters, and properties.
+4. Normalizes naming conventions across all declarations and references.
+5. Typechecks AST boundaries and emits diagnostics in machine-readable JSON matching Carthage Mago's schema.
+
+#### 2. PER-CS Code Formatting Invariants
+- **4-Space Indentation:** All block nesting levels, function bodies, class declarations, and multi-line array literals strictly use 4 spaces. Hard tabs (`\t`) are normalized to 4 spaces.
+- **Brace Conventions:** K&R / 1TBS style for control flow blocks (`if`, `while`, `for`, `match`) and functions; PSR-12 class body alignment.
+- **Operator Spacing:** Single surrounding space for all binary and assignment operators (`+`, `-`, `*`, `/`, `===`, `!==`, `=>`, `=`).
+- **Verbatim Literal Preservation:** Single-quoted, double-quoted, heredoc/nowdoc string literals, and comments (inline `//`, block `/* ... */`, and docblocks `/** ... */`) are preserved verbatim with exact byte ranges.
+
+#### 3. Automated Type Inference & Array Classification
+When variables or function parameters are declared without explicit types, the inferencer evaluates initializers:
+- **Primitives:** Infers `string`, `int`, `float`, `bool` from scalar literals (`$x = ''` $\rightarrow$ `string $x = ''`).
+- **Array Literal Classification:**
+  - Non-empty, sequential integer-indexed or unkeyed arrays: inferred as `list` (`[1, 2, 3]` $\rightarrow$ `list $items = [1, 2, 3];`).
+  - Non-empty arrays where all keys are string literals: inferred as `dict` (`['status' => 'ok']` $\rightarrow$ `dict $payload = ...;`).
+  - Non-empty arrays with integer, mixed, or complex keys: inferred as `hashMap` (`[1 => 'first', 2 => 'second']` $\rightarrow$ `hashMap $map = ...;`).
+  - Empty array declarations: inferred as `array` (`[]` $\rightarrow$ `array $buffer = [];`).
+- **Function Parameter Defaults:** `function process($timeout = 30, $items = [1, 2])` $\rightarrow$ `function process(int $timeout = 30, list $items = [1, 2])`.
+- **Class Property Defaults:** Properties initialized with defaults receive typed declarations (`public int $retries = 3;`).
+- **Non-Destructive Annotation Policy:** Existing user-written type hints are strictly preserved. If an existing annotation contradicts the assigned value, a typecheck diagnostic is emitted without mutating user code.
+- **Ambiguity Fallback:** If a type cannot be statically proven, or if variables are dynamically reassigned to incompatible types, the linter leaves the variable untyped without failing.
+
+#### 4. Naming Convention Enforcement & Scope-Wide Renaming
+- **Variables:** Normalized to `snake_case` (`$userAccount` $\rightarrow$ `$user_account`).
+  - **Preserved Variables:** `$this` and procedural PHP superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_ENV`, `$_FILES`, `$_COOKIE`, `$_SESSION`, `$_REQUEST`, `$GLOBALS`).
+- **Classes, Interfaces, Traits, Enums:** Normalized to `PascalCase` (`class order_item` $\rightarrow$ `class OrderItem`).
+  - All references are updated atomically: `new`, `extends`, `implements`, `use`, `instanceof`, `catch`, return types, parameter types, and static method calls (`OrderItem::create()`).
+- **Functions & Methods:** Normalized to `camelCase` (`function calculate_total()` $\rightarrow$ `function calculateTotal()`).
+  - **Magic Methods Preserved:** Any method starting with `__` (e.g. `__construct`, `__destruct`, `__toString`) is preserved unchanged.
+  - **Test Function Exception:** Any function or method whose name begins with `test` (case-insensitive) is normalized to `snake_case` (`function testUserLogin()` $\rightarrow$ `function test_user_login()`).
+- **`--no-case-change` Option:** Disables identifier casing normalization while leaving formatting, autotyping, and typechecking fully operational.
+
+#### 5. CLI Flags & Carthage Mago JSON Schema
+```bash
+rhp run lint [PATH] [--check | --no-fix] [--no-case-change] [--fix]
+```
+
+When run in dry-run mode (`--check` / `--no-fix`), diagnostics are output in Carthage Mago-compatible JSON:
+```json
+{
+  "status": "ok",
+  "files_scanned": 10,
+  "files_modified": 0,
+  "total_issues": 1,
+  "errors": 0,
+  "warnings": 1,
+  "issues": [
+    {
+      "level": "warning",
+      "code": "casing/variable",
+      "message": "Variable '$userProfile' should be snake_case: '$user_profile'",
+      "file": "src/User.rhp",
+      "line": 12,
+      "column": 5,
+      "span": {
+        "start": 180,
+        "end": 192
+      }
+    }
+  ]
+}
+```
+

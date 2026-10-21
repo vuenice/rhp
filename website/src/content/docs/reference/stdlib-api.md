@@ -5,34 +5,265 @@ section: "Reference"
 order: 4
 ---
 
-## `Arr` Facade API
+## `Arr` Facade & Collection Subtypes API
+
+RHP provides four specialized collection subtypes backed by dedicated Rust heap structures, alongside a permissive `array` parent type:
+- `array`: Permissive parent collection type for backward compatibility, matching any collection variant (`list`, `dict`, `set`, `hashmap`)
+- `list`: Contiguous numerical index sequence (`Vec<PhpValue>`)
+- `dict`: Insertion-ordered string-keyed dictionary (`IndexMap<String, PhpValue>`)
+- `set`: Unique collection with $O(1)$ membership and set algebra (`HashSet<PhpValue>`)
+- `hashmap` / `map`: Universal key-value dictionary supporting arbitrary complex keys (`HashMap<PhpValue, PhpValue>`)
+
+> **Immutability by Default & Reassignment Contract:**
+> Calling collection helper methods (such as `$arr->sort()`, `$arr->filter()`, or `Arr::list($arr)->sort()`) **never mutates the original collection in place**. Every transformation returns a brand-new instance. To update a variable, use explicit reassignment:
+> ```php
+> $my_array = $my_array->sort(); // Leverages Copy-On-Write (COW) with zero unnecessary clones
+> ```
+
+### Static `Arr` Facade Methods
 
 ```php
-// Instantiation
+// Subtype Constructors
 Arr::list(array $items = []): list;
 Arr::dict(array $pairs = []): dict;
 Arr::set(array $values = []): set;
-Arr::hashMap(): hashmap;
+Arr::hashMap(array $entries = []): hashmap;
+Arr::map(array $entries = []): hashmap; // Alias for Arr::hashMap()
 
-// Extension
+// Generators & Utilities
+Arr::range(int $start, int $end, int $step = 1): list;
+Arr::repeat(mixed $value, int $times): list;
+Arr::count(mixed $collection): int;
+Arr::contains(mixed $collection, mixed $needle): bool;
+Arr::has(mixed $collection, mixed $key): bool;
+Arr::get(mixed $collection, mixed $key, mixed $default = null): mixed;
+Arr::keys(mixed $collection): list;
+Arr::values(mixed $collection): list;
+
+// Dynamic Macro Extension
 Arr::macro(string $name, callable $closure): void;
+```
 
-// List Instance Methods
-$list->map(callable $fn): list;
-$list->filter(callable $fn): list;
-$list->reduce(callable $fn, mixed $initial = null): mixed;
+---
+
+### `list` Instance Methods (Sequential Contiguous List)
+
+```php
+// Inspection & State
+$list->count(): int;                    // Also: size(), length(), len()
+$list->isEmpty(): bool;
+$list->isNotEmpty(): bool;
+$list->contains(mixed $needle): bool;
+$list->first(): mixed;
+$list->last(): mixed;
 $list->find(callable $fn): mixed;
-$list->count(): int;
-$list->push(mixed ...$values): void;
-$list->pop(): mixed;
 
-// Dict Instance Methods
+// Mutation & Extraction
+$list->push(mixed ...$values): list;
+$list->pop(): mixed;
+$list->all(): list;                     // Also: toArray()
+$list->slice(int $offset, ?int $length = null): list;
+$list->chunk(int $size): list;
+$list->reverse(): list;
+$list->sort(?callable $comparator = null): list;
+$list->sortBy(string|callable $key): list;
+
+// Higher-Order Transforms & Reductions
+$list->map(callable $fn): list;         // fn($item, $index)
+$list->filter(?callable $fn = null): list;
+$list->reject(callable $fn): list;
+$list->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $item)
+$list->each(callable $fn): list;        // Also: forEach()
+
+// Mathematical Aggregations & Serialization
+$list->sum(): int|float;
+$list->avg(): float;                    // Also: average()
+$list->min(): mixed;
+$list->max(): mixed;
+$list->toJson(): string;
+
+// Operators & Iteration
+$val = $list[0];                        // 0-indexed integer lookup
+$list[] = 42;                           // Appends value
+foreach ($list as $item) {}             // Contiguous sequential traversal
+foreach ($list as $idx => $item) {}     // Yields 0-based integer index
+```
+
+---
+
+### `dict` Instance Methods (Ordered String-Key Map)
+
+```php
+// Key-Value Retrieval & Mutation
 $dict->get(string $key, mixed $default = null): mixed;
-$dict->put(string $key, mixed $value): void;
-$dict->has(string $key): bool;
-$dict->keys(): list;
-$dict->values(): list;
-$dict->diff(dict $other): dict;
+$dict->put(string $key, mixed $value): dict;
+$dict->pull(string $key, mixed $default = null): mixed;
+$dict->forget(string ...$keys): dict;
+$dict->has(string $key): bool;          // Also: hasKey()
+$dict->hasAny(array $keys): bool;
+$dict->keys(): list;                    // Returns keys in insertion order
+$dict->values(): list;                  // Returns values in insertion order
+$dict->only(array|string ...$keys): dict;
+$dict->except(array|string ...$keys): dict;
+
+// Inspection & Ordering
+$dict->count(): int;
+$dict->isEmpty(): bool;
+$dict->isNotEmpty(): bool;
+$dict->first(): mixed;
+$dict->last(): mixed;
+$dict->firstKey(): ?string;
+$dict->lastKey(): ?string;
+$dict->reverse(): dict;
+$dict->sort(?callable $comparator = null): dict;
+$dict->sortBy(string|callable $key): dict;
+
+// Functional Transforms & Set-like Algebra
+$dict->map(callable $fn): dict;         // fn($val, $key)
+$dict->mapWithKeys(callable $fn): dict; // fn($val, $key) => [$newK => $newV]
+$dict->filter(?callable $fn = null): dict;
+$dict->reject(callable $fn): dict;
+$dict->reduce(callable $fn, mixed $initial = null): mixed;
+$dict->diff(dict|array $other): dict;   // Key-based diff
+$dict->intersect(dict|array $other): dict;
+$dict->each(callable $fn): dict;
+$dict->pluck(string $valueKey, ?string $keyBy = null): dict|list;
+
+// Aggregations & Serialization
+$dict->sum(): int|float;
+$dict->avg(): float;
+$dict->min(): mixed;
+$dict->max(): mixed;
+$dict->toJson(): string;
+
+// Operators & Iteration
+$val = $dict['key'];                    // O(1) string key lookup
+$dict['key'] = $value;                  // Inserts or updates key
+foreach ($dict as $key => $val) {}      // Strict insertion order traversal
+```
+
+---
+
+### `set` Instance Methods (Unique Value Collection - Step 10)
+
+Directly mapped to native Rust `HashSet<PhpValue>`. Guaranteed $O(1)$ set membership and duplicate elimination:
+
+```php
+// Membership & Insertion
+$set->contains(mixed $needle): bool;    // O(1) membership check
+$set->has(mixed $needle): bool;         // Alias for contains()
+$set->add(mixed $value): set;           // Inserts unique value; returns $set
+$set->push(mixed $value): set;          // Alias for add()
+$set->remove(mixed $value): bool;       // Removes value; returns true if present
+$set->delete(mixed $value): bool;       // Alias for remove()
+
+// Inspection & Export
+$set->count(): int;                     // Also: size(), length(), len()
+$set->isEmpty(): bool;
+$set->isNotEmpty(): bool;
+$set->first(): mixed;                   // Retrieves first available element
+$set->all(): list;                      // Converts to sequential list
+$set->toArray(): list;                  // Alias for all()
+$set->values(): list;                   // Alias for all()
+$set->toJson(): string;                 // JSON array representation "[...]"
+
+// Mathematical Set Algebra
+$set->diff(set|array $other): set;      // Relative complement (elements in $this not in $other)
+$set->intersect(set|array $other): set; // Intersection (elements present in both)
+$set->union(set|array $other): set;     // Set union (elements present in either)
+
+// Higher-Order Transforms & Side Effects
+$set->map(callable $fn): set;           // fn($item) => mapped item (deduplicated)
+$set->filter(?callable $fn = null): set;// fn($item) => bool (keeps matching items)
+$set->reject(callable $fn): set;        // fn($item) => bool (drops matching items)
+$set->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $item)
+$set->each(callable $fn): set;          // fn($item) (side effects)
+$set->forEach(callable $fn): set;       // Alias for each()
+
+// Bracket Operators & Syntax
+$isMember = $set['apple'];              // O(1) bracket membership check (returns bool)
+$set['apple'] = true;                   // Inserts element into set
+$set['apple'] = false;                  // Removes element from set
+$set[] = 'banana';                      // Push syntax: inserts unique element
+
+// Native foreach Iteration
+foreach ($set as $item) {               // Iterates through each unique element
+    // $item
+}
+foreach ($set as $idx => $item) {       // Iterates with 0-based sequence counter
+    // $idx, $item
+}
+```
+
+---
+
+### `hashmap` / `map` Instance Methods (Universal Complex Key-Value Map - Step 11)
+
+Directly mapped to native Rust `HashMap<PhpValue, PhpValue>`. Universal general key-value dictionary supporting arbitrary complex keys (arrays, objects, sets, scalars):
+
+```php
+// Key-Value Retrieval & Mutation
+$map->get(mixed $key, mixed $default = null): mixed;      // Retrieves value by key
+$map->has(mixed $key): bool;                              // O(1) key existence check
+$map->contains(mixed $key): bool;                         // Alias for has()
+$map->hasKey(mixed $key): bool;                           // Alias for has()
+$map->put(mixed $key, mixed $value): hashmap;             // Inserts or replaces key-value
+$map->pull(mixed $key, mixed $default = null): mixed;     // Removes key and returns value
+$map->remove(mixed ...$keys): hashmap;                    // Removes one or more keys
+$map->forget(mixed ...$keys): hashmap;                    // Alias for remove()
+
+// Key/Value/Entry Projections
+$map->keys(): list;                                       // List of all keys (including complex keys)
+$map->values(): list;                                     // List of all values
+$map->entries(): list;                                    // List of [[$key, $value], ...] pairs
+$map->all(): list;                                        // Alias for entries()
+$map->toArray(): list;                                    // Alias for entries()
+
+// Inspection & Count
+$map->count(): int;                                       // Also: size(), length(), len()
+$map->isEmpty(): bool;
+$map->isNotEmpty(): bool;
+$map->first(): mixed;                                     // Retrieves first value in iteration order
+$map->toJson(): string;                                   // JSON object representation
+
+// Higher-Order Transforms & Combinators
+$map->map(callable $fn): hashmap;                         // fn($value, $key) => transformed value
+$map->mapWithKeys(callable $fn): hashmap;                 // fn($value, $key) => [$newK, $newV]
+$map->filter(?callable $fn = null): hashmap;              // fn($value, $key) => bool
+$map->reject(callable $fn): hashmap;                      // fn($value, $key) => bool
+$map->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $value, $key)
+$map->diff(hashmap|dict|set|array $other): hashmap;       // Key-based diff
+$map->intersect(hashmap|dict|set|array $other): hashmap;  // Key-based intersect
+$map->merge(hashmap|dict ...$others): hashmap;            // Merges maps/dicts into new hashmap
+$map->each(callable $fn): hashmap;                        // fn($value, $key) (side effects)
+$map->forEach(callable $fn): hashmap;                     // Alias for each()
+
+// Complex Key Types Supported
+// 1. Array / List as key:
+$map[[10, 20]] = 'Point A';
+$pointA = $map[[10, 20]];
+
+// 2. Object / Class instance as key:
+$user = new User(1);
+$map[$user] = 'User Session Data';
+$data = $map[$user];
+
+// 3. Set as key:
+$map[Arr::set([1, 2])] = 'Coordinate Pair';
+
+// 4. Scalar keys:
+$map[42] = 'int';
+$map[3.14] = 'float';
+$map['slug'] = 'string';
+$map[true] = 'bool';
+
+// Native foreach Iteration with Complex Keys
+foreach ($map as $key => $val) {                          // $key yields complex key directly!
+    // $key can be an array [x, y], object, set, or scalar
+}
+foreach ($map as $val) {                                  // Iterates values only
+    // $val
+}
 ```
 
 ---

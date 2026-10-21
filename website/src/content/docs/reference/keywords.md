@@ -28,9 +28,18 @@ The following primitive and collection subtype keywords are reserved for type an
 
 ```text
 int         float       string      bool        void        mixed
-array       list        dict        set         hashmap     callable
-iterable    object      never       null
+array       list        dict        set         hashmap     map
+callable    iterable    object      never       null
 ```
+
+### Collection & Type Boundary Rules
+
+| Type Category | Keywords | Behavioral Contract |
+| :--- | :--- | :--- |
+| **Permissive Parent Collection** | `array` | Backward-compatible parent collection type. Accepts `list`, `dict`, `set`, and `hashmap` interchangeably in variable declarations (`array $arr = []`), function parameter hints (`array $items`), and return hints (`: array`). |
+| **Strict Collection Subtypes** | `list`, `dict`, `set`, `hashmap`, `map` | Enforces strict compile-time and runtime boundaries. Incompatible assignments (e.g. assigning a dictionary to `list $arr` or scalar to `set $s`) throw a `VariableTypeMismatch` error. |
+| **Strict Scalar Primitives** | `int`, `float`, `string`, `bool` | Enforces strict Rust-style type boundaries without implicit type-shifting (`int $x = 0; $x = 'hello';` throws a type error). Must be strictly lowercase. |
+| **Special Types** | `void`, `never`, `mixed`, `callable`, `iterable`, `object`, `null` | Boundary control, dynamic escape hatches, and function return contracts. |
 
 ---
 
@@ -51,6 +60,17 @@ iterable    object      never       null
 > Direct use of `$_GET`, `$_POST`, `$_SESSION`, and `$_COOKIE` is deprecated. RHP provides modern, type-safe static facades (`Request`, `Session`, and `Cookie`). The `rhp run lint` command reports `deprecated-superglobal` warnings when legacy superglobals are used.
 
 ---
+
+## Module & Native Import Keywords
+
+| Keyword | Syntax Example | Description |
+| :--- | :--- | :--- |
+| `use` | `use App\Models\User;` or `use "./Cache.rs";` | Imports PHP/RHP namespaces, classes, or native `.rs` helper files |
+| `import` | `import "./Cache.rs";` or `import Cache from "./Cache.rs";` | Direct import of native Rust `.rs` files as Tier 2 static facades |
+| `as` | `import "./Log.rs" as CustomLogger;` | Aliases an imported class or native helper class identifier |
+
+---
+
 
 ## Explicitly Disallowed Keywords: `await`
 

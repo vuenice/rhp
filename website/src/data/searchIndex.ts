@@ -48,9 +48,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Variables and Types",
     section: "Language Guide",
-    description: "Gradual type system, scalar primitives, subtyped collections, and COW semantics.",
+    description: "Gradual type system, scalar primitives, subtyped collections (list, dict, set, hashMap), complex keys, and COW semantics.",
     url: "/docs/guide/variables-and-types",
-    keywords: ["variables", "types", "scalar", "int", "float", "string", "bool", "type hints", "cow"]
+    keywords: ["variables", "types", "scalar", "int", "float", "string", "bool", "type hints", "cow", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "hashset", "hashmap"]
   },
   {
     title: "Operators",
@@ -141,9 +141,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr, Str, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
+    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "arr", "str", "http", "file", "cache", "log", "tier 2", "rust"]
+    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "http", "file", "cache", "log", "tier 2", "rust"]
   },
 
   // Tooling

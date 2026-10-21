@@ -114,50 +114,311 @@ $formatted = Float::f64(1234567.89)->toDecimal(2);
 Instead of standard, ambiguous hash tables for every list or map, RHP provides four specialized collection subtypes backed directly by Rust heap structures:
 
 ### 1. `Arr::list` (Sequential Lists)
-Optimized for sequential numerical indices and maximum CPU cache locality. Backed by `Box<Vec<PhpValue>>`.
+Optimized for strictly sequential numerical indices and maximum CPU cache locality. Backed by contiguous Rust `Rc<RefCell<Vec<PhpValue>>>` with Copy-On-Write (COW) semantics.
+
+* **CPU Cache Locality & Zero-Allocation Iteration:** During `foreach ($list as $key => $val)` iteration, the runtime uses a dedicated `ActiveIterator::List` stream that points directly to the underlying `Vec<PhpValue>` contiguous memory buffer with an internal cursor index. It streams elements without allocating intermediate key-value pair vectors or cloning keys.
+* **Strict Sequential Indexing:** Supports numeric index reading (`$list[0]`), updating (`$list[1] = 999`), and sequential appending (`$list[] = $val`).
+* **String Key Rejection:** Attempting to assign non-numeric string keys (such as `$list['name'] = 'val'`) is rejected with an `UndefinedIndex` error, preventing sequential lists from degrading into hash tables.
+* **Inline Type Annotations & Implicit Factory Lowering:** Local variable declarations using `list $arr = [];` are compiled directly into optimized Rust-backed `Arr::list([])` allocations under the hood.
 
 ```php
-list $numbers = Arr::list([10, 20, 30, 40])
+// Inline variable type annotation and implicit factory initialization
+list $numbers = [10, 20, 30, 40]; // Lowers directly to Arr::list([10, 20, 30, 40])
+
+// Fluent higher-order transformations
+list $doubled = $numbers
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 30);
 
-print($numbers[0]); // 40
+print($doubled[0]); // 40
+
+// Sequential operations
+$doubled[] = 100;    // Appends 100
+$doubled[1] = 999;   // Updates index 1
+print($doubled->count()); // 4
+
+// Attempting to assign a non-numeric string key throws an error:
+// $doubled['invalid_key'] = 42; // Error: Undefined index or key 'invalid_key'
 ```
+
+### Native Lowercase Collection Keywords & Inline Declarations
+
+RHP aligns with PHP native conventions by using **strictly lowercase keywords** for collection types: `list`, `dict`, `set`, and `hashmap` (matching `array`, `string`, `int`, and `bool`).
+
+This design provides two major advantages:
+1. **PHP Native Alignment:** Avoids confusion with userland classes or external object models. Collection hints feel like first-class language primitives.
+2. **Inline Variable Declarations:** Allows developers to declare and initialize statically typed collections in local scopes:
+   ```php
+   list $my_new_scoped_arr = [];
+   dict $my_new_scoped_dict = [];
+   ```
+
+#### Compiler & Parser Lowering Strategy
+When RHP processes collection types, the lexer, parser, and IR lowerer collaborate through a three-stage lowering pipeline:
+* **Token Recognition:** The lexer recognizes `list`, `dict`, `set`, and `hashmap` as dedicated built-in type keywords (`Token::TypeList`, `Token::TypeDict`, etc.), clearly separating them from user-defined class identifiers.
+* **Implicit Lowering to Factory Calls:** When the parser encounters local variable declarations or assignments like `list $my_arr = [];`, it compiles them directly into the optimized Rust-backed factory initialization:
+  $$\text{list } \$my\_arr = []; \quad \longrightarrow \quad \$my\_arr = \text{Arr::list}([]); \quad \text{(backed by contiguous Vec<PhpValue>)}$$
+  $$\text{dict } \$my\_dict = []; \quad \longrightarrow \quad \$my\_dict = \text{Arr::dict}([]); \quad \text{(backed by IndexMap)}$$
+  $$\text{set } \$my\_set = []; \quad \longrightarrow \quad \$my\_set = \text{Arr::set}([]); \quad \text{(backed by HashSet)}$$
+  $$\text{hashmap } \$my\_map = []; \quad \longrightarrow \quad \$my\_map = \text{Arr::hashMap}([]); \quad \text{(backed by HashMap)}$$
+* **Parameter Type Safety:** At function boundaries, type contracts enforce compile-time verification and runtime guards (`OpCode::AssertType`), ensuring only the correct high-performance Rust variant enters the function.
+
 
 ### 2. `Arr::dict` (Insertion-Ordered Maps)
-String-keyed map retaining deterministic insertion order and $O(1)$ lookups. Backed by `Box<IndexMap<String, PhpValue>>`.
+String-keyed map retaining strict deterministic insertion order and amortized $O(1)$ lookups, updates, and removals. Backed directly by Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`.
+
+* **Strict Insertion Ordering:** Unlike standard unordered hash tables, `Arr::dict` preserves exact key insertion order across all iterations, serializations, and mutations. Updating the value of an existing key preserves its original index slot.
+* **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` drives an `ActiveIterator::Dict` that indexes directly into the underlying `IndexMap` via an internal cursor, eliminating intermediate vector allocations.
+* **Laravel Collection Methods:** `Arr::dict` exposes the full suite of Laravel-style collection instance methods for fluent, functional data pipelines.
 
 ```php
-dict $user = Arr::dict([
-    'id' => 1,
-    'name' => 'Alice',
-    'role' => 'admin'
+dict $product = Arr::dict([
+    'sku'      => 'PROD-100',
+    'name'     => 'Ergonomic Desk',
+    'price'    => 250,
+    'discount' => 25,
+    'tax'      => 15,
 ]);
 
-print($user->get('name')); // 'Alice'
+// 1. Fluent Inspection & Access
+$name = $product->get('name');                   // 'Ergonomic Desk'
+$stock = $product->get('stock', 0);               // Fallback default: 0
+$hasSku = $product->has('sku');                   // true
+$hasAny = $product->hasAny(['color', 'weight']); // false
+list $keys = $product->keys();                   // ['sku', 'name', 'price', 'discount', 'tax']
+list $values = $product->values();               // ['PROD-100', 'Ergonomic Desk', 250, 25, 15]
+
+// 2. In-Place Mutations & Detachment (Copy-On-Write)
+$product->put('in_stock', true);
+$discount = $product->pull('discount', 0);        // 25 (removes 'discount' from $product)
+$product->forget('tax');                          // Removes 'tax'
+
+// 3. Higher-Order Transforms (Immutable Pipelines)
+dict $prices = Arr::dict(['item1' => 10, 'item2' => 20])
+    ->map(fn($price, $key) => $price * 2);        // ['item1' => 20, 'item2' => 40]
+
+dict $filtered = Arr::dict(['a' => 10, 'b' => 5, 'c' => 25])
+    ->filter(fn($val, $k) => $val >= 10);         // ['a' => 10, 'c' => 25]
+
+dict $rejected = Arr::dict(['a' => 10, 'b' => 5, 'c' => 25])
+    ->reject(fn($val, $k) => $val >= 10);         // ['b' => 5]
+
+int $sum = Arr::dict(['x' => 10, 'y' => 20, 'z' => 30])->sum(); // 60
+float $avg = Arr::dict(['x' => 10, 'y' => 20, 'z' => 30])->avg(); // 20.0
+
+// 4. Filtering, Flipping, Merging & JSON Serialization
+dict $subset = $product->only(['sku', 'name']);
+dict $without = $product->except(['sku']);
+dict $flipped = Arr::dict(['role' => 'admin'])->flip(); // ['admin' => 'role']
+dict $merged = Arr::dict(['a' => 1])->merge(Arr::dict(['b' => 2, 'a' => 99])); // ['a' => 99, 'b' => 2]
+string $json = $product->toJson(); // '{"sku":"PROD-100","name":"Ergonomic Desk",...}'
+
+// 5. Zero-Allocation Streaming Iteration
+foreach ($product as $prop => $val) {
+    Sys::print("{}: {}", $prop, (string)$val);
+}
 ```
 
-### 3. `Arr::set` (Unique Sets)
-Unique collections mapped directly to `HashSet<PhpValue>` with $O(1)$ membership checking and set algebra:
+### 3. `Arr::set` (Unique Sets - Step 10)
+Unique collection mapped directly to native Rust `HashSet<PhpValue>`. Automatically deduplicates values, provides guaranteed $O(1)$ set membership, and implements mathematical set algebra:
 
 ```php
-set $tags = Arr::set(['fast', 'rust', 'php', 'rust']);
-$tags->add('backend');
+set $tags = Arr::set(['fast', 'rust', 'php', 'rust', 'backend', 'php']);
 
-// Set algebra
-$diff = $tags->diff(Arr::set(['php']));
+// 1. Automatic Deduplication
+print($tags->count()); // 4 (unique: 'fast', 'rust', 'php', 'backend')
+
+// 2. Element Insertion & Bracket Push Syntax
+$tags->add('frontend'); // Appends 'frontend'; returns $tags
+$tags[] = 'systems';    // Bracket push syntax (deduplicated automatically)
+
+// 3. O(1) Membership Checking
+bool $hasRust = $tags->contains('rust'); // true
+bool $hasJava = $tags->has('java');       // false
+
+// Bracket Indexing for Membership
+bool $isMember = $tags['rust']; // true (bracket indexing checks set membership)
+$tags['go'] = true;             // Inserts 'go' into set
+$tags['go'] = false;            // Removes 'go' from set
+
+// 4. Element Removal
+bool $removed = $tags->remove('php'); // true (was present)
+$tags->delete('nonexistent');         // false (alias for remove())
+
+// 5. Mathematical Set Algebra
+$setA = Arr::set([1, 2, 3, 4]);
+$setB = Arr::set([3, 4, 5, 6]);
+
+set $diff = $setA->diff($setB);            // Relative complement: {1, 2}
+set $intersect = $setA->intersect($setB);  // Intersection: {3, 4}
+set $union = $setA->union($setB);          // Set union: {1, 2, 3, 4, 5, 6}
+set $diffArr = $setA->diff([2, 4]);        // Cross-collection algebra with plain array
+
+// 6. Higher-Order Transforms & Reductions
+set $evens = Arr::set([1, 2, 3, 4, 5, 6])
+    ->filter(fn($n) => $n % 2 === 0);      // {2, 4, 6}
+
+set $doubled = $evens->map(fn($n) => $n * 10); // {20, 40, 60}
+int $sum = $doubled->reduce(fn($acc, $n) => $acc + $n, 0); // 120
+
+// 7. Streaming Foreach & Export
+list $asList = $tags->all();               // Converts to sequential list
+string $json = $tags->toJson();            // '["fast","rust",...]'
+
+foreach ($tags as $tag) {
+    // Visits each unique element exactly once
+}
 ```
 
-### 4. `Arr::hashMap` (Universal Complex Maps)
-Universal key-value map mapped to `HashMap<PhpValue, PhpValue>`, allowing arbitrary complex keys such as arrays or object instances:
+### 4. `Arr::hashMap` / `Arr::map` (Universal Complex Maps - Step 11)
+Universal general key-value dictionary mapped directly to native Rust `HashMap<PhpValue, PhpValue>`. Unlike traditional PHP associative arrays which strictly coerce keys to integers or strings, `Arr::hashMap` supports **arbitrary complex keys** (arrays/lists, objects/class instances, sets, and scalars):
 
 ```php
-$geoIndex = Arr::hashMap();
-$geoIndex[[40.7128, -74.0060]] = 'New York City';
-$geoIndex[[51.5074, -0.1278]]  = 'London';
+class Coordinate {
+    public float $lat;
+    public float $lng;
+    public function __construct(float $lat, float $lng) {
+        $this->lat = $lat;
+        $this->lng = $lng;
+    }
+}
 
-print($geoIndex[[40.7128, -74.0060]]); // 'New York City'
+// 1. Instantiation (using Arr::hashMap or Arr::map alias)
+$map = Arr::hashMap();
+
+// 2. Arrays / Lists as Complex Keys
+$map[[10, 20]] = 'Alpha Base';
+$map[[30, 40]] = 'Beta Outpost';
+$loc = $map[[10, 20]]; // 'Alpha Base' (lookups use deep structural equality)
+
+// 3. Objects / Class Instances as Keys
+$c1 = new Coordinate(37.7749, -122.4194);
+$c2 = new Coordinate(40.7128, -74.0060);
+$map[$c1] = 'San Francisco';
+$map[$c2] = 'New York';
+$city = $map[$c1]; // 'San Francisco'
+
+// 4. Sets & Scalars as Keys
+$map[Arr::set(['read', 'write'])] = 'AdminPerms';
+$map[42] = 'integer key';
+$map[3.14] = 'float key';
+$map['tenant'] = 'string key';
+$map[true] = 'boolean key';
+
+// 5. Fluent Key-Value Operations
+$map->put('timeout', 5000);
+$timeout = $map->get('timeout', 1000); // 5000
+$fallback = $map->get('missing', 'default_val'); // 'default_val'
+bool $hasTimeout = $map->has('timeout'); // true (also: contains(), hasKey())
+$pulled = $map->pull('timeout', 0);      // Retrieves 5000 and removes key
+$map->remove('tenant');                  // Removes key (also: forget())
+
+// 6. Projections & Higher-Order Transforms
+list $allKeys = $map->keys();            // List of keys (including complex keys)
+list $allVals = $map->values();          // List of values
+list $entries = $map->entries();         // List of [[$key, $value], ...] pairs
+
+$doubled = $map
+    ->filter(fn($v, $k) => is_numeric($v))
+    ->map(fn($v, $k) => $v * 2);
+
+// Re-index entries via mapWithKeys
+$reindexed = $map->mapWithKeys(fn($v, $k) => ["transformed_" . (string)$k => $v]);
+
+// Diff, Intersect & Merge
+$other = Arr::hashMap(['a' => 1, 'b' => 2]);
+$diffMap = $map->diff($other);           // Keys in $map not in $other
+$merged  = $map->merge($other);          // Merged map
+
+// 7. Streaming Foreach with Complex Keys
+foreach ($map as $key => $val) {
+    // $key yields the complex key directly (array, object, set, or scalar)!
+}
 ```
+
+---
+
+## The Permissive `array` Parent Type vs. Explicit Subtypes
+
+RHP achieves the best of both worlds: full backward compatibility for dynamic PHP codebases alongside Rust-grade performance and memory layout optimization.
+
+### 1. Unified Parent Wrapper (`RhpType::Array`)
+Under the hood, `RhpType::Array` serves as the **permissive parent datatype** for all collection variants (`list`, `dict`, `set`, and `hashmap`):
+
+| Syntax | Compiled Type | Underlying Rust Structure | Type Flexibility |
+| :--- | :--- | :--- | :--- |
+| `$arr = [];` | `RhpType::Array` | Dynamic `PhpValue::Array` | **Dynamic:** Freely reassignable across list, dict, set, hashmap |
+| `array $arr = [];` | `RhpType::Array` | Unified collection parent | **Permissive:** Accepts any collection variant interchangeably |
+| `list $arr = [];` | `CollectionSubtype::List` | Contiguous `Rc<RefCell<Vec<PhpValue>>>` | **Strict:** Sequential integer-indexed lists only |
+| `dict $arr = [];` | `CollectionSubtype::Dict` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | **Strict:** Insertion-ordered string-keyed dictionaries only |
+| `set $arr = [];` | `CollectionSubtype::Set` | `Rc<RefCell<HashSet<PhpValue>>>` | **Strict:** Unique value sets only |
+| `hashmap $arr = [];` | `CollectionSubtype::HashMap` | `Rc<RefCell<HashMap<PhpValue, PhpValue>>>` | **Strict:** Universal complex key-value maps only |
+
+### 2. Dynamic Typing via `PhpValue` & Flexible Reassignment
+Local variables initialized without a strict type constraint (or declared with the permissive `array` type hint) store values dynamically in a unified `PhpValue` enum handle. 
+
+Because they are not rigidly locked to a single data structure type for their entire lifetime, you can easily reassign `$arr` from a sequential list structure to a dictionary or map structure without throwing a type error:
+
+```php
+// Dynamic flexibility on untyped variables:
+$arr = [1, 2, 3];            // Sequential list
+$arr = ['name' => 'yogesh']; // Seamlessly reassigns to dictionary
+
+// Permissive parent type hint for backward compatibility:
+array $data = [1, 2, 3];
+$data = ['name' => 'yogesh'];           // Allowed
+$data = Arr::list([10, 20]);            // Allowed
+$data = Arr::dict(['env' => 'prod']);   // Allowed
+```
+
+### 3. Strict Type Bounds vs. Dynamic Variables
+This dynamic flexibility applies to untyped variables and generic `array`-hinted variables. However, once a variable or parameter is explicitly type-hinted with a **strict collection subtype** (like `list $arr` or `dict $arr`) or a primitive scalar (like `int $x`), RHP enforces strict type boundaries and throws a Rust-style compile-time or runtime error on incompatible assignments:
+
+```php
+// 1. Strict List rejects string-keyed dictionaries:
+list $numbers = [1, 2, 3];
+// $numbers = ['name' => 'yogesh']; 
+// Error: VariableTypeMismatch: Cannot assign value of type 'Dict' to typed variable '$numbers' of type 'List'
+
+// 2. Strict Dict rejects sequential integer lists:
+dict $user = ['name' => 'yogesh'];
+// $user = [1, 2, 3];
+// Error: VariableTypeMismatch: Cannot assign value of type 'List' to typed variable '$user' of type 'Dict'
+
+// 3. Strict scalar primitives reject incompatible types:
+int $x = 0;
+// $x = 'hello'; 
+// Error: VariableTypeMismatch: Cannot assign value of type 'string' to typed variable '$x' of type 'int'
+```
+
+---
+
+## Immutable Helper Methods by Default
+
+* **Immutability by Default:** Calling array and collection helper methods (such as `$my_array->sort()` or `Arr::list($my_array)->sort()`) **never mutates the original array in place**.
+* **Zero Hidden Side Effects:** Every transformation returns a brand-new collection instance, keeping data flows clean, predictable, and thread-safe.
+
+```php
+$original = [3, 1, 2];
+
+// $sorted is a new sorted instance; $original remains [3, 1, 2]
+$sorted = $original->sort();
+
+print($original[0]); // 3 (untouched!)
+print($sorted[0]);   // 1
+```
+
+### Explicit Variable Reassignment
+
+If a developer wants to update a variable with the transformed or sorted array, they use **explicit reassignment**:
+
+```php
+$my_array = $my_array->sort();
+// or
+$my_array = Arr::list($my_array)->sort();
+```
+
+Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointer mechanics, making variable replacement lightning-fast without unnecessary memory duplication or garbage collection overhead.
 
 ---
 
@@ -168,7 +429,7 @@ To prevent unexpected side effects and eliminate unnecessary heap clones, collec
 ```php
 list $original = Arr::list([1, 2, 3]);
 
-// Shares the underlying buffer with zero memory copy
+// Shares the underlying buffer with zero memory copy (O(1) pointer reference)
 list $copy = $original;
 
 // Modifying $copy detaches it into a new buffer transparently
@@ -177,3 +438,4 @@ $copy[] = 4;
 print($original->count()); // 3 (untouched)
 print($copy->count());     // 4
 ```
+
