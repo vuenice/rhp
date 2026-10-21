@@ -50,21 +50,64 @@ RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor
 
 ### 1. `Arr::list` (Sequential Lists - Step 8)
 
-`Arr::list` maps directly to a contiguous Rust `Vec<PhpValue>` wrapped in `Rc<RefCell<...>>`. It guarantees high CPU cache locality, sequential zero-based integer indexing, and fast append operations:
+`Arr::list` maps directly to a contiguous Rust `Vec<PhpValue>` wrapped in `Rc<RefCell<...>>` with Copy-On-Write (COW) semantics. It guarantees maximum CPU cache locality, sequential zero-based integer indexing, and rapid append operations:
+
+* **CPU Cache Locality During Iteration:** The runtime iteration engine uses a dedicated `ActiveIterator::List` stream that retains a direct reference handle to the contiguous vector with a cursor index. It streams elements sequentially without allocating intermediate `(PhpValue, PhpValue)` pairs or cloning keys.
+* **Strict Sequential Index Integrity:** Lists support numeric indexing (`$list[0]`), numeric in-place updates (`$list[1] = 999`), and append operations (`$list[] = $val`). Non-numeric string keys (e.g. `$list['key'] = 42`) are strictly rejected with an `UndefinedIndex` runtime error.
+* **Inline Declaration & Implicit Factory Lowering:** Declaring `list $arr = [];` is automatically lowered by the compiler into an optimized `Arr::list([])` allocation.
 
 ```php
-// 1. Instantiation
+// 1. Instantiation (Explicit Facade or Inline Declaration)
 list $numbers = Arr::list([10, 20, 30, 40]);
+list $items = []; // Lowers directly to Arr::list([])
 
-// 2. Functional pipelines
+// 2. Static Factory Helpers
+list $seq = Arr::range(1, 10, 2);       // [1, 3, 5, 7, 9]
+list $repeated = Arr::repeat('rhp', 3); // ['rhp', 'rhp', 'rhp']
+list $wrapped = Arr::wrap(42);          // [42]
+list $fromDict = Arr::from(Arr::dict(['a' => 1, 'b' => 2])); // [1, 2]
+
+// 3. Higher-Order Transforms & Pipelines
 list $doubled = $numbers
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 30); // [40, 60, 80]
 
-// 3. Math & Search
+list $rejected = $numbers->reject(fn($n) => $n % 20 === 0); // [10, 30]
+int $reduced = $numbers->reduce(fn($acc, $n) => $acc + $n, 0); // 100
+
+// 4. Math & Aggregations
 int $sum = $doubled->sum();      // 180
 float $avg = $doubled->avg();    // 60.0
-int $first = $doubled->first();  // 40
+int $min = $doubled->min();      // 40
+int $max = $doubled->max();      // 80
+int $count = $doubled->count();  // 3
+
+// 5. Slicing, Chunks, and Flattening
+list $chunks = $numbers->chunk(2);               // [[10, 20], [30, 40]]
+list $flat = Arr::flatten(Arr::list([[1, 2], [3, 4]])); // [1, 2, 3, 4]
+list $taken = $numbers->take(2);                // [10, 20]
+list $skipped = $numbers->skip(2);              // [30, 40]
+list $sliced = $numbers->slice(1, 2);           // [20, 30]
+
+// 6. Searching, Verification & Uniqueness
+int $first = $doubled->first();                 // 40
+int $last = $doubled->last();                   // 80
+int $found = $doubled->find(fn($n) => $n > 50); // 60
+bool $hasForty = $doubled->contains(40);        // true
+bool $isEmpty = $doubled->isEmpty();            // false
+list $unique = Arr::list([1, 2, 2, 3])->unique(); // [1, 2, 3]
+
+// 7. Partitioning & Zipping
+list $parts = $numbers->partition(fn($n) => $n <= 20); // [[10, 20], [30, 40]]
+list $zipped = Arr::list(['a', 'b'])->zip(Arr::list([1, 2])); // [['a', 1], ['b', 2]]
+
+// 8. Dynamic Macro Registration (Arr::macro)
+Arr::macro('toCsv', function ($delimiter = ',') {
+    return implode($delimiter, $this->all());
+});
+
+string $csv = Arr::list([1, 2, 3])->toCsv();      // "1,2,3"
+string $pipe = Arr::list(['a', 'b'])->toCsv('|'); // "a|b"
 ```
 
 ---

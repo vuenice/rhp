@@ -30,18 +30,44 @@ Arr::set(array $values = []): set;
 Arr::hashMap(array $entries = []): hashmap;
 Arr::map(array $entries = []): hashmap; // Alias for Arr::hashMap()
 
+// Dot-Notation Deep Inspection & Mutation
+Arr::get(mixed $target, string $key, mixed $default = null): mixed;
+Arr::set(mixed &$target, string $key, mixed $value): mixed;
+Arr::has(mixed $target, string $key): bool;
+Arr::hasAny(mixed $target, array|list $keys): bool;
+Arr::forget(mixed &$target, string ...$keys): mixed;
+Arr::pull(mixed &$target, string $key, mixed $default = null): mixed;
+Arr::dot(mixed $target, string $prepend = ''): dict;
+Arr::undot(dict|array $dotted): dict;
+
+// Structural Partitioning & Transformation
+Arr::divide(dict|array $target): list;                         // Returns [keys, values]
+Arr::keyBy(array|list $items, string $key): dict;              // Re-indexes items by field key
+Arr::pluck(array|list $items, string $key, ?string $keyBy = null): list|dict;
+Arr::collapse(array|list $array): list;                        // Collapses list of arrays into flat list
+Arr::flatten(mixed $array): list;                              // Recursively flattens nested arrays
+Arr::chunk(mixed $array, int $size): list;                     // Chunks array into list of lists
+Arr::from(mixed $items): list;                                 // Converts any iterable/collection to list
+Arr::first(mixed $array): mixed;                               // Returns first element
+Arr::last(mixed $array): mixed;                                // Returns last element
+Arr::isAssoc(mixed $array): bool;                              // Checks if collection is associative dict
+Arr::isList(mixed $array): bool;                               // Checks if collection is sequential list
+
 // Generators & Utilities
 Arr::range(int $start, int $end, int $step = 1): list;
 Arr::repeat(mixed $value, int $times): list;
+Arr::wrap(mixed $value): list;
 Arr::count(mixed $collection): int;
 Arr::contains(mixed $collection, mixed $needle): bool;
-Arr::has(mixed $collection, mixed $key): bool;
-Arr::get(mixed $collection, mixed $key, mixed $default = null): mixed;
 Arr::keys(mixed $collection): list;
 Arr::values(mixed $collection): list;
+Arr::merge(mixed ...$arrays): list|dict;
+Arr::unique(mixed $items): set;
+Arr::reverse(mixed $target): list|dict;
+Arr::sort(mixed $items): list;
 
 // Dynamic Macro Extension
-Arr::macro(string $name, callable $closure): void;
+Arr::macro(string $name, callable $closure): bool;
 ```
 
 ---
@@ -59,14 +85,24 @@ $list->last(): mixed;
 $list->find(callable $fn): mixed;
 
 // Mutation & Extraction
-$list->push(mixed ...$values): list;
+$list->push(mixed ...$values): list;    // Also: add()
 $list->pop(): mixed;
+$list->shift(): mixed;
+$list->unshift(mixed ...$values): list;
 $list->all(): list;                     // Also: toArray()
 $list->slice(int $offset, ?int $length = null): list;
+$list->take(int $count): list;
+$list->skip(int $count): list;
 $list->chunk(int $size): list;
+$list->flatten(): list;
+$list->unique(): list;
 $list->reverse(): list;
 $list->sort(?callable $comparator = null): list;
 $list->sortBy(string|callable $key): list;
+$list->concat(mixed $other): list;      // Also: merge()
+$list->pluck(string $key): list;
+$list->partition(callable $fn): list;
+$list->zip(mixed $other): list;
 
 // Higher-Order Transforms & Reductions
 $list->map(callable $fn): list;         // fn($item, $index)
@@ -82,11 +118,13 @@ $list->min(): mixed;
 $list->max(): mixed;
 $list->toJson(): string;
 
-// Operators & Iteration
+// Operators & Iteration (Zero-Allocation ActiveIterator::List)
 $val = $list[0];                        // 0-indexed integer lookup
+$list[1] = 999;                         // In-place numeric update
 $list[] = 42;                           // Appends value
-foreach ($list as $item) {}             // Contiguous sequential traversal
-foreach ($list as $idx => $item) {}     // Yields 0-based integer index
+// $list['str_key'] = 1;                // Throws UndefinedIndex error (strict sequential indexing)
+foreach ($list as $item) {}             // Contiguous sequential traversal with CPU cache locality
+foreach ($list as $idx => $item) {}     // Yields 0-based integer index without key allocations
 ```
 
 ---
@@ -94,52 +132,69 @@ foreach ($list as $idx => $item) {}     // Yields 0-based integer index
 ### `dict` Instance Methods (Ordered String-Key Map)
 
 ```php
-// Key-Value Retrieval & Mutation
+// Key-Value Retrieval, Projections & Mutation
 $dict->get(string $key, mixed $default = null): mixed;
 $dict->put(string $key, mixed $value): dict;
 $dict->pull(string $key, mixed $default = null): mixed;
 $dict->forget(string ...$keys): dict;
-$dict->has(string $key): bool;          // Also: hasKey()
+$dict->has(string $key): bool;                                  // Also: hasKey()
 $dict->hasAny(array $keys): bool;
-$dict->keys(): list;                    // Returns keys in insertion order
-$dict->values(): list;                  // Returns values in insertion order
+$dict->keys(): list;                                            // Returns keys in strict insertion order
+$dict->values(): list;                                          // Returns values in strict insertion order
 $dict->only(array|string ...$keys): dict;
 $dict->except(array|string ...$keys): dict;
+$dict->flip(): dict;                                            // Swaps keys with values
+$dict->merge(dict|array ...$others): dict;                      // Merges multiple dictionaries into a new dict
+$dict->all(): dict;                                             // Returns underlying dictionary (also: toArray())
+$dict->toArray(): dict;
 
-// Inspection & Ordering
-$dict->count(): int;
+// Inspection & Search
+$dict->count(): int;                                            // Also: size(), length(), len()
 $dict->isEmpty(): bool;
 $dict->isNotEmpty(): bool;
-$dict->first(): mixed;
-$dict->last(): mixed;
-$dict->firstKey(): ?string;
-$dict->lastKey(): ?string;
-$dict->reverse(): dict;
-$dict->sort(?callable $comparator = null): dict;
-$dict->sortBy(string|callable $key): dict;
+$dict->contains(mixed|callable $needleOrClosure): bool;
+$dict->first(): mixed;                                          // First element in insertion order
+$dict->last(): mixed;                                           // Last element in insertion order
+$dict->firstKey(): ?string;                                     // First key in insertion order
+$dict->lastKey(): ?string;                                      // Last key in insertion order
 
-// Functional Transforms & Set-like Algebra
-$dict->map(callable $fn): dict;         // fn($val, $key)
-$dict->mapWithKeys(callable $fn): dict; // fn($val, $key) => [$newK => $newV]
-$dict->filter(?callable $fn = null): dict;
-$dict->reject(callable $fn): dict;
-$dict->reduce(callable $fn, mixed $initial = null): mixed;
-$dict->diff(dict|array $other): dict;   // Key-based diff
-$dict->intersect(dict|array $other): dict;
-$dict->each(callable $fn): dict;
+// Ordering, Slicing & Chunking
+$dict->sortKeys(): dict;                                        // Sorts keys ascending (natural ordering)
+$dict->sortKeysDesc(): dict;                                    // Sorts keys descending
+$dict->sort(?callable $comparator = null): dict;                // Sorts by values ascending
+$dict->sortBy(string|callable $key): dict;                      // Sorts by custom closure or subkey
+$dict->reverse(): dict;                                         // Reverses key-value insertion order
+$dict->chunk(int $size): list;                                  // Chunks dictionary into list of dictionaries
+$dict->take(int $limit): dict;                                  // Takes first (or last if negative) N entries
+$dict->skip(int $count): dict;                                  // Skips first N entries
+$dict->slice(int $offset, ?int $length = null): dict;           // Slices dictionary entries
+
+// Functional Higher-Order Transforms & Pipelines
+$dict->map(callable $fn): dict;                                 // fn($val, $key) => $newVal
+$dict->mapWithKeys(callable $fn): dict;                         // fn($val, $key) => [$newKey => $newVal]
+$dict->filter(?callable $fn = null): dict;                      // Keeps entries where fn($val, $key) is truthy
+$dict->reject(callable $fn): dict;                              // Drops entries where fn($val, $key) is truthy
+$dict->reduce(callable $fn, mixed $initial = null): mixed;      // fn($carry, $val) => $newCarry
+$dict->each(callable $fn): dict;                                // fn($val, $key) (short-circuit on false)
 $dict->pluck(string $valueKey, ?string $keyBy = null): dict|list;
+
+// Set-Like Differences & Intersections
+$dict->diff(dict|array $other): dict;                           // Entries whose values are not in $other
+$dict->diffKeys(dict|array $other): dict;                       // Entries whose keys are not in $other
+$dict->intersect(dict|array $other): dict;                      // Entries whose values exist in $other
+$dict->intersectKeys(dict|array $other): dict;                  // Entries whose keys exist in $other
 
 // Aggregations & Serialization
 $dict->sum(): int|float;
 $dict->avg(): float;
 $dict->min(): mixed;
 $dict->max(): mixed;
-$dict->toJson(): string;
+$dict->toJson(): string;                                        // Encodes to JSON object string '{"k":"v"}'
 
-// Operators & Iteration
-$val = $dict['key'];                    // O(1) string key lookup
-$dict['key'] = $value;                  // Inserts or updates key
-foreach ($dict as $key => $val) {}      // Strict insertion order traversal
+// Operators & Zero-Allocation Streaming Iteration
+$val = $dict['key'];                                            // O(1) string key lookup
+$dict['key'] = $value;                                          // Inserts or updates key in-place
+foreach ($dict as $key => $val) {}                              // Zero-allocation streaming via ActiveIterator::Dict
 ```
 
 ---

@@ -44,19 +44,25 @@ print("User Role: " . $roleTitle);
 
 ## Iteration: `foreach` Over Subtyped Collections
 
-The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`):
+The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`).
+
+For dictionaries (`Arr::dict`), `foreach` drives a zero-allocation streaming iterator (`ActiveIterator::Dict`) that accesses entries directly via internal index offsets without allocating temporary key/value arrays, strictly maintaining insertion order:
 
 ```php
-// Iterating over a list
+// Iterating over a list (sequential 0-based index)
 list $users = Arr::list(['Alice', 'Bob', 'Charlie']);
 foreach ($users as $index => $name) {
-    print("[{$index}] " . $name);
+    Sys::print("[{}]: {}", $index, $name);
 }
 
-// Iterating over an ordered dictionary
-dict $meta = Arr::dict(['region' => 'us-east-1', 'active' => true]);
+// Iterating over an ordered dictionary (strict insertion order preserved)
+dict $meta = Arr::dict([
+    'region'  => 'us-east-1',
+    'active'  => true,
+    'cluster' => 'k8s-prod',
+]);
 foreach ($meta as $key => $value) {
-    print($key . " => " . (string)$value);
+    Sys::print("{} => {}", $key, (string)$value);
 }
 ```
 

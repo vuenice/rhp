@@ -50,7 +50,7 @@ export const searchIndex: SearchItem[] = [
     section: "Language Guide",
     description: "Gradual type system, scalar primitives, subtyped collections (list, dict, set, hashMap), complex keys, and COW semantics.",
     url: "/docs/guide/variables-and-types",
-    keywords: ["variables", "types", "scalar", "int", "float", "string", "bool", "type hints", "cow", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "hashset", "hashmap"]
+    keywords: ["variables", "types", "scalar", "int", "float", "string", "bool", "type hints", "cow", "arr", "list", "dict", "indexmap", "laravel collections", "set", "hashmap", "map", "complex keys", "set algebra", "hashset", "hashmap"]
   },
   {
     title: "Operators",
@@ -64,7 +64,7 @@ export const searchIndex: SearchItem[] = [
     section: "Language Guide",
     description: "if/else, switch, match expressions, while, for, and foreach loops.",
     url: "/docs/guide/control-flow",
-    keywords: ["control flow", "if", "else", "match", "switch", "for", "foreach", "while"]
+    keywords: ["control flow", "if", "else", "match", "switch", "for", "foreach", "while", "streaming iterator"]
   },
   {
     title: "Functions and Closures",
@@ -104,9 +104,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr, Str, Future, Memory, File, HTTP, Log, and Sys.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Future, Memory, File, HTTP, Log, and Sys.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "arr", "str", "future", "memory", "file", "http"]
+    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "future", "memory", "file", "http"]
   },
   {
     title: "Observability & OpenTelemetry",

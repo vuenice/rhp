@@ -63,6 +63,21 @@ $result = Memory::scope(function(): int {
 
 ---
 
+## Subtyped Collection Memory Layout & Streaming Iteration
+
+Rather than using Zend Engine's monolithic `zend_array` (which incurs massive memory overhead with 56-byte hash buckets and separate doubly linked list pointers for iteration order), RHP uses dedicated, cache-conscious Rust structures:
+
+### 1. `Arr::dict`: `Rc<RefCell<IndexMap<String, PhpValue>>>`
+- **Dense Linear Storage:** Keys and values are stored in contiguous vectors indexed by a sparse hash table (`IndexMap`), achieving compact memory layout with near-zero pointer chasing.
+- **Strict Deterministic Ordering:** Iteration order strictly matches insertion order. Updating an existing key modifies its value in-place without altering its slot position in the iteration order.
+- **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` initializes an `ActiveIterator::Dict { dict, cursor: usize }`. Each iteration step reads `dict.get_index(cursor)` directly by index offset, allocating **zero temporary vectors or key-value tuples**.
+- **Copy-On-Write (CoW) Detachment:** Reassignment (`$copy = $dict`) shares the underlying reference-counted buffer with zero allocations (`Rc::clone`). In-place mutations on shared buffers trigger transparent detachment (`ensure_dict_mut()`), cloning only when necessary.
+
+### 2. `Arr::list`: `Rc<RefCell<Vec<PhpValue>>>`
+- **Contiguous Vector Buffer:** Stored directly as a dense vector of `PhpValue` tagged unions, offering direct CPU L1/L2 cache prefetching and sequential indexing without hashtable hashing overhead.
+
+---
+
 ## Memory & State Rules
 
 ### 1. Boot Heap Immutability (`server.rhp` $\rightarrow$ `Arc`)
