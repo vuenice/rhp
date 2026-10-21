@@ -294,7 +294,87 @@ foreach ($map as $key => $val) {
 
 ---
 
-### 3. Collection Type Boundaries & Permissive `array` Acceptance
+### 5. Static `Arr` Facade & Dot Notation Helpers
+
+The static `Arr` facade exposes Laravel-inspired utilities for navigating deeply nested associative dictionaries, restructuring data, and inspecting collection shapes:
+
+#### Dot Notation Traversal & Deep Mutation
+Access and mutate arbitrarily nested dictionaries or object trees using intuitive dot-delimited key paths:
+
+```php
+$data = Arr::dict([
+    'user' => Arr::dict([
+        'profile' => Arr::dict([
+            'name'  => 'Alice',
+            'email' => 'alice@example.com',
+        ]),
+        'role' => 'admin',
+    ]),
+]);
+
+// 1. Safe Deep Read with Arr::get
+$name = Arr::get($data, 'user.profile.name');               // 'Alice'
+$age  = Arr::get($data, 'user.profile.age', 25);            // 25 (default fallback)
+
+// 2. Deep Membership with Arr::has and Arr::hasAny
+bool $hasEmail = Arr::has($data, 'user.profile.email');     // true
+bool $hasAny   = Arr::hasAny($data, ['user.missing', 'user.profile.email']); // true
+
+// 3. Deep Mutation with Arr::set
+// Sets intermediate dictionaries automatically if not already present:
+$modified = Arr::set($data, 'user.profile.city', 'Amsterdam');
+$city = Arr::get($modified, 'user.profile.city');           // 'Amsterdam'
+
+// 4. Deep Removal with Arr::forget and Arr::pull
+$withoutRole = Arr::forget($modified, 'user.role');
+bool $hasRole = Arr::has($withoutRole, 'user.role');        // false
+
+$pulledName = Arr::pull($withoutRole, 'user.profile.name'); // 'Alice' (retrieves & removes)
+
+// 5. Flattening & Unflattening (Arr::dot / Arr::undot)
+// Arr::dot collapses multidimensional dicts into single-level dot keys:
+dict $flat = Arr::dot(Arr::dict([
+    'db' => Arr::dict([
+        'host' => '127.0.0.1',
+        'port' => 3306,
+    ]),
+])); // ['db.host' => '127.0.0.1', 'db.port' => 3306]
+
+// Arr::undot reconstructs full nested dictionaries from dot keys:
+dict $nested = Arr::undot($flat);
+// Returns: ['db' => ['host' => '127.0.0.1', 'port' => 3306]]
+```
+
+#### Structural Transformations & Shape Inspection
+
+```php
+// 1. Arr::divide: Splits a dictionary into a pair of [keys, values]
+list $divided = Arr::divide(Arr::dict(['x' => 10, 'y' => 20]));
+// Result: [['x', 'y'], [10, 20]]
+
+// 2. Arr::keyBy: Indexes a list of dictionaries by a key field
+list $users = Arr::list([
+    Arr::dict(['id' => 'u1', 'name' => 'John']),
+    Arr::dict(['id' => 'u2', 'name' => 'Jane']),
+]);
+dict $keyed = Arr::keyBy($users, 'id');
+// ['u1' => ['id' => 'u1', 'name' => 'John'], 'u2' => ['id' => 'u2', 'name' => 'Jane']]
+
+// 3. Arr::pluck: Plucks a field into a list or keyed dictionary
+list $names = Arr::pluck($users, 'name');          // ['John', 'Jane']
+dict $keyedNames = Arr::pluck($users, 'name', 'id'); // ['u1' => 'John', 'u2' => 'Jane']
+
+// 4. Arr::collapse: Collapses an array of arrays into a single flat list
+list $collapsed = Arr::collapse([[1, 2], [3, 4], [5]]); // [1, 2, 3, 4, 5]
+
+// 5. Shape Inspection: Arr::isAssoc and Arr::isList
+bool $isAssoc = Arr::isAssoc(Arr::dict(['k' => 'v']));  // true
+bool $isList  = Arr::isList(Arr::list([1, 2, 3]));       // true
+```
+
+---
+
+### 6. Collection Type Boundaries & Permissive `array` Acceptance
 
 RHP combines strict type annotations with flexible parent compatibility:
 
@@ -321,7 +401,7 @@ countAnyCollection(Arr::hashMap([[1, 2] => 3]));// OK
 
 ---
 
-### 4. Dynamic Runtime Macro Registration (`Arr::macro`)
+### 7. Dynamic Runtime Macro Registration (`Arr::macro`)
 
 Extend collection instances with custom domain methods at runtime without subclassing `Arr`:
 
