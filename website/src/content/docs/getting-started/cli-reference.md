@@ -152,36 +152,70 @@ rhp serve
 
 ### `rhp run lint [PATH] [OPTIONS]`
 
-Lints, auto-formats code, infers variable type signatures, and normalizes casing conventions across your codebase.
+Lints, auto-formats code according to PER-CS standards, infers variable, parameter, and property type signatures, normalizes casing conventions, and outputs diagnostics in machine-readable JSON inspired by [Carthage Software Mago](https://github.com/carthage-software/mago).
 
 ```bash
 # Auto-format and write changes to disk
 rhp run lint src/
 
-# Dry run: check and report issues without writing files
+# Dry run: check and report issues in JSON without writing files
 rhp run lint src/ --check
 # or
 rhp run lint src/ --no-fix
 
-# Skip changing identifier casing
+# Auto-format and typecheck without changing identifier casing
 rhp run lint src/ --no-case-change
 ```
 
+#### Options for `run lint`:
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--check` | Dry-run check mode; emits diagnostics in JSON without modifying files | `false` |
+| `--no-fix` | Alias for `--check`; leaves files on disk unmodified | `false` |
+| `--fix` | Auto-formats code and writes inferred types and casing fixes to disk | `true` |
+| `--no-case-change` | Skips identifier casing transformations (`snake_case`, `PascalCase`, `camelCase`) | `false` |
+
+#### Key Capabilities:
+
+1. **AST Code Formatting:** Enforces 4-space indentation, operator spacing, and normalized brace positioning while preserving comments and string literals.
+2. **Automated Type Inference:**
+   - Inactive untyped scalars: `$x = '';` $\rightarrow$ `string $x = '';`, `$y = 1;` $\rightarrow$ `int $y = 1;`.
+   - Initialized array classification: sequential $\rightarrow$ `list`, string-keyed $\rightarrow$ `dict`, integer/complex-keyed $\rightarrow$ `hashMap`, empty $\rightarrow$ `array`.
+   - Function parameter defaults and class property defaults.
+   - Preserves user-declared types; emits typecheck errors if values mismatch.
+3. **Casing Normalization:**
+   - Variables $\rightarrow$ `snake_case` (preserving `$this` and PHP superglobals).
+   - Classes, interfaces, traits, and enums $\rightarrow$ `PascalCase` (and all references).
+   - Functions and methods $\rightarrow$ `camelCase` (preserving magic methods).
+   - **Test function exception:** any function starting with `test` is normalized to `snake_case`.
+
 #### Diagnostic Output Schema
 
-When run with `--check`, errors and suggestions are emitted in machine-readable JSON matching the Carthage Mago diagnostics format:
+When run with `--check` or `--no-fix`, diagnostics are emitted in Carthage Mago-compatible JSON:
 
 ```json
 {
-  "file": "src/Order.rhp",
+  "status": "ok",
+  "files_scanned": 8,
+  "files_modified": 0,
+  "total_issues": 1,
+  "errors": 0,
+  "warnings": 1,
   "issues": [
     {
-      "code": "RHP0042",
-      "severity": "Warning",
-      "message": "Variable $total is missing explicit scalar type hint. Inferred: 'float'.",
+      "level": "warning",
+      "code": "casing/variable",
+      "message": "Variable '$userAccount' should be snake_case: '$user_account'",
+      "file": "src/Order.rhp",
       "line": 14,
-      "col": 5
+      "column": 5,
+      "span": {
+        "start": 210,
+        "end": 222
+      }
     }
   ]
 }
 ```
+
