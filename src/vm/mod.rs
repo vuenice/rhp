@@ -41,12 +41,12 @@ pub use arena::{
 pub use engine::{CallFrame, DEFAULT_MAX_CALL_DEPTH, VM};
 pub use error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 pub use facade::{
-    append_log, clear_log_history, clear_runtime_closure_macros, clear_tier2_plugins,
+    append_log, clear_log_history, clear_request_context, clear_runtime_closure_macros, clear_tier2_plugins,
     dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,
     extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
-    has_runtime_closure_macro, has_tier2_plugin, parse_json_value, register_runtime_closure_macro,
-    register_tier2_plugin, register_tier2_plugin_handler, FacadeResult, LogRecord, PluginFacade,
-    Tier2PluginHandler,
+    has_runtime_closure_macro, has_tier2_plugin, init_cookie_data, init_request_params, init_session_data,
+    parse_json_value, register_runtime_closure_macro, register_tier2_plugin, register_tier2_plugin_handler,
+    FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
 };
 pub use fiber::{
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, enter_fiber,
@@ -69,7 +69,7 @@ pub use rust_loader::{
     resolve_rust_file_path, to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry,
     RustLogStore,
 };
-pub use value::{PhpValue, VmClosure, VmFuture, VmObject};
+pub use value::{FutureState, PhpValue, VmClosure, VmFuture, VmObject};
 pub use worker::{
     deserialize_response, execute_isolated_request, serialize_response, WorkerError, WorkerHandle,
     WorkerModel, WorkerPayload, WorkerPool, WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats,

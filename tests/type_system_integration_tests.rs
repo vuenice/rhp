@@ -241,10 +241,10 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
         Some(&RhpType::String)
     );
 
-    // Explicitly typed variable `$locked: int = 10;` cannot be reassigned to `string`
+    // Explicitly typed variable `int $locked = 10;` cannot be reassigned to `string`
     let locked_var_violation = r#"
         function brokenLock(int $id): int {
-            $locked: int = $id + 1;
+            int $locked = $id + 1;
             $locked = "cannot assign string to locked int";
             return $locked;
         }
@@ -296,7 +296,7 @@ fn test_extended_rust_numeric_types_and_fluent_wrappers() {
             $generatedId = Int::i64(9223372036854775807)->random()->add()->subtract();
             $precisePrice = Float::f64(99.99)->toDecimal(2);
             $converted = Float::i64()->toDecimal(2);
-            $u64Val: u64 = Int::u64(42);
+            u64 $u64Val = Int::u64(42);
             return $precisePrice * $ratio;
         }
     "#;

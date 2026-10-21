@@ -1,0 +1,7 @@
+target/
+node_modules
+dist
+dist-ssr
+*.local
+src-tauri/target
+.tauri

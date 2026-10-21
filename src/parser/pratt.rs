@@ -287,9 +287,12 @@ impl<'s> CombinatorStream<'s> {
                 Ok(Expr::new(ExprKind::Clone(Box::new(inner)), span))
             }
             Token::Await => {
-                let inner = self.parse_expr(binding_power::PREFIX)?;
-                let span = spanned.span.merge(inner.span);
-                Ok(Expr::new(ExprKind::Await(Box::new(inner)), span))
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "The 'await' keyword is not supported in RHP. Use synchronous facades (File, DB, HTTP) to get results synchronously, or call '->wait()' on Future objects.".to_string(),
+                    },
+                    spanned.span,
+                ));
             }
 
             // Yield expression (`yield`, `yield from`, `yield $k => $v`)
@@ -332,32 +335,39 @@ impl<'s> CombinatorStream<'s> {
                 }
             }
 
-            // Parentheses: type casting or grouping
+            // Parentheses: grouping or reject PHP-style type casting
             Token::OpenParen => {
-                // Check if this is a type cast `(int) $x`, `(string) $x`, etc.
+                // Reject PHP-style type cast `(int) $x`, `(string) $x`, etc.
                 if let Some(next) = self.peek() {
-                    let cast_type = match next.token {
-                        Token::TypeInt => Some(CastType::Int),
-                        Token::TypeFloat => Some(CastType::Float),
-                        Token::TypeString => Some(CastType::String),
-                        Token::TypeBool => Some(CastType::Bool),
-                        Token::TypeArray => Some(CastType::Array),
-                        Token::TypeObject => Some(CastType::Object),
-                        Token::Ident("integer") => Some(CastType::Int),
-                        Token::Ident("double") | Token::Ident("real") => Some(CastType::Float),
-                        Token::Ident("boolean") => Some(CastType::Bool),
-                        Token::Ident("binary") => Some(CastType::String),
-                        _ => None,
+                    let is_cast_type = match next.token {
+                        Token::TypeInt
+                        | Token::TypeFloat
+                        | Token::TypeString
+                        | Token::TypeBool
+                        | Token::TypeArray
+                        | Token::TypeObject
+                        | Token::Ident("integer" | "double" | "real" | "boolean" | "binary") => true,
+                        _ => false,
                     };
 
-                    if let Some(kind) = cast_type {
-                        if self.peek_nth(1).map(|t| &t.token) == Some(&Token::CloseParen) {
-                            self.advance(); // consume type
-                            self.advance(); // consume CloseParen
-                            let expr = self.parse_expr(binding_power::PREFIX)?;
-                            let span = spanned.span.merge(expr.span);
-                            return Ok(Expr::new(ExprKind::Cast { kind, expr: Box::new(expr) }, span));
-                        }
+                    if is_cast_type && self.peek_nth(1).map(|t| &t.token) == Some(&Token::CloseParen) {
+                        let type_name = next.token.as_str();
+                        let target_type = match type_name {
+                            "integer" => "int",
+                            "boolean" => "bool",
+                            "double" | "real" => "float",
+                            "binary" => "string",
+                            other => other,
+                        };
+                        return Err(ParseError::new(
+                            ParseErrorKind::Custom {
+                                message: format!(
+                                    "Type cast syntax '({})' is not supported in RHP. Use functional conversion '{}(...)' instead (e.g. '{}($x)').",
+                                    type_name, target_type, target_type
+                                ),
+                            },
+                            spanned.span.merge(self.peek_nth(1).unwrap().span),
+                        ));
                     }
                 }
 
@@ -627,14 +637,33 @@ impl<'s> CombinatorStream<'s> {
             Token::TypeInt | Token::TypeString | Token::TypeFloat | Token::TypeBool
                 if self.check(&Token::OpenParen) =>
             {
-                let type_name = spanned.token.as_str();
-                Err(ParseError::new(
-                    ParseErrorKind::Custom {
-                        message: format!(
-                            "Invalid type cast syntax '{}(...)': use native PHP casting '({}) $x' instead to avoid confusion with object instantiation.",
-                            type_name, type_name
-                        ),
+                let kind = match spanned.token {
+                    Token::TypeInt => CastType::Int,
+                    Token::TypeString => CastType::String,
+                    Token::TypeFloat => CastType::Float,
+                    Token::TypeBool => CastType::Bool,
+                    _ => unreachable!(),
+                };
+                self.expect(Token::OpenParen)?;
+                let expr = self.parse_expr_lowest()?;
+                let close_tok = self.expect(Token::CloseParen)?;
+                let span = spanned.span.merge(close_tok.span);
+                Ok(Expr::new(
+                    ExprKind::Cast {
+                        kind,
+                        expr: Box::new(expr),
                     },
+                    span,
+                ))
+            }
+
+            token if token.is_type() => {
+                let type_name = token.as_str();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: type_name,
+                        value: type_name.to_string(),
+                    }),
                     spanned.span,
                 ))
             }
@@ -1055,6 +1084,18 @@ impl<'s> CombinatorStream<'s> {
                 let is_reference = s.matches(&Token::Ampersand);
                 let is_variadic = s.matches(&Token::Ellipsis);
                 let name = s.expect_variable()?;
+                if s.check(&Token::Colon) {
+                    let colon = s.expect(Token::Colon)?;
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: format!(
+                                "Colon type syntax '{}: Type' is not supported. Use prefix type syntax 'Type {}' instead (e.g., 'int {}').",
+                                name.name, name.name, name.name
+                            ),
+                        },
+                        name.span.merge(colon.span),
+                    ));
+                }
 
                 // Default parameter value
                 let default_value = if s.matches(&Token::Assign) {

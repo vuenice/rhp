@@ -190,7 +190,7 @@ pub enum ExprKind<'s> {
         class: Box<Expr<'s>>,
     },
 
-    /// Type casting (`(int) $string`).
+    /// Type casting / conversion (e.g., `int($string)`, `string($x)`).
     Cast {
         kind: CastType,
         expr: Box<Expr<'s>>,

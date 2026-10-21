@@ -393,10 +393,10 @@ fn test_spec_surface_level_gradual_typing_and_function_signatures() {
 #[test]
 fn test_typed_variable_declarations() {
     let source = r#"
-        $x: int = 10;
-        $y: float = 3.14;
-        $s: string = "hello";
-        $flag: bool;
+        int $x = 10;
+        float $y = 3.14;
+        string $s = "hello";
+        bool $flag;
     "#;
     let program = parse(source).expect("Failed to parse typed var decls");
     assert_eq!(program.statements.len(), 4);
@@ -418,6 +418,21 @@ fn test_typed_variable_declarations() {
         }
         _ => panic!("Expected VarDecl without init"),
     }
+}
+
+#[test]
+fn test_rejection_of_colon_typed_variable_declarations() {
+    let bad_source = "$x: int = 10;";
+    let err = parse(bad_source).expect_err("Colon type syntax must be rejected");
+    assert!(err.to_string().contains("Colon type syntax '$x: Type' is not supported"));
+
+    let bad_prop = "class Foo { public $x: int = 10; }";
+    let err_prop = parse(bad_prop).expect_err("Colon type property must be rejected");
+    assert!(err_prop.to_string().contains("Colon type syntax '$x: Type' is not supported"));
+
+    let bad_param = "function bar($x: int) {}";
+    let err_param = parse(bad_param).expect_err("Colon type parameter must be rejected");
+    assert!(err_param.to_string().contains("Colon type syntax '$x: Type' is not supported"));
 }
 
 #[test]
@@ -1172,26 +1187,22 @@ fn test_spec_legacy_php_functions_phpfun_lowering_and_signature_map() {
 }
 
 #[test]
-fn test_type_casting_syntax_and_rejection_of_function_style_casts() {
-    // 1. Native PHP type casting parses cleanly both without space and with space
+fn test_functional_type_casting_syntax_and_rejection_of_c_style_casts() {
+    // 1. Functional type casting parses cleanly: int($raw), string($raw), float($raw), bool($raw)
     let source = r#"
-        $intVal = (int)$raw;
-        $strVal = (string)$raw;
-        $floatVal = (float)$raw;
-        $boolVal = (bool)$raw;
-        $spacedInt = (int) $raw;
-        $spacedStr = (string) $raw;
+        $intVal = int($raw);
+        $strVal = string($raw);
+        $floatVal = float($raw);
+        $boolVal = bool($raw);
     "#;
-    let program = parse(source).expect("Native PHP casting syntax must parse");
-    assert_eq!(program.statements.len(), 6);
+    let program = parse(source).expect("Functional type casting syntax must parse");
+    assert_eq!(program.statements.len(), 4);
 
     for (stmt, expected_kind) in program.statements.iter().zip([
         CastType::Int,
         CastType::String,
         CastType::Float,
         CastType::Bool,
-        CastType::Int,
-        CastType::String,
     ]) {
         match &stmt.kind {
             StmtKind::Expr(expr) => match &expr.kind {
@@ -1205,14 +1216,18 @@ fn test_type_casting_syntax_and_rejection_of_function_style_casts() {
         }
     }
 
-    // 2. Function-style cast syntax int($x), string($x) is rejected with informative error
-    let bad_int = "$x = int($val);";
-    let err_int = parse(bad_int).expect_err("int($val) must be rejected");
-    assert!(err_int.to_string().contains("use native PHP casting '(int) $x'"));
+    // 2. PHP-style cast syntax (int)$x, (string)$x is rejected with informative error
+    let bad_int = "$x = (int)$val;";
+    let err_int = parse(bad_int).expect_err("(int)$val must be rejected");
+    assert!(err_int.to_string().contains("Type cast syntax '(int)' is not supported"));
 
-    let bad_str = "$x = string($val);";
-    let err_str = parse(bad_str).expect_err("string($val) must be rejected");
-    assert!(err_str.to_string().contains("use native PHP casting '(string) $x'"));
+    let bad_str = "$x = (string)$val;";
+    let err_str = parse(bad_str).expect_err("(string)$val must be rejected");
+    assert!(err_str.to_string().contains("Type cast syntax '(string)' is not supported"));
+
+    let bad_spaced_int = "$x = (int) $val;";
+    let err_spaced_int = parse(bad_spaced_int).expect_err("(int) $val must be rejected");
+    assert!(err_spaced_int.to_string().contains("Type cast syntax '(int)' is not supported"));
 }
 
 #[test]

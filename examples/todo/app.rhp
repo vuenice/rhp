@@ -47,10 +47,10 @@ class TodoStore {
                 $loaded = [];
                 $maxId = 0;
                 foreach ($rawTodos as $item) {
-                    $id = (int)$item["id"];
-                    $title = (string)$item["title"];
-                    $cat = $item->has("category") ? (string)$item["category"] : "General";
-                    $created = $item->has("createdAt") ? (string)$item["createdAt"] : "Today";
+                    $id = int($item["id"]);
+                    $title = string($item["title"]);
+                    $cat = $item->has("category") ? string($item["category"]) : "General";
+                    $created = $item->has("createdAt") ? string($item["createdAt"]) : "Today";
                     $t = new Todo($id, $title, $cat, $created);
                     if ($item->has("completed") && $item["completed"]) {
                         $t->completed = true;
@@ -208,7 +208,7 @@ class TodoStore {
 
 class TodoRenderer {
     public static function renderItem(Todo $todo): string {
-        $idStr = (string)$todo->id;
+        $idStr = string($todo->id);
         $checkedAttr = $todo->completed ? "checked" : "";
         $itemClass = $todo->completed
             ? "todo-item flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-xl transition duration-200 opacity-70 group"
@@ -258,9 +258,9 @@ class TodoRenderer {
         $html = "<div id=\"todo-list-container\" class=\"space-y-4\">\n";
         
         // Counter and stats bar
-        $totalStr = (string)$stats["total"];
-        $activeStr = (string)$stats["active"];
-        $completedStr = (string)$stats["completed"];
+        $totalStr = string($stats["total"]);
+        $activeStr = string($stats["active"]);
+        $completedStr = string($stats["completed"]);
 
         $html = $html . "  <div class=\"grid grid-cols-3 gap-3 mb-6\">\n";
         $html = $html . "    <div class=\"bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 text-center\">\n";
@@ -434,7 +434,7 @@ global $_GET, $_POST, $_SERVER;
 
 $filePath = "";
 if ($_SERVER != null && $_SERVER->has("TODOS_FILE")) {
-    $filePath = (string)$_SERVER["TODOS_FILE"];
+    $filePath = string($_SERVER["TODOS_FILE"]);
 }
 $store = new TodoStore($filePath);
 
@@ -476,9 +476,9 @@ if ($method == "POST" && Str::startsWith($uri, "/todos") && !Str::contains($uri,
 if ($method == "POST" && Str::contains($uri, "/todos/toggle")) {
     $id = 1;
     if ($_GET != null && $_GET->has("id")) {
-        $id = (int)$_GET["id"];
+        $id = int($_GET["id"]);
     } elseif ($_POST != null && $_POST->has("id")) {
-        $id = (int)$_POST["id"];
+        $id = int($_POST["id"]);
     }
     $store->toggle($id);
     $stats = $store->getStats();
@@ -490,9 +490,9 @@ if ($method == "POST" && Str::contains($uri, "/todos/toggle")) {
 if ($method == "POST" && Str::contains($uri, "/todos/delete")) {
     $id = 1;
     if ($_GET != null && $_GET->has("id")) {
-        $id = (int)$_GET["id"];
+        $id = int($_GET["id"]);
     } elseif ($_POST != null && $_POST->has("id")) {
-        $id = (int)$_POST["id"];
+        $id = int($_POST["id"]);
     }
     $store->delete($id);
     $stats = $store->getStats();

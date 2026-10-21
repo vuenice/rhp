@@ -55,7 +55,7 @@ fn test_function_boundary_contracts_and_dynamic_body_register_allocation() {
         function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
             $subtotal = $quantity * $price;
             $tax = $subtotal * $taxRate;
-            $total: float = $subtotal + $tax;
+            float $total = $subtotal + $tax;
             return $total;
         }
 
@@ -115,7 +115,7 @@ fn test_function_boundary_contracts_and_dynamic_body_register_allocation() {
         .iter()
         .filter(|op| matches!(op, OpCode::AssertType { .. }))
         .count();
-    // 3 params + 1 locked local ($total: float) + 1 return boundary = 5 AssertType instructions
+    // 3 params + 1 locked local (float $total) + 1 return boundary = 5 AssertType instructions
     assert_eq!(assert_count, 5);
 
     // Verify top-level call to `calculateTotal(4, 25.0)`

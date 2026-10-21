@@ -699,7 +699,7 @@ pub struct RegisterInfo {
     pub rhp_type: RhpType,
     /// True if this register holds a formal parameter.
     pub is_param: bool,
-    /// True if this variable has an explicit locked type annotation (`$x: int` or parameter type).
+    /// True if this variable has an explicit locked type annotation (`int $x` or parameter type).
     pub is_locked_type: bool,
 }
 

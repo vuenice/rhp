@@ -98,7 +98,7 @@ pub struct CallFrame {
 /// - **Tight Fetch-Decode-Execute Loop:** Dispatches flat `Copy`-able [`OpCode`] instructions
 ///   with zero pointer chasing.
 /// - **Gradual Type Boundary Enforcement:** Executes `OpCode::AssertType` at function/method
-///   parameter and return boundaries as well as locked local declarations (`$x: int`).
+///   parameter and return boundaries as well as locked local declarations (`int $x`).
 /// - **Zero-Cost Exception Table Unwinding:** Unwinds `try`/`catch`/`finally` regions via the
 ///   chunk's `ExceptionHandler` table when `Throw` or `ThrowMatchError` is executed.
 /// - **Post-Response Defer Queue:** Collects `defer { ... }` and `Future::defer(...)` hooks and
@@ -174,6 +174,7 @@ impl VM {
         self.upvalue_buffer.clear();
         self.defer_queue.clear();
         self.output_buffer.clear();
+        crate::vm::facade::clear_request_context();
         self.arena.drop_request()
     }
 
@@ -1644,6 +1645,36 @@ impl VM {
                             .get_property(&prop_name)
                             .cloned()
                             .unwrap_or(PhpValue::Null),
+                        PhpValue::Future(f_rc) => {
+                            let mut fut = f_rc.borrow_mut();
+                            match prop_name.as_str() {
+                                "state" | "status" => PhpValue::string(fut.state().as_str()),
+                                "is_completed" | "isCompleted" | "is_ready" | "isReady" => {
+                                    PhpValue::Bool(fut.poll_completion())
+                                }
+                                "is_pending" | "isPending" => PhpValue::Bool(!fut.poll_completion()),
+                                "value" => {
+                                    fut.poll_completion();
+                                    fut.value.clone().unwrap_or(PhpValue::Null)
+                                }
+                                "error" => {
+                                    fut.poll_completion();
+                                    fut.error
+                                        .as_ref()
+                                        .map(|e| PhpValue::string(e.clone()))
+                                        .unwrap_or(PhpValue::Null)
+                                }
+                                _ => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::UndefinedProperty {
+                                            class: "Future".to_string(),
+                                            property: prop_name,
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                        }
                         PhpValue::Null => PhpValue::Null,
                         other => {
                             return Err(self.make_error(
@@ -1838,16 +1869,18 @@ impl VM {
                     let fut_val = self.registers[base_reg + future.index()].clone();
                     let resolved = match fut_val {
                         PhpValue::Future(f_rc) => {
-                            let borrow = f_rc.borrow();
-                            if let Some(ref err_msg) = borrow.error {
-                                return Err(self.make_error(
-                                    RuntimeErrorKind::Custom {
-                                        message: err_msg.clone(),
-                                    },
-                                    span,
-                                ));
+                            let mut b = f_rc.borrow_mut();
+                            match b.wait_result() {
+                                Ok(val) => val,
+                                Err(err_msg) => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::Custom {
+                                            message: err_msg,
+                                        },
+                                        span,
+                                    ));
+                                }
                             }
-                            borrow.value.clone().unwrap_or(PhpValue::Null)
                         }
                         other => other,
                     };
@@ -2649,10 +2682,31 @@ impl VM {
                     self.output_buffer.push_str(&text);
                     return Ok(PhpValue::Null);
                 }
-                "print" | "println" => {
+                "print" => {
                     let mut text = crate::vm::format::format_sys_args(args);
                     text.push('\n');
                     self.output_buffer.push_str(&text);
+                    return Ok(PhpValue::Null);
+                }
+                "print_r" => {
+                    if let Some(arg) = args.first() {
+                        let return_output = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+                        let formatted = arg.to_print_r();
+                        if return_output {
+                            return Ok(PhpValue::string(formatted));
+                        } else {
+                            self.output_buffer.push_str(&formatted);
+                            self.output_buffer.push('\n');
+                            return Ok(PhpValue::Bool(true));
+                        }
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                "dump" | "dd" => {
+                    for arg in args {
+                        self.output_buffer.push_str(&arg.to_print_r());
+                        self.output_buffer.push('\n');
+                    }
                     return Ok(PhpValue::Null);
                 }
                 _ => {}
@@ -4472,6 +4526,35 @@ impl VM {
                     let completed = b.poll_completion();
                     Ok(PhpValue::Bool(completed))
                 }
+                "state" | "getState" | "status" => {
+                    let mut b = fut_rc.borrow_mut();
+                    Ok(PhpValue::string(b.state().as_str()))
+                }
+                "isPending" => {
+                    let mut b = fut_rc.borrow_mut();
+                    Ok(PhpValue::Bool(!b.poll_completion()))
+                }
+                "isReady" => {
+                    let mut b = fut_rc.borrow_mut();
+                    Ok(PhpValue::Bool(b.poll_completion()))
+                }
+                "poll" => {
+                    let mut b = fut_rc.borrow_mut();
+                    let is_ready = b.poll_completion();
+                    let mut dict = indexmap::IndexMap::new();
+                    if is_ready {
+                        dict.insert("state".to_string(), PhpValue::string("Ready"));
+                        if let Some(ref err) = b.error {
+                            dict.insert("error".to_string(), PhpValue::string(err.clone()));
+                        } else {
+                            let val = b.value.clone().unwrap_or(PhpValue::Null);
+                            dict.insert("value".to_string(), val);
+                        }
+                    } else {
+                        dict.insert("state".to_string(), PhpValue::string("Pending"));
+                    }
+                    Ok(PhpValue::dict_from_map(dict))
+                }
                 "hasError" => {
                     let mut b = fut_rc.borrow_mut();
                     b.poll_completion();
@@ -4749,6 +4832,27 @@ impl VM {
                 }
             }
             ("HTTPResponse", "status") => Ok(PhpValue::Int(200)),
+            ("HTTPResponse", "ok") => {
+                let status = if let PhpValue::Object(o) = receiver {
+                    o.borrow()
+                        .get_property("status")
+                        .and_then(|v| v.to_i64())
+                        .unwrap_or(200)
+                } else {
+                    200
+                };
+                Ok(PhpValue::Bool(status >= 200 && status < 300))
+            }
+            ("HTTPResponse", "headers") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow()
+                        .get_property("headers")
+                        .cloned()
+                        .unwrap_or_else(|| PhpValue::dict(Vec::new())))
+                } else {
+                    Ok(PhpValue::dict(Vec::new()))
+                }
+            }
             ("HTTPClient", "get" | "post") => {
                 let url = args
                     .first()
@@ -4759,6 +4863,47 @@ impl VM {
                 resp.set_property("status", PhpValue::Int(200));
                 resp.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
                 Ok(PhpValue::object(resp))
+            }
+            ("AHTTPClient", "get" | "post" | "put" | "delete" | "patch" | "request") => {
+                let url = args
+                    .first()
+                    .map(|v| v.to_php_string())
+                    .unwrap_or_default();
+                let body_payload = args.get(1).map(|v| v.to_php_string());
+                let http_method = method.to_ascii_uppercase();
+                let mut extra_headers: Vec<(String, String)> = Vec::new();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(hd)) = o.borrow().get_property("headers") {
+                        for (k, v) in hd.borrow().iter() {
+                            extra_headers.push((k.clone(), v.to_php_string()));
+                        }
+                    }
+                }
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let mut resp = VmObject::new("HTTPResponse");
+                    resp.set_property("url", PhpValue::string(url));
+                    resp.set_property("status", PhpValue::Int(200));
+                    let body_str = if let Some(b) = body_payload {
+                        b
+                    } else {
+                        "{\"status\":\"ok\"}".to_string()
+                    };
+                    resp.set_property("body", PhpValue::string(body_str));
+                    let mut headers_dict = IndexMap::new();
+                    headers_dict.insert("Content-Type".to_string(), PhpValue::string("application/json"));
+                    headers_dict.insert("X-Async-Engine".to_string(), PhpValue::string("tokio"));
+                    headers_dict.insert("X-HTTP-Method".to_string(), PhpValue::string(http_method));
+                    for (k, v) in extra_headers {
+                        headers_dict.insert(k, PhpValue::string(v));
+                    }
+                    resp.set_property("headers", PhpValue::dict_from_map(headers_dict));
+                    let frozen = crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(resp));
+                    let _ = tx.send(Ok(frozen));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
             }
             ("DBQuery", "find") => {
                 let id = args.first().cloned().unwrap_or(PhpValue::Int(1));
@@ -4842,6 +4987,95 @@ impl VM {
                 });
                 crate::vm::fiber::record_fiber_io_finish();
                 Ok(PhpValue::Int(1))
+            }
+            ("ADBQuery", "where" | "orderBy" | "limit" | "offset" | "select") => {
+                Ok(receiver.clone())
+            }
+            ("ADBQuery", "find") => {
+                let id = args.first().cloned().unwrap_or(PhpValue::Int(1));
+                let tbl = if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+                let id_frozen = crate::vm::parent_process::FrozenValue::from_php_value(&id);
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let mut record = VmObject::new("ModelRecord");
+                    record.set_property("id", id_frozen.to_php_value());
+                    record.set_property("table", PhpValue::string(tbl));
+                    let frozen = crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(record));
+                    let _ = tx.send(Ok(frozen));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ADBQuery", "first") => {
+                let tbl = if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let mut record = VmObject::new("ModelRecord");
+                    record.set_property("id", PhpValue::Int(1));
+                    record.set_property("table", PhpValue::string(tbl));
+                    let frozen = crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(record));
+                    let _ = tx.send(Ok(frozen));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ADBQuery", "get" | "all") => {
+                let tbl = if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let mut record = VmObject::new("ModelRecord");
+                    record.set_property("id", PhpValue::Int(1));
+                    record.set_property("table", PhpValue::string(tbl));
+                    let items = vec![crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(record))];
+                    let _ = tx.send(Ok(crate::vm::parent_process::FrozenValue::List(items)));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ADBQuery", "count") => {
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let _ = tx.send(Ok(crate::vm::parent_process::FrozenValue::Int(1)));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ADBQuery", "insert" | "update" | "delete") => {
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let _ = tx.send(Ok(crate::vm::parent_process::FrozenValue::Int(1)));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
             }
             ("LoggerChannel", "info" | "error" | "debug" | "warning" | "warn" | "notice"
             | "alert" | "critical" | "emergency") => {

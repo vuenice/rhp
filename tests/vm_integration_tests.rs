@@ -98,7 +98,7 @@ fn test_functions_recursion_default_and_named_arguments_and_type_contracts() {
         function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
             $subtotal = $quantity * $price;
             $tax = $subtotal * $taxRate;
-            $total: float = $subtotal + $tax;
+            float $total = $subtotal + $tax;
             return $total;
         }
 
@@ -679,14 +679,14 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
 
 #[test]
 fn test_vm_runtime_type_casting_and_collection_boundary_contracts() {
-    // 1. Runtime Type Casting: (int)$x, (string)$x, (float)$x, (bool)$x
+    // 1. Runtime Type Casting: int($x), string($x), float($x), bool($x)
     let source_casts = r#"
         $rawNum = "42";
-        $asInt = (int)$rawNum;
-        $asFloat = (float)"3.14";
-        $asStr = (string)999;
-        $asBool = (bool)1;
-        $asBoolFalse = (bool)0;
+        $asInt = int($rawNum);
+        $asFloat = float("3.14");
+        $asStr = string(999);
+        $asBool = bool(1);
+        $asBoolFalse = bool(0);
     "#;
     let (vm_casts, _) = run_source_with_vm(source_casts).expect("Type casting must succeed");
     assert_eq!(vm_casts.get_main_variable("$asInt"), Some(&PhpValue::Int(42)));

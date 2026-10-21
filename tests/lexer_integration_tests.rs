@@ -242,9 +242,9 @@ fn test_spec_surface_level_gradual_typing() {
 fn test_supporting_classes_vs_base_datatypes() {
     let source = r#"
         // int, float, string are base datatypes
-        $x: int = 10;
-        $y: float = 3.14;
-        $s: string = "hello";
+        int $x = 10;
+        float $y = 3.14;
+        string $s = "hello";
 
         // Int and Float are supporting facade classes
         $boxedInt = Int::i64();

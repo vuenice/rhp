@@ -122,3 +122,65 @@ fn test_echo_and_print_contrast() {
     let (vm, _) = run_source_with_vm(source).expect("Echo vs Print newline contrast test should succeed");
     assert_eq!(vm.output(), "ABCD\nE\n");
 }
+
+#[test]
+fn test_sys_println_does_not_exist() {
+    let source = r#"
+        Sys::println("This should fail because Sys::println does not exist");
+    "#;
+    let res = run_source_with_vm(source);
+    assert!(res.is_err(), "Sys::println should not exist, only echo and print");
+}
+
+#[test]
+fn test_print_r_array_and_dict() {
+    let source = r#"
+        $data = [
+            "name" => "RHP Playground",
+            "mode" => "Standalone",
+        ];
+        print_r($data);
+    "#;
+    let (vm, _) = run_source_with_vm(source).expect("print_r on dict should succeed");
+    let expected = concat!(
+        "Array\n",
+        "(\n",
+        "    [name] => RHP Playground\n",
+        "    [mode] => Standalone\n",
+        ")\n"
+    );
+    assert_eq!(vm.output(), expected);
+
+    let source2 = r#"
+        $nums = [1, 2, 3];
+        print_r($nums);
+    "#;
+    let (vm2, _) = run_source_with_vm(source2).expect("print_r on array should succeed");
+    let expected2 = concat!(
+        "Array\n",
+        "(\n",
+        "    [0] => 1\n",
+        "    [1] => 2\n",
+        "    [2] => 3\n",
+        ")\n"
+    );
+    assert_eq!(vm2.output(), expected2);
+}
+
+#[test]
+fn test_print_r_return_string_flag() {
+    let source = r#"
+        $data = ["key" => "value"];
+        $str = print_r($data, true);
+        echo $str;
+    "#;
+    let (vm, _) = run_source_with_vm(source).expect("print_r return flag should succeed");
+    let expected = concat!(
+        "Array\n",
+        "(\n",
+        "    [key] => value\n",
+        ")"
+    );
+    assert_eq!(vm.output(), expected);
+}
+

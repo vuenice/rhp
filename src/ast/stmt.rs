@@ -24,7 +24,7 @@ pub enum StmtKind<'s> {
     /// Expression statement (e.g. `$obj->run();`, `$x = 10;`).
     Expr(Expr<'s>),
 
-    /// Strongly-typed or untyped variable declaration statement (e.g., `$x: int = 10;`).
+    /// Strongly-typed variable declaration statement (e.g., `int $x = 10;`).
     VarDecl {
         var: Variable<'s>,
         type_hint: Option<TypeHint<'s>>,

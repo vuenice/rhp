@@ -5,7 +5,7 @@ use crate::type_system::{
 };
 use std::collections::HashMap;
 
-/// Tracks a local variable's dynamically inferred type and optional locked type annotation (`$x: int`).
+/// Tracks a local variable's dynamically inferred type and optional locked type annotation (`int $x`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariableBinding {
     pub name: String,
@@ -34,7 +34,7 @@ impl TypeEnvironment {
         }
     }
 
-    /// Declare a variable with an explicit locked type annotation (`$x: int = 10;` or parameter `int $x`).
+    /// Declare a variable with an explicit locked type annotation (`int $x = 10;` or parameter `int $x`).
     pub fn declare_typed(
         &mut self,
         name: impl Into<String>,
@@ -73,7 +73,7 @@ impl TypeEnvironment {
 
     /// Assign or dynamically infer a variable's type within a function body (`$subtotal = $q * $p;`).
     ///
-    /// - If the variable was declared with an explicit locked type (`$x: int` or a typed parameter),
+    /// - If the variable was declared with an explicit locked type (`int $x` or a typed parameter),
     ///   enforces compatibility against the locked type.
     /// - If the variable is untyped, dynamically updates its inferred type to `value_type`.
     pub fn assign_inferred(
@@ -435,6 +435,15 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Mixed),
         },
 
+        "AFile" => match method {
+            "read" => Ok(RhpType::Future(Box::new(RhpType::String))),
+            "write" | "exists" | "delete" | "remove" | "append" => {
+                Ok(RhpType::Future(Box::new(RhpType::Bool)))
+            }
+            "size" => Ok(RhpType::Future(Box::new(RhpType::Int))),
+            _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
+        },
+
         "Future" => match method {
             "run" => {
                 let inner_ret = arg_types
@@ -522,6 +531,10 @@ pub fn resolve_facade_static_call(
         },
 
         "HTTP" => Ok(RhpType::Class("HTTPResponse".to_string())),
+        "AHTTP" => match method {
+            "withHeaders" => Ok(RhpType::Class("AHTTPClient".to_string())),
+            _ => Ok(RhpType::Future(Box::new(RhpType::Class("HTTPResponse".to_string())))),
+        },
         "Image" => Ok(RhpType::Class("ImageInstance".to_string())),
         "URL" => match method {
             "to" | "route" | "current" | "full" => Ok(RhpType::String),
@@ -529,14 +542,42 @@ pub fn resolve_facade_static_call(
         },
         "Session" => match method {
             "has" => Ok(RhpType::Bool),
-            "put" | "forget" => Ok(RhpType::Void),
+            "set" | "put" => Ok(RhpType::Mixed),
+            "forget" | "remove" | "delete" | "clear" | "flush" => Ok(RhpType::Void),
             "get" => Ok(RhpType::Mixed),
+            "all" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Cookie" => match method {
+            "has" => Ok(RhpType::Bool),
+            "set" | "put" => Ok(RhpType::Mixed),
+            "forget" | "delete" | "remove" | "clear" => Ok(RhpType::Void),
+            "get" => Ok(RhpType::Mixed),
+            "all" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Request" => match method {
+            "has" => Ok(RhpType::Bool),
+            "set" => Ok(RhpType::String),
+            "clear" => Ok(RhpType::Void),
+            "get" | "input" => Ok(RhpType::Mixed),
+            "all" | "only" | "format" | "merge" => {
+                Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
+            }
             _ => Ok(RhpType::Mixed),
         },
         "DB" => Ok(RhpType::Class("QueryBuilder".to_string())),
+        "ADB" => match method {
+            "table" => Ok(RhpType::Class("ADBQuery".to_string())),
+            "find" => Ok(RhpType::Future(Box::new(RhpType::Class("ModelRecord".to_string())))),
+            "select" | "query" => Ok(RhpType::Future(Box::new(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))))),
+            "insert" | "update" | "delete" => Ok(RhpType::Future(Box::new(RhpType::Int))),
+            _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
+        },
         "Log" => Ok(RhpType::Void),
         "Sys" => match method {
-            "print" | "println" | "echo" | "dd" => Ok(RhpType::Void),
+            "print" | "echo" | "dd" | "dump" => Ok(RhpType::Void),
+            "print_r" => Ok(RhpType::Mixed),
             "env" => Ok(RhpType::Mixed),
             "os" | "version" => Ok(RhpType::String),
             "timestamp" => Ok(RhpType::Int),
@@ -760,6 +801,10 @@ pub fn resolve_builtin_fluent_method(
             }
             "catch" | "catchError" => Some(RhpType::Future(inner.clone())),
             "isCompleted" => Some(RhpType::Bool),
+            "isPending" => Some(RhpType::Bool),
+            "isReady" => Some(RhpType::Bool),
+            "state" | "getState" | "status" => Some(RhpType::String),
+            "poll" => Some(RhpType::Mixed),
             "hasError" => Some(RhpType::Bool),
             "value" => Some((**inner).clone()),
             "error" => Some(RhpType::String),
@@ -779,6 +824,12 @@ pub fn resolve_builtin_fluent_method(
                 "ok" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),
             },
+            "AHTTPClient" => match method {
+                "post" | "get" | "put" | "delete" | "patch" | "request" => {
+                    Some(RhpType::Future(Box::new(RhpType::Class("HTTPResponse".to_string()))))
+                }
+                _ => Some(RhpType::Dynamic),
+            },
             "ImageInstance" => match method {
                 "resize" | "crop" | "rotate" | "watermark" => {
                     Some(RhpType::Class("ImageInstance".to_string()))
@@ -795,6 +846,17 @@ pub fn resolve_builtin_fluent_method(
                 )))),
                 "find" | "first" => Some(RhpType::Dynamic),
                 "count" => Some(RhpType::Int),
+                _ => Some(RhpType::Dynamic),
+            },
+            "ADBQuery" => match method {
+                "where" | "orderBy" | "limit" | "offset" | "select" => {
+                    Some(RhpType::Class("ADBQuery".to_string()))
+                }
+                "get" | "all" => Some(RhpType::Future(Box::new(RhpType::Collection(CollectionSubtype::List(Box::new(
+                    RhpType::Class("ModelRecord".to_string()),
+                )))))),
+                "find" | "first" => Some(RhpType::Future(Box::new(RhpType::Class("ModelRecord".to_string())))),
+                "count" | "insert" | "update" | "delete" => Some(RhpType::Future(Box::new(RhpType::Int))),
                 _ => Some(RhpType::Dynamic),
             },
             "WeakReference" => match method {

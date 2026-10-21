@@ -504,6 +504,22 @@ pub struct VmClosure {
     pub is_static: bool,
 }
 
+/// The execution state of an asynchronous Future, matching Rust's `Poll::Pending` / `Poll::Ready`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FutureState {
+    Pending,
+    Ready,
+}
+
+impl FutureState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FutureState::Pending => "Pending",
+            FutureState::Ready => "Ready",
+        }
+    }
+}
+
 /// Runtime asynchronous Future handle supporting non-blocking background task execution,
 /// sync resolution, timers, parallel joins, and races.
 #[derive(Clone)]
@@ -540,6 +556,25 @@ impl VmFuture {
             error: None,
             receiver: Some(Arc::new(Mutex::new(receiver))),
         }
+    }
+
+    /// Return the current state of this future (`FutureState::Pending` or `FutureState::Ready`).
+    pub fn state(&mut self) -> FutureState {
+        if self.poll_completion() {
+            FutureState::Ready
+        } else {
+            FutureState::Pending
+        }
+    }
+
+    /// Check if this future is still in the pending state without blocking.
+    pub fn is_pending(&mut self) -> bool {
+        !self.poll_completion()
+    }
+
+    /// Check if this future has reached the ready/completed state without blocking.
+    pub fn is_ready(&mut self) -> bool {
+        self.poll_completion()
     }
 
     /// Check if background execution has completed without blocking.
@@ -922,6 +957,106 @@ impl PhpValue {
             Self::Object(obj) => format!("class@{}", obj.borrow().class_name),
             Self::Closure(c) => format!("Closure({})", c.name),
             Self::Future(_) => "Future".to_string(),
+            Self::Resource(_) => "Resource".to_string(),
+        }
+    }
+
+    /// Recursively formats this value matching standard PHP `print_r` semantics.
+    pub fn to_print_r(&self) -> String {
+        self.format_print_r(0)
+    }
+
+    fn format_print_r(&self, indent: usize) -> String {
+        if indent > 32 {
+            return "*RECURSION*".to_string();
+        }
+        let pad = "    ".repeat(indent);
+        let inner_pad = "    ".repeat(indent + 1);
+        match self {
+            Self::Null => String::new(),
+            Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
+            Self::Int(n) => n.to_string(),
+            Self::Float(fl) => fl.to_string(),
+            Self::RustInt { value, .. } => value.to_string(),
+            Self::RustFloat { value, .. } => value.to_string(),
+            Self::String(s) => s.to_string(),
+            Self::Array(arr) => {
+                let borrowed = arr.borrow();
+                if borrowed.is_empty() {
+                    return "Array\n(\n)".to_string();
+                }
+                let mut out = String::from("Array\n") + &pad + "(\n";
+                for (idx, val) in borrowed.iter().enumerate() {
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, idx, val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::Dict(dict) => {
+                let borrowed = dict.borrow();
+                if borrowed.is_empty() {
+                    return "Array\n(\n)".to_string();
+                }
+                let mut out = String::from("Array\n") + &pad + "(\n";
+                for (k, val) in borrowed.iter() {
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, k, val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::List(list) => {
+                let borrowed = list.borrow();
+                if borrowed.is_empty() {
+                    return "Arr::list\n(\n)".to_string();
+                }
+                let mut out = String::from("Arr::list\n") + &pad + "(\n";
+                for (idx, val) in borrowed.iter().enumerate() {
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, idx, val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::HashMap(hm) => {
+                let borrowed = hm.borrow();
+                if borrowed.is_empty() {
+                    return "Arr::hashMap\n(\n)".to_string();
+                }
+                let mut out = String::from("Arr::hashMap\n") + &pad + "(\n";
+                for (k, val) in borrowed.iter() {
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, k.to_php_string(), val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::Set(set) => {
+                let borrowed = set.borrow();
+                if borrowed.is_empty() {
+                    return "Arr::set\n(\n)".to_string();
+                }
+                let mut out = String::from("Arr::set\n") + &pad + "(\n";
+                for val in borrowed.iter() {
+                    out.push_str(&format!("{}{}\n", inner_pad, val.to_php_string()));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::Object(obj) => {
+                let borrowed = obj.borrow();
+                let mut out = format!("{} Object\n{}(\n", borrowed.class_name, pad);
+                for (k, val) in &borrowed.properties {
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, k, val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::Closure(c) => format!("Closure({})", c.name),
+            Self::Future(fut) => format!("Future(completed={})", fut.borrow().is_completed),
             Self::Resource(_) => "Resource".to_string(),
         }
     }

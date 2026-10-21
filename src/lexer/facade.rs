@@ -101,7 +101,15 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "Session",
-        "Session state management facade across requests (get, put, has, forget)",
+        "Session state management facade across requests (get, set, put, has, all, forget, clear)",
+    ),
+    FacadeInfo::native(
+        "Cookie",
+        "HTTP cookie management facade (get, set, put, has, all, forget, clear)",
+    ),
+    FacadeInfo::native(
+        "Request",
+        "HTTP request inspection, input parameters, and type formatting facade (get, all, only, has, set, format, merge, clear)",
     ),
     FacadeInfo::native(
         "Image",
@@ -116,12 +124,24 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Centralized database pool query facade (table, find, select, insert, update, delete)",
     ),
     FacadeInfo::native(
+        "ADB",
+        "Asynchronous database query and connection pool operations running on Rust Tokio (table, query, select, insert, update, delete, find, raw)",
+    ),
+    FacadeInfo::native(
+        "AFile",
+        "Asynchronous non-blocking file I/O operations running on Rust Tokio (read, write, exists, delete, append, size)",
+    ),
+    FacadeInfo::native(
+        "AHTTP",
+        "Asynchronous non-blocking HTTP client running on Rust Tokio (get, post, put, delete, patch, request, withHeaders)",
+    ),
+    FacadeInfo::native(
         "Log",
         "Non-blocking centralized logging facade (info, error, debug, warn, channel)",
     ),
     FacadeInfo::native(
         "Sys",
-        "System environment, output, and debugging intrinsics facade (env, echo, print, println, dd, os, version, timestamp)",
+        "System environment, output, and debugging intrinsics facade (env, echo, print, dd, os, version, timestamp)",
     ),
     FacadeInfo::native(
         "Glob",
@@ -154,10 +174,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
-/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`).
-pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "println", "echo", "dd"];
+/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`, `Sys::print_r()`, `Sys::dump()`).
+pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "println", "echo", "dd", "print_r", "var_dump", "dump"];
 
-/// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`).
+/// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`, `print_r`, `var_dump`, `dump`).
 #[inline]
 pub fn is_reserved_intrinsic(name: &str) -> bool {
     RESERVED_INTRINSICS.contains(&name)
@@ -411,14 +431,20 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     LegacyPhpFunctionMapping {
         php_name: "var_dump",
         rhp_facade: "Sys",
-        rhp_method: "dd",
-        rhp_signature: "Sys::dd(mixed ...$vars): void",
+        rhp_method: "dump",
+        rhp_signature: "Sys::dump(mixed ...$vars): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "dump",
+        rhp_facade: "Sys",
+        rhp_method: "dump",
+        rhp_signature: "Sys::dump(mixed ...$vars): void",
     },
     LegacyPhpFunctionMapping {
         php_name: "print_r",
         rhp_facade: "Sys",
-        rhp_method: "print",
-        rhp_signature: "Sys::print(mixed $value): void",
+        rhp_method: "print_r",
+        rhp_signature: "Sys::print_r(mixed $value, bool $return = false): mixed",
     },
     LegacyPhpFunctionMapping {
         php_name: "get_class",
@@ -559,6 +585,14 @@ impl FacadeRegistry {
             "future" => "Future",
             "log" => "Log",
             "db" => "DB",
+            "adb" => "ADB",
+            "file" => "File",
+            "afile" => "AFile",
+            "http" => "HTTP",
+            "ahttp" => "AHTTP",
+            "session" => "Session",
+            "cookie" => "Cookie",
+            "request" => "Request",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -608,7 +642,8 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
-            | "file" | "http" | "sys" | "glob" | "session" | "image" | "url" | "phpfun"
+            | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
+            | "adb" | "afile" | "ahttp"
     )
 }
 

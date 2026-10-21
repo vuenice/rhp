@@ -18,6 +18,8 @@ fn print_help() {
             "    rhp run lint [PATH] [OPTIONS]    Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
             "    rhp --version                    Display version information\n",
             "    rhp --help                       Display this help message\n\n",
+            "COMPANION TOOLS:\n",
+            "    rhp-play                         Launch the interactive desktop RHP Playground GUI\n\n",
             "OPTIONS for 'serve':\n",
             "    --port <PORT>, -p <PORT>         Port to listen on (defaults to 8000)\n",
             "    --host <HOST>                    Host to bind (defaults to 127.0.0.1)\n\n",
@@ -34,6 +36,12 @@ fn print_help() {
 
 fn print_version() {
     println!("rhp {}", env!("CARGO_PKG_VERSION"));
+}
+
+fn print_playground_hint() {
+    eprintln!("RHP Playground is available as a dedicated binary: 'rhp-play'.");
+    eprintln!("Run 'rhp-play' to launch the interactive GUI playground.");
+    process::exit(1);
 }
 
 fn main() {
@@ -53,6 +61,9 @@ fn main() {
             print_help();
             process::exit(0);
         }
+        "playground" | "play" | "ui" | "gui" => {
+            print_playground_hint();
+        }
         "serve" => {
             handle_serve(&args[2..]);
         }
@@ -68,6 +79,9 @@ fn main() {
                 process::exit(1);
             }
             match args[2].as_str() {
+                "playground" | "play" | "ui" | "gui" => {
+                    print_playground_hint();
+                }
                 "lint" => {
                     handle_run_lint(&args[3..]);
                 }

@@ -2,6 +2,8 @@ use crate::ast::{
     expr::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
     stmt::{ClassMemberKind, FunctionDecl, MethodDecl, Stmt, StmtKind},
     types::{CastType, TypeHint},
+    visitor::{walk_expr, walk_stmt, AstVisitor},
+    Program,
 };
 use crate::lint::autotype::classify_array_literal;
 use crate::lint::reporter::{Issue, IssueLevel};
@@ -37,7 +39,10 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
     // 2. Static boundary signatures & typed declaration verification
     collect_declaration_diagnostics(&program.statements, file_name, &mut issues);
 
-    // 3. Medium/Gradual Type Checker pass
+    // 3. Deprecated direct superglobals check ($_GET, $_POST, $_SESSION, $_COOKIE)
+    collect_deprecated_superglobals(&program, file_name, &mut issues);
+
+    // 4. Medium/Gradual Type Checker pass
     match check_program(&program) {
         Ok(_) => {}
         Err(type_err) => {
@@ -474,3 +479,68 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "non-singleton-extends-singleton-forbidden",
     }
 }
+
+struct DeprecatedSuperglobalsVisitor<'a> {
+    file_name: &'a str,
+    issues: &'a mut Vec<Issue>,
+}
+
+impl<'s, 'a> AstVisitor<'s> for DeprecatedSuperglobalsVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &Stmt<'s>) {
+        if let StmtKind::Global(vars) = &stmt.kind {
+            for var in vars {
+                if let Some(msg) = deprecated_superglobal_message(var.name) {
+                    self.issues.push(Issue::new(
+                        IssueLevel::Warning,
+                        "deprecated-superglobal",
+                        msg,
+                        self.file_name,
+                        var.span.line,
+                        var.span.col,
+                        var.span.start,
+                        var.span.end,
+                    ));
+                }
+            }
+        }
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        if let ExprKind::Variable(var) = &expr.kind {
+            if let Some(msg) = deprecated_superglobal_message(var.name) {
+                self.issues.push(Issue::new(
+                    IssueLevel::Warning,
+                    "deprecated-superglobal",
+                    msg,
+                    self.file_name,
+                    var.span.line,
+                    var.span.col,
+                    var.span.start,
+                    var.span.end,
+                ));
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
+fn deprecated_superglobal_message(name: &str) -> Option<String> {
+    match name {
+        "$_GET" | "_GET" => Some("Direct use of '$_GET' is discouraged in RHP. Use 'Request::get()' instead.".to_string()),
+        "$_POST" | "_POST" => Some("Direct use of '$_POST' is discouraged in RHP. Use 'Request::get()' instead.".to_string()),
+        "$_SESSION" | "_SESSION" => Some("Direct use of '$_SESSION' is discouraged in RHP. Use 'Session::get()' / 'Session::set()' instead.".to_string()),
+        "$_COOKIE" | "_COOKIE" => Some("Direct use of '$_COOKIE' is discouraged in RHP. Use 'Cookie::get()' / 'Cookie::set()' instead.".to_string()),
+        _ => None,
+    }
+}
+
+fn collect_deprecated_superglobals<'s>(
+    program: &Program<'s>,
+    file_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let mut visitor = DeprecatedSuperglobalsVisitor { file_name, issues };
+    visitor.visit_program(program);
+}
+

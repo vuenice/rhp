@@ -183,6 +183,8 @@ pub struct WorkerRequest {
     pub headers: IndexMap<String, String>,
     /// Request-local global variables injected into VM global scope.
     pub globals: HashMap<String, FrozenValue>,
+    /// Session parameters.
+    pub session: IndexMap<String, FrozenValue>,
 }
 
 impl WorkerRequest {
@@ -197,6 +199,7 @@ impl WorkerRequest {
             cookies: IndexMap::new(),
             headers: IndexMap::new(),
             globals: HashMap::new(),
+            session: IndexMap::new(),
         }
     }
 
@@ -214,6 +217,7 @@ impl WorkerRequest {
             cookies: IndexMap::new(),
             headers: IndexMap::new(),
             globals: HashMap::new(),
+            session: IndexMap::new(),
         }
     }
 
@@ -256,6 +260,12 @@ impl WorkerRequest {
     /// Add a custom request-local global variable.
     pub fn with_global(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
         self.globals.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add a session parameter.
+    pub fn with_session(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
+        self.session.insert(key.into(), value.into());
         self
     }
 }
@@ -889,6 +899,7 @@ fn execute_isolated_request_inner(
 
             // Inject superglobals and request-local context
             inject_superglobals(&mut vm, request);
+            setup_request_context(request);
 
             // Execute request inside an isolated local execution fiber
             let fiber_name = format!("worker_{}_fiber_{}", worker_id, request.id);
@@ -956,6 +967,7 @@ fn execute_isolated_request_inner(
         WorkerPayload::Call { func_name, args } => {
             let mut vm = state.create_worker_vm();
             inject_superglobals(&mut vm, request);
+            setup_request_context(request);
 
             let php_args: Vec<PhpValue> = args.iter().map(|a| a.to_php_value()).collect();
 
@@ -1069,6 +1081,31 @@ fn inject_superglobals(vm: &mut VM, request: &WorkerRequest) {
         vm.set_global(bare, val.clone());
         vm.set_global(sigil, val);
     }
+}
+
+/// Setup Request, Cookie, and Session facade context for the incoming request.
+/// All request values are converted to string values by default!
+fn setup_request_context(request: &WorkerRequest) {
+    let mut req_params = IndexMap::new();
+    for (k, v) in &request.get_params {
+        req_params.insert(k.clone(), PhpValue::string(v.to_php_value().to_php_string()));
+    }
+    for (k, v) in &request.post_params {
+        req_params.insert(k.clone(), PhpValue::string(v.to_php_value().to_php_string()));
+    }
+    crate::vm::facade::init_request_params(req_params);
+
+    let mut cookie_map = IndexMap::new();
+    for (k, v) in &request.cookies {
+        cookie_map.insert(k.clone(), PhpValue::string(v.clone()));
+    }
+    crate::vm::facade::init_cookie_data(cookie_map);
+
+    let mut session_map = IndexMap::new();
+    for (k, v) in &request.session {
+        session_map.insert(k.clone(), v.to_php_value());
+    }
+    crate::vm::facade::init_session_data(session_map);
 }
 
 /// Extract human-readable string message from panic payload.

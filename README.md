@@ -20,6 +20,7 @@ Most applications do not require extreme performance from day one, but businesse
 RHP combines a dynamic, developer-friendly interface with a robust, multi-threaded Rust execution backend.
 
 - **Execution & Tooling Modes:**
+  - **Interactive Desktop Playground (`rhp-play`):** Instant desktop GUI playground with real-time syntax highlighting, multiple workspace/project connection manager, and split-pane execution output.
   - **Development Mode (`rhp run dev`):** Uses a direct tree-walking AST interpreter for sub-millisecond hot-reloading, instant cold starts, and immediate stack traces. Automatically targets `index.rhp` in current working directory (`pwd`) by default, or an explicit file via `--file="/your-path/server.rhp"`.
   - **Production Mode (`rhp run build`):** Lowers code into a register-based Bytecode VM with optional Cranelift JIT compilation, running on a multi-worker Tokio execution pool for maximum throughput. Automatically targets `index.rhp` in `pwd` by default, or an explicit file via `--file="/your-path/server.rhp"`.
   - **Lint & Auto-Format Mode (`rhp run lint`):** Auto-applies standard 4-space indentation, formats operators/braces (inspired by Carthage Mago), automatically infers and adds variable type signatures (`$x = '';` -> `string $x = '';`), runs the static type checker, and outputs diagnostic issues in JSON format.
