@@ -52,6 +52,29 @@ rhp run lint src/ --no-case-change
 
 ---
 
+## Deprecated Superglobals Diagnostics
+
+`rhp run lint` checks for legacy procedural PHP superglobals (`$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`) and flags them with actionable warnings recommending modern facades:
+
+```json
+{
+  "level": "warning",
+  "code": "deprecated-superglobal",
+  "message": "Direct use of '$_GET' is discouraged in RHP. Use 'Request::get()' instead.",
+  "file": "src/Controller.rhp",
+  "line": 12,
+  "column": 15
+}
+```
+
+Replace legacy superglobal access with their static facade equivalents:
+- `$_GET['id']` $\rightarrow$ `Request::get('id')`
+- `$_POST['action']` $\rightarrow$ `Request::get('action')`
+- `$_SESSION['user']` $\rightarrow$ `Session::get('user')`
+- `$_COOKIE['token']` $\rightarrow$ `Cookie::get('token')`
+
+---
+
 ## Machine-Readable JSON Output
 
 In CI/CD environments, export diagnostics directly:
@@ -61,3 +84,4 @@ rhp run lint src/ --check
 ```
 
 Outputs diagnostic arrays formatted for GitHub Actions, GitLab CI, and IDE problem matchers.
+

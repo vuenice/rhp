@@ -42,9 +42,35 @@ To build locally from a cloned repository:
 ```bash
 git clone https://github.com/vuenice/rhp.git
 cd rhp
+
+# Option A: Install directly into ~/.cargo/bin (recommended)
+cargo install --path .
+
+# Option B: Build and symlink debug binary for instant live development
+cargo build
+ln -sf $(pwd)/target/debug/rhp ~/.cargo/bin/rhp
+
+# Option C: Optimized release binary system-wide
 cargo build --release
 sudo cp target/release/rhp /usr/local/bin/
 ```
+
+### Troubleshooting: `rhp: command not found in local`
+
+If `rhp` is installed but running `rhp` in your shell returns `command not found`:
+
+1. Ensure `~/.cargo/bin` is in your shell's `PATH`:
+   ```bash
+   echo $PATH | grep -q "$HOME/.cargo/bin" && echo "In PATH" || echo "Not in PATH"
+   ```
+2. If not present, append it to your shell configuration file (`~/.bashrc`, `~/.zshrc`, or `~/.profile`):
+   ```bash
+   export PATH="$HOME/.cargo/bin:$PATH"
+   ```
+3. Reload your shell:
+   ```bash
+   source ~/.bashrc  # or source ~/.zshrc
+   ```
 
 ---
 

@@ -26,47 +26,107 @@ rhp [COMMAND] [PATH] [OPTIONS]
 
 ## Commands
 
-### `rhp run dev [PATH] [OPTIONS]`
+### `rhp run dev [PATH] [OPTIONS]` (or `rhp dev [PATH]`)
 
-Executes the target script or directory using the direct tree-walking AST interpreter. Automatically defaults to `index.rhp` in the current working directory (`pwd`) if no file is provided.
+Executes the target script, project, or directory using the direct tree-walking AST interpreter with instant sub-millisecond cold start. Automatically defaults to `index.rhp` (or `app.rhp`) in the current working directory (`pwd`) if no path is provided.
 
-- **Primary Use Case:** Daily local development, rapid feedback loops, and unit tests.
-- **Cold Start Latency:** Less than 5 milliseconds.
-- **Hot Reloading:** Watches project files and invalidates in-memory AST cache nodes without restarting server state.
+#### Automatic Web Application Detection
+
+When the target script is a web application (i.e. it uses superglobals `$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST` or renders HTML), `rhp run dev` **automatically launches the interactive HTTP web server** on port **8080** instead of terminating after a single CLI execution:
+
+```text
+=======================================================================
+🚀 RHP Development Server (Dev Mode)
+📡 Listening on: http://127.0.0.1:8080
+📂 Serving application: examples/todo/index.rhp
+⚡ Reactive UI: HTMX + Alpine.js
+⌨️  Press Ctrl+C to terminate the server.
+=======================================================================
+```
+
+#### Usage Examples
 
 ```bash
-# Execute index.rhp in current working directory (default)
+# Start dev server for a web project (e.g., TODO app)
+rhp run dev examples/todo
+
+# Shorthand syntax
+rhp dev examples/todo
+
+# Specify custom port and host
+rhp run dev examples/todo --port 3000 --host 0.0.0.0
+# or short flag:
+rhp dev examples/todo -p 3000
+
+# Inside a project directory (auto-detects index.rhp / app.rhp)
+cd examples/todo
 rhp run dev
 
-# Execute specified file via --file argument
-rhp run dev --file="/your-path/server.rhp"
-# or
-rhp run dev --file="server.rhp"
+# Force one-shot CLI execution (e.g., dump rendered HTML to stdout)
+rhp run dev examples/todo --cli
 
-# Execute single file via positional path
-rhp run dev src/main.rhp
+# Run a standalone CLI script (executes once and outputs to stdout)
+rhp run dev scripts/benchmark.rhp
+```
+
+#### Options for `run dev` & `run build`:
+
+| Option | Shorthand | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `--port <PORT>` | `-p <PORT>` | Port to bind when running as an HTTP server | `8080` |
+| `--host <HOST>` | | Network interface to bind | `127.0.0.1` |
+| `--cli` | | Force one-shot CLI execution even if script is a web app | `false` |
+| `--server` | | Force HTTP web server mode | `false` |
+| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute | `index.rhp` |
+
+---
+
+### `rhp run build [PATH] [OPTIONS]` (or `rhp build [PATH]`)
+
+Compiles source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Register VM with Cranelift JIT compilation enabled.
+
+Like `run dev`, if the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
+
+```text
+=======================================================================
+🚀 RHP Production Server (Build Mode + JIT)
+📡 Listening on: http://127.0.0.1:8080
+📂 Serving application: examples/todo/index.rhp
+⚡ Reactive UI: HTMX + Alpine.js
+⌨️  Press Ctrl+C to terminate the server.
+=======================================================================
+```
+
+```bash
+# Run production web server with JIT
+rhp run build examples/todo
+
+# Shorthand syntax
+rhp build examples/todo
+
+# Production server on custom port
+rhp run build examples/todo --port 8000
+
+# Execute CLI script with JIT compilation
+rhp run build scripts/compute_heavy.rhp
 ```
 
 ---
 
-### `rhp run build [PATH] [OPTIONS]`
+### `rhp serve [PATH] [OPTIONS]`
 
-Lowers source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Tokio VM with Cranelift JIT compilation enabled. Automatically defaults to `index.rhp` in the current working directory (`pwd`) if no file is provided.
-
-- **Primary Use Case:** Production deployments, background workers, and performance benchmarks.
-- **Optimizations:** JIT compiles hot loops directly to machine code (`opt_level: 2`).
+Dedicated command to start the built-in RHP HTTP server for web applications. Routes incoming HTTP requests into isolated zero-bootstrap worker VMs with standard superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`).
 
 ```bash
-# Execute index.rhp in current working directory (default)
-rhp run build
+# Serve application on default port 8080
+rhp serve examples/todo
 
-# Execute specified file via --file argument
-rhp run build --file="/your-path/server.rhp"
-# or
-rhp run build --file="server.rhp"
+# Serve on custom port
+rhp serve examples/todo --port 8080 --host 0.0.0.0
 
-# Execute single file via positional path
-rhp run build src/main.rhp
+# Automatically picks app.rhp or index.rhp in current directory
+cd examples/todo
+rhp serve
 ```
 
 ---

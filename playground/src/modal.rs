@@ -243,7 +243,7 @@ impl CreateModal {
                             name: app_name,
                             project_path: self.project_path.clone(),
                             rhp_path: self.rhp_path.clone(),
-                            code: "<?php\n\necho \"Connected to RHP environment!\\n\";\n".to_string(),
+                            code: "echo \"Connected to RHP environment!\\n\";\n".to_string(),
                             output: String::new(),
                             color_idx: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() % 4) as usize,
                         };

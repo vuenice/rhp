@@ -11,11 +11,11 @@ Built 100% in **pure Rust** with **`eframe` / `egui`**, **`syntect`**, **`tokio`
 ```
 +----+--------------------------------+--------------------------------+
 |    |  LEFT PANEL: CODE EDITOR       |  RIGHT PANEL: OUTPUT           |
-| [+]|  1 <?php                       |  1 Array                       |
-|    |  2                             |  2 (                           |
-| [L]|  3 collect([                   |  3     [name] => TweakPHP      |
-|    |  4     "name" => "TweakPHP",   |  4     [link] => ...           |
-| [V]|  5 ]);                         |  5 )                           |
+| [+]|  1 $data = [                   |  1 Array                       |
+|    |  2     "name" => "RHP",        |  2 (                           |
+| [L]|  3 ];                          |  3     [name] => RHP           |
+|    |  4                             |  4 )                           |
+| [V]|  5 print_r($data);             |                                |
 |    |                                |                                |
 |    |             [ ▶ Run (Ctrl+↵) ] |                                |
 +----+--------------------------------+--------------------------------+

@@ -16,7 +16,7 @@ impl<'a> EditorPanel<'a> {
                 ui.style(),
                 &code_theme,
                 text,
-                "php",
+                "PHP Source",
             );
             ui.fonts(|f| f.layout_job(layout_job))
         };
@@ -92,6 +92,8 @@ impl<'a> EditorPanel<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_scroll_area_gutter_calculation() {
         let ctx = egui::Context::default();
@@ -144,5 +146,20 @@ mod tests {
                 assert_eq!(te.galley.rows.len(), 6);
             });
         });
+    }
+
+    #[test]
+    fn test_egui_extras_highlight_php_source() {
+        let ctx = egui::Context::default();
+        let code_theme = CodeTheme::dark(13.0);
+        let code = "$data = [ \"name\" => \"RHP Playground\" ];\nprint_r($data);\n";
+        let layout_job = egui_extras::syntax_highlighting::highlight(
+            &ctx,
+            &egui::Style::default(),
+            &code_theme,
+            code,
+            "PHP Source",
+        );
+        assert!(layout_job.sections.len() > 10);
     }
 }

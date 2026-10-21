@@ -42,6 +42,52 @@ bool $isProduction = true;
 
 ---
 
+## Variable Declarations (Prefix Type Syntax)
+
+RHP supports statically locked variable declarations using **prefix type notation**:
+
+```php
+int $x = 10;
+string $name = "Alice";
+float $rate = 0.05;
+bool $isActive = true;
+int $uninitialized; // Uninitialized typed declaration
+```
+
+> [!IMPORTANT]
+> **No Colon Type Syntax (`$x: int = 10;`):**
+> RHP **only** supports prefix type declarations (`int $x = 10;`). TypeScript/Hack-style colon declarations (`$x: int = 10;` or `$x: int;`) are strictly forbidden and trigger a compile-time parse error:
+> ```text
+> ParseError: Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+> ```
+> This rule applies uniformly across local variables, class properties (`public int $id = 1;`), and parameter lists (`function calc(int $id)`).
+
+---
+
+## Type Conversion & Casting (Functional Syntax)
+
+Type conversions in RHP use function-style conversion syntax rather than C-style or PHP-style parenthesized casts:
+
+```php
+$raw = "42";
+
+// Supported: functional type conversions
+$count = int($raw);        // 42 (int)
+$text  = string(123);      // "123" (string)
+$pi    = float("3.14159"); // 3.14159 (float)
+$flag  = bool(1);          // true (bool)
+```
+
+> [!WARNING]
+> **C-Style / PHP-Style Casts (`(int)$x`) Are Not Supported:**
+> Parenthesized type casting like `(int)$x`, `(string)$x`, `(float)$x`, or `(bool)$x` is rejected by the parser with a clear diagnostic:
+> ```text
+> ParseError: Type cast syntax '(int)' is not supported in RHP. Use functional conversion 'int(...)' instead (e.g. 'int($x)').
+> ```
+> This guarantees consistent, unambiguous expression parsing and aligns scalar casting with functional conversions.
+
+---
+
 ## Native Rust Numeric Types & Fluent APIs
 
 For low-level system operations, cryptography, and large data structures, RHP provides fluent static wrappers for native Rust numeric types:

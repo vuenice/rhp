@@ -293,6 +293,9 @@ fn test_cli_run_dev_web_app_starts_server_with_port() {
     )
     .expect("Failed to write app.rhp");
 
+    let test_port = 18000 + (std::process::id() % 10000) as u16;
+    let port_str = test_port.to_string();
+
     let exe_path = env!("CARGO_BIN_EXE_rhp");
 
     let mut child = Command::new(exe_path)
@@ -300,7 +303,7 @@ fn test_cli_run_dev_web_app_starts_server_with_port() {
         .arg("dev")
         .arg(&temp_dir)
         .arg("--port")
-        .arg("9876")
+        .arg(&port_str)
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn rhp binary");
@@ -331,8 +334,9 @@ fn test_cli_run_dev_web_app_starts_server_with_port() {
         combined
     );
     assert!(
-        combined.contains("Listening on: http://127.0.0.1:9876"),
-        "Banner should show listening port 9876: {}",
+        combined.contains(&format!("Listening on: http://127.0.0.1:{}", test_port)),
+        "Banner should show listening port {}: {}",
+        test_port,
         combined
     );
 

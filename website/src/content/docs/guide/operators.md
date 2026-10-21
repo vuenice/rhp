@@ -80,3 +80,19 @@ string $first = "Fast";
 string $second = "Backend";
 string $full = $first . " " . $second;
 ```
+
+---
+
+## Type Conversion (Functional Syntax, No `(type)` Casts)
+
+In RHP, type conversion is not performed using C-style or PHP-style prefix cast operators like `(int)$x` or `(string)$x`. Instead, use functional conversion syntax:
+
+```php
+int $numericId  = int($request->get('id'));
+string $textVal = string(12345);
+float $amount   = float("49.99");
+bool $isEnabled = bool($config->get('active'));
+```
+
+> [!NOTE]
+> Attempting to use parenthesized casts like `(int)$val` or `(string)$val` triggers a compile-time `ParseError`. Always use `int(...)`, `string(...)`, `float(...)`, or `bool(...)`.

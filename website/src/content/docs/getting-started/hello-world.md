@@ -74,6 +74,33 @@ rhp run build hello.rhp
 
 ---
 
+## Running Interactive Web Applications (HTMX & Alpine.js)
+
+When building web applications with interactive frontends and HTTP routing, RHP automatically starts an HTTP web server on port **8080**:
+
+```bash
+# Run the built-in reactive TODO example app
+rhp run dev examples/todo
+
+# Or using the dev shorthand
+rhp dev examples/todo
+```
+
+Terminal output:
+```text
+=======================================================================
+🚀 RHP Development Server (Dev Mode)
+📡 Listening on: http://127.0.0.1:8080
+📂 Serving application: examples/todo/index.rhp
+⚡ Reactive UI: HTMX + Alpine.js
+⌨️  Press Ctrl+C to terminate the server.
+=======================================================================
+```
+
+Open **[http://localhost:8080](http://localhost:8080)** in your browser to interact with the application.
+
+---
+
 ## Auto-Formatting and Linting
 
 RHP includes a built-in code formatter and type annotator inspired by Carthage Software Mago:

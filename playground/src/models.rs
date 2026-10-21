@@ -26,9 +26,7 @@ impl AppItem {
 }
 
 pub fn default_standalone_code() -> String {
-    r#"<?php
-
-$data = [
+    r#"$data = [
     "name" => "RHP Playground",
     "mode" => "Standalone",
     "description" => "Easily run and test PHP & RHP code instantly",
@@ -121,5 +119,18 @@ mod tests {
             color_idx: 2,
         };
         assert!(!is_demo_connection(&user_app));
+    }
+
+    #[test]
+    fn test_default_standalone_code() {
+        let code = default_standalone_code();
+        assert!(!code.contains("<?php"), "RHP code does not need <?php");
+        assert!(!code.starts_with("<?"));
+
+        // Verify it runs cleanly in RHP VM
+        let result = rhp::vm::run_source_with_vm_and_jit(&code, false);
+        assert!(result.is_ok(), "Default standalone code must execute successfully");
+        let (vm, _) = result.unwrap();
+        assert!(vm.output().contains("RHP Playground"));
     }
 }

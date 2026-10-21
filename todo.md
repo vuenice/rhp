@@ -19,6 +19,21 @@ This document outlines the engineering roadmap and architectural improvements fo
     ```
   - Disallow automatic implicit type coercion or promotion from `Arr::list` to `dict` during key assignment unless using the generic permissive parent `array` type.
 
+- [x] **Prefix Variable Type Declarations Only (`int $x = 10;`):**
+  - Typed variable declarations support **prefix syntax only**: `int $x = 10;`, `string $name = "Alice";`, `float $pi = 3.14;`, `bool $flag = true;`, or `int $x;`.
+  - Colon-based type declarations (`$x: int = 10;` or `$x: int;`) are **explicitly disallowed** and produce a compile-time parse error:
+    ```text
+    Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+    ```
+  - Applies consistently across local variables, class properties (`public int $x = 1;`), and parameter lists (`function foo(int $x)`).
+
+- [x] **Functional Type Conversions Only (`int($x)`, `string($x)`):**
+  - Type conversions must use functional conversion syntax: `int($x)`, `string($x)`, `float($x)`, `bool($x)`.
+  - C-style / PHP-style casts (`(int)$x`, `(string)$x`, `(float)$x`, `(bool)$x`) are **not supported** and produce a compile-time parse error:
+    ```text
+    Type cast syntax '(int)' is not supported in RHP. Use functional conversion 'int(...)' instead (e.g. 'int($x)').
+    ```
+
 ---
 
 ## 2. Phase-by-Phase Implementation Roadmap

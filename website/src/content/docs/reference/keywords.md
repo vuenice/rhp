@@ -41,6 +41,22 @@ iterable    object      never       null
 | `$this` | Class instances | Reference to current instance |
 | `self` | Class scope | Reference to enclosing class definition |
 | `parent` | Subclasses | Reference to parent class implementation |
-| `$_GET` | Web requests | Request query parameters dictionary |
-| `$_POST` | Web requests | Request body payload dictionary |
 | `$_SERVER` | Web requests | Server environment parameters dictionary |
+| `$_GET` | **Deprecated** | Use `Request::get()` instead |
+| `$_POST` | **Deprecated** | Use `Request::get()` instead |
+| `$_SESSION` | **Deprecated** | Use `Session::get()` / `Session::set()` instead |
+| `$_COOKIE` | **Deprecated** | Use `Cookie::get()` / `Cookie::set()` instead |
+
+> **Note on Superglobals in RHP:**
+> Direct use of `$_GET`, `$_POST`, `$_SESSION`, and `$_COOKIE` is deprecated. RHP provides modern, type-safe static facades (`Request`, `Session`, and `Cookie`). The `rhp run lint` command reports `deprecated-superglobal` warnings when legacy superglobals are used.
+
+---
+
+## Explicitly Disallowed Keywords: `await`
+
+RHP deliberately rejects the **`await`** keyword to eliminate function coloring across codebases.
+
+| Keyword | Status | Compiler Diagnostic | Recommended Alternative |
+| :--- | :--- | :--- | :--- |
+| `await` | **Rejected** (Compile Error) | *"The 'await' keyword is not supported in RHP. Use synchronous facades (File, DB, HTTP) to get results synchronously, or call '->wait()' on Future objects."* | Use synchronous facades (`File`, `DB`, `HTTP`) or call `$future->wait()` |
+

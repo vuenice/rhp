@@ -56,3 +56,44 @@ By eliminating reference variables and enforcing immutable collections with Copy
 RHP officially supports both:
 - `.rhp`: Standard extension for modern RHP projects.
 - `.php`: Supported for drop-in migration workflows and editor compatibility.
+
+---
+
+## How do typed variable declarations and type casting work in RHP?
+
+Unlike TypeScript, Hack, or legacy PHP, RHP enforces **prefix type declarations** matching C/Rust conventions:
+```php
+int $x = 10;          // Supported prefix syntax
+$x: int = 10;         // Rejected: ParseError (colon syntax not supported)
+```
+
+Similarly, RHP replaces legacy PHP / C-style parenthesized casts with **functional conversions**:
+```php
+$id = int($raw);      // Supported functional syntax
+$id = (int)$raw;      // Rejected: ParseError (parenthesized cast not supported)
+$str = string($id);   // Supported functional syntax
+```
+
+Both rules ensure consistent parsing, avoid grammar ambiguities with grouping parentheses and object instantiation, and provide immediate, helpful compiler diagnostics if old syntax is encountered.
+
+---
+
+## Why are `$_GET`, `$_POST`, `$_SESSION`, and `$_COOKIE` deprecated, and how do I handle requests?
+
+Traditional PHP superglobals are mutable global arrays that lead to state pollution across requests in multi-threaded worker pools and lack type contracts.
+
+In RHP:
+1. **Static Facades:** Use `Request::get()`, `Request::all()`, `Request::only()`, `Session::get()` / `Session::set()`, and `Cookie::get()` / `Cookie::set()`.
+2. **Default String Values:** All query and body request values are strings by default.
+3. **In-Place Type Formatting:** Use `Request::format()` to validate and convert parameter types on the request object:
+   ```php
+   Request::format([
+       'page' => 'int',
+       'active' => bool,
+   ]);
+
+   int $page = Request::get('page');     // 1
+   bool $active = Request::get('active'); // true
+   ```
+4. **Parser Disambiguation:** Both quoted strings (`'int'`, `'bool'`) and bare type keywords (`int`, `bool`) are supported in `Request::format()`. The parser deterministically resolves bare keywords in expression positions without ambiguity against statement-level typed variable declarations (`int $x = 10;`).
+

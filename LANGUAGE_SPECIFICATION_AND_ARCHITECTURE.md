@@ -58,6 +58,19 @@
   $arr = ['name' => 'yogesh']; // Supported via permissive parent array type
   ```
 - **Strict Type Bounds vs. Dynamic Variables:** While dynamic flexibility applies to untyped and generic `array`-hinted variables, once a variable or parameter is explicitly type-hinted with a strict collection subtype (like `list $arr` or `dict $arr`) or a primitive scalar (like `int $x`), RHP enforces strict type boundaries and throws a Rust-style value/type error if assigned an incompatible type.
+- **Variable Declarations — Prefix Syntax Only (`int $x = 10;`):**
+  - Typed variable declarations require prefix type notation: `int $x = 10;`, `string $name = "Alice";`, `float $rate = 0.05;`, `bool $flag = true;`, or uninitialized `int $x;`.
+  - Colon-based type declarations (`$x: int = 10;` or `$x: int;`) are **strictly unsupported** and produce a compile-time parse error:
+    ```text
+    ParseError: Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+    ```
+  - This rule applies consistently to local variables, class properties (`public int $id = 1;`), and formal function/method parameters (`function compute(int $val)`).
+- **Type Conversion — Functional Syntax Only (`int($x)`, `string($x)`):**
+  - Type conversions must use functional syntax: `int($x)`, `string($x)`, `float($x)`, `bool($x)`.
+  - C-style and PHP-style parenthesized casts (`(int)$x`, `(string)$x`, `(float)$x`, `(bool)$x`) are **strictly unsupported** and produce an informative compile-time parse error:
+    ```text
+    ParseError: Type cast syntax '(int)' is not supported in RHP. Use functional conversion 'int(...)' instead (e.g. 'int($x)').
+    ```
 - **Default Integers and Floats:** Default/standard integer and float types use `i32` (`Int` and `Float` wrappers/primitives).
 - **Extended Rust Numeric Types & Fluent APIs:** Developers can also use all other native Rust numeric types in our language (such as `i64`, `f64`, `u32`, etc.). They can be constructed and manipulated fluently via type wrappers, e.g.:
 
@@ -321,9 +334,67 @@ High-level file I/O interface supporting both synchronous fibers and non-blockin
 
 Session state management interface across requests:
 
-- **Key Methods:** `Session::get()`, `Session::put()`, `Session::has()`, `Session::forget()`.
+- **Key Methods:**
+  - `Session::get(?string $key = null, mixed $default = null)`: Reads a session variable, or returns all session data when called without arguments.
+  - `Session::set(string $key, mixed $value)` / `Session::put(...)`: Stores a session variable.
+  - `Session::has(string $key)`: Returns `true` if the session key exists and is non-null.
+  - `Session::all()`: Returns a `dict` containing all active session entries.
+  - `Session::forget(string $key)` / `Session::remove(...)`: Removes a session key.
+  - `Session::clear()` / `Session::flush()`: Clears all session data.
 
-### 6. Image Facade
+### 6. Cookie Facade
+
+HTTP cookie management interface:
+
+- **Key Methods:**
+  - `Cookie::get(?string $key = null, mixed $default = null)`: Reads a cookie value, or returns all cookies when called without arguments.
+  - `Cookie::set(string $key, mixed $value, ...)` / `Cookie::put(...)`: Stores a cookie value (converted to string).
+  - `Cookie::has(string $key)`: Checks whether a cookie is present.
+  - `Cookie::all()`: Returns a `dict` of all active cookies.
+  - `Cookie::forget(string $key)` / `Cookie::delete(...)`: Removes a cookie.
+  - `Cookie::clear()`: Clears all cookies.
+
+### 7. Request Facade & Input Formatting
+
+HTTP request inspection, parameter retrieval, and strict type casting:
+
+- **Key Methods:**
+  - `Request::get(?string $key = null, mixed $default = null)`: Reads a request parameter (query parameter or body payload), or returns all parameters when called without arguments.
+  - `Request::all()`: Returns a `dict` containing all active request parameters.
+  - `Request::only(array|list|...string $keys)`: Filters and extracts only the specified keys. Supports both array lists `Request::only(['user', 'email'])` and variadic arguments `Request::only('user', 'email')`.
+  - `Request::has(string $key)`: Checks if a request parameter exists.
+  - `Request::set(string $key, mixed $value)`: Sets a parameter on the request object.
+  - `Request::merge(array $data)`: Merges an array or dict of parameters into the request object.
+  - `Request::format(array $typeMap)`: Formats and converts request parameters in-place on the request object.
+
+- **Default String Values:**
+  All incoming request values (query string parameters and request bodies) are strings by default. Numeric, boolean, and other raw inputs default to string representation until formatted.
+
+- **Type Formatting with `Request::format`:**
+  To cast and enforce types on the request object, use `Request::format(...)`:
+  ```php
+  // Both quoted string types and bare type keywords are supported:
+  Request::format([
+      'param1' => 'int',
+      'param2' => bool,
+      'rate'   => float,
+      'title'  => string,
+  ]);
+
+  $param1 = Request::get('param1'); // Returns int (e.g. 123)
+  $param2 = Request::get('param2'); // Returns bool (true/false)
+  ```
+
+  **Parser Disambiguation:**
+  The parser does not get confused by bare type keywords (`int`, `bool`, `float`, `string`, etc.) in array values.
+  - Statement-level typed variable declarations (`int $x = 10;`) are disambiguated by checking for a trailing variable token (`$var`).
+  - Function and method signatures (`function foo(int $x): bool`) are delimited by parameter/return delimiters `(` and `:`.
+  - Inside array literals and expression positions, type keywords are parsed as value tokens that resolve directly to their type name string (`"bool"`, `"int"`, etc.), making both `['param2' => bool]` and `['param2' => 'bool']` 100% unambiguous in the grammar.
+
+- **Deprecation of Superglobals:**
+  Direct use of PHP superglobals (`$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`) is strongly discouraged in RHP. Developers must use facade styles (`Request::get()`, `Session::get()`, `Cookie::get()`). The RHP linter (`rhp run lint`) automatically issues a `deprecated-superglobal` warning when legacy superglobals are detected.
+
+### 8. Image Facade
 
 Fluent image manipulation utilities leveraging native underlying graphics libraries:
 
@@ -335,13 +406,13 @@ Image::make('photo.jpg')
     ->save('thumbnail.jpg');
 ```
 
-### 7. URL Facade
+### 9. URL Facade
 
 URL generation, route inspection, and request URL analysis:
 
 - **Key Methods:** `URL::to()`, `URL::route()`, `URL::current()`, `URL::full()`.
 
-### 8. Trace & Telemetry Facades (OpenTelemetry Observability)
+### 10. Trace & Telemetry Facades (OpenTelemetry Observability)
 
 Native Tier 1 static facades providing enterprise-grade, zero-overhead distributed tracing and metrics conforming strictly to the OpenTelemetry specifications and W3C Distributed Tracing standards:
 
@@ -385,12 +456,37 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
   - `Future::any(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns the result of whichever task completes first without requiring an explicit `->wait()` chain.
   - `Future::defer(callable $fn)`: Registers a post-response callback in the request queue executed after the HTTP response payload is flushed to the client (replacing stand-alone `defer()`).
 
+- **Asynchronous Tokio Facades (`AFile`, `AHTTP`, `ADB`):**
+  - Dispatches non-blocking I/O operations directly to background Rust Tokio threads without blocking the current thread or execution.
+  - `AFile`: Asynchronous non-blocking file operations (`read`, `write`, `exists`, `delete`, `append`, `size`).
+  - `AHTTP`: Asynchronous non-blocking HTTP requests (`get`, `post`, `put`, `delete`, `patch`, `withHeaders`).
+  - `ADB`: Asynchronous non-blocking database queries (`table`, `find`, `get`, `select`, `insert`, `update`, `delete`, `query`, `raw`, and fluent `ADBQuery`).
+
+- **Rust-Like `Future` State Model (`Poll::Pending` / `Poll::Ready`):**
+  - Future handles expose internal state matching Rust's `Poll` semantics:
+    - `$future->state` / `$future->getState()`: Returns `"Pending"` or `"Ready"`.
+    - `$future->isPending()`: Returns `true` while the background Tokio task is running.
+    - `$future->isReady()` / `$future->isCompleted()`: Returns `true` once resolved.
+    - `$future->poll()`: Non-blocking probe returning `null` if pending, or the resolved value if ready.
+    - `$future->wait()`: Synchronously awaits completion and returns the resolved value.
+
+- **Strict Elimination of the `await` Keyword (No Function Coloring):**
+  - RHP eliminates function coloring by avoiding the `await` keyword completely.
+  - For synchronous, straightforward blocking execution, developers use `File`, `DB`, and `HTTP`.
+  - For asynchronous execution, developers use `AFile`, `ADB`, `AHTTP`, or `Future::run()`, and synchronize values with `$future->wait()` or `Future::wait([ ... ])`.
+  - Typing `await` triggers a compile error directing developers to synchronous facades or `->wait()`.
+
+- **Formatted Output Intrinsics (`echo` & `print`):**
+  - `echo` / `Sys::echo(...)`: Formatted output without trailing newline.
+  - `print` / `Sys::print(...)`: Formatted output WITH trailing newline (`\n`).
+  - **No `Sys::println`:** There is no function like `Sys::println` in RHP. Only `echo` and `print` exist. Invoking `Sys::println(...)` fails with `UndefinedFacadeMethod`.
+
 #### Concurrent execution using `Future::wait()`:
 
 ```php
 [$user, $posts] = Future::wait([
-    fn() => DB::table('users')->find($id),
-    fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
+    ADB::table('users')->find($id),
+    AHTTP::get("https://api.example.com/posts?user={$id}")->json()
 ]);
 ```
 
@@ -398,8 +494,8 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
 
 ```php
 $fastestResponse = Future::any([
-    fn() => HTTP::get('https://primary-mirror.com/data')->json(),
-    fn() => HTTP::get('https://secondary-mirror.com/data')->json()
+    AHTTP::get('https://primary-mirror.com/data')->json(),
+    AHTTP::get('https://secondary-mirror.com/data')->json()
 ]);
 ```
 
@@ -436,14 +532,18 @@ Future::defer(fn() => Log::info('Request processed successfully'));
 
 ### Overview & Execution Modes Strategy
 
-- **Development Mode (`rhp run dev`):** Direct AST Execution via Tree-Walking Interpreter. Evaluates AST nodes directly in memory using recursive pattern matching without emitting bytecode. Delivers instant cold startup times and sub-millisecond hot reloading.
-- **Production / Build Mode (`rhp run build`):** Register-based Bytecode VM with optional JIT (Cranelift) compilation. Lowers AST into linear IR opcode streams executed within a Tokio multi-worker execution pool for maximum throughput.
+- **Development Mode (`rhp run dev` / `rhp dev`):** Direct AST Execution via Tree-Walking Interpreter. Evaluates AST nodes directly in memory using recursive pattern matching without emitting bytecode. Delivers instant cold startup times and sub-millisecond hot reloading. For web applications (scripts referencing `$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`, or rendering HTML), it automatically launches the interactive HTTP server on port 8080.
+- **Production / Build Mode (`rhp run build` / `rhp build`):** Register-based Bytecode VM with optional JIT (Cranelift) compilation. Lowers AST into linear IR opcode streams executed within a Tokio multi-worker execution pool for maximum throughput. Launches with JIT acceleration for web applications.
+- **Dedicated Web Server Mode (`rhp serve`):** High-performance HTTP server routing requests into zero-bootstrap isolated worker request VMs with superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`).
 - **Entrypoint & Target File Resolution:**
-  - When running `rhp run dev` or `rhp run build` without a file argument, the CLI automatically picks `index.rhp` in the current working directory (`pwd`).
-  - An explicit script file can be passed via the `--file` flag (e.g., `rhp run build --file="/your-path/server.rhp"`), `-f <path>`, or as a positional path argument.
+  - When running `rhp run dev` or `rhp run build` without a file argument, the CLI automatically picks `index.rhp` (or `app.rhp`) in the current working directory (`pwd`).
+  - An explicit script file or project directory can be passed via `--file` (`rhp run dev --file="app.rhp"`), `-f <path>`, or as a positional path argument (`rhp run dev examples/todo`).
+  - Use `--port <PORT>` / `-p <PORT>` to configure the HTTP listening port (default: 8080).
+  - Use `--cli` to force one-shot CLI execution of web scripts instead of launching the server.
 
 ### Developer Experience Framework (`rhp run dev`)
 
+- **Interactive Web Server & Reactive UI:** Auto-launches on port 8080 when running web applications (e.g. `examples/todo`), serving live HTMX and Alpine.js frontends with instant request worker dispatch.
 - **Hot Reloading:** File-watching engine powered by the `notify` crate. Re-parses changed files on the fly via Logos/Pratt parser, invalidating in-memory AST cache nodes without restarting persistent server state.
 - **Exact Stack Traces & Source Maps:** Precise source span tracking (`Span { file_id, start, end, line, col }`) attached directly across AST nodes. Translates runtime errors directly to source file locations without requiring IP-to-bytecode line-table offset translation.
 - **Interactive Debugging (DAP Protocol):** Integrated Debug Adapter Protocol (`dap-rs`) server listening on a configurable port. Execution traps checked via atomic execution flags in the evaluator loop for breakpoints and local environment scope inspection.

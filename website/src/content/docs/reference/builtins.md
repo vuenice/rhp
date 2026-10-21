@@ -11,9 +11,13 @@ To eliminate global namespace pollution while preserving convenient developer sh
 
 | Shorthand Call | Lowered AST Node | Description |
 | :--- | :--- | :--- |
+| `echo("text", ...$args)` | `Sys::echo("text", ...$args)` | Write formatted text to stdout without trailing newline |
+| `print("text", ...$args)` | `Sys::print("text", ...$args)` | Write formatted text to stdout WITH trailing newline (`\n`) |
 | `env('KEY', 'default')` | `Sys::env('KEY', 'default')` | Read system environment variable |
-| `print("text")` | `Sys::print("text")` | Write text to standard output |
 | `dd($val1, $val2)` | `Sys::dd($val1, $val2)` | Dump variables and terminate execution |
+
+> **Note on `Sys::println`:**
+> There is **no** `Sys::println` function in RHP. Only `echo` (inline, no newline) and `print` (with trailing newline) exist in the language and via the `Sys` facade (`Sys::echo` and `Sys::print`).
 
 ---
 
