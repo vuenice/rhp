@@ -86,7 +86,26 @@ $data = $fileFuture->wait();
 
 - **Use `defer()` to execute post-response hooks after the payload has been flushed to the client, ensuring background logging or cleanup tasks never delay user response times.**
 
-### 4. Executing Scripts (`rhp run dev` & `rhp run build`)
+### 4. Interactive Desktop Playground (`rhp-play`)
+
+RHP includes a minimalist, high-performance desktop GUI playground (inspired by TweakPHP) featuring real-time syntax highlighting, local workspace connection management, and split-pane execution output:
+
+```bash
+# Run directly via Cargo:
+cargo run --manifest-path playground/Cargo.toml
+
+# Or from within the playground directory:
+cd playground && cargo run
+
+# Run the pre-compiled binary:
+./playground/target/release/rhp-play
+
+# Or install globally to ~/.cargo/bin:
+cargo install --path playground
+rhp-play
+```
+
+### 5. Executing Scripts (`rhp run dev` & `rhp run build`)
 
 Execute RHP programs in either Development Mode (direct AST interpretation with sub-millisecond startup) or Production Mode (register bytecode VM with Cranelift JIT compilation).
 
@@ -106,7 +125,7 @@ rhp run dev server.rhp
 rhp run build server.rhp
 ```
 
-### 5. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
+### 6. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
 
 Inspired by Carthage Software Mago, `rhp run lint` combines an AST-guided auto-formatter, static type annotator, and boundary type checker into a single command:
 
@@ -140,7 +159,7 @@ rhp run lint [PATH] --no-case-change
   - Preserves already written type annotations without modifying them.
 - **JSON Diagnostic Output:** Reports remaining typecheck violations, casing issues (in `--no-fix` mode), and mismatches in machine-readable JSON format matching Mago's schema.
 
-### 6. Native OpenTelemetry & Distributed Observability (`Trace` / `Telemetry`)
+### 7. Native OpenTelemetry & Distributed Observability (`Trace` / `Telemetry`)
 
 RHP eliminates legacy Zend C APM extensions (`ext-sentry`, `ddtrace`, `newrelic.so`) by embedding a zero-overhead native OpenTelemetry engine directly into the runtime:
 

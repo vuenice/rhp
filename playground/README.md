@@ -50,14 +50,22 @@ Built 100% in **pure Rust** with **`eframe` / `egui`**, **`syntect`**, **`tokio`
 The Playground is built as a dedicated companion binary named **`rhp-play`**:
 
 ### Run with Cargo:
+From root repository:
 ```bash
-cargo run -p rhp-play
+cargo run --manifest-path playground/Cargo.toml
+```
+Or from the `playground/` directory:
+```bash
+cd playground && cargo run
 ```
 
-### Build & Install:
+### Build & Run Binary Directly:
 ```bash
-cargo build --release -p rhp-play
-# Produces: target/release/rhp-play
+# Build release binary (lives in playground/target/)
+cargo build --release --manifest-path playground/Cargo.toml
+
+# Run the compiled binary:
+./playground/target/release/rhp-play
 ```
 
 To install both `rhp` and `rhp-play` to `~/.cargo/bin`:
