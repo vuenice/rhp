@@ -37,20 +37,60 @@ $dict->diff(dict $other): dict;
 
 ---
 
-## `Str` Facade API
+## `Str` Facade & String Instance API
 
 ```php
+// Static Facade Methods & Constructors
 Str::slug(string $text, string $separator = '-'): string;
 Str::contains(string $haystack, string $needle): bool;
 Str::startsWith(string $haystack, string $prefix): bool;
 Str::endsWith(string $haystack, string $suffix): bool;
 Str::upper(string $text): string;
 Str::lower(string $text): string;
-Str::trim(string $text): string;
-Str::fromEncoding(string $bytes, string $encoding): string;
-Str::toEncoding(string $text, string $encoding): string;
-Str::byteLength(string $text): int;
-Str::macro(string $name, callable $closure): void;
+Str::trim(string $text, string $chars = " \t\n\r\0\x0B"): string;
+Str::ltrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
+Str::rtrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
+Str::substr(string $text, int $start, ?int $length = null): string;
+Str::repeat(string $text, int $times): string;
+Str::reverse(string $text): string;
+Str::random(int $length = 16): string;
+Str::join(string $glue, array $pieces): string;
+Str::split(string $delimiter, string $string): list;
+Str::replace(string $search, string $replace, string $subject): string;
+
+// Multi-Byte Encodings & Binary Constructors
+Str::fromEncoding(string|array $bytes, string $encoding): string; // Decodes Shift-JIS, EUC-JP, ISO-2022-JP, UTF-8
+Str::toEncoding(string $text, string $encoding): string;           // Encodes to target encoding raw bytes
+Str::utf8(string|array $input): string;                            // Ensures UTF-8 compliance from raw bytes
+Str::isUtf8(string $text): bool;                                   // Checks if bytes are valid UTF-8
+Str::fromBytes(array|list $bytes): string;                         // Constructs binary string from byte values [0..255]
+Str::bytes(string $text): list;                                    // Returns list of byte integers [0..255]
+Str::byteLength(string $text): int;                                // Returns byte length (binary length)
+Str::encoding(string $text): string;                               // Detects probable encoding
+Str::macro(string $name, callable $closure): void;                 // Registers dynamic macro bound to string instances
+
+// Fluent Immutable Instance Methods ($text->trim()->upper())
+$str->trim(?string $chars = null): string;
+$str->ltrim(?string $chars = null): string;
+$str->rtrim(?string $chars = null): string;
+$str->upper(): string;
+$str->lower(): string;
+$str->slug(): string;
+$str->contains(string $needle): bool;
+$str->startsWith(string $prefix): bool;
+$str->endsWith(string $suffix): bool;
+$str->length(): int;
+$str->byteLength(): int;
+$str->split(string $delimiter): list;
+$str->replace(string $search, string $replace): string;
+$str->substr(int $start, ?int $length = null): string;
+$str->reverse(): string;
+$str->repeat(int $times): string;
+$str->toEncoding(string $encoding): string;
+$str->utf8(): string;
+$str->bytes(): list;
+$str->isUtf8(): bool;
+$str->isEmpty(): bool;
 ```
 
 ---
