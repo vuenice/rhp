@@ -97,3 +97,12 @@ In RHP:
    ```
 4. **Parser Disambiguation:** Both quoted strings (`'int'`, `'bool'`) and bare type keywords (`int`, `bool`) are supported in `Request::format()`. The parser deterministically resolves bare keywords in expression positions without ambiguity against statement-level typed variable declarations (`int $x = 10;`).
 
+---
+
+## How does RHP resolve the script file when running `rhp run dev` or `rhp run build`?
+
+When executing `rhp run dev` or `rhp run build`:
+1. **Default (`pwd`):** If no file is specified, RHP automatically looks for `index.rhp` in the current working directory (`pwd`).
+2. **Explicit `--file` Argument:** If `--file` is provided (e.g. `rhp run build --file="/your-path/server.rhp"` or `rhp run dev --file="server.rhp"`), RHP executes that specific file. The short flag `-f` is also supported.
+3. **Positional Argument:** You can also pass the script path directly as a positional argument (e.g. `rhp run dev server.rhp`).
+

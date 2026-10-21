@@ -90,9 +90,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Modules and Imports",
     section: "Language Guide",
-    description: "Namespaces, use statements, auto-loading, and zero-cost file symbol resolution.",
+    description: "Namespaces, use statements, auto-loading, and importing Rust (.rs) files for high-speed helper classes.",
     url: "/docs/guide/modules-and-imports",
-    keywords: ["modules", "imports", "use", "namespace", "autoload", "require"]
+    keywords: ["modules", "imports", "use", "namespace", "autoload", "require", "rust import", "rs", "cache", "log", "helper classes"]
   },
   {
     title: "Concurrency and Async",
@@ -107,6 +107,13 @@ export const searchIndex: SearchItem[] = [
     description: "Tier 1 native facades: Arr, Str, Future, Memory, File, HTTP, Log, and Sys.",
     url: "/docs/guide/standard-library",
     keywords: ["standard library", "facades", "arr", "str", "future", "memory", "file", "http"]
+  },
+  {
+    title: "Observability & OpenTelemetry",
+    section: "Language Guide",
+    description: "Native OpenTelemetry distributed tracing, W3C traceparent, metrics percentiles, OTLP, and APM bridges.",
+    url: "/docs/guide/observability-opentelemetry",
+    keywords: ["opentelemetry", "otel", "tracing", "spans", "telemetry", "metrics", "otlp", "sentry", "datadog", "traceparent", "baggage", "histograms", "observability"]
   },
 
   // Reference
@@ -134,9 +141,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr, Str, HTTP, File, Memory, and Weak facades.",
+    description: "Full method signatures for Arr, Str, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "arr", "str", "http", "file"]
+    keywords: ["stdlib", "api", "signatures", "methods", "arr", "str", "http", "file", "cache", "log", "tier 2", "rust"]
   },
 
   // Tooling
@@ -180,9 +187,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "FFI and Rust Native Interop",
     section: "Advanced",
-    description: "Authoring native Tier-2 Rust crates and compiling C-ABI shared dynamic libraries.",
+    description: "Direct Rust (.rs) file imports, Tier 2 helper classes, native crates, and C-ABI dynamic libraries.",
     url: "/docs/advanced/ffi-interop",
-    keywords: ["ffi", "rust", "interop", "native", "c abi", "crates", "plugins"]
+    keywords: ["ffi", "rust", "interop", "native", "c abi", "crates", "plugins", "rust file import", "import", "rs", "cache", "log", "helper class"]
   },
   {
     title: "Compiler Internals",

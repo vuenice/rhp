@@ -45,3 +45,34 @@ Expressions are parsed using a custom Pratt parser with top-down operator preced
 | **10** | `? :` | Right-to-left | Ternary operator |
 | **5** | `=`, `+=`, `-=`, `*=`, `/=`, `??=` | Right-to-left | Assignment |
 | **0 (Lowest)** | `fn`, `yield` | Non-associative | Arrow function closure |
+
+---
+
+## Statement Grammar
+
+```ebnf
+Program         ::= Statement*
+
+Statement       ::= NamespaceStmt
+                  | UseStmt
+                  | ImportStmt
+                  | ClassDecl
+                  | FuncDecl
+                  | VariableDecl
+                  | ExprStmt
+                  | ReturnStmt
+                  | IfStmt
+                  | WhileStmt
+                  | ForStmt
+                  | ForeachStmt
+                  | MatchStmt
+
+ImportStmt      ::= "import" String ("as" Ident)? ";"
+                  | "import" Ident "from" String ";"
+                  | "use" String ("as" Ident)? ";"
+
+UseStmt         ::= "use" QualifiedName ("as" Ident)? ";"
+
+VariableDecl    ::= TypeSpecifier VarIdent ("=" Expression)? ";"
+```
+

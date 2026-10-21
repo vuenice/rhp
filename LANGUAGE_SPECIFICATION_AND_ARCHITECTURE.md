@@ -477,8 +477,16 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
   - Typing `await` triggers a compile error directing developers to synchronous facades or `->wait()`.
 
 - **Formatted Output Intrinsics (`echo` & `print`):**
-  - `echo` / `Sys::echo(...)`: Formatted output without trailing newline.
-  - `print` / `Sys::print(...)`: Formatted output WITH trailing newline (`\n`).
+  - `Sys` contains two functions: `echo` and `print`.
+  - `echo` / `Sys::echo(...)`: Compiles directly to Rust `print!()` (prints on the same line without a trailing newline).
+  - `print` / `Sys::print(...)`: Compiles directly to Rust `println!()` (prints WITH a trailing newline `\n`).
+  - **Direct Rust Parameter Compilation:** Format strings compile directly to native Rust formatting functions with function parameters passed as-is.
+  - **No C Language Style Support:** RHP intentionally does **not** support C-style printf format specifiers (`%d`, `%s`, `%f`, `%x`, etc.). All template placeholders use Rust formatting parameters:
+    - `{}`: Value placeholder (`Sys::print("Age: {}, Name: {}", 30, "Bob")`)
+    - `{:.2}`: Floating-point precision (`Sys::print("{:.2}", 3.141592)` -> `3.14`)
+    - `{:05}`: Integer zero padding (`Sys::print("{:05}", 42)` -> `00042`)
+    - `{:x}`: Lowercase hexadecimal (`Sys::print("{:x}", 255)` -> `ff`)
+    - `{:b}`: Binary formatting (`Sys::print("{:b}", 5)` -> `101`)
   - **No `Sys::println`:** There is no function like `Sys::println` in RHP. Only `echo` and `print` exist. Invoking `Sys::println(...)` fails with `UndefinedFacadeMethod`.
 
 #### Concurrent execution using `Future::wait()`:

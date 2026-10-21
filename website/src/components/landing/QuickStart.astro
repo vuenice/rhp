@@ -62,10 +62,10 @@
         Run instantly with the AST development interpreter, or compile to bytecode VM via production mode.
       </p>
       <div class="mt-auto rounded-xl bg-slate-950 p-3.5 border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto">
-        <div class="text-slate-400"># Development mode</div>
-        <div><span class="text-brand-500">$</span> rhp run dev hello.rhp</div>
-        <div class="text-slate-400 mt-1"># Format & typecheck</div>
-        <div><span class="text-brand-500">$</span> rhp run lint hello.rhp</div>
+        <div class="text-slate-400"># Dev mode (auto-picks index.rhp)</div>
+        <div><span class="text-brand-500">$</span> rhp run dev</div>
+        <div class="text-slate-400 mt-1"># Or explicit file</div>
+        <div><span class="text-brand-500">$</span> rhp run dev --file="hello.rhp"</div>
       </div>
     </div>
 

@@ -93,15 +93,42 @@ Arr::macro('toCsv', function ($delimiter = ',') {
 $csv = Arr::list([1, 2, 3])->toCsv();
 ```
 
-### 2. Str Facade
+### 2. Str Facade & Binary-Safe String Architecture
 
-Provides clean, UTF-8-safe string inspection and transformation utilities:
+RHP strings are fundamentally **binary-safe raw byte structures** (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization (SSO) and larger buffers via `Rc<Vec<u8>>`), matching Zend Engine's binary safety while retaining Rust's memory safety:
 
-```php
-$slug = Str::slug('Laravel Style Facades'); // 'laravel-style-facades'
-$token = Str::random(32);
-$hasWord = Str::contains('Runtime engine', 'engine'); // true
-```
+* **Binary Safety:** Safely reads binary files, network streams, images, and raw byte arrays with null bytes (`\0`) without triggering Rust UTF-8 panics.
+* **Legacy Japanese Multi-Byte Support:** Natively accommodates **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** without panics.
+* **Static Constructors & Facades:** Avoids `new Str()` object overhead in favor of static facade factories:
+  ```php
+  // 1. Creating a standard string (treated as raw bytes / UTF-8 safe)
+  $greeting = "こんにちは世界"; // Stored natively as raw UTF-8 bytes in Vec<u8>
+
+  // 2. Explicitly declaring or converting from a specific encoding (e.g., Shift-JIS)
+  $jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
+
+  // 3. Ensuring UTF-8 compliance via explicit facade constructors
+  $safeText = Str::utf8($userInput);
+
+  // 4. Converting back to raw encoding bytes
+  $rawJis = Str::toEncoding($greeting, 'Shift-JIS');
+  ```
+* **Immutable Helpers & Explicit Variable Reassignment:** Consistent with collection rules, string helpers are **immutable by default** (returning a new instance rather than mutating in place). Developers use explicit reassignment, leveraging Copy-On-Write (COW) and pointer semantics:
+  ```php
+  $text = "  hello world  ";
+
+  // Method chaining returns a new instance; original $text is untouched
+  $trimmed = $text->trim()->upper(); 
+
+  // Explicit reassignment to update the variable in place cleanly
+  $text = $text->trim()->upper(); 
+  ```
+
+| Feature | Implementation Strategy | Benefit |
+| :--- | :--- | :--- |
+| **Internal Storage** | `Vec<u8>` with 23-byte SSO inside `PhpValue::String` | Binary safe; handles arbitrary bytes, images, network streams, and legacy Japanese encodings natively. |
+| **Instantiation** | Static facades (`Str::utf8()`, `Str::fromEncoding()`) | Avoids `new Str()` object header overhead; keeps syntax clean and performant. |
+| **Mutations** | Immutable helpers + explicit reassignment (`$str = $str->method()`) | Predictable side-effect-free data manipulation combined with zero-garbage memory replacement. |
 
 ### 3. Asynchronous Execution (`async` / `defer`)
 
@@ -305,12 +332,61 @@ RHP intentionally omits the `await` keyword to eliminate the infectious function
 
 ### 11. Formatted Output Intrinsics (`echo` & `print`)
 
-RHP provides two core output mechanisms with Rust-style template formatting:
-- **`echo` / `Sys::echo(...)`**: Outputs without a trailing newline.
-- **`print` / `Sys::print(...)`**: Outputs WITH a trailing newline (`\n`).
+`Sys` provides two core output functions that compile directly to native Rust `print!` and `println!` routines with function parameters passed as-is:
+- **`echo` / `Sys::echo(...)`**: Compiles directly to Rust `print!()` (outputs on the same line without a trailing newline).
+- **`print` / `Sys::print(...)`**: Compiles directly to Rust `println!()` (outputs WITH a trailing newline `\n`).
+
+Both functions work identically. RHP does **not** support C-language style formatting (`%d`, `%s`, `%f`, etc.). All template strings use native Rust formatting parameters directly:
+
+```php
+// Value placeholders
+Sys::print("Age: {}, Name: {}", 30, "Bob"); // Outputs: Age: 30, Name: Bob\n
+
+// 1. Floating-point precision
+Sys::print("{:.2}", 3.141592); // Outputs: 3.14\n
+
+// 2. Integer padding with zeros
+Sys::print("{:05}", 42); // Outputs: 00042\n
+
+// 3. Hexadecimal lowercase
+Sys::print("{:x}", 255); // Outputs: ff\n
+
+// 4. Binary formatting
+Sys::print("{:b}", 5); // Outputs: 101\n
+
+// Inline output on the same line with Sys::echo
+Sys::echo("Age: {}, Name: {}", 30, "Bob"); // Outputs: Age: 30, Name: Bob (no newline)
+Sys::echo(" [ready]");                     // Outputs:  [ready] (same line)
+```
 
 > **Note on `Sys::println`:**
 > There is **no function like `Sys::println`** in RHP. Only `echo` and `print` exist (both as language constructs and via `Sys::echo` and `Sys::print`). Invocations of `Sys::println(...)` fail with an `UndefinedFacadeMethod` error.
+
+### 12. Direct Rust File Import (`import "./Cache.rs"`) for Helper Classes
+
+To keep the core language syntax minimal and unbloated while providing extreme native performance at the framework and application level, RHP allows importing `.rs` files directly into `.rhp` scripts:
+
+```php
+// Import Rust helper files directly
+import "./Cache.rs";
+import "./Log.rs" as Logger;
+import FastCache from "./Cache.rs";
+use "./Cache.rs";
+
+// Use directly as static Tier 2 helper classes without instantiation
+Cache::set("session_user_10", "Alice", 3600); // Key, Value, TTL (seconds)
+if (Cache::has("session_user_10")) {
+    $user = Cache::get("session_user_10");
+}
+Cache::increment("active_connections", 1);
+
+Logger::info("User session verified", ["user_id" => 10]);
+```
+
+- **Framework-Level Performance:** Helpers like `Cache`, `Log`, `RateLimiter`, or `FastCrypto` do not need to be baked into core language syntax, yet execute with bare-metal Rust speed at the framework level.
+- **AOT Compilation & SHA-256 Caching:** When `rustc` is available, `.rs` files are automatically compiled into native dynamic libraries (`cdylib` / `.so`) with SHA-256 caching in `target/tmp/rhp_cache/`.
+- **Fast In-Process Fallback:** During development or testing without `rustc`, RHP transparently provides an in-process thread-safe native execution engine.
+- **Thread-Safety & Multi-Worker Concurrency:** State stored across worker threads utilizes `FrozenValue` boundaries, ensuring zero data races across multi-threaded Tokio execution pools without GC pauses.
 
 ---
 

@@ -44,28 +44,39 @@ When the target script is a web application (i.e. it uses superglobals `$_SERVER
 =======================================================================
 ```
 
-#### Usage Examples
+#### Entrypoint File Resolution
+
+When running `rhp run dev` or `rhp run build`:
+1. **Default (`pwd`):** If no path or `--file` option is supplied, RHP automatically picks `index.rhp` in the current working directory (`pwd`).
+2. **Explicit `--file` Argument:** If `--file` is supplied (e.g. `--file="/your-path/server.rhp"`), RHP executes that exact script.
+3. **Positional Argument:** Alternatively, pass the path directly as a positional argument (e.g. `rhp run dev server.rhp`).
+
+#### Usage Examples for `run dev`
 
 ```bash
-# Start dev server for a web project (e.g., TODO app)
+# Automatically pick and execute index.rhp in current working directory
+rhp run dev
+
+# Explicitly specify file via --file argument
+rhp run dev --file="/your-path/server.rhp"
+# or relative path:
+rhp run dev --file="server.rhp"
+
+# Start dev server for a web project directory
 rhp run dev examples/todo
 
 # Shorthand syntax
-rhp dev examples/todo
+rhp dev --file="/your-path/server.rhp"
 
 # Specify custom port and host
 rhp run dev examples/todo --port 3000 --host 0.0.0.0
 # or short flag:
 rhp dev examples/todo -p 3000
 
-# Inside a project directory (auto-detects index.rhp / app.rhp)
-cd examples/todo
-rhp run dev
-
 # Force one-shot CLI execution (e.g., dump rendered HTML to stdout)
 rhp run dev examples/todo --cli
 
-# Run a standalone CLI script (executes once and outputs to stdout)
+# Run a standalone CLI script
 rhp run dev scripts/benchmark.rhp
 ```
 
@@ -73,11 +84,11 @@ rhp run dev scripts/benchmark.rhp
 
 | Option | Shorthand | Description | Default |
 | :--- | :--- | :--- | :--- |
+| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute (e.g. `--file="/your-path/server.rhp"`) | `index.rhp` in `pwd` |
 | `--port <PORT>` | `-p <PORT>` | Port to bind when running as an HTTP server | `8080` |
 | `--host <HOST>` | | Network interface to bind | `127.0.0.1` |
 | `--cli` | | Force one-shot CLI execution even if script is a web app | `false` |
 | `--server` | | Force HTTP web server mode | `false` |
-| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute | `index.rhp` |
 
 ---
 
@@ -85,7 +96,7 @@ rhp run dev scripts/benchmark.rhp
 
 Compiles source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Register VM with Cranelift JIT compilation enabled.
 
-Like `run dev`, if the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
+Like `run dev`, it automatically defaults to `index.rhp` in `pwd` unless specified via `--file` or positional argument. If the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
 
 ```text
 =======================================================================
@@ -98,11 +109,19 @@ Like `run dev`, if the target is a web application, it automatically launches th
 ```
 
 ```bash
+# Automatically pick and execute index.rhp in current working directory with JIT
+rhp run build
+
+# Explicitly specify file via --file argument
+rhp run build --file="/your-path/server.rhp"
+# or relative path:
+rhp run build --file="server.rhp"
+
 # Run production web server with JIT
 rhp run build examples/todo
 
 # Shorthand syntax
-rhp build examples/todo
+rhp build --file="/your-path/server.rhp"
 
 # Production server on custom port
 rhp run build examples/todo --port 8000

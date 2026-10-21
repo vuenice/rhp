@@ -200,8 +200,8 @@ Cookie::clear(): void;
 ## `Sys` Facade API
 
 ```php
-Sys::echo(string $format, mixed ...$args): void;  // Formatted output without trailing newline
-Sys::print(string $format, mixed ...$args): void; // Formatted output WITH trailing newline (\n)
+Sys::echo(string $format, mixed ...$args): void;  // Directly compiles to Rust print!() (no trailing newline)
+Sys::print(string $format, mixed ...$args): void; // Directly compiles to Rust println!() (adds trailing \n)
 Sys::env(string $key, mixed $default = null): mixed;
 Sys::os(): string;                               // Host OS name (e.g. "linux")
 Sys::version(): string;                          // RHP engine version
@@ -210,4 +210,95 @@ Sys::dd(mixed ...$vars): void;                   // Dump variables and terminate
 
 // NOTE: There is NO Sys::println function. Only echo and print exist in RHP.
 ```
+
+### Formatting Syntax & Direct Parameter Mapping
+
+Both `Sys::echo` and `Sys::print` directly map to Rust's native `print!` and `println!` routines with function parameters passed as-is. C-style format specifiers (`%d`, `%s`, `%f`, etc.) are **not** supported.
+
+```php
+// Value placeholder
+Sys::print("Age: {}, Name: {}", 30, "Bob"); // Age: 30, Name: Bob\n
+
+// Floating-point precision
+Sys::print("{:.2}", 3.141592);              // 3.14\n
+
+// Integer padding with zeros
+Sys::print("{:05}", 42);                    // 00042\n
+
+// Hexadecimal lowercase
+Sys::print("{:x}", 255);                    // ff\n
+
+// Binary formatting
+Sys::print("{:b}", 5);                      // 101\n
+
+// Inline output on the same line
+Sys::echo("Age: {}, Name: {}", 30, "Bob");  // Age: 30, Name: Bob (same line)
+```
+
+---
+
+## `Trace` & `Telemetry` Facade API (OpenTelemetry)
+
+```php
+// Span Lifecycle
+Trace::startSpan(string $name, ?array $options = null): dict;
+Trace::endSpan(?array $status = null): ?dict;
+Trace::span(string $name, callable $closure, ?array $attributes = null): mixed;
+Trace::setAttribute(string $key, mixed $value): void;
+Trace::addEvent(string $name, ?array $attributes = null): void;
+Trace::recordException(string $type, string $message, ?string $stackTrace = null): void;
+
+// Context & Identifier Inspection
+Trace::traceId(): ?string;          // Active 32-hex character TraceId
+Trace::spanId(): ?string;           // Active 16-hex character SpanId
+Trace::parentSpanId(): ?string;     // Active 16-hex parent SpanId (if any)
+Trace::isRecording(): bool;         // true if active span is recording
+
+// Metrics & Histograms
+Trace::counter(string $name, float $delta = 1.0, ?array $attributes = null): void;
+Trace::gauge(string $name, float $value, ?array $attributes = null): void;
+Trace::histogram(string $name, float $value, ?array $attributes = null): void;
+Trace::metricSummary(string $name): ?dict; // Returns [count, sum, min, max, avg, p50, p90, p95, p99]
+
+// OTLP & APM Exporters
+Trace::exportOtlp(): string;        // Canonical OTLP/HTTP JSON (/v1/traces)
+Trace::exportOtlpMetrics(): string; // Canonical OTLP/HTTP JSON (/v1/metrics)
+Trace::exportSentry(string $type, string $message): string; // Sentry crash event JSON
+Trace::exportDatadog(): string;     // Datadog APM trace JSON
+```
+
+---
+
+## Tier 2 Native Helper Classes API (`Cache`, `Log`)
+
+Imported via `import "./Cache.rs";` or `import "./Log.rs";`. These helper classes are not built into the core language syntax to avoid language bloat, but provide framework-level performance using thread-safe Rust stores with zero garbage collection overhead.
+
+### `Cache` Helper Class API
+
+```php
+// In-Memory L1 Cache with Optional TTL
+Cache::get(string $key, mixed $default = null): mixed;
+Cache::set(string $key, mixed $value, int $ttlSeconds = 0): bool;
+Cache::has(string $key): bool;
+Cache::delete(string $key): bool;
+Cache::increment(string $key, int $step = 1): int;
+Cache::decrement(string $key, int $step = 1): int;
+Cache::all(): dict;
+Cache::keys(): list;
+Cache::count(): int;
+Cache::clear(): void;
+```
+
+### `Log` Helper Class API
+
+```php
+// Structured High-Speed In-Memory & File Logging
+Log::info(string $message, array|dict $context = []): void;
+Log::warn(string $message, array|dict $context = []): void;
+Log::error(string $message, array|dict $context = []): void;
+Log::debug(string $message, array|dict $context = []): void;
+Log::history(): list; // Returns list of log entries with timestamps, levels, and messages
+Log::clear(): void;
+```
+
 

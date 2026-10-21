@@ -32,6 +32,7 @@ export const docsNavigation: DocNavSection[] = [
       { title: "Modules and Imports", slug: "guide/modules-and-imports", href: "/docs/guide/modules-and-imports" },
       { title: "Concurrency & Async", slug: "guide/concurrency-async", href: "/docs/guide/concurrency-async" },
       { title: "Standard Library Overview", slug: "guide/standard-library", href: "/docs/guide/standard-library" },
+      { title: "Observability & OpenTelemetry", slug: "guide/observability-opentelemetry", href: "/docs/guide/observability-opentelemetry" },
     ]
   },
   {
