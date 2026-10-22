@@ -184,6 +184,12 @@ jobs:
           cp README.md "pkg_bundle/"
           tar -czvf "${DIST_DIR}/rhp-bundle-${VER}-${TARGET}.tar.gz" -C "pkg_bundle" .
 
+          # 4. Homebrew-compatible standalone archives (e.g. rhp-v0.1.0-TARGET.tar.gz)
+          PKG_VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "${VER}" != "v${PKG_VER}" ]; then
+            cp "${DIST_DIR}/rhp-${VER}-${TARGET}.tar.gz" "${DIST_DIR}/rhp-v${PKG_VER}-${TARGET}.tar.gz"
+          fi
+
           # Compute SHA-256 Checksums
           cd "${DIST_DIR}"
           for file in *.tar.gz; do
@@ -230,6 +236,12 @@ jobs:
           Copy-Item $rhpPlayBin -Destination "$pkgBundle/rhp-play.exe"
           Copy-Item "README.md" -Destination "$pkgBundle/"
           Compress-Archive -Path "$pkgBundle/*" -DestinationPath "$distDir/rhp-bundle-$ver-$target.zip" -Force
+
+          # 4. Standard versioned package for package managers
+          $pkgVer = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($ver -ne "v$pkgVer") {
+            Copy-Item "$distDir/rhp-$ver-$target.zip" -Destination "$distDir/rhp-v$pkgVer-$target.zip" -Force
+          }
 
           # Compute SHA-256 Checksums
           Set-Location $distDir
@@ -318,7 +330,12 @@ jobs:
 
           ### 🚀 Quick Start & Installation
 
-          #### Linux / macOS
+          #### 🍺 Homebrew (Recommended for macOS & Linux)
+          ```bash
+          brew install vuenice/rhp/rhp
+          ```
+
+          #### 📦 Manual Download & Unpack (Linux / macOS)
           ```bash
           # Unpack RHP release bundle:
           tar -xzf rhp-bundle-*.tar.gz
@@ -331,7 +348,7 @@ jobs:
           rhp --version
           ```
 
-          #### Crates.io
+          #### 🦀 Crates.io
           ```bash
           cargo install rhp
           ```

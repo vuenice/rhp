@@ -6,3 +6,4 @@ temp_interactive_push.bat
 website/node_modules/
 website/dist/
 website/.astro/
+dist/

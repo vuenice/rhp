@@ -17,15 +17,22 @@ RHP is distributed as a single standalone statically linked binary (`rhp`). The 
 
 ---
 
-## One-Line Automated Installer
+## Installing via Homebrew (Recommended for macOS & Linux)
 
-The recommended method to install RHP on Linux and macOS is via the official curl installer:
+The easiest way to install and manage RHP on macOS and Linux is using Homebrew:
 
 ```bash
-curl -fsSL https://rhp.dev/install.sh | bash
+brew install vuenice/rhp/rhp
 ```
 
-The script automatically detects your platform architecture (`x86_64` or `aarch64`), downloads the pre-built binary, installs it to `~/.rhp/bin`, and adds it to your shell configuration (`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`).
+Or tap the repository first and install:
+
+```bash
+brew tap vuenice/rhp
+brew install rhp
+```
+
+Homebrew automatically fetches the appropriate pre-compiled standalone binary for your architecture (`aarch64` Apple Silicon, `x86_64` Intel Mac, or `x86_64` Linux) and links it directly into your `$PATH`.
 
 ---
 

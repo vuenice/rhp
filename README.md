@@ -35,9 +35,10 @@ RHP combines a dynamic, developer-friendly interface with a robust, multi-thread
 RHP includes a complete, full-stack reactive TODO application in [`examples/todo`](examples/todo) proving that the compiler, type system, register VM, JSON persistence, and built-in HTTP server work seamlessly with **HTMX** and **Alpine.js**:
 
 ```bash
-# 1. Ensure rhp is available in your PATH:
-cargo install --path .
-# (or link for live development: ln -sf $(pwd)/target/debug/rhp ~/.cargo/bin/rhp)
+# 1. Install RHP via Homebrew (macOS & Linux):
+brew install vuenice/rhp/rhp
+
+# (Or build from source via Cargo: cargo install --path .)
 
 # 2. Run the TODO app in Development Mode:
 rhp run dev examples/todo
