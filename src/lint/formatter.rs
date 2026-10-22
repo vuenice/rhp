@@ -9,7 +9,8 @@
 /// - Preserves string literals and comment contents intact
 /// - Trims trailing whitespace and collapses redundant blank lines
 pub fn format_source(source: &str) -> String {
-    let lines = split_lines(source);
+    let preprocessed = split_function_braces_to_next_line(source);
+    let lines = split_lines(&preprocessed);
     let mut formatted_lines = Vec::with_capacity(lines.len());
     let mut indent_level: usize = 0;
     let mut in_multiline_comment = false;
@@ -56,12 +57,12 @@ pub fn format_source(source: &str) -> String {
         // Normalize spacing within line code segments
         let spaced = format_line_spacing(trimmed);
 
-        // Adjust indent level for lines starting with closing braces
-        let starts_with_close = spaced.starts_with('}') || spaced.starts_with(']');
+        // Adjust indent level for lines starting with closing braces/brackets/parentheses
+        let leading_closes = count_leading_closes(&spaced);
         let is_case_or_default = spaced.starts_with("case ") || spaced.starts_with("default:") || spaced == "default";
 
-        let current_line_indent = if starts_with_close && indent_level > 0 {
-            indent_level - 1
+        let current_line_indent = if leading_closes > 0 && indent_level > 0 {
+            indent_level.saturating_sub(leading_closes)
         } else if is_case_or_default && indent_level > 0 {
             indent_level.saturating_sub(1)
         } else {
@@ -98,12 +99,205 @@ pub fn format_source(source: &str) -> String {
     result
 }
 
+/// Count closing tokens `}`, `]`, `)` at the beginning of a line.
+fn count_leading_closes(line: &str) -> usize {
+    let mut count = 0;
+    for c in line.chars() {
+        if c == '}' || c == ']' || c == ')' {
+            count += 1;
+        } else if (c == ';' || c == ',') && count > 0 {
+            continue;
+        } else if c == ' ' || c == '\t' {
+            continue;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
+/// Separates opening curly braces `{` of function and method declarations onto the next line
+/// following standard PER-CS / PSR-12 and Carthage Mago formatting rules.
+fn split_function_braces_to_next_line(source: &str) -> String {
+    let mut result_lines = Vec::new();
+    let mut in_function_signature = false;
+    let mut paren_balance: usize = 0;
+    let mut in_multiline_comment = false;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+
+        // If inside a multiline comment, check for end
+        if in_multiline_comment {
+            if trimmed.contains("*/") {
+                in_multiline_comment = false;
+            }
+            result_lines.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with("/*") && !trimmed.contains("*/") {
+            in_multiline_comment = true;
+            result_lines.push(line.to_string());
+            continue;
+        }
+
+        // Check if a function/method declaration begins on this line
+        if !in_function_signature {
+            if is_function_declaration_start(trimmed) {
+                let (opens, closes) = count_parens(trimmed);
+                if opens > closes {
+                    in_function_signature = true;
+                    paren_balance = opens - closes;
+                    result_lines.push(line.to_string());
+                    continue;
+                } else if let Some(without) = ends_with_open_brace(line) {
+                    result_lines.push(without);
+                    result_lines.push("{".to_string());
+                    continue;
+                }
+            }
+        } else {
+            // Inside multiline function signature
+            let (opens, closes) = count_parens(trimmed);
+            paren_balance += opens;
+            if closes >= paren_balance {
+                // Function parameter list finished
+                in_function_signature = false;
+                paren_balance = 0;
+                if let Some(without) = ends_with_open_brace(line) {
+                    result_lines.push(without);
+                    result_lines.push("{".to_string());
+                    continue;
+                }
+            } else {
+                paren_balance -= closes;
+            }
+        }
+
+        result_lines.push(line.to_string());
+    }
+
+    result_lines.join("\n")
+}
+
+fn ends_with_open_brace(line: &str) -> Option<String> {
+    let trimmed = line.trim_end();
+    if trimmed.ends_with('{') {
+        Some(trimmed[..trimmed.len() - 1].trim_end().to_string())
+    } else {
+        None
+    }
+}
+
+fn is_function_declaration_start(line: &str) -> bool {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut str_delim = '"';
+
+    while i < n {
+        let c = chars[i];
+        if in_str {
+            if c == '\\' && i + 1 < n {
+                i += 2;
+                continue;
+            }
+            if c == str_delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '"' || c == '\'' || c == '`' {
+            in_str = true;
+            str_delim = c;
+            i += 1;
+            continue;
+        }
+
+        if (c == '/' && i + 1 < n && (chars[i + 1] == '/' || chars[i + 1] == '*')) || c == '#' {
+            break;
+        }
+
+        // Check for whole keyword "function"
+        if line[i..].starts_with("function") {
+            let before_ok = i == 0 || (!chars[i - 1].is_alphanumeric() && chars[i - 1] != '_' && chars[i - 1] != '$');
+            let after_idx = i + 8;
+            let after_ok = after_idx < n && (chars[after_idx].is_whitespace() || chars[after_idx] == '&');
+
+            if before_ok && after_ok {
+                let mut j = after_idx;
+                while j < n && (chars[j].is_whitespace() || chars[j] == '&') {
+                    j += 1;
+                }
+                // Named function/method has an identifier name, not '('
+                if j < n && (chars[j].is_alphabetic() || chars[j] == '_') {
+                    return true;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    false
+}
+
+fn count_parens(line: &str) -> (usize, usize) {
+    let mut opens = 0;
+    let mut closes = 0;
+    let mut in_str = false;
+    let mut str_delim = '"';
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    while i < n {
+        let c = chars[i];
+        if in_str {
+            if c == '\\' && i + 1 < n {
+                i += 2;
+                continue;
+            }
+            if c == str_delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '"' || c == '\'' || c == '`' {
+            in_str = true;
+            str_delim = c;
+            i += 1;
+            continue;
+        }
+
+        if (c == '/' && i + 1 < n && (chars[i + 1] == '/' || chars[i + 1] == '*')) || c == '#' {
+            break;
+        }
+
+        if c == '(' {
+            opens += 1;
+        } else if c == ')' {
+            closes += 1;
+        }
+
+        i += 1;
+    }
+
+    (opens, closes)
+}
+
 /// Split input into lines while handling both LF and CRLF.
 fn split_lines(source: &str) -> Vec<&str> {
     source.lines().collect()
 }
 
-/// Scan line for structural braces and multi-line openers outside strings and comments.
+/// Scan line for structural braces, brackets, parentheses outside strings and comments.
 fn scan_line_structural_tokens(line: &str) -> (usize, usize, bool, bool, char) {
     let mut opens = 0;
     let mut closes = 0;
@@ -152,9 +346,9 @@ fn scan_line_structural_tokens(line: &str) -> (usize, usize, bool, bool, char) {
             continue;
         }
 
-        if c == '{' {
+        if c == '{' || c == '[' || c == '(' {
             opens += 1;
-        } else if c == '}' {
+        } else if c == '}' || c == ']' || c == ')' {
             closes += 1;
         }
     }
@@ -233,10 +427,12 @@ fn format_line_spacing(line: &str) -> String {
                 output.pop();
             }
             output.push(',');
-            output.push(' ');
             i += 1;
             while i < n && (chars[i] == ' ' || chars[i] == '\t') {
                 i += 1;
+            }
+            if i < n && chars[i] != ')' && chars[i] != ']' && chars[i] != '}' {
+                output.push(' ');
             }
             continue;
         }
@@ -421,6 +617,10 @@ fn format_line_spacing(line: &str) -> String {
             if matches!(last_word.as_str(), "if" | "elseif" | "while" | "for" | "foreach" | "switch" | "catch") {
                 if !output.ends_with(' ') {
                     output.push(' ');
+                }
+            } else if !last_word.is_empty() && last_word != "function" {
+                while output.ends_with(' ') {
+                    output.pop();
                 }
             }
             output.push('(');

@@ -49,14 +49,14 @@ export class CodeEditor {
         },
         ".cm-content": {
           padding: "12px 16px",
-          caretColor: "var(--accent-purple)",
+          caretColor: "var(--primary, #4747b8)",
         },
         ".cm-cursor": {
-          borderLeftColor: "var(--accent-purple)",
+          borderLeftColor: "var(--primary, #4747b8)",
           borderLeftWidth: "2px",
         },
         "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-          backgroundColor: "rgba(168, 85, 247, 0.28) !important",
+          backgroundColor: "rgba(71, 71, 184, 0.35) !important",
         },
         ".cm-gutters": {
           backgroundColor: "var(--bg-panel)",

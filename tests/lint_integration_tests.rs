@@ -298,9 +298,9 @@ $res = calculate_user_tax(50);
     assert!(content.contains("class UserAccount {"), "Got: {}", content);
     assert!(content.contains("new UserAccount()"), "Got: {}", content);
 
-    // Function and method names to camelCase
-    assert!(content.contains("function getUserEmail(): string {"), "Got: {}", content);
-    assert!(content.contains("function calculateUserTax(int $tax_amount): int {"), "Got: {}", content);
+    // Function and method names to camelCase, with opening braces on the next line
+    assert!(content.contains("function getUserEmail(): string\n    {"), "Got: {}", content);
+    assert!(content.contains("function calculateUserTax(int $tax_amount): int\n{"), "Got: {}", content);
     assert!(content.contains("calculateUserTax(50);"), "Got: {}", content);
 
     // Variable and property to snake_case
@@ -328,12 +328,12 @@ function normal_utility_function(): void {
     let res = rhp::lint::lint_source(code, "test_suite.rhp");
     let content = res.formatted_content;
 
-    // Functions starting with 'test' must be in snake_case
-    assert!(content.contains("function test_user_login(): void {"), "Got: {}", content);
-    assert!(content.contains("function test_database_connection(): void {"), "Got: {}", content);
+    // Functions starting with 'test' must be in snake_case, with opening braces on the next line
+    assert!(content.contains("function test_user_login(): void\n{"), "Got: {}", content);
+    assert!(content.contains("function test_database_connection(): void\n{"), "Got: {}", content);
 
     // Standard non-test functions must be in camelCase
-    assert!(content.contains("function normalUtilityFunction(): void {"), "Got: {}", content);
+    assert!(content.contains("function normalUtilityFunction(): void\n{"), "Got: {}", content);
 
     // Variables inside both are snake_case
     assert!(content.contains("string $session_token = 'xyz';"), "Got: {}", content);
@@ -392,7 +392,7 @@ class my_service {
     // Formatted and autotyped, but original casing preserved!
     let content = res.formatted_content;
     assert!(content.contains("class my_service {"), "Casing should NOT change: {}", content);
-    assert!(content.contains("function calculate_total(int $itemPrice = 100): int {"), "Casing should NOT change: {}", content);
+    assert!(content.contains("function calculate_total(int $itemPrice = 100): int\n    {"), "Casing should NOT change: {}", content);
     assert!(content.contains("int $myVar = $itemPrice;"), "Casing should NOT change: {}", content);
 }
 
@@ -456,4 +456,97 @@ fn test_cli_no_fix_and_no_case_change_options() {
     let _ = fs::remove_file(temp_file);
     let _ = fs::remove_dir(temp_dir);
 }
+
+#[test]
+fn test_user_requested_format_code_snippet() {
+    let unformatted = r#"int $int_value = 1;
+float $float_value = 1.1;
+bool $bool_value = true;
+string $string_value = 'hello world';
+
+dict $arr_dict = [
+"name" => "RHP Playground",
+"mode" => "Standalone",
+"description" => "Easily run and test PHP & RHP code instantly",
+];
+
+list $arr_list = [ 1, 2, 3 ];
+
+dd(
+$int_value,
+$float_value,
+$bool_value,
+$string_value,
+$arr_dict,
+$arr_list
+);
+"#;
+
+    let res = rhp::lint::lint_source(unformatted, "playground.rhp");
+    let expected = "\
+int $int_value = 1;
+float $float_value = 1.1;
+bool $bool_value = true;
+string $string_value = 'hello world';
+
+dict $arr_dict = [
+    \"name\" => \"RHP Playground\",
+    \"mode\" => \"Standalone\",
+    \"description\" => \"Easily run and test PHP & RHP code instantly\",
+];
+
+list $arr_list = [ 1, 2, 3 ];
+
+dd(
+    $int_value,
+    $float_value,
+    $bool_value,
+    $string_value,
+    $arr_dict,
+    $arr_list
+);
+";
+    assert_eq!(res.formatted_content, expected);
+}
+
+#[test]
+fn test_multiline_function_params_and_next_line_curly_braces() {
+    let unformatted = r#"
+function computeTax(
+int $subtotal,
+float $rate,
+list $discounts = [10, 20]
+): float {
+return $subtotal * $rate;
+}
+"#;
+
+    let formatted = format_source(unformatted);
+    let expected = "\
+function computeTax(
+    int $subtotal,
+    float $rate,
+    list $discounts = [10, 20]
+): float
+{
+    return $subtotal * $rate;
+}
+";
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_single_line_array_and_function_call_comma_spacing() {
+    let unformatted = r#"
+$nums=[1,2,3];
+$names=['alpha','beta','gamma'];
+$call=myFunction($a,$b,$c);
+"#;
+
+    let formatted = format_source(unformatted);
+    assert!(formatted.contains("$nums = [1, 2, 3];"), "Got: {}", formatted);
+    assert!(formatted.contains("$names = ['alpha', 'beta', 'gamma'];"), "Got: {}", formatted);
+    assert!(formatted.contains("$call = myFunction($a, $b, $c);"), "Got: {}", formatted);
+}
+
 

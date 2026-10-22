@@ -6,8 +6,8 @@
       <stop offset="100%" stop-color="#0A0D12" />
     </linearGradient>
     <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#F06543" />
-      <stop offset="100%" stop-color="#6366F1" />
+      <stop offset="0%" stop-color="#4747b8" />
+      <stop offset="100%" stop-color="#818cf8" />
     </linearGradient>
     <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="40" result="blur" />
@@ -17,8 +17,8 @@
   <rect width="1200" height="630" fill="url(#bg)" />
 
   <!-- Subtle glow circles -->
-  <circle cx="200" cy="150" r="160" fill="#F06543" opacity="0.12" filter="url(#glow)" />
-  <circle cx="1000" cy="480" r="200" fill="#6366F1" opacity="0.12" filter="url(#glow)" />
+  <circle cx="200" cy="150" r="160" fill="#4747b8" opacity="0.16" filter="url(#glow)" />
+  <circle cx="1000" cy="480" r="200" fill="#6366F1" opacity="0.14" filter="url(#glow)" />
 
   <!-- Subtle grid lines -->
   <g stroke="#1F293D" stroke-width="1" opacity="0.4">
@@ -39,7 +39,7 @@
   <path d="M144 120H164C170.6 120 176 125.4 176 132C176 138.1 171.5 143.1 165.6 143.9L177 160H167L157 144H152V160H144V120ZM152 127.6V136.4H163C165.7 136.4 167.8 134.3 167.8 131.6C167.8 128.9 165.7 127.6 163 127.6H152Z" fill="url(#accent)" />
 
   <text x="225" y="155" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="44" font-weight="800" letter-spacing="-1">RHP</text>
-  <text x="330" y="153" fill="#F06543" font-family="Inter, sans-serif" font-size="20" font-weight="700" letter-spacing="2">v0.1.0-alpha</text>
+  <text x="330" y="153" fill="#818cf8" font-family="Inter, sans-serif" font-size="20" font-weight="700" letter-spacing="2">v0.1.0-alpha</text>
 
   <!-- Title & Subtitle -->
   <text x="120" y="270" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="58" font-weight="800" letter-spacing="-1.5">
