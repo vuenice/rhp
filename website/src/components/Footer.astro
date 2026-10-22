@@ -1,5 +1,5 @@
 ---
-// Footer.astro
+import { siteUrl } from '../lib/paths';
 ---
 
 <footer class="border-t border-slate-200 dark:border-slate-850 bg-slate-50 dark:bg-[#07090E] transition-colors mt-auto">
@@ -8,8 +8,8 @@
       
       <!-- Brand & Mission Column -->
       <div class="col-span-2">
-        <a href="/" class="flex items-center space-x-3 mb-4 group">
-          <img src="/rhp-logo.svg" alt="RHP Logo" class="w-8 h-8 group-hover:scale-105 transition-transform" />
+        <a href={siteUrl('/')} class="flex items-center space-x-3 mb-4 group">
+          <img src={siteUrl('/rhp-logo.svg')} alt="RHP Logo" class="w-8 h-8 group-hover:scale-105 transition-transform" />
           <span class="text-xl font-bold tracking-tight text-slate-900 dark:text-white">RHP</span>
           <span class="text-xs font-mono text-brand-500 bg-brand-500/10 px-2 py-0.5 rounded-full border border-brand-500/20">v0.1.0-alpha</span>
         </a>
@@ -33,12 +33,12 @@
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white mb-4">Documentation</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/docs/getting-started/installation" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Installation</a></li>
-          <li><a href="/docs/getting-started/hello-world" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Hello World</a></li>
-          <li><a href="/docs/guide/variables-and-types" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Variables & Types</a></li>
-          <li><a href="/docs/guide/concurrency-async" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Async & Concurrency</a></li>
-          <li><a href="/docs/guide/standard-library" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Standard Library</a></li>
-          <li><a href="/docs/reference/grammar" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Grammar Reference</a></li>
+          <li><a href={siteUrl('/docs/getting-started/installation')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Installation</a></li>
+          <li><a href={siteUrl('/docs/getting-started/hello-world')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Hello World</a></li>
+          <li><a href={siteUrl('/docs/guide/variables-and-types')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Variables & Types</a></li>
+          <li><a href={siteUrl('/docs/guide/concurrency-async')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Async & Concurrency</a></li>
+          <li><a href={siteUrl('/docs/guide/standard-library')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Standard Library</a></li>
+          <li><a href={siteUrl('/docs/reference/grammar')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Grammar Reference</a></li>
         </ul>
       </div>
 
@@ -46,11 +46,11 @@
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white mb-4">Architecture</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/docs/advanced/memory-model" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Zero-GC Memory Model</a></li>
-          <li><a href="/docs/advanced/compiler-internals" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Compiler & VM Internals</a></li>
-          <li><a href="/docs/advanced/ffi-interop" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Rust FFI & Plugins</a></li>
-          <li><a href="/docs/tooling/linter" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Linter & Auto-Typing</a></li>
-          <li><a href="/docs/tooling/editor-setup" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">VS Code & LSP Setup</a></li>
+          <li><a href={siteUrl('/docs/advanced/memory-model')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Zero-GC Memory Model</a></li>
+          <li><a href={siteUrl('/docs/advanced/compiler-internals')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Compiler & VM Internals</a></li>
+          <li><a href={siteUrl('/docs/advanced/ffi-interop')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Rust FFI & Plugins</a></li>
+          <li><a href={siteUrl('/docs/tooling/linter')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Linter & Auto-Typing</a></li>
+          <li><a href={siteUrl('/docs/tooling/editor-setup')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">VS Code & LSP Setup</a></li>
         </ul>
       </div>
 
@@ -58,11 +58,11 @@
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white mb-4">Ecosystem</h3>
         <ul class="space-y-2.5 text-sm">
-          <li><a href="/docs/contributing" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Contributing Guide</a></li>
-          <li><a href="/docs/changelog" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Changelog & Releases</a></li>
-          <li><a href="/docs/faq" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">FAQ & Trade-offs</a></li>
+          <li><a href={siteUrl('/docs/contributing')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Contributing Guide</a></li>
+          <li><a href={siteUrl('/docs/changelog')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Changelog & Releases</a></li>
+          <li><a href={siteUrl('/docs/faq')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">FAQ & Trade-offs</a></li>
           <li><a href="https://github.com/vuenice/rhp/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">MIT License</a></li>
-          <li><a href="/#benchmarks" class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Benchmarks</a></li>
+          <li><a href={siteUrl('/#benchmarks')} class="text-slate-600 dark:text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Benchmarks</a></li>
         </ul>
       </div>
 

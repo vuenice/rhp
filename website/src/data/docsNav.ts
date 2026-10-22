@@ -1,3 +1,5 @@
+import { siteUrl } from '../lib/paths';
+
 export interface DocNavItem {
   title: string;
   slug: string;
@@ -9,66 +11,72 @@ export interface DocNavSection {
   items: DocNavItem[];
 }
 
+const item = (title: string, slug: string): DocNavItem => ({
+  title,
+  slug,
+  href: siteUrl(`/docs/${slug}`)
+});
+
 export const docsNavigation: DocNavSection[] = [
   {
     title: "Getting Started",
     items: [
-      { title: "Installation", slug: "getting-started/installation", href: "/docs/getting-started/installation" },
-      { title: "Hello World", slug: "getting-started/hello-world", href: "/docs/getting-started/hello-world" },
-      { title: "Core Architecture", slug: "getting-started/core-architecture", href: "/docs/getting-started/core-architecture" },
-      { title: "Project Structure", slug: "getting-started/project-structure", href: "/docs/getting-started/project-structure" },
-      { title: "CLI Reference", slug: "getting-started/cli-reference", href: "/docs/getting-started/cli-reference" },
+      item("Installation", "getting-started/installation"),
+      item("Hello World", "getting-started/hello-world"),
+      item("Core Architecture", "getting-started/core-architecture"),
+      item("Project Structure", "getting-started/project-structure"),
+      item("CLI Reference", "getting-started/cli-reference"),
     ]
   },
   {
     title: "Language Guide",
     items: [
-      { title: "Variables and Types", slug: "guide/variables-and-types", href: "/docs/guide/variables-and-types" },
-      { title: "Numeric Types", slug: "guide/numeric-types", href: "/docs/guide/numeric-types" },
-      { title: "Operators", slug: "guide/operators", href: "/docs/guide/operators" },
-      { title: "Control Flow", slug: "guide/control-flow", href: "/docs/guide/control-flow" },
-      { title: "Functions and Closures", slug: "guide/functions", href: "/docs/guide/functions" },
-      { title: "Classes, Structs & Singletons", slug: "guide/classes-and-objects", href: "/docs/guide/classes-and-objects" },
-      { title: "Error Handling", slug: "guide/error-handling", href: "/docs/guide/error-handling" },
-      { title: "Modules and Imports", slug: "guide/modules-and-imports", href: "/docs/guide/modules-and-imports" },
-      { title: "Concurrency & Async", slug: "guide/concurrency-async", href: "/docs/guide/concurrency-async" },
-      { title: "Standard Library Overview", slug: "guide/standard-library", href: "/docs/guide/standard-library" },
-      { title: "Observability & OpenTelemetry", slug: "guide/observability-opentelemetry", href: "/docs/guide/observability-opentelemetry" },
+      item("Variables and Types", "guide/variables-and-types"),
+      item("Numeric Types", "guide/numeric-types"),
+      item("Operators", "guide/operators"),
+      item("Control Flow", "guide/control-flow"),
+      item("Functions and Closures", "guide/functions"),
+      item("Classes, Structs & Singletons", "guide/classes-and-objects"),
+      item("Error Handling", "guide/error-handling"),
+      item("Modules and Imports", "guide/modules-and-imports"),
+      item("Concurrency & Async", "guide/concurrency-async"),
+      item("Standard Library Overview", "guide/standard-library"),
+      item("Observability & OpenTelemetry", "guide/observability-opentelemetry"),
     ]
   },
   {
     title: "Reference",
     items: [
-      { title: "Grammar & Syntax Reference", slug: "reference/grammar", href: "/docs/reference/grammar" },
-      { title: "Lexical & Syntax Architecture", slug: "reference/syntax-architecture", href: "/docs/reference/syntax-architecture" },
-      { title: "Keywords Reference", slug: "reference/keywords", href: "/docs/reference/keywords" },
-      { title: "Built-in Functions", slug: "reference/builtins", href: "/docs/reference/builtins" },
-      { title: "Standard Library API", slug: "reference/stdlib-api", href: "/docs/reference/stdlib-api" },
+      item("Grammar & Syntax Reference", "reference/grammar"),
+      item("Lexical & Syntax Architecture", "reference/syntax-architecture"),
+      item("Keywords Reference", "reference/keywords"),
+      item("Built-in Functions", "reference/builtins"),
+      item("Standard Library API", "reference/stdlib-api"),
     ]
   },
   {
     title: "Tooling",
     items: [
-      { title: "Package Manager", slug: "tooling/package-manager", href: "/docs/tooling/package-manager" },
-      { title: "Auto-Formatter", slug: "tooling/formatter", href: "/docs/tooling/formatter" },
-      { title: "Linter & Static Typing", slug: "tooling/linter", href: "/docs/tooling/linter" },
-      { title: "Editor Setup & LSP", slug: "tooling/editor-setup", href: "/docs/tooling/editor-setup" },
+      item("Package Manager", "tooling/package-manager"),
+      item("Auto-Formatter", "tooling/formatter"),
+      item("Linter & Static Typing", "tooling/linter"),
+      item("Editor Setup & LSP", "tooling/editor-setup"),
     ]
   },
   {
     title: "Advanced",
     items: [
-      { title: "Memory Model & Zero-GC", slug: "advanced/memory-model", href: "/docs/advanced/memory-model" },
-      { title: "FFI & Rust Native Interop", slug: "advanced/ffi-interop", href: "/docs/advanced/ffi-interop" },
-      { title: "Compiler & VM Internals", slug: "advanced/compiler-internals", href: "/docs/advanced/compiler-internals" },
+      item("Memory Model & Zero-GC", "advanced/memory-model"),
+      item("FFI & Rust Native Interop", "advanced/ffi-interop"),
+      item("Compiler & VM Internals", "advanced/compiler-internals"),
     ]
   },
   {
     title: "Community & Meta",
     items: [
-      { title: "Contributing Guide", slug: "contributing", href: "/docs/contributing" },
-      { title: "Changelog", slug: "changelog", href: "/docs/changelog" },
-      { title: "Frequently Asked Questions", slug: "faq", href: "/docs/faq" },
+      item("Contributing Guide", "contributing"),
+      item("Changelog", "changelog"),
+      item("Frequently Asked Questions", "faq"),
     ]
   }
 ];

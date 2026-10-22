@@ -1,4 +1,6 @@
 ---
+import { siteUrl } from '../lib/paths';
+
 interface Props {
   title: string;
   description?: string;
@@ -19,7 +21,7 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site || 'https://rhp.dev'
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href={siteUrl('/favicon.svg')} />
     <meta name="generator" content={Astro.generator} />
 
     <!-- Primary Meta Tags -->
@@ -33,14 +35,14 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site || 'https://rhp.dev'
     <meta property="og:url" content={canonicalURL} />
     <meta property="og:title" content={`${title} · RHP Programming Language`} />
     <meta property="og:description" content={description} />
-    <meta property="og:image" content={new URL(ogImage, Astro.site || 'https://rhp.dev')} />
+    <meta property="og:image" content={new URL(siteUrl(ogImage), Astro.site || 'https://rhp.dev')} />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content={canonicalURL} />
     <meta property="twitter:title" content={`${title} · RHP Programming Language`} />
     <meta property="twitter:description" content={description} />
-    <meta property="twitter:image" content={new URL(ogImage, Astro.site || 'https://rhp.dev')} />
+    <meta property="twitter:image" content={new URL(siteUrl(ogImage), Astro.site || 'https://rhp.dev')} />
 
     <!-- Fonts: Inter & JetBrains Mono via CDN or fallback -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

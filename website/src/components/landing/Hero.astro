@@ -1,5 +1,6 @@
 ---
 // Hero.astro
+import { siteUrl } from '../../lib/paths';
 const codeSnippet = `// 1. Native Rust-backed collection pipeline
 list $orders = Arr::list([120, 45, 890, 15, 330])
     ->filter(fn($price) => $price > 50)
@@ -34,7 +35,7 @@ Sys::print("Peak memory: " . Memory::peak() . " bytes");`;
           <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <span>RHP v0.1.0-alpha Released</span>
           <span class="text-slate-400">·</span>
-          <a href="/docs/getting-started/installation" class="text-brand-500 hover:underline flex items-center gap-1 font-semibold">
+          <a href={siteUrl('/docs/getting-started/installation')} class="text-brand-500 hover:underline flex items-center gap-1 font-semibold">
             Read docs <span aria-hidden="true">&rarr;</span>
           </a>
         </div>
@@ -54,7 +55,7 @@ Sys::print("Peak memory: " . Memory::peak() . " bytes");`;
         <!-- CTA Buttons -->
         <div class="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2">
           <a
-            href="/docs/getting-started/installation"
+            href={siteUrl('/docs/getting-started/installation')}
             class="px-6 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-sm shadow-lg shadow-brand-500/25 transition-all hover:shadow-brand-500/35 hover:-translate-y-0.5"
           >
             Get Started

@@ -1,3 +1,5 @@
+import { siteUrl } from '../lib/paths';
+
 export interface SearchItem {
   title: string;
   section: string;
@@ -6,7 +8,7 @@ export interface SearchItem {
   keywords: string[];
 }
 
-export const searchIndex: SearchItem[] = [
+const rawSearchIndex: SearchItem[] = [
   // Getting Started
   {
     title: "Installation",
@@ -229,3 +231,8 @@ export const searchIndex: SearchItem[] = [
     keywords: ["faq", "questions", "php comparison", "octane", "swoole", "performance", "extends arr", "macro", "macros", "macroable"]
   }
 ];
+
+export const searchIndex: SearchItem[] = rawSearchIndex.map(item => ({
+  ...item,
+  url: siteUrl(item.url),
+}));

@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
 import SearchModal from '../components/SearchModal.astro';
 import { docsNavigation, getPrevNextDocs } from '../data/docsNav';
+import { siteUrl } from '../lib/paths';
 
 interface Heading {
   depth: number;
@@ -102,7 +103,7 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
         
         <!-- Breadcrumbs -->
         <nav class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mb-6 font-mono">
-          <a href="/docs/getting-started/installation" class="hover:text-brand-500">Docs</a>
+          <a href={siteUrl('/docs/getting-started/installation')} class="hover:text-brand-500">Docs</a>
           <span>/</span>
           {section && (
             <>

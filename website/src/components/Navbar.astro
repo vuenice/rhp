@@ -1,5 +1,6 @@
 ---
 import ThemeToggle from './ThemeToggle.astro';
+import { siteUrl } from '../lib/paths';
 ---
 
 <header class="sticky top-0 z-40 w-full backdrop-blur-md bg-white/80 dark:bg-[#080B10]/80 border-b border-slate-200 dark:border-slate-800/80 transition-colors">
@@ -8,8 +9,8 @@ import ThemeToggle from './ThemeToggle.astro';
       
       <!-- Logo & Brand -->
       <div class="flex items-center space-x-3">
-        <a href="/" class="flex items-center space-x-3 group">
-          <img src="/rhp-logo.svg" alt="RHP Logo" class="w-8 h-8 group-hover:scale-105 transition-transform" />
+        <a href={siteUrl('/')} class="flex items-center space-x-3 group">
+          <img src={siteUrl('/rhp-logo.svg')} alt="RHP Logo" class="w-8 h-8 group-hover:scale-105 transition-transform" />
           <div class="flex items-center space-x-2">
             <span class="text-xl font-bold tracking-tight text-slate-900 dark:text-white group-hover:text-brand-500 transition-colors">RHP</span>
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20 font-mono">
@@ -21,12 +22,12 @@ import ThemeToggle from './ThemeToggle.astro';
 
       <!-- Center Nav Links (Desktop) -->
       <nav class="hidden md:flex items-center space-x-7 text-sm font-medium text-slate-600 dark:text-slate-300">
-        <a href="/docs/getting-started/installation" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Docs</a>
-        <a href="/#features" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Features</a>
-        <a href="/#showcase" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Showcase</a>
-        <a href="/#benchmarks" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Benchmarks</a>
-        <a href="/#playground" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Playground</a>
-        <a href="/#roadmap" class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Roadmap</a>
+        <a href={siteUrl('/docs/getting-started/installation')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Docs</a>
+        <a href={siteUrl('/#features')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Features</a>
+        <a href={siteUrl('/#showcase')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Showcase</a>
+        <a href={siteUrl('/#benchmarks')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Benchmarks</a>
+        <a href={siteUrl('/#playground')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Playground</a>
+        <a href={siteUrl('/#roadmap')} class="hover:text-brand-500 dark:hover:text-brand-400 transition-colors">Roadmap</a>
       </nav>
 
       <!-- Right Actions: Search, GitHub, Theme, Mobile toggle -->
@@ -80,12 +81,12 @@ import ThemeToggle from './ThemeToggle.astro';
 
   <!-- Mobile Drawer Menu -->
   <div id="mobile-menu" class="hidden md:hidden border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0A0D14] px-4 pt-2 pb-4 space-y-2">
-    <a href="/docs/getting-started/installation" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Documentation</a>
-    <a href="/#features" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Features</a>
-    <a href="/#showcase" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Showcase</a>
-    <a href="/#benchmarks" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Benchmarks</a>
-    <a href="/#playground" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Playground</a>
-    <a href="/#roadmap" class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Roadmap</a>
+    <a href={siteUrl('/docs/getting-started/installation')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Documentation</a>
+    <a href={siteUrl('/#features')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Features</a>
+    <a href={siteUrl('/#showcase')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Showcase</a>
+    <a href={siteUrl('/#benchmarks')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Benchmarks</a>
+    <a href={siteUrl('/#playground')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Playground</a>
+    <a href={siteUrl('/#roadmap')} class="block px-3 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">Roadmap</a>
     <div class="pt-2 border-t border-slate-200 dark:border-slate-800">
       <a href="https://github.com/vuenice/rhp" target="_blank" rel="noopener noreferrer" class="flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium text-brand-500 hover:bg-brand-500/10">
         <span>GitHub Repository</span>

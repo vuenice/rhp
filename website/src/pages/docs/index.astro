@@ -1,4 +1,6 @@
 ---
-// Redirect /docs to /docs/getting-started/installation
-return Astro.redirect('/docs/getting-started/installation');
+import { siteUrl } from '../../lib/paths';
+
+// Redirect /docs to /docs/getting-started/installation with base URL awareness
+return Astro.redirect(siteUrl('/docs/getting-started/installation'));
 ---
