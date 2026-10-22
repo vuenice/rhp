@@ -5,9 +5,9 @@ section: "Tooling"
 order: 5
 ---
 
-The **RHP Playground** (`rhp-play`) is a native, ultra-responsive desktop GUI application built for instant code execution, rapid prototyping, and real-time application debugging.
+The **RHP Playground** (`rhp-play`) is a clean, minimalist, high-performance desktop GUI application built for instant code execution, rapid prototyping, and real-time application debugging.
 
-Inspired by tools like **TweakPHP**, RHP Playground lets developers test code snippets, verify syntax, inspect runtime telemetry, and interact directly with local, containerized, or remote applications without boilerplate or restarts.
+Designed specifically after the workflow popularized by **[TweakPHP](https://github.com/tweakphp/tweakphp)**, RHP Playground allows you to run scratchpad scripts with zero configuration, and connect directly to your local projects, Docker containers, or remote SSH servers to tweak and test code inside your running application context.
 
 <div class="my-8 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-2xl bg-[#0B0F19]">
   <div class="flex items-center justify-between px-4 py-2.5 bg-[#0E1422] border-b border-slate-800/80 text-xs text-slate-400">
@@ -29,68 +29,103 @@ Inspired by tools like **TweakPHP**, RHP Playground lets developers test code sn
 
 ---
 
-## Key Capabilities
+## How to Run the Playground App
 
-### 1. Standalone Script Runner
-Jump right in and execute RHP code with zero configuration. Test modern language features including:
-- **Rust-Backed Collections**: Experiment with `Arr::list`, `Arr::dict`, and `Arr::set` pipelines.
-- **Tokio Concurrency**: Test `Future::wait` and asynchronous deferred tasks (`Future::defer`).
-- **Deterministic Memory**: Validate bump arena allocations and zero-GC performance in real time.
+RHP Playground is built 100% in pure Rust using **`eframe` / `egui`**, **`syntect`**, **`tokio`**, and **`rfd`** for near-instant rendering and low memory footprint.
 
-### 2. Multi-Environment Application Debugging
-Connect RHP Playground directly to your existing application stacks to evaluate scripts within the application's boot context:
+### 1. Run with Cargo
 
-- **Local Projects**: Point `rhp-play` to your local Laravel, Vapor, or RHP application folder. Scripts execute with access to your models, configuration, and services.
-- **Docker Containers**: Debug containerized backend services running in local Docker environments without needing manual shell-exec gymnastics.
-- **Remote SSH Environments**: Securely connect over SSH to staging or remote servers to test queries, inspect models, and reproduce edge cases on live runtimes.
+From the root of the RHP repository:
 
-### 3. Real-Time Telemetry & Performance Stats
-Every execution provides immediate feedback in the dedicated output panel:
-- **Startup & Execution Timing**: Measure compilation and execution latency in milliseconds.
-- **Memory Footprint**: Track peak memory consumed during script execution.
-- **GC Metrics**: Verify 0.0ms GC pause times thanks to RHP's deterministic RAII memory model.
+```bash
+cargo run --manifest-path playground/Cargo.toml
+```
 
-### 4. Saved Connections & Workspaces
-Easily switch between different projects and environments using the sidebar:
-- Color-coded connection badges for quick identification.
-- Independent scratchpads and code history per connection.
-- Persistent configuration saved across sessions in `~/.rhp_playground_apps.json`.
+Or switch directly into the `playground` directory and run:
+
+```bash
+cd playground
+cargo run
+```
+
+### 2. Build & Run the Pre-compiled Binary
+
+To build an optimized release binary:
+
+```bash
+# Compile with release optimizations (outputs to playground/target/release/)
+cargo build --release --manifest-path playground/Cargo.toml
+
+# Launch the compiled binary:
+./playground/target/release/rhp-play
+```
+
+### 3. Install Globally to System `PATH`
+
+You can install both the `rhp` engine compiler and the `rhp-play` desktop companion into `~/.cargo/bin`:
+
+```bash
+# Install the RHP compiler CLI
+cargo install --path .
+
+# Install the RHP Playground desktop GUI
+cargo install --path playground
+```
+
+Once installed, launch the playground from anywhere:
+
+```bash
+rhp-play
+```
+
+> **Binary Auto-Discovery:** `rhp-play` automatically searches for the companion `rhp` compiler binary in the current directory, the parent directory, or in your system `$PATH`. You can also configure a custom binary path per project connection.
 
 ---
 
-## Launching RHP Playground
+## Interface Layout & Features
 
-RHP Playground is built with Rust and `egui` / `eframe` for native multi-platform performance and low memory overhead.
+### 1. Left Sidebar Rail
+- **`+` Button (Create Connection)**: Opens a modal with connection options:
+  - **Local**: Point to a local directory (e.g. `/home/user/code/my-app`) and optionally specify a custom `rhp` binary.
+  - **Docker**: Containerized execution target for local Docker dev environments.
+  - **Remote**: Remote server execution over SSH.
+- **Connection Badges**: Displays each configured project with a distinctive initial badge (e.g. `L` for Local, `V` for Vapor, `M` for My App). Click any badge to instantly switch active workspace and restore your script state.
+- **Right-Click Settings**: Click the settings icon or right-click any connection to update project paths or delete connections.
 
-### Running from Source
+### 2. Split-Pane Workspace
+- **Left Panel (Code Editor)**:
+  - Clean monospace editor with line numbers.
+  - Real-time syntax highlighting for PHP and RHP constructs.
+  - Full keyboard editing with undo/redo support.
+- **Right Panel (Output Console)**:
+  - Live execution output with line numbering.
+  - Selectable text for easy copying of query results, debug dumps (`print_r`, `var_dump`), or error traces.
+- **Draggable Splitter**: Click and drag the divider between editor and output to adjust your ideal screen split.
 
-You can run the playground directly from the RHP workspace:
-
-```bash
-# Debug mode (fast compilation)
-cargo run -p rhp-play
-
-# Release mode (maximum UI and JIT responsiveness)
-cargo run --release -p rhp-play
-```
-
-### CLI Options
-
-You can also specify a custom project path or binary target upon launch:
-
-```bash
-# Launch with an active project directory
-cargo run -p rhp-play -- --project /path/to/my-laravel-app
-```
+### 3. Execution & Process Controls
+- **Run Button**: Prominent execution trigger (or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> / <kbd>⌘</kbd>+<kbd>Enter</kbd>).
+- **Execution Spinner**: Enters an active `⏳ Running...` state while your script executes asynchronously on the background Tokio runtime.
+- **Instant Cancel**: A `⏹ Cancel` button appears dynamically during execution, allowing you to instantly terminate runaway queries, infinite loops, or long-running tasks without freezing the GUI.
 
 ---
 
-## Connecting to an Application
+## Workflows: Standalone vs. Connected
 
-1. Click the **+** (New Connection) button in the sidebar.
-2. Select your target connection type:
-   - **Local**: Enter your project root path and the path to your `rhp` binary.
-   - **Docker**: Select your container name and working directory.
-   - **Remote**: Provide SSH host credentials and remote project path.
+### Standalone Scratchpad Mode
+By default, the playground operates as a lightweight scratchpad. Use it to:
+- Test RHP language syntax and operators without project scaffolding.
+- Experiment with native Rust collections (`Arr::list`, `Arr::dict`, `Arr::set`).
+- Verify concurrent Tokio fibers with `Future::wait` and `Future::defer`.
+- Inspect zero-GC performance and bump arena allocation behaviors.
+
+### Connected Application Mode (TweakPHP Style)
+When connected to an existing application directory:
+1. Click the **`+`** icon in the sidebar rail.
+2. Enter your **App Name** and select your **Project Path**.
 3. Click **Create Connection**.
-4. Write your script in the editor and press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> (or <kbd>⌘</kbd>+<kbd>Enter</kbd> on macOS) to execute.
+4. The playground runs scripts in the context of your application, letting you:
+   - Call application classes, service providers, and models.
+   - Run live database queries and test Eloquent or SQL logic.
+   - Verify bug fixes or tweak controller logic before writing formal tests.
+
+All connections and code snippets are automatically persisted in `~/.rhp_playground_apps.json` so your workspace is preserved between restarts.
