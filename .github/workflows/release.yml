@@ -1,17 +1,24 @@
-name: CI/CD & Cross-Platform Distribution
+name: Release (Cargo & CLI Binaries)
 
 on:
   push:
-    branches: [ "main" ]
     tags: [ "v*" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
     inputs:
-      create_release:
-        description: "Publish GitHub Release (true/false)"
+      tag_name:
+        description: "Release Version Tag (e.g. v0.1.0; defaults to Cargo.toml version or Git tag)"
         required: false
-        default: "false"
+        default: ""
+        type: string
+      draft:
+        description: "Create Draft Release"
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: "Create Pre-release"
+        required: false
+        default: false
         type: boolean
 
 permissions:
@@ -19,15 +26,11 @@ permissions:
 
 jobs:
   # =========================================================================
-  # 1. Test Suite (Linux, macOS, Windows)
+  # 1. Pre-Release Test Verification
   # =========================================================================
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  check-and-test:
+    name: Verify Tests
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +42,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux GUI Dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -50,7 +52,7 @@ jobs:
             libssl-dev \
             libgtk-3-dev
 
-      - name: Run RHP Language Engine Tests
+      - name: Run RHP Engine Tests
         run: cargo test
 
       - name: Run RHP Playground Tests
@@ -59,10 +61,11 @@ jobs:
           cargo test
 
   # =========================================================================
-  # 2. Cross-Platform Release Distribution Matrix
+  # 2. Cross-Platform CLI Binary Matrix Build & Packaging
   # =========================================================================
-  build-dist:
+  build-binaries:
     name: Build (${{ matrix.target }})
+    needs: check-and-test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -115,15 +118,20 @@ jobs:
             libssl-dev \
             libgtk-3-dev
 
-      - name: Determine Version Tag
+      - name: Determine Version
         id: version
         shell: bash
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "VER=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            VER="${{ github.event.inputs.tag_name }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VER="${{ github.ref_name }}"
           else
-            echo "VER=latest" >> $GITHUB_OUTPUT
+            PKG_VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+            VER="v${PKG_VER}"
           fi
+          echo "VER=${VER}" >> $GITHUB_OUTPUT
+          echo "Building release for version: ${VER}"
 
       - name: Build RHP Engine Release Binary
         run: cargo build --release --target ${{ matrix.target }}
@@ -150,7 +158,6 @@ jobs:
           RHP_BIN="target/${TARGET}/release/rhp"
           RHP_PLAY_BIN="playground/target/${TARGET}/release/rhp-play"
 
-          # Fallback to default target release if not in target subdir
           if [ ! -f "$RHP_BIN" ]; then RHP_BIN="target/release/rhp"; fi
           if [ ! -f "$RHP_PLAY_BIN" ]; then RHP_PLAY_BIN="playground/target/release/rhp-play"; fi
 
@@ -234,16 +241,29 @@ jobs:
           path: dist_${{ matrix.target }}/*
 
   # =========================================================================
-  # 3. GitHub Release Creation (on Tag or Manual Dispatch)
+  # 3. Publish GitHub Release
   # =========================================================================
-  release:
+  publish-release:
     name: Publish GitHub Release
-    needs: [test, build-dist]
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    needs: build-binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Determine Version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            VER="${{ github.event.inputs.tag_name }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VER="${{ github.ref_name }}"
+          else
+            PKG_VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+            VER="v${PKG_VER}"
+          fi
+          echo "VER=${VER}" >> $GITHUB_OUTPUT
 
       - name: Download all build distribution artifacts
         uses: actions/download-artifact@v4
@@ -260,9 +280,39 @@ jobs:
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.VER }}
           files: release_files/*
           generate_release_notes: true
-          draft: false
-          prerelease: false
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =========================================================================
+  # 4. Cargo / Crates.io Release
+  # =========================================================================
+  publish-cargo:
+    name: Publish Crate to Crates.io
+    needs: [check-and-test, publish-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Informational Notice (No Crates.io Token Configured)
+        if: env.CARGO_REGISTRY_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::notice ::CARGO_REGISTRY_TOKEN secret is not configured in this repository. Skipping cargo publish to crates.io. To enable automated crates.io publishing, add CARGO_REGISTRY_TOKEN in GitHub Settings -> Secrets and variables -> Actions."
+          cargo package --list
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

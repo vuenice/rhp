@@ -24,6 +24,7 @@ export const docsNavigation: DocNavSection[] = [
     title: "Language Guide",
     items: [
       { title: "Variables and Types", slug: "guide/variables-and-types", href: "/docs/guide/variables-and-types" },
+      { title: "Numeric Types", slug: "guide/numeric-types", href: "/docs/guide/numeric-types" },
       { title: "Operators", slug: "guide/operators", href: "/docs/guide/operators" },
       { title: "Control Flow", slug: "guide/control-flow", href: "/docs/guide/control-flow" },
       { title: "Functions and Closures", slug: "guide/functions", href: "/docs/guide/functions" },
@@ -39,6 +40,7 @@ export const docsNavigation: DocNavSection[] = [
     title: "Reference",
     items: [
       { title: "Grammar & Syntax Reference", slug: "reference/grammar", href: "/docs/reference/grammar" },
+      { title: "Lexical & Syntax Architecture", slug: "reference/syntax-architecture", href: "/docs/reference/syntax-architecture" },
       { title: "Keywords Reference", slug: "reference/keywords", href: "/docs/reference/keywords" },
       { title: "Built-in Functions", slug: "reference/builtins", href: "/docs/reference/builtins" },
       { title: "Standard Library API", slug: "reference/stdlib-api", href: "/docs/reference/stdlib-api" },

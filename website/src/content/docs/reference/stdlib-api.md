@@ -70,6 +70,16 @@ Arr::sort(mixed $items): list;
 Arr::macro(string $name, callable $closure): bool;
 ```
 
+> **Why Class Inheritance (`extends Arr`) is Forbidden:**
+> Core facades wrap optimized native Rust heap allocations (such as `Box<Vec<PhpValue>>` and `Box<IndexMap<String, PhpValue>>`). Subclassing static facades (`class MyArr extends Arr`) is strictly forbidden at compile time to prevent tight coupling to Rust internals and state management violations in multi-threaded Tokio fibers.
+>
+> Attempting `class CustomArr extends Arr` generates:
+> ```text
+> Fatal Error: Cannot extend static facade class 'Arr'. Use 'Arr::macro()' to register custom methods dynamically.
+> ```
+>
+> Instead, register dynamic methods at boot via `Arr::macro('methodName', function(...) { ... })`. Macros are stored in a thread-safe global registry with zero overhead on core collection types.
+
 ---
 
 ### `list` Instance Methods (Sequential Contiguous List)

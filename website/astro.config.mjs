@@ -5,7 +5,8 @@ import rhpGrammar from './src/grammars/rhp.tmLanguage.json' with { type: 'json' 
 // https://astro.build/config
 export default defineConfig({
   integrations: [tailwind()],
-  site: 'https://rhp.dev',
+  site: process.env.ASTRO_SITE || 'https://rhp.dev',
+  base: process.env.ASTRO_BASE || '/',
   markdown: {
     shikiConfig: {
       theme: 'github-dark',

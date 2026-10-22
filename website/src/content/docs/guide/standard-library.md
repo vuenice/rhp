@@ -557,16 +557,41 @@ $sorted = $numbers->sort();
 $numbers = $numbers->sort();
 ```
 
-### 5. Runtime Macro Registration (`Arr::macro`)
-Traditional class inheritance (`extends Arr`) is forbidden to preserve Rust heap boundaries and thread safety. Developers register custom macros dynamically at runtime:
+### 5. Runtime Macro Registration (`Arr::macro`) vs. Class Extension
+
+#### Why Traditional Class Extension (`extends Arr`) is a Bad Idea
+
+In object-oriented programming, developers often instinctively subclass helper utilities (e.g., `class CustomArr extends Arr`). In RHP, **inheriting from static facades is strictly forbidden at compile time**:
+
+* **Tight Coupling to Rust Internals:** Core helper classes like `Arr` and `Str` are not regular user-land classes—they are static facades wrapping optimized Rust heap allocations (such as `Box<Vec<PhpValue>>`, `Box<IndexMap<String, PhpValue>>`, or UTF-8 string buffers). Allowing inheritance would expose these internal memory boundaries and complicate the VM's JIT and optimization pipeline.
+* **Stateless Design Violations:** `Arr` and `Str` are intentionally designed as stateless utility wrappers and fluent pipeline builders. Subclassing them introduces state management confusion and severe thread-safety risks in a multi-threaded Tokio execution environment.
+
+Attempting to extend `Arr` or any other core static facade triggers a compile-time fatal diagnostic:
+
+```text
+Fatal Error: Cannot extend static facade class 'Arr'. Use 'Arr::macro()' to register custom methods dynamically.
+```
+
+#### Dynamic Runtime Macro Registration
+
+Instead of extending the class via inheritance, developers can register custom methods dynamically using `::macro()`:
 
 ```php
-Arr::macro('toCsv', function($delimiter = ',') {
+// Define a custom macro on the Arr facade
+Arr::macro('toCsv', function ($delimiter = ',') {
+    // Custom logic accessing the underlying collection
     return implode($delimiter, $this->all());
 });
 
+// Usage anywhere in your application
 $csv = Arr::list([1, 2, 3])->toCsv(); // "1,2,3"
 ```
+
+#### Why Macros Work Perfectly for RHP
+
+1. **Zero Performance Cost on Core Types:** Macros are stored in a global runtime registry rather than altering core class definitions or underlying Rust struct layouts.
+2. **Maintains Familiarity:** Matches the exact developer ergonomics of Laravel's `Macroable` trait, making migration seamless for engineering teams upgrading high-traffic apps.
+3. **Thread-Safe Registration:** Macros can be registered once during the initial application bootstrap phase in the parent process (`server.rhp`), making them safely accessible across all concurrent worker threads with zero locking overhead on hot paths.
 
 ---
 

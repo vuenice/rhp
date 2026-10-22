@@ -3,6 +3,16 @@ name = "rhp"
 version = "0.1.0"
 edition = "2024"
 default-run = "rhp"
+description = "Rust-Powered High-Performance PHP-Family Language, JIT Compiler, and Runtime"
+license = "MIT"
+authors = ["RHP Core Contributors"]
+repository = "https://github.com/vuenice/rhp"
+homepage = "https://rhp.dev"
+documentation = "https://rhp.dev/docs"
+readme = "README.md"
+keywords = ["compiler", "jit", "language", "php", "rust"]
+categories = ["compilers", "development-tools"]
+
 
 [dependencies]
 cranelift-codegen = "0.136.2"

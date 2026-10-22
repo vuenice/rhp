@@ -76,9 +76,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Classes, Structs & Singletons",
     section: "Language Guide",
-    description: "OOP architecture, visibility, interfaces, traits, and persistent singleton classes.",
+    description: "OOP architecture, visibility, interfaces, traits, persistent singleton classes, and facade macro extensibility.",
     url: "/docs/guide/classes-and-objects",
-    keywords: ["classes", "structs", "objects", "singleton", "interfaces", "traits", "oop"]
+    keywords: ["classes", "structs", "objects", "singleton", "interfaces", "traits", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
   },
   {
     title: "Error Handling",
@@ -104,9 +104,9 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Future, Memory, File, HTTP, Log, and Sys.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "future", "memory", "file", "http"]
+    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
   },
   {
     title: "Observability & OpenTelemetry",
@@ -120,9 +120,16 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Grammar & Syntax Reference",
     section: "Reference",
-    description: "Complete formal EBNF grammar specifications and Pratt parser precedence table.",
+    description: "Complete formal EBNF grammar specifications, custom Pratt parser operator precedence table, and typed AST structure.",
     url: "/docs/reference/grammar",
-    keywords: ["grammar", "ebnf", "syntax", "tokens", "pratt parser", "precedence"]
+    keywords: ["grammar", "ebnf", "syntax", "tokens", "pratt parser", "precedence", "binding power", "combinator", "ast", "expressions", "destructuring"]
+  },
+  {
+    title: "Lexical & Syntax Architecture",
+    section: "Reference",
+    description: "Refined lexical rules, keyword resolution, numeric validation, quoting strategies, maximal munch, case sensitivity, and variable validation.",
+    url: "/docs/reference/syntax-architecture",
+    keywords: ["lexical", "syntax", "architecture", "lexer", "logos", "maximal munch", "numeric literals", "trailing underscore", "leading dot", "quotes", "backticks", "case sensitivity", "attributes", "elseif", "variable names"]
   },
   {
     title: "Keywords Reference",
@@ -192,11 +199,11 @@ export const searchIndex: SearchItem[] = [
     keywords: ["ffi", "rust", "interop", "native", "c abi", "crates", "plugins", "rust file import", "import", "rs", "cache", "log", "helper class"]
   },
   {
-    title: "Compiler Internals",
+    title: "Compiler & VM Internals",
     section: "Advanced",
-    description: "Logos lexer, Pratt parser, linear bytecode IR, register VM, and Cranelift JIT.",
+    description: "Logos lexer, custom Pratt parser & combinators, strongly-typed AST, register bytecode VM engine, PhpValue, and Cranelift JIT.",
     url: "/docs/advanced/compiler-internals",
-    keywords: ["compiler", "vm", "jit", "cranelift", "bytecode", "logos", "ir", "internals"]
+    keywords: ["compiler", "vm", "jit", "cranelift", "bytecode", "logos", "ir", "internals", "pratt parser", "combinators", "ast", "ast visitor", "span tracking", "tree-walk", "register vm", "phpvalue", "dispatch loop", "callframe", "exception table"]
   },
 
   // Meta
@@ -217,8 +224,8 @@ export const searchIndex: SearchItem[] = [
   {
     title: "Frequently Asked Questions (FAQ)",
     section: "Community",
-    description: "Answers to common questions about PHP compatibility, Octane vs RHP, and types.",
+    description: "Answers to common questions about PHP compatibility, Octane vs RHP, types, and facade macro extensibility.",
     url: "/docs/faq",
-    keywords: ["faq", "questions", "php comparison", "octane", "swoole", "performance"]
+    keywords: ["faq", "questions", "php comparison", "octane", "swoole", "performance", "extends arr", "macro", "macros", "macroable"]
   }
 ];

@@ -21,6 +21,35 @@ if ($statusCode === 200) {
 }
 ```
 
+### Control Flow Normalization (`elseif` vs `else if`)
+
+In RHP, chained conditionals are standardized strictly on the monolithic keyword **`elseif`**:
+* **Standard Monolithic Keyword:** Always use `elseif` for secondary conditional branches.
+* **Prohibition of Two-Word `else if`:** The separated two-word sequence `else if` is rejected at compile time to eliminate dangling-else ambiguities and ensure code formatting consistency.
+
+```php
+// ✅ Valid:
+if ($status === 'active') {
+    $code = 1;
+} elseif ($status === 'pending') {
+    $code = 2;
+} else {
+    $code = 0;
+}
+
+// ❌ Rejected by compiler:
+// if ($status === 'active') {
+//     $code = 1;
+// } else if ($status === 'pending') { // ParseError
+//     $code = 2;
+// }
+```
+
+When `else if` is encountered, the compiler halts with an explicit error:
+```text
+SyntaxError: Use 'elseif' instead of 'else if'.
+```
+
 ---
 
 ## Pattern Matching with `match` Expressions

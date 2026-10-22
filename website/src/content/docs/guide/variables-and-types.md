@@ -19,10 +19,10 @@ RHP implements a **medium-strategy gradual type system**:
 
 All primitive type keywords are strictly lowercase:
 
-| Type Keyword | Description | Underlying Rust Structure |
+| Type Keyword | Description | Default Rust Storage |
 | :--- | :--- | :--- |
-| `int` | Signed 32-bit integer | `i32` |
-| `float` | Double precision floating-point | `f64` |
+| `int` | Signed integer — **defaults to `i32`** | `i32` |
+| `float` | Floating-point number — **defaults to `i32`** (32-bit float) | `i32` |
 | `string` | Binary-safe UTF-8 byte buffer with 23-byte SSO | `RhpString` (`Vec<u8>`) |
 | `bool` | Boolean value (`true` or `false`) | `bool` |
 | `void` | Absence of a return value | Unit `()` |
@@ -47,6 +47,22 @@ In RHP, strings are fundamentally raw byte buffers (`RhpString` storing $\le 23$
 * **Legacy Japanese Support:** Legacy multi-byte character sets such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** are preserved as raw bytes. Developers use `Str::fromEncoding($raw, 'Shift-JIS')` or `Str::utf8($raw)` for safe conversions.
 * **Immutable Helpers:** Chained helper methods like `$text->trim()->upper()` are immutable by default, leaving the original variable untouched. Variable updates use explicit reassignment (`$text = $text->trim()->upper();`) with Copy-On-Write (COW) semantics.
 
+### String Quoting Strategies & Escaping
+
+RHP provides versatile quoting strategies to simplify string handling, multi-line formatting, and template safety:
+
+* **Nested Opposing Quotes:** Single quotes can enclose double quotes without escaping (`'Hello "world"'`), and double quotes can enclose single quotes (`"It's working!"`).
+* **Escaped Quotes:** Backslash escapes `\'` and `\"` are supported inside single- and double-quoted strings.
+* **Raw Backtick Strings:** Enclosing strings in backticks (`` `...` ``) creates raw string literals where escape sequences (like `\n` or `\t`) and quotes are treated as literal characters without interpretation.
+* **Line Ending Normalization:** All newline variations (CRLF `\r\n`, LF `\n`, CR `\r`) are tracked by the lexer and normalized cleanly across platforms.
+
+```php
+string $single  = 'He said, "Hello"';
+string $double  = "It's a great day";
+string $escaped = "Line 1\nLine 2 with \"quotes\"";
+string $rawPath = `C:\new_folder\test.txt`; // Literal backslashes preserved
+```
+
 ---
 
 ## Variable Declarations (Prefix Type Syntax)
@@ -68,6 +84,33 @@ int $uninitialized; // Uninitialized typed declaration
 > ParseError: Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
 > ```
 > This rule applies uniformly across local variables, class properties (`public int $id = 1;`), and parameter lists (`function calc(int $id)`).
+
+### Variable Identifier Validation Rules
+
+Variable identifiers must strictly adhere to lexical naming rules:
+1. **Sigil (`$`) Requirement:** All variables must begin with a leading `$` sigil.
+2. **Identifier Character Rules:** The character immediately following `$` must be an ASCII letter (`a-z`, `A-Z`) or underscore (`_`), followed by any combination of letters, digits (`0-9`), or underscores.
+3. **Prohibited Patterns:**
+   - Bare sigils (`$`) without an identifier name are rejected.
+   - Variable-variables (`$$var`, `$$$name`) are strictly prohibited in RHP.
+   - Variables starting with digits (`$0`, `$123`) are forbidden.
+
+When an invalid variable name is detected, the lexer produces a clear diagnostic error:
+```text
+ParseError: Variable names must start with a letter or underscore, followed by alphanumeric characters (e.g., $varName).
+```
+
+```php
+// ✅ Valid variable identifiers:
+int $count = 10;
+string $_temp = "cache";
+float $data_v2 = 3.14;
+
+// ❌ Invalid variable identifiers (trigger compile-time error):
+// $$variable; // Error: Variable names must start with a letter or underscore...
+// $0;         // Error: Variable names must start with a letter or underscore...
+// $;          // Error: Variable names must start with a letter or underscore...
+```
 
 ---
 
@@ -95,16 +138,72 @@ $flag  = bool(1);          // true (bool)
 
 ---
 
-## Native Rust Numeric Types & Fluent APIs
+## Default Storage: `int` and `float` are both `i32`
 
-For low-level system operations, cryptography, and large data structures, RHP provides fluent static wrappers for native Rust numeric types:
+> [!IMPORTANT]
+> **Both `int` and `float` default to `i32` (32-bit) storage.**
+> The `float` primitive does **not** map to Rust's `f64` by default. It stores a 32-bit integer under the hood just like `int`. Use `Float::f64(...)` or `Float::f32(...)` via the `Float` facade when you explicitly need IEEE-754 precision.
 
 ```php
-// Construct and chain 64-bit integer calculations
-$largeNumber = Int::i64(9223372036854775807);
+int   $count = 42;       // i32 internally
+float $score = 9;        // also i32 internally — NOT f64
 
-// Decimal formatting
-$formatted = Float::f64(1234567.89)->toDecimal(2);
+// Explicit 64-bit or IEEE float via the Float facade:
+$precise = Float::f64(3.141592653589793);  // f64 precision
+$big     = Int::i64(9223372036854775807);  // i64 max value
+```
+
+---
+
+## `Int` and `Float` — Supporting Facade Classes (NOT Base Types)
+
+`Int` and `Float` are **static facade classes** — they are *not* instances of `int` or `float` and can never be instantiated with `new`. They provide factory methods and fluent utilities for working with extended Rust numeric types.
+
+| Item | Kind | Example |
+| :--- | :--- | :--- |
+| `int` | Primitive keyword (base datatype) | `int $x = 5;` |
+| `float` | Primitive keyword (base datatype) | `float $y = 3;` |
+| `Int` | Static facade class (identifier) | `Int::i64(...)` |
+| `Float` | Static facade class (identifier) | `Float::f64(...)` |
+
+```php
+// ✅ Correct — use as type keywords (primitive base types)
+int   $age    = 30;
+float $amount = 100;
+
+// ✅ Correct — use as static facade (extended numeric utilities)
+$bigId   = Int::i64(9223372036854775807);
+$precise = Float::f64(3.141592653589793)->toDecimal(6);
+$random  = Int::i64()->random()->add()->subtract();
+
+// ❌ Fatal Error — Int and Float cannot be instantiated
+// $obj = new Int();
+// => Fatal Error: Cannot instantiate static facade class 'Int'. Use static methods directly.
+```
+
+> [!CAUTION]
+> Calling `new Int()`, `new Float()`, `new Arr()`, or `new Str()` always produces a **fatal compile-time error**. These are purely static facades.
+
+---
+
+## Extended Rust Numeric Types via Facade Methods
+
+For low-level operations (cryptography, network protocols, large data), use the `Int` and `Float` facades to access native Rust numeric variants with full fluent chaining:
+
+```php
+// --- Int facade ---
+$small  = Int::i8(127);               // i8  (-128 to 127)
+$medium = Int::i32(2_147_483_647);    // i32 (same as plain `int` default)
+$large  = Int::i64(9_223_372_036_854_775_807);  // i64
+$huge   = Int::i128(170141183460469231731687303715884105727); // i128
+$ptr    = Int::usize(1024);           // usize (pointer-width)
+$chain  = Int::i64()->random()->add(10)->subtract(3); // fluent
+
+// --- Float facade ---
+$single = Float::f32(3.14);           // f32  (same as plain `float` default storage)
+$double = Float::f64(3.141592653589793); // f64 full IEEE-754 64-bit
+$fmt    = Float::f64(1234567.89)->toDecimal(2); // "1234567.89"
+$pct    = Float::f64(0.75)->toPercent();        // "75.00%"
 ```
 
 ---

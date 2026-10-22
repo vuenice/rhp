@@ -132,30 +132,10 @@ npx netlify deploy --prod --dir=dist
 ```
 
 ### GitHub Pages
-Configure your GitHub Actions workflow (`.github/workflows/deploy.yml`):
-```yaml
-name: Deploy Website to GitHub Pages
-on:
-  push:
-    branches: [ main ]
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install dependencies
-        run: cd website && npm ci
-      - name: Build site
-        run: cd website && npm run build
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./website/dist
-```
+Continuous deployment is automated via `.github/workflows/deploy-pages.yml`:
+- **Build:** Sets up Node.js 22, installs dependencies via `npm ci`, and builds static assets to `dist/`.
+- **Deploy:** Employs official `actions/deploy-pages@v4` with `actions/upload-pages-artifact@v3`.
+- **Triggers:** Automatically on push to `main` branch (for changes in `website/`) and on manual `workflow_dispatch`.
 
 ---
 
