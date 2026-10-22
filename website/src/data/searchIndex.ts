@@ -184,6 +184,13 @@ const rawSearchIndex: SearchItem[] = [
     url: "/docs/tooling/editor-setup",
     keywords: ["editor", "vscode", "neovim", "lsp", "tree-sitter", "syntax highlighting"]
   },
+  {
+    title: "Playground App",
+    section: "Tooling",
+    description: "Interactive desktop app to run RHP scripts and debug local, Docker, or remote applications.",
+    url: "/docs/tooling/playground",
+    keywords: ["playground", "rhp-play", "gui", "desktop", "tweakphp", "debug", "docker", "ssh", "repl", "scratchpad", "script runner"]
+  },
 
   // Advanced
   {

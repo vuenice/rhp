@@ -38,26 +38,37 @@ html {
   content: "" !important;
 }
 
-/* Inline code (VitePress style) */
+/* Inline code (VitePress style) - support both light and dark themes */
 .prose :not(pre) > code {
   font-family: var(--font-mono) !important;
   font-size: 0.85em !important;
   font-weight: 500 !important;
   padding: 0.2em 0.45em !important;
   border-radius: 4px !important;
+  background-color: rgba(100, 116, 139, 0.12) !important;
+  color: #0f172a !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+}
+
+html.dark .prose :not(pre) > code {
   background-color: rgba(142, 150, 170, 0.14) !important;
   color: #e2e8f0 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
+/* Wrapper injected by DocsLayout so the badge/button don't scroll with the code */
+.code-block {
+  position: relative;
+  margin: 1.25rem 0;
+}
+
 /* Code block container (VitePress style) */
 .prose pre.astro-code {
-  position: relative !important;
   background-color: #161618 !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   border-radius: 8px !important;
   padding: 1.25rem 1.5rem !important; /* 20px 24px */
-  margin: 1.25rem 0 !important;
+  margin: 0 !important;
   overflow-x: auto !important;
   font-family: var(--font-mono) !important;
   font-size: 0.875rem !important; /* 14px */
@@ -99,6 +110,12 @@ html {
   z-index: 2;
 }
 
+/* Hide language badge on hover so it does not collide with the copy button */
+.code-block:hover .code-lang-label,
+.code-block:focus-within .code-lang-label {
+  opacity: 0;
+}
+
 /* VitePress copy button */
 .code-copy-btn {
   position: absolute;
@@ -120,8 +137,8 @@ html {
   transition: opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.1s ease;
 }
 
-.prose pre:hover .code-copy-btn,
-pre.astro-code:hover .code-copy-btn {
+.code-block:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
   opacity: 1;
 }
 
@@ -139,5 +156,13 @@ pre.astro-code:hover .code-copy-btn {
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.4);
   background-color: rgba(52, 211, 153, 0.1);
+}
+
+/* Responsive documentation tables */
+.prose table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
 }
 

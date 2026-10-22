@@ -1,225 +1,155 @@
 ---
 // PlaygroundTeaser.astro
+import { siteUrl } from '../../lib/paths';
 ---
 
-<section id="playground" class="py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+<section id="playground" class="py-20 lg:py-28 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+  <!-- Glow Accent -->
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[400px] bg-brand-500/10 blur-[140px] rounded-full pointer-events-none -z-10"></div>
+
   <div class="text-center max-w-3xl mx-auto mb-12 space-y-4">
     <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500 border border-brand-500/20">
-      Interactive Playground
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+      Playground App
     </div>
-    <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-      Try RHP in Your Browser
+
+    <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+      RHP Playground App
     </h2>
-    <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400">
-      Test out syntax, collection subtypes, and async futures directly in this sandbox interface.
+
+    <p class="text-base sm:text-lg text-slate-600 dark:text-slate-400 leading-relaxed">
+      An interactive desktop scratchpad to run RHP scripts instantly and debug Local, Docker, or Remote applications — just like <strong class="text-slate-900 dark:text-slate-200">TweakPHP</strong> for your PHP & RHP workflows.
     </p>
+
+    <!-- CTAs -->
+    <div class="flex flex-wrap items-center justify-center gap-4 pt-3">
+      <a
+        href={siteUrl('/docs/tooling/playground')}
+        class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold text-sm shadow-lg shadow-brand-500/25 transition-all hover:shadow-brand-500/35 hover:-translate-y-0.5"
+      >
+        <span>Try Now</span>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+        </svg>
+      </a>
+
+      <a
+        href={siteUrl('/docs/tooling/playground')}
+        class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold text-sm border border-slate-200 dark:border-slate-700/80 transition-all hover:-translate-y-0.5"
+      >
+        <span>Documentation</span>
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+
+      <div class="hidden sm:inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#0B0F19] border border-slate-800 text-xs font-mono text-slate-300">
+        <span class="text-brand-500 select-none">$</span>
+        <span>cargo run -p rhp-play</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Playground Editor Card -->
-  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0B0F19] shadow-2xl overflow-hidden">
-    
-    <!-- Editor Header: Presets, Actions, and Run Button -->
-    <div class="flex flex-wrap items-center justify-between border-b border-slate-800/80 bg-[#0E1422] px-4 py-3 gap-3">
-      
-      <!-- Preset Select -->
-      <div class="flex items-center space-x-3">
-        <label for="code-preset-select" class="text-xs text-slate-400 font-medium hidden sm:inline">Template:</label>
-        <select
-          id="code-preset-select"
-          class="bg-slate-900 border border-slate-700/80 text-slate-200 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500 font-mono"
-        >
-          <option value="hello">1. Hello World & Str Facade</option>
-          <option value="collections">2. Native Arr Subtypes & COW</option>
-          <option value="concurrency">3. Tokio Concurrency (Future::wait)</option>
-          <option value="memory">4. Zero-GC Memory & Arena Scope</option>
-        </select>
-      </div>
-
-      <!-- Right Actions: Run Button & Reset -->
+  <!-- Playground Window / Image Showcase Card -->
+  <div class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-[#0B0F19] shadow-2xl overflow-hidden group">
+    <!-- Window Header -->
+    <div class="flex items-center justify-between border-b border-slate-800/80 bg-[#0E1422] px-4 py-3">
       <div class="flex items-center space-x-2">
-        <button
-          id="reset-code-btn"
-          type="button"
-          class="px-3 py-1.5 rounded-lg text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-        >
-          Reset
-        </button>
-
-        <button
-          id="run-code-btn"
-          type="button"
-          class="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-md shadow-brand-500/20 transition-all active:scale-95"
-        >
-          <svg id="run-icon" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-          <span id="run-text">Run (Ctrl+↵)</span>
-        </button>
+        <div class="w-3 h-3 rounded-full bg-rose-500/80"></div>
+        <div class="w-3 h-3 rounded-full bg-amber-500/80"></div>
+        <div class="w-3 h-3 rounded-full bg-emerald-500/80"></div>
       </div>
 
-    </div>
-
-    <!-- Main Playground Workspace: Editor + Terminal Output -->
-    <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[380px]">
-      
-      <!-- Left: Code Editor (7 cols) -->
-      <div class="lg:col-span-7 flex flex-col border-b lg:border-b-0 lg:border-r border-slate-800/80 bg-[#0A0D15]">
-        <div class="px-4 py-2 bg-[#080B12] border-b border-slate-800/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
-          <span>main.rhp</span>
-          <span class="text-slate-500">UTF-8 &bull; 4-space indent</span>
-        </div>
-        <textarea
-          id="playground-editor"
-          class="w-full flex-1 p-4 bg-transparent text-slate-200 font-mono text-xs sm:text-sm resize-none focus:outline-none leading-relaxed selection:bg-brand-500/30 min-h-[280px]"
-          spellcheck="false"
-          placeholder="Type your RHP code here..."
-        ></textarea>
+      <div class="text-xs text-slate-400 font-medium flex items-center gap-2 font-mono">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>rhp-play &bull; Standalone & App Debugger</span>
       </div>
 
-      <!-- Right: Output Terminal & Telemetry (5 cols) -->
-      <div class="lg:col-span-5 flex flex-col bg-[#07090F]">
-        <div class="px-4 py-2 bg-[#090C14] border-b border-slate-800/60 flex items-center justify-between text-[11px] font-mono text-slate-400">
-          <span class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-            Terminal Output
-          </span>
-          <span id="output-timing" class="text-emerald-400 font-mono">Ready</span>
-        </div>
+      <a
+        href={siteUrl('/docs/tooling/playground')}
+        class="text-[11px] font-mono text-brand-400 hover:text-brand-300 transition-colors flex items-center gap-1"
+      >
+        <span>Dedicated Guide</span>
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+    </div>
 
-        <!-- Terminal Output Text -->
-        <div class="flex-1 p-4 overflow-y-auto font-mono text-xs text-slate-300 leading-relaxed min-h-[220px]">
-          <pre id="output-stdout" class="whitespace-pre-wrap text-emerald-400/90 font-mono">[RHP Runtime Ready]
-Click "Run" or press Ctrl+Enter to execute.</pre>
-        </div>
+    <!-- App Screenshot with Link to Docs -->
+    <a
+      href={siteUrl('/docs/tooling/playground')}
+      class="block relative overflow-hidden focus:outline-none"
+      title="Click to view RHP Playground App documentation"
+    >
+      <img
+        src={siteUrl('/playground/rhp-play.png')}
+        alt="RHP Playground desktop app interface showing interactive code execution and application debugging"
+        class="w-full h-auto transition-transform duration-300 group-hover:scale-[1.006] block"
+        loading="lazy"
+      />
 
-        <!-- Telemetry Bottom Bar -->
-        <div class="px-4 py-2.5 bg-[#05070C] border-t border-slate-800/80 grid grid-cols-3 gap-2 text-[10px] font-mono text-slate-400">
-          <div>
-            <span class="text-slate-500 block">GC Pause</span>
-            <span id="telemetry-gc" class="text-emerald-400 font-semibold">0.0 ms</span>
-          </div>
-          <div>
-            <span class="text-slate-500 block">Memory</span>
-            <span id="telemetry-mem" class="text-slate-300 font-semibold">1,024 B</span>
-          </div>
-          <div>
-            <span class="text-slate-500 block">COW Detach</span>
-            <span id="telemetry-cow" class="text-slate-300 font-semibold">0</span>
-          </div>
-        </div>
-
+      <!-- Subtle hover overlay with CTA -->
+      <div class="absolute inset-0 bg-gradient-to-t from-[#0B0F19]/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end justify-center pb-8">
+        <span class="px-5 py-2.5 rounded-xl bg-brand-500 text-white font-semibold text-xs shadow-xl flex items-center gap-2">
+          <span>Read Playground Documentation</span>
+          <span aria-hidden="true">&rarr;</span>
+        </span>
       </div>
+    </a>
 
+    <!-- Bottom Status Bar -->
+    <div class="px-4 py-2.5 bg-[#080B12] border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-slate-400">
+      <div class="flex items-center gap-4">
+        <span class="text-emerald-400 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          Standalone & Multi-Host Execution Ready
+        </span>
+        <span class="text-slate-600 hidden sm:inline">&bull;</span>
+        <span class="text-slate-400 hidden sm:inline">Local, Docker & Remote SSH</span>
+      </div>
+      <div class="flex items-center gap-4 text-slate-500">
+        <span>GC Pause: 0.0ms</span>
+        <span>&bull;</span>
+        <span>Sub-millisecond JIT Startup</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature Grid Below Screenshot -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+    <div class="p-5 rounded-xl bg-white dark:bg-[#0E131F] border border-slate-200 dark:border-slate-800 shadow-sm hover:border-brand-500/30 transition-all">
+      <div class="w-8 h-8 rounded-lg bg-brand-500/10 text-brand-500 flex items-center justify-center mb-3">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      </div>
+      <h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1.5">Instant Script Runner</h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+        Test RHP syntax, native collection pipelines (`Arr::list`), and Tokio async futures without boilerplate, scaffolding, or server boots.
+      </p>
     </div>
 
-    <!-- Stub Extension Developer Notice -->
-    <div class="px-4 py-2 bg-[#05070C] border-t border-slate-800/80 text-[11px] text-slate-500 flex items-center justify-between">
-      <span>Interface client: <code class="font-mono text-brand-400">src/lib/playgroundClient.ts</code></span>
-      <span class="hidden sm:inline text-slate-400">Wire to WebAssembly compiler / Tokio HTTP endpoint</span>
+    <div class="p-5 rounded-xl bg-white dark:bg-[#0E131F] border border-slate-200 dark:border-slate-800 shadow-sm hover:border-brand-500/30 transition-all">
+      <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center mb-3">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+        </svg>
+      </div>
+      <h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1.5">Local, Docker & Remote SSH</h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+        Connect directly to your local projects, Docker containers, or live staging/production servers over SSH to evaluate code in context.
+      </p>
     </div>
 
+    <div class="p-5 rounded-xl bg-white dark:bg-[#0E131F] border border-slate-200 dark:border-slate-800 shadow-sm hover:border-brand-500/30 transition-all">
+      <div class="w-8 h-8 rounded-lg bg-php-500/10 text-php-400 flex items-center justify-center mb-3">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      </div>
+      <h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1.5">TweakPHP-Style Workflow</h3>
+      <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+        Query application databases, call service classes, verify fixes, and inspect output with real-time memory and GC telemetry.
+      </p>
+    </div>
   </div>
 </section>
-
-<script>
-  import { defaultExecutionClient } from '../../lib/playgroundClient';
-
-  const snippets = {
-    hello: `// 1. Basic greeting with string transformation
-string $name = "Developer";
-string $greeting = Str::slug("Hello {$$name} to RHP");
-
-print("Greeting: " . $greeting); //automatically compiled to Sys::print()
-print("RHP Version: " . Sys::version());`,
-
-    collections: `// Subtyped collections backed by Rust heap structures
-list $raw = Arr::list([10, 45, 120, 95, 330]);
-
-list $filtered = $raw
-    ->filter(fn($n) => $n > 50)
-    ->map(fn($n) => $n * 1.08);
-
-print("Filtered high-order list: " . $filtered->toJson());`,
-
-    concurrency: `// Non-blocking concurrent execution on Tokio thread pool
-[$user, $orders] = Future::wait([
-    fn() => DB::table('users')->find(42),
-    fn() => HTTP::get('https://api.internal/metrics')->json()
-]);
-
-Future::defer(fn() => Log::info("Post-response deferred hook"));
-print("User and metrics resolved concurrently!");`,
-
-    memory: `// Zero-GC deterministic memory management
-Memory::scope(function() {
-    $temp = Str::repeat("RHP_FAST_BUFFER_", 1000);
-    print("Allocated in scoped bump arena: " . Memory::usage() . " bytes");
-});
-
-print("GC cycles recorded: " . Memory::gcRuns());
-print("Total GC pause duration: " . Memory::gcPauseMs() . " ms");`
-  };
-
-  const editor = document.getElementById('playground-editor') as HTMLTextAreaElement;
-  const presetSelect = document.getElementById('code-preset-select') as HTMLSelectElement;
-  const runBtn = document.getElementById('run-code-btn');
-  const runText = document.getElementById('run-text');
-  const resetBtn = document.getElementById('reset-code-btn');
-  const stdoutPre = document.getElementById('output-stdout');
-  const timingSpan = document.getElementById('output-timing');
-  const gcSpan = document.getElementById('telemetry-gc');
-  const memSpan = document.getElementById('telemetry-mem');
-  const cowSpan = document.getElementById('telemetry-cow');
-
-  // Load initial preset
-  if (editor && presetSelect) {
-    editor.value = snippets.hello;
-
-    presetSelect.addEventListener('change', () => {
-      const key = presetSelect.value as keyof typeof snippets;
-      if (snippets[key]) {
-        editor.value = snippets[key];
-      }
-    });
-
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        const key = presetSelect.value as keyof typeof snippets;
-        editor.value = snippets[key] || snippets.hello;
-      });
-    }
-
-    async function execute() {
-      if (!runBtn || !editor || !stdoutPre) return;
-
-      runBtn.setAttribute('disabled', 'true');
-      if (runText) runText.textContent = 'Running...';
-      if (timingSpan) timingSpan.textContent = 'Compiling...';
-
-      try {
-        const result = await defaultExecutionClient.run(editor.value);
-
-        stdoutPre.textContent = result.stdout;
-        if (timingSpan) timingSpan.textContent = `${result.durationMs}ms`;
-        if (gcSpan) gcSpan.textContent = `${result.gcPauseMs.toFixed(1)} ms`;
-        if (memSpan) memSpan.textContent = `${result.memoryUsageBytes.toLocaleString()} B`;
-        if (cowSpan) cowSpan.textContent = `${result.cowDetachments}`;
-      } catch (err: any) {
-        stdoutPre.textContent = `Execution Error: ${err.message || err}`;
-      } finally {
-        runBtn.removeAttribute('disabled');
-        if (runText) runText.textContent = 'Run (Ctrl+↵)';
-      }
-    }
-
-    if (runBtn) {
-      runBtn.addEventListener('click', execute);
-    }
-
-    // Shortcut Ctrl+Enter or Cmd+Enter
-    editor.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        execute();
-      }
-    });
-  }
-</script>

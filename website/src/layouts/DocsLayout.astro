@@ -225,7 +225,7 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
   // Code block copy button and language tag injection (VitePress style)
   function enhanceCodeBlocks() {
     document.querySelectorAll('pre').forEach(pre => {
-      if (pre.querySelector('.code-copy-btn')) return;
+      if (pre.parentElement?.classList.contains('code-block')) return;
 
       // Extract language from attribute or code class (e.g. data-language="php")
       const code = pre.querySelector('code');
@@ -234,14 +234,18 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
       let lang = langData || (langClass ? langClass.replace('language-', '') : '');
       if (lang === 'text') lang = '';
 
-      pre.classList.add('relative', 'group');
+      // Wrap the <pre> so the badge/button stay fixed while long lines scroll horizontally.
+      const wrapper = document.createElement('div');
+      wrapper.className = 'code-block';
+      pre.parentNode?.insertBefore(wrapper, pre);
+      wrapper.appendChild(pre);
 
       // VitePress language badge (visible in top-right)
       if (lang) {
         const langBadge = document.createElement('span');
         langBadge.className = 'code-lang-label';
         langBadge.textContent = lang;
-        pre.appendChild(langBadge);
+        wrapper.appendChild(langBadge);
       }
 
       // VitePress copy button
@@ -275,7 +279,7 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
         }, 1800);
       });
 
-      pre.appendChild(copyBtn);
+      wrapper.appendChild(copyBtn);
     });
   }
 

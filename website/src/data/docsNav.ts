@@ -61,6 +61,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Auto-Formatter", "tooling/formatter"),
       item("Linter & Static Typing", "tooling/linter"),
       item("Editor Setup & LSP", "tooling/editor-setup"),
+      item("Playground App", "tooling/playground"),
     ]
   },
   {
