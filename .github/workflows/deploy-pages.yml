@@ -42,7 +42,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: npm ci --prefix website
+        run: npm ci --prefix website --legacy-peer-deps
 
       - name: Build site with Astro
         run: npm run build --prefix website

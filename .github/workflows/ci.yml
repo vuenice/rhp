@@ -3,8 +3,14 @@ name: Continuous Integration
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "website/**"
+      - "**.md"
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "website/**"
+      - "**.md"
   workflow_dispatch:
 
 permissions:
@@ -69,7 +75,7 @@ jobs:
           cache-dependency-path: website/package-lock.json
 
       - name: Install dependencies
-        run: npm ci --prefix website
+        run: npm ci --prefix website --legacy-peer-deps
 
       - name: Build Astro Website
         run: npm run build --prefix website
