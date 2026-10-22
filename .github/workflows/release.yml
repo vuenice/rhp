@@ -1,12 +1,12 @@
 name: Release (Cargo & CLI Binaries)
 
 on:
-  push:
-    tags: [ "v*" ]
+  release:
+    types: [published, created]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release Version Tag (e.g. v0.1.0; defaults to Cargo.toml version or Git tag)"
+        description: "Release Version Tag (e.g. v0.1.0; defaults to release tag or Cargo.toml version)"
         required: false
         default: ""
         type: string
@@ -67,6 +67,7 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: check-and-test
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -86,8 +87,8 @@ jobs:
             target: aarch64-apple-darwin
             archive_ext: tar.gz
             bin_ext: ""
-          # macOS Intel (x86_64)
-          - os: macos-13
+          # macOS Intel (x86_64) - cross-compiled via Apple Silicon runner
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive_ext: tar.gz
             bin_ext: ""
@@ -122,7 +123,9 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            VER="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
             VER="${{ github.event.inputs.tag_name }}"
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             VER="${{ github.ref_name }}"
@@ -255,7 +258,9 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            VER="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ]; then
             VER="${{ github.event.inputs.tag_name }}"
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             VER="${{ github.ref_name }}"
@@ -264,6 +269,7 @@ jobs:
             VER="v${PKG_VER}"
           fi
           echo "VER=${VER}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VER}"
 
       - name: Download all build distribution artifacts
         uses: actions/download-artifact@v4
@@ -277,14 +283,71 @@ jobs:
           find release_artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release_files/ \;
           ls -la release_files/
 
+      - name: Generate Release Assets Description
+        id: release_desc
+        shell: bash
+        run: |
+          VER="${{ steps.version.outputs.VER }}"
+          cat << 'EOF' | sed 's/^          //' > release_body.md
+          ### 📦 Release Packages & Checksums
+
+          | Package Archive | Target Platform | SHA-256 Checksum |
+          | :--- | :--- | :--- |
+          EOF
+
+          for hash_file in release_files/*.sha256; do
+            if [ -f "$hash_file" ]; then
+              filename=$(basename "${hash_file%.sha256}")
+              checksum=$(awk '{print $1}' "$hash_file")
+              platform="Generic"
+              if [[ "$filename" == *"unknown-linux-gnu"* ]]; then
+                platform="Linux (x86_64)"
+              elif [[ "$filename" == *"aarch64-apple-darwin"* ]]; then
+                platform="macOS Apple Silicon (ARM64)"
+              elif [[ "$filename" == *"x86_64-apple-darwin"* ]]; then
+                platform="macOS Intel (x86_64)"
+              elif [[ "$filename" == *"windows-msvc"* ]]; then
+                platform="Windows (x86_64)"
+              fi
+              echo "| \`$filename\` | $platform | \`$checksum\` |" >> release_body.md
+            fi
+          done
+
+          cat << 'EOF' | sed 's/^          //' >> release_body.md
+
+          ### 🚀 Quick Start & Installation
+
+          #### Linux / macOS
+          ```bash
+          # Unpack RHP release bundle:
+          tar -xzf rhp-bundle-*.tar.gz
+
+          # Move binaries to your PATH:
+          sudo mv rhp /usr/local/bin/
+          sudo mv rhp-play /usr/local/bin/
+
+          # Verify installation:
+          rhp --version
+          ```
+
+          #### Crates.io
+          ```bash
+          cargo install rhp
+          ```
+
+          For language specifications, documentation, and tutorials, visit [rhp.dev](https://rhp.dev) or browse [documentation](https://rhp.dev/docs).
+          EOF
+
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VER }}
           files: release_files/*
+          body_path: release_body.md
+          append_body: true
           generate_release_notes: true
-          draft: ${{ github.event.inputs.draft == 'true' }}
-          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          draft: ${{ github.event.inputs.draft == 'true' || (github.event_name == 'release' && github.event.release.draft) }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' || (github.event_name == 'release' && github.event.release.prerelease) }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
