@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/src-tauri/icons/32x32.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RHP Playground</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Left Sidebar Rail -->
+      <aside class="sidebar-rail" id="sidebar-rail">
+        <button
+          class="sidebar-btn standalone-btn active"
+          id="btn-standalone"
+          title="RHP Standalone Scratchpad"
+        >
+          ▶
+        </button>
+        <div class="sidebar-divider"></div>
+        <div class="apps-container" id="apps-list">
+          <!-- Dynamic app badges will be injected here -->
+        </div>
+        <button
+          class="add-connection-btn"
+          id="btn-open-create-modal"
+          title="New App Connection"
+        >
+          +
+        </button>
+      </aside>
+
+      <!-- Main Application Area -->
+      <main class="main-wrapper">
+        <!-- Header Bar -->
+        <header class="header-bar">
+          <div class="header-left">
+            <span class="header-title" id="header-title">⚡ RHP Playground</span>
+            <span class="header-badge" id="header-badge">Standalone</span>
+            <span class="header-path" id="header-path" style="display: none;"></span>
+          </div>
+          <div class="header-actions">
+            <div class="execution-status" id="execution-status"></div>
+            <button class="btn btn-secondary" id="btn-settings" style="display: none;" title="Connection Settings">
+              ⚙ Settings
+            </button>
+            <button class="btn btn-secondary" id="btn-format" title="Format Code with rhp lint">
+              Format
+            </button>
+            <button class="btn btn-run" id="btn-run" title="Execute script (Ctrl+Enter)">
+              <span>▶ Run</span>
+              <span class="shortcut-hint">Ctrl+↵</span>
+            </button>
+            <button class="btn btn-cancel" id="btn-cancel" style="display: none;" title="Cancel execution">
+              <span class="spinner"></span>
+              <span>⏹ Cancel</span>
+            </button>
+          </div>
+        </header>
+
+        <!-- Editor & Output Panels with Draggable Divider -->
+        <section class="workspace-split" id="workspace-split">
+          <!-- Editor Panel -->
+          <div class="editor-container" id="editor-container" style="width: 50%;">
+            <div class="panel-header">
+              <span>Code Editor (RHP / PHP)</span>
+              <div class="panel-header-actions">
+                <button class="panel-action-btn" id="btn-reset-code" title="Reset to default code">Reset</button>
+                <button class="panel-action-btn" id="btn-clear-code" title="Clear editor">Clear</button>
+              </div>
+            </div>
+            <div class="editor-view-root" id="editor-view-root"></div>
+          </div>
+
+          <!-- Draggable Splitter Divider -->
+          <div class="splitter-divider" id="splitter-divider" title="Drag to resize panels"></div>
+
+          <!-- Output Panel -->
+          <div class="output-container" id="output-container" style="flex: 1;">
+            <div class="panel-header">
+              <span id="output-header-title">Output</span>
+              <div class="panel-header-actions">
+                <button class="panel-action-btn" id="btn-copy-output" title="Copy output to clipboard">Copy</button>
+                <button class="panel-action-btn" id="btn-clear-output" title="Clear output">Clear</button>
+              </div>
+            </div>
+            <div class="output-content-area" id="output-content">
+              <span class="output-empty">// Press Run (Ctrl+Enter) to execute...</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- New Connection Modal -->
+      <div class="modal-overlay" id="modal-create">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3 class="modal-title">New Connection</h3>
+            <button class="modal-close-btn" id="btn-close-create-modal">&times;</button>
+          </div>
+
+          <div class="segmented-tabs">
+            <button class="tab-btn active" data-tab="local">Local</button>
+            <button class="tab-btn" data-tab="docker">Docker</button>
+            <button class="tab-btn" data-tab="remote">Remote</button>
+          </div>
+
+          <div id="tab-content-local">
+            <div class="form-group">
+              <label class="form-label">App Name</label>
+              <input
+                type="text"
+                class="form-input"
+                id="create-app-name"
+                placeholder="e.g. My App or Laravel Project"
+              />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Project Directory</label>
+              <div class="form-input-row">
+                <input
+                  type="text"
+                  class="form-input"
+                  id="create-project-path"
+                  placeholder="/path/to/project"
+                />
+                <button class="btn btn-secondary" id="btn-browse-project">Browse...</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">RHP Binary Path</label>
+              <div class="form-input-row">
+                <input
+                  type="text"
+                  class="form-input"
+                  id="create-rhp-path"
+                  placeholder="rhp or /path/to/rhp"
+                />
+                <button class="btn btn-secondary" id="btn-browse-rhp">Browse...</button>
+              </div>
+            </div>
+
+            <div class="modal-error" id="create-modal-error" style="display: none;"></div>
+
+            <div class="modal-footer">
+              <button class="btn btn-secondary" id="btn-cancel-create">Cancel</button>
+              <button class="btn btn-run" id="btn-confirm-create" style="background-color: var(--accent-purple);">
+                Create Connection
+              </button>
+            </div>
+          </div>
+
+          <div id="tab-content-docker" style="display: none;">
+            <div class="tab-placeholder">
+              <h4>Docker Container Connection</h4>
+              <p>Docker containerized REPL execution will be available in future releases.</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" id="btn-cancel-docker">Close</button>
+            </div>
+          </div>
+
+          <div id="tab-content-remote" style="display: none;">
+            <div class="tab-placeholder">
+              <h4>Remote SSH Connection</h4>
+              <p>Execute PHP code securely on remote staging or production servers over SSH.</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" id="btn-cancel-remote">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div class="modal-overlay" id="modal-settings">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3 class="modal-title">Project Settings</h3>
+            <button class="modal-close-btn" id="btn-close-settings-modal">&times;</button>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">App Name</label>
+            <input type="text" class="form-input" id="settings-app-name" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Project Directory</label>
+            <div class="form-input-row">
+              <input type="text" class="form-input" id="settings-project-path" />
+              <button class="btn btn-secondary" id="btn-settings-browse-project">Browse...</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">RHP Binary Path</label>
+            <div class="form-input-row">
+              <input type="text" class="form-input" id="settings-rhp-path" />
+              <button class="btn btn-secondary" id="btn-settings-browse-rhp">Browse...</button>
+            </div>
+          </div>
+
+          <div class="modal-error" id="settings-modal-error" style="display: none;"></div>
+
+          <div class="modal-footer" style="justify-content: space-between;">
+            <button class="btn btn-cancel" id="btn-delete-connection" style="background-color: rgba(244, 63, 94, 0.2); border-color: rgba(244, 63, 94, 0.4); color: #ff8095;">
+              Delete
+            </button>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
+              <button class="btn btn-run" id="btn-confirm-settings" style="background-color: var(--accent-purple);">
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -164,20 +164,21 @@ $data = $fileFuture->wait();
 
 ### 5. Interactive Desktop Playground (`rhp-play`)
 
-RHP includes a minimalist, high-performance desktop GUI playground (inspired by TweakPHP) featuring real-time syntax highlighting, local workspace connection management, and split-pane execution output:
+RHP includes a minimalist, high-performance desktop playground built with **Tauri v2**, **Vanilla TypeScript**, and **CodeMirror 6** (inspired by TweakPHP) featuring real-time syntax highlighting, local workspace connection management, and split-pane execution output:
 
 ```bash
-# Run directly via Cargo:
-cargo run --manifest-path playground/Cargo.toml
+# Run in development mode (with hot-reload):
+cd playground
+npm install
+npm run tauri dev
 
-# Or from within the playground directory:
-cd playground && cargo run
-
-# Run the pre-compiled binary:
-./playground/target/release/rhp-play
+# Or build the frontend and compile the native release binary:
+npm run build
+cargo build --release
+./target/release/rhp-play
 
 # Or install globally to ~/.cargo/bin:
-cargo install --path playground
+cargo install --path src-tauri
 rhp-play
 ```
 

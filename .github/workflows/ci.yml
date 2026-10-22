@@ -42,12 +42,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxkbcommon-dev \
+            libwebkit2gtk-4.1-dev \
             libssl-dev \
-            libgtk-3-dev
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev
 
       - name: Run RHP Language Engine Tests
         run: cargo test --verbose

@@ -14,6 +14,7 @@ pub struct AppItem {
 }
 
 impl AppItem {
+    #[allow(dead_code)]
     pub fn initial_letter(&self) -> String {
         self.name
             .trim()
@@ -26,13 +27,27 @@ impl AppItem {
 }
 
 pub fn default_standalone_code() -> String {
-    r#"$data = [
+    r#"$int_value = 1;
+$float_value = 1.1;
+$bool_value = true;
+$string_value = 'hello world';
+
+$arr_dict = [
     "name" => "RHP Playground",
     "mode" => "Standalone",
     "description" => "Easily run and test PHP & RHP code instantly",
 ];
 
-print_r($data);
+$arr_list = [ 1, 2, 3 ];
+
+dd(
+  $int_value, 
+  $float_value, 
+  $bool_value, 
+  $string_value, 
+  $arr_dict, 
+  $arr_list
+);
 "#.to_string()
 }
 

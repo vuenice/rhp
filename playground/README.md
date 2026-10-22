@@ -1,8 +1,8 @@
 # RHP Playground
 
-A clean, minimalist, high-performance desktop playground for **RHP / PHP**, designed exactly like [TweakPHP](https://github.com/tweakphp/tweakphp).
+A clean, minimalist, high-performance desktop playground for **RHP / PHP**, designed like [TweakPHP](https://github.com/tweakphp/tweakphp).
 
-Built 100% in **pure Rust** with **`eframe` / `egui`**, **`syntect`**, **`tokio`**, and **`rfd`**.
+Built with **Tauri v2**, **Vanilla TypeScript**, and **CodeMirror 6** for effortless styling, maintainability, and native desktop performance without heavy frontend frameworks.
 
 ---
 
@@ -22,20 +22,21 @@ Built 100% in **pure Rust** with **`eframe` / `egui`**, **`syntect`**, **`tokio`
 ```
 
 ### 1. Left Sidebar Rail
+- **`▶` Button (Standalone Scratchpad)**: Switches instantly to the standalone RHP scratchpad.
 - **`+` Button (Create Connection)**: Opens a modal popup with 3 tabs: **Local**, **Docker**, and **Remote**.
   - **Local Connection**: Requires **Project Path** and **RHP Path** (with native folder/file pickers).
   - **Docker & Remote**: Reserved for upcoming releases.
-- **App Badges (`L`, `V`, ...)**: Displays each configured app with a rounded badge containing the first letter of the app's name.
+- **App Badges (`L`, `V`, ...)**: Displays each configured app with a rounded badge containing the initial letter of the app's name.
   - Clicking a badge seamlessly switches the active workspace and playground state.
 
-### 2. Two Simple Plain Panels
+### 2. Two Resizable Panels
 - **Left Panel (Editor)**:
+  - Powered by **CodeMirror 6** with real-time PHP / RHP syntax highlighting and bracket matching.
   - Line numbers gutter (`1, 2, 3...`).
-  - Monospace code editor with real-time PHP / RHP syntax highlighting.
-  - Minimalist and uncluttered.
+  - Active line highlighting, indentation guides, and clean dark mode styling.
 - **Right Panel (Output)**:
-  - Line numbers gutter (`1, 2, 3...`).
   - Selectable monospace execution output.
+  - Formatted error banners, execution duration indicator (`✓ 12ms`), copy button, and clear button.
 - **Draggable Splitter**: Easily adjust the horizontal ratio between the editor and output panels.
 
 ### 3. Run & Cancel Controls
@@ -45,37 +46,34 @@ Built 100% in **pure Rust** with **`eframe` / `egui`**, **`syntect`**, **`tokio`
 
 ---
 
-## 🚀 Installation & Running
+## 🚀 Development & Running
 
-The Playground is built as a dedicated companion binary named **`rhp-play`**:
-
-### Run with Cargo:
-From root repository:
+### Prerequisites
+On Linux (Debian/Ubuntu):
 ```bash
-cargo run --manifest-path playground/Cargo.toml
-```
-Or from the `playground/` directory:
-```bash
-cd playground && cargo run
+sudo apt update && sudo apt install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
 ```
 
-### Build & Run Binary Directly:
+### Run in Development (with Hot Reload):
 ```bash
-# Build release binary (lives in playground/target/)
-cargo build --release --manifest-path playground/Cargo.toml
+cd playground
+npm install
+npm run tauri dev
+```
 
-# Run the compiled binary:
+### Build Frontend & Release Binary:
+```bash
+cd playground
+npm run build
+cargo build --release
+```
+The compiled binary will be located at:
+```bash
 ./playground/target/release/rhp-play
 ```
 
-To install both `rhp` and `rhp-play` to `~/.cargo/bin`:
+### Run Unit Tests:
 ```bash
-cargo install --path .
-cargo install --path playground
+cd playground
+cargo test
 ```
-
-Once installed, simply run:
-```bash
-rhp-play
-```
-`rhp-play` automatically discovers its companion `rhp` compiler binary from the same directory or system `PATH`!

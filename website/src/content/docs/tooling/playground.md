@@ -31,33 +31,29 @@ Designed specifically after the workflow popularized by **[TweakPHP](https://git
 
 ## How to Run the Playground App
 
-RHP Playground is built 100% in pure Rust using **`eframe` / `egui`**, **`syntect`**, **`tokio`**, and **`rfd`** for near-instant rendering and low memory footprint.
+RHP Playground is built with **Tauri v2**, **Vanilla TypeScript**, and **CodeMirror 6**, backed by a high-performance asynchronous Rust engine (`tokio`, `rfd`) for native performance, instant startup, and effortless styling without bloated frontend frameworks.
 
-### 1. Run with Cargo
+### 1. Development Mode (with Hot Reload)
 
-From the root of the RHP repository:
-
-```bash
-cargo run --manifest-path playground/Cargo.toml
-```
-
-Or switch directly into the `playground` directory and run:
+From the `playground` directory:
 
 ```bash
 cd playground
-cargo run
+npm install
+npm run tauri dev
 ```
 
 ### 2. Build & Run the Pre-compiled Binary
 
-To build an optimized release binary:
+To build the frontend and compile an optimized release binary:
 
 ```bash
-# Compile with release optimizations (outputs to playground/target/release/)
-cargo build --release --manifest-path playground/Cargo.toml
+cd playground
+npm run build
+cargo build --release
 
 # Launch the compiled binary:
-./playground/target/release/rhp-play
+./target/release/rhp-play
 ```
 
 ### 3. Install Globally to System `PATH`
