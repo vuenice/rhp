@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://rhp.dev/docs"><img src="https://img.shields.io/badge/docs-rhp.dev-orange.svg" alt="Documentation"></a>
+  <a href="https://discord.gg/DdCn4ySEv"><img src="https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/vuenice/rhp/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status"></a>
   <a href="https://github.com/vuenice/rhp/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -431,5 +432,6 @@ class OrderProcessor {
 ## 📚 Documentation & Community
 
 - **Official Documentation:** [https://rhp.dev/docs](https://rhp.dev/docs)
+- **Discord Community:** [Join RHP Discord Server](https://discord.gg/DdCn4ySEv)
 - **Architecture Deep Dives:** [Syntax & Core Architecture](https://rhp.dev/docs/reference/syntax-architecture)
 - **GitHub Repository:** [https://github.com/vuenice/rhp](https://github.com/vuenice/rhp)
