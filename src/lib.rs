@@ -46,11 +46,11 @@ pub use lexer::{
 };
 pub use parser::{
     error::{ParseError, ParseErrorKind},
-    parse, parse_expr, parse_stmt, parse_with_file_id, CombinatorStream, Parser,
+    parse, parse_expr, parse_stmt, parse_with_file_id, parse_with_path, CombinatorStream, Parser,
 };
 pub use type_system::{
     check_program, check_program_with_hierarchy, parse_and_check, parse_and_check_with_file_id,
-    parse_and_check_with_hierarchy, ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FrontendError,
+    parse_and_check_with_hierarchy, parse_and_check_with_path, ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FrontendError,
     FunctionSignature, InterfaceTypeInfo, ParamSignature, PropertyTypeInfo, RhpType, RustFloatKind,
     RustIntKind, TypeCheckResult, TypeChecker, TypeEnvironment, TypeError, TypeErrorKind,
     TypeHierarchy, TypedProgram, VariableBinding,
@@ -71,6 +71,7 @@ pub use vm::{
     record_fiber_io_finish, record_fiber_io_start, record_fiber_yield, register_runtime_closure_macro,
     register_tier2_plugin, register_tier2_plugin_handler, run_expr, run_module, run_source,
     run_source_in_fiber, run_source_in_fiber_with_context, run_source_with_file_id,
+    run_source_with_path, run_source_with_path_and_vm, run_source_with_path_vm_and_jit,
     run_source_with_vm, run_source_with_vm_and_jit, serialize_response, set_fiber_local, with_current_fiber, CallFrame,
     EngineState, Environment, ExecutionError, FacadeResult, Fiber, FiberContext, FiberId,
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, FrozenValue, IndexMap,

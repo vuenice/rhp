@@ -333,6 +333,33 @@ pub enum Token<'s> {
     TypeHashMap,
 
     // -------------------------------------------------------------------------
+    // Magic Constants (Case-Insensitive compile-time / scope metadata)
+    // -------------------------------------------------------------------------
+    #[regex(r"(?i:__line__)")]
+    MagicLine,
+
+    #[regex(r"(?i:__file__)")]
+    MagicFile,
+
+    #[regex(r"(?i:__dir__)")]
+    MagicDir,
+
+    #[regex(r"(?i:__function__)")]
+    MagicFunction,
+
+    #[regex(r"(?i:__class__)")]
+    MagicClass,
+
+    #[regex(r"(?i:__method__)")]
+    MagicMethod,
+
+    #[regex(r"(?i:__trait__)")]
+    MagicTrait,
+
+    #[regex(r"(?i:__namespace__)")]
+    MagicNamespace,
+
+    // -------------------------------------------------------------------------
     // Identifiers (Fallback after keywords)
     // -------------------------------------------------------------------------
     #[regex(r"[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*", |lex| lex.slice())]
@@ -669,6 +696,14 @@ impl<'s> Token<'s> {
             Token::TypeDict => "dict",
             Token::TypeSet => "set",
             Token::TypeHashMap => "hashmap",
+            Token::MagicLine => "__LINE__",
+            Token::MagicFile => "__FILE__",
+            Token::MagicDir => "__DIR__",
+            Token::MagicFunction => "__FUNCTION__",
+            Token::MagicClass => "__CLASS__",
+            Token::MagicMethod => "__METHOD__",
+            Token::MagicTrait => "__TRAIT__",
+            Token::MagicNamespace => "__NAMESPACE__",
             Token::DoubleColon => "::",
             Token::NullsafeArrow => "?->",
             Token::Arrow => "->",
@@ -825,6 +860,21 @@ impl<'s> Token<'s> {
                 | Token::TypeDict
                 | Token::TypeSet
                 | Token::TypeHashMap
+        )
+    }
+
+    /// Check if this token represents a PHP magic constant.
+    pub fn is_magic_constant(&self) -> bool {
+        matches!(
+            self,
+            Token::MagicLine
+                | Token::MagicFile
+                | Token::MagicDir
+                | Token::MagicFunction
+                | Token::MagicClass
+                | Token::MagicMethod
+                | Token::MagicTrait
+                | Token::MagicNamespace
         )
     }
 

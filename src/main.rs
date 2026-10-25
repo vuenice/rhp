@@ -366,7 +366,12 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
         RunMode::Build { jit_enabled, .. } => jit_enabled,
     };
 
-    match rhp::vm::run_source_with_vm_and_jit(&source, jit_enabled) {
+    let canonical_path = std::fs::canonicalize(&resolved_path)
+        .unwrap_or_else(|_| resolved_path.clone())
+        .to_string_lossy()
+        .to_string();
+
+    match rhp::vm::run_source_with_path_vm_and_jit(&source, &canonical_path, jit_enabled) {
         Ok((vm, val)) => {
             let out = vm.output();
             if !out.is_empty() {
@@ -673,7 +678,12 @@ fn serve_http_connection(
         req = req.with_post(k, v);
     }
 
-    let state = match rhp::ParentProcess::boot(&source) {
+    let canonical_path = std::fs::canonicalize(script_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(script_path))
+        .to_string_lossy()
+        .to_string();
+
+    let state = match rhp::ParentProcess::boot_with_path(&source, &canonical_path) {
         Ok(s) => s,
         Err(e) => {
             let err_body = format!("<h1>500 Compilation Error</h1><pre>{}</pre>", e);

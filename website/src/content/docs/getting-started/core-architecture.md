@@ -7,6 +7,14 @@ order: 3
 
 ## What RHP Is
 
+<p align="center" class="my-6">
+  <img
+    src="/rhp-banner.png"
+    alt="RHP - High-Performance Programming Language Combining Rust Speed & PHP Ergonomics"
+    class="w-full h-auto rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800"
+  />
+</p>
+
 RHP is a **strict, gradually typed, PHP-style language with a Rust host runtime**. It is built from the ground up for blazing fast, memory-safe web requests. 
 
 - **Not PHP-compatible:** RHP deliberately breaks backward compatibility with PHP's legacy baggage, dynamic quirks, and loose typing.

@@ -306,13 +306,16 @@ impl<'s> CombinatorStream<'s> {
         // 14. Namespace statement
         if self.matches(&Token::Namespace) {
             let name = if !self.check(&Token::SemiColon) && !self.check(&Token::OpenBrace) {
-                Some(self.expect_ident()?)
+                Some(self.expect_qualified_ident()?)
             } else {
                 None
             };
 
             if self.check(&Token::OpenBrace) {
+                let prev_ns = self.scope.namespace.clone();
+                self.scope.namespace = name.as_ref().map(|id| id.name.to_string());
                 let body = self.parse_block_statements()?;
+                self.scope.namespace = prev_ns;
                 let span = start_span.merge(self.current_span());
                 return Ok(Stmt::new(
                     StmtKind::Namespace {
@@ -322,6 +325,7 @@ impl<'s> CombinatorStream<'s> {
                     span,
                 ));
             } else {
+                self.scope.namespace = name.as_ref().map(|id| id.name.to_string());
                 self.expect_statement_terminator()?;
                 let span = start_span.merge(self.current_span());
                 return Ok(Stmt::new(
@@ -538,17 +542,20 @@ impl<'s> CombinatorStream<'s> {
         if self.matches(&Token::Function) {
             let name = self.expect_ident()?;
             self.register_user_function(name.name);
-            let params = self.parse_formal_parameters()?;
-            let return_type = if self.matches(&Token::Colon) {
-                Some(self.parse_type_hint()?)
-            } else {
-                None
-            };
-            let body = if self.matches(&Token::SemiColon) {
-                None
-            } else {
-                Some(self.parse_block_statements()?)
-            };
+            let (params, return_type, body) = self.with_function_scope(name.name, |stream| {
+                let params = stream.parse_formal_parameters()?;
+                let return_type = if stream.matches(&Token::Colon) {
+                    Some(stream.parse_type_hint()?)
+                } else {
+                    None
+                };
+                let body = if stream.matches(&Token::SemiColon) {
+                    None
+                } else {
+                    Some(stream.parse_block_statements()?)
+                };
+                Ok((params, return_type, body))
+            })?;
             let span = start_span.merge(self.current_span());
             return Ok(Stmt::new(
                 StmtKind::FunctionDecl(FunctionDecl {
@@ -633,15 +640,22 @@ impl<'s> CombinatorStream<'s> {
                 Vec::new()
             };
 
+            let class_fqn = match &self.scope.namespace {
+                Some(ns) => format!("{}\\{}", ns, name.name),
+                None => name.name.to_string(),
+            };
             self.expect(Token::OpenBrace)?;
-            let mut members = Vec::new();
-            while !self.check(&Token::CloseBrace) && !self.is_eof() {
-                self.skip_doc_comments();
-                if self.check(&Token::CloseBrace) {
-                    break;
+            let members = self.with_class_scope(class_fqn, |stream| {
+                let mut members = Vec::new();
+                while !stream.check(&Token::CloseBrace) && !stream.is_eof() {
+                    stream.skip_doc_comments();
+                    if stream.check(&Token::CloseBrace) {
+                        break;
+                    }
+                    members.push(stream.parse_class_member()?);
                 }
-                members.push(self.parse_class_member()?);
-            }
+                Ok(members)
+            })?;
             let close_brace = self.expect(Token::CloseBrace)?;
             let span = start_span.merge(close_brace.span);
             return Ok(Stmt::new(
@@ -666,18 +680,25 @@ impl<'s> CombinatorStream<'s> {
             } else {
                 Vec::new()
             };
+            let iface_fqn = match &self.scope.namespace {
+                Some(ns) => format!("{}\\{}", ns, name.name),
+                None => name.name.to_string(),
+            };
             self.expect(Token::OpenBrace)?;
-            let mut methods = Vec::new();
-            while !self.check(&Token::CloseBrace) && !self.is_eof() {
-                self.skip_doc_comments();
-                if self.check(&Token::CloseBrace) {
-                    break;
+            let methods = self.with_class_scope(iface_fqn, |stream| {
+                let mut methods = Vec::new();
+                while !stream.check(&Token::CloseBrace) && !stream.is_eof() {
+                    stream.skip_doc_comments();
+                    if stream.check(&Token::CloseBrace) {
+                        break;
+                    }
+                    let member = stream.parse_class_member()?;
+                    if let ClassMemberKind::Method(m) = member.kind {
+                        methods.push(m);
+                    }
                 }
-                let member = self.parse_class_member()?;
-                if let ClassMemberKind::Method(m) = member.kind {
-                    methods.push(m);
-                }
-            }
+                Ok(methods)
+            })?;
             let close_brace = self.expect(Token::CloseBrace)?;
             let span = start_span.merge(close_brace.span);
             return Ok(Stmt::new(
@@ -695,15 +716,22 @@ impl<'s> CombinatorStream<'s> {
         // Trait declaration
         if self.matches(&Token::Trait) {
             let name = self.expect_ident()?;
+            let trait_fqn = match &self.scope.namespace {
+                Some(ns) => format!("{}\\{}", ns, name.name),
+                None => name.name.to_string(),
+            };
             self.expect(Token::OpenBrace)?;
-            let mut members = Vec::new();
-            while !self.check(&Token::CloseBrace) && !self.is_eof() {
-                self.skip_doc_comments();
-                if self.check(&Token::CloseBrace) {
-                    break;
+            let members = self.with_trait_scope(trait_fqn, |stream| {
+                let mut members = Vec::new();
+                while !stream.check(&Token::CloseBrace) && !stream.is_eof() {
+                    stream.skip_doc_comments();
+                    if stream.check(&Token::CloseBrace) {
+                        break;
+                    }
+                    members.push(stream.parse_class_member()?);
                 }
-                members.push(self.parse_class_member()?);
-            }
+                Ok(members)
+            })?;
             let close_brace = self.expect(Token::CloseBrace)?;
             let span = start_span.merge(close_brace.span);
             return Ok(Stmt::new(
@@ -730,40 +758,46 @@ impl<'s> CombinatorStream<'s> {
             } else {
                 Vec::new()
             };
-
+            let enum_fqn = match &self.scope.namespace {
+                Some(ns) => format!("{}\\{}", ns, name.name),
+                None => name.name.to_string(),
+            };
             self.expect(Token::OpenBrace)?;
-            let mut cases = Vec::new();
-            let mut methods = Vec::new();
+            let (cases, methods) = self.with_class_scope(enum_fqn, |stream| {
+                let mut cases = Vec::new();
+                let mut methods = Vec::new();
 
-            while !self.check(&Token::CloseBrace) && !self.is_eof() {
-                self.skip_doc_comments();
-                if self.check(&Token::CloseBrace) {
-                    break;
-                }
-                let member_attrs = self.parse_attributes()?;
-                if self.matches(&Token::Case) {
-                    let case_start = self.current_span();
-                    let case_name = self.expect_ident()?;
-                    let case_val = if self.matches(&Token::Assign) {
-                        Some(self.parse_expr_lowest()?)
+                while !stream.check(&Token::CloseBrace) && !stream.is_eof() {
+                    stream.skip_doc_comments();
+                    if stream.check(&Token::CloseBrace) {
+                        break;
+                    }
+                    let member_attrs = stream.parse_attributes()?;
+                    if stream.matches(&Token::Case) {
+                        let case_start = stream.current_span();
+                        let case_name = stream.expect_ident()?;
+                        let case_val = if stream.matches(&Token::Assign) {
+                            Some(stream.parse_expr_lowest()?)
+                        } else {
+                            None
+                        };
+                        stream.expect_statement_terminator()?;
+                        let case_span = case_start.merge(stream.current_span());
+                        cases.push(EnumCase {
+                            span: case_span,
+                            attributes: member_attrs,
+                            name: case_name,
+                            value: case_val,
+                        });
                     } else {
-                        None
-                    };
-                    self.expect_statement_terminator()?;
-                    let case_span = case_start.merge(self.current_span());
-                    cases.push(EnumCase {
-                        span: case_span,
-                        attributes: member_attrs,
-                        name: case_name,
-                        value: case_val,
-                    });
-                } else {
-                    let member = self.parse_class_member()?;
-                    if let ClassMemberKind::Method(m) = member.kind {
-                        methods.push(m);
+                        let member = stream.parse_class_member()?;
+                        if let ClassMemberKind::Method(m) = member.kind {
+                            methods.push(m);
+                        }
                     }
                 }
-            }
+                Ok((cases, methods))
+            })?;
             let close_brace = self.expect(Token::CloseBrace)?;
             let span = start_span.merge(close_brace.span);
             return Ok(Stmt::new(
@@ -843,17 +877,20 @@ impl<'s> CombinatorStream<'s> {
         let is_async = self.matches(&Token::Async);
         if self.matches(&Token::Function) {
             let name = self.expect_ident()?;
-            let params = self.parse_formal_parameters()?;
-            let return_type = if self.matches(&Token::Colon) {
-                Some(self.parse_type_hint()?)
-            } else {
-                None
-            };
-            let body = if self.matches(&Token::SemiColon) {
-                None
-            } else {
-                Some(self.parse_block_statements()?)
-            };
+            let (params, return_type, body) = self.with_function_scope(name.name, |stream| {
+                let params = stream.parse_formal_parameters()?;
+                let return_type = if stream.matches(&Token::Colon) {
+                    Some(stream.parse_type_hint()?)
+                } else {
+                    None
+                };
+                let body = if stream.matches(&Token::SemiColon) {
+                    None
+                } else {
+                    Some(stream.parse_block_statements()?)
+                };
+                Ok((params, return_type, body))
+            })?;
             let span = start_span.merge(self.current_span());
             return Ok(ClassMember {
                 span,

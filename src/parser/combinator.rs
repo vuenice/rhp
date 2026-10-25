@@ -8,12 +8,69 @@ use crate::ast::{
 use crate::lexer::{span::Span, token::Token, SpannedToken};
 use crate::parser::error::{ParseError, ParseErrorKind};
 
+/// Active lexical scope tracker during parsing for resolving magic constants
+/// (`__CLASS__`, `__METHOD__`, `__FUNCTION__`, `__TRAIT__`, `__NAMESPACE__`).
+#[derive(Debug, Clone, Default)]
+pub struct ScopeContext {
+    pub namespace: Option<String>,
+    pub class_stack: Vec<String>,
+    pub trait_stack: Vec<String>,
+    pub function_stack: Vec<String>,
+}
+
+impl ScopeContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn current_class(&self) -> Option<&str> {
+        self.class_stack.last().map(|s| s.as_str())
+    }
+
+    #[inline]
+    pub fn current_trait(&self) -> Option<&str> {
+        self.trait_stack.last().map(|s| s.as_str())
+    }
+
+    #[inline]
+    pub fn current_function(&self) -> Option<&str> {
+        self.function_stack.last().map(|s| s.as_str())
+    }
+
+    #[inline]
+    pub fn current_namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    pub fn current_method_fqn(&self) -> Option<String> {
+        if let Some(func) = self.current_function() {
+            if let Some(cls) = self.current_class() {
+                Some(format!("{}::{}", cls, func))
+            } else if let Some(tr) = self.current_trait() {
+                Some(format!("{}::{}", tr, func))
+            } else if func == "{closure}" {
+                Some("{closure}".to_string())
+            } else if let Some(ref ns) = self.namespace {
+                Some(format!("{}\\{}", ns, func))
+            } else {
+                Some(func.to_string())
+            }
+        } else {
+            None
+        }
+    }
+}
+
 /// Lookahead and combinatorial parser helpers operating over a stream of spanned tokens.
 pub struct CombinatorStream<'s> {
     pub(crate) tokens: Vec<SpannedToken<'s>>,
     pub(crate) cursor: usize,
     pub(crate) file_id: usize,
+    pub(crate) file_path: Option<String>,
+    pub(crate) source: Option<&'s str>,
     pub(crate) user_functions: HashSet<String>,
+    pub(crate) scope: ScopeContext,
 }
 
 impl<'s> CombinatorStream<'s> {
@@ -64,8 +121,84 @@ impl<'s> CombinatorStream<'s> {
             tokens,
             cursor: 0,
             file_id,
+            file_path: None,
+            source: None,
             user_functions,
+            scope: ScopeContext::new(),
         }
+    }
+
+    /// Attach the original source code slice to this stream for qualified identifier slicing.
+    #[inline]
+    pub fn with_source(mut self, source: &'s str) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// Attach an explicit file path to this stream for `__FILE__` and `__DIR__` resolution.
+    #[inline]
+    pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
+        self.file_path = Some(path.into());
+        self
+    }
+
+    /// Return the current source file path for `__FILE__`.
+    #[inline]
+    pub fn current_file_path(&self) -> String {
+        self.file_path.clone().unwrap_or_default()
+    }
+
+    /// Return the current source file directory for `__DIR__`.
+    #[inline]
+    pub fn current_dir_path(&self) -> String {
+        if let Some(ref path) = self.file_path {
+            std::path::Path::new(path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        }
+    }
+
+    #[inline]
+    pub fn scope(&self) -> &ScopeContext {
+        &self.scope
+    }
+
+    #[inline]
+    pub fn scope_mut(&mut self) -> &mut ScopeContext {
+        &mut self.scope
+    }
+
+    pub fn with_class_scope<T, F>(&mut self, name: impl Into<String>, f: F) -> Result<T, ParseError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, ParseError>,
+    {
+        self.scope.class_stack.push(name.into());
+        let res = f(self);
+        self.scope.class_stack.pop();
+        res
+    }
+
+    pub fn with_trait_scope<T, F>(&mut self, name: impl Into<String>, f: F) -> Result<T, ParseError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, ParseError>,
+    {
+        self.scope.trait_stack.push(name.into());
+        let res = f(self);
+        self.scope.trait_stack.pop();
+        res
+    }
+
+    pub fn with_function_scope<T, F>(&mut self, name: impl Into<String>, f: F) -> Result<T, ParseError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, ParseError>,
+    {
+        self.scope.function_stack.push(name.into());
+        let res = f(self);
+        self.scope.function_stack.pop();
+        res
     }
 
     /// Register a declared user-defined function name in the parser symbol table.
@@ -182,8 +315,8 @@ impl<'s> CombinatorStream<'s> {
             Some(spanned) => {
                 if let Token::Ident(name) = spanned.token {
                     Ok(Ident::new(name, spanned.span))
-                } else if spanned.token.is_keyword() || spanned.token.is_type() {
-                    // Allow keywords in identifier positions (e.g., method names like ->match(), ->class)
+                } else if spanned.token.is_keyword() || spanned.token.is_type() || spanned.token.is_magic_constant() {
+                    // Allow keywords and magic constants in identifier positions (e.g., method names like ->match(), ->class)
                     Ok(Ident::new(spanned.token.as_str(), spanned.span))
                 } else {
                     Err(ParseError::new(
@@ -202,6 +335,28 @@ impl<'s> CombinatorStream<'s> {
                 span,
             )),
         }
+    }
+
+    /// Expect an identifier or namespace-qualified identifier (e.g. `App\Services\Worker`).
+    pub fn expect_qualified_ident(&mut self) -> Result<Ident<'s>, ParseError> {
+        let first = self.expect_ident()?;
+        if !self.check(&Token::Backslash) {
+            return Ok(first);
+        }
+        let start = first.span.start;
+        let mut span = first.span;
+        let mut end = first.span.end;
+        while self.matches(&Token::Backslash) {
+            let next = self.expect_ident()?;
+            end = next.span.end;
+            span = span.merge(next.span);
+        }
+        let name = if let Some(src) = self.source {
+            &src[start..end]
+        } else {
+            first.name
+        };
+        Ok(Ident::new(name, span))
     }
 
     /// Expect a variable token (`$var`).

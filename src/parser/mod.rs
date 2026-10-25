@@ -31,7 +31,26 @@ impl<'s> Parser<'s> {
     pub fn from_source_with_file_id(source: &'s str, file_id: usize) -> Result<Self, ParseError> {
         let tokens = Lexer::tokenize_with_file_id(source, file_id)
             .map_err(|e| ParseError::new(ParseErrorKind::Lex(e.error), e.span))?;
-        Ok(Self::new(tokens, file_id))
+        let mut stream = CombinatorStream::new(tokens, file_id);
+        stream.source = Some(source);
+        Ok(Self { stream })
+    }
+
+    /// Attach an explicit file path to the parser stream for `__FILE__` and `__DIR__` resolution.
+    pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
+        self.stream = self.stream.with_file_path(path);
+        self
+    }
+
+    /// Construct a parser from source with an explicit file path and file_id.
+    pub fn from_source_with_path(
+        source: &'s str,
+        path: impl Into<String>,
+        file_id: usize,
+    ) -> Result<Self, ParseError> {
+        let mut parser = Self::from_source_with_file_id(source, file_id)?;
+        parser = parser.with_file_path(path);
+        Ok(parser)
     }
 
     /// Parse the entire token stream into a strongly-typed Abstract Syntax Tree `Program`.
@@ -79,6 +98,12 @@ pub fn parse<'s>(source: &'s str) -> Result<Program<'s>, ParseError> {
 /// Convenience function: Parse source code string directly into a typed `Program` AST with file_id.
 pub fn parse_with_file_id<'s>(source: &'s str, file_id: usize) -> Result<Program<'s>, ParseError> {
     let mut parser = Parser::from_source_with_file_id(source, file_id)?;
+    parser.parse_program()
+}
+
+/// Convenience function: Parse source code string directly into a typed `Program` AST with explicit file path.
+pub fn parse_with_path<'s>(source: &'s str, path: impl Into<String>) -> Result<Program<'s>, ParseError> {
+    let mut parser = Parser::from_source_with_path(source, path, 0)?;
     parser.parse_program()
 }
 

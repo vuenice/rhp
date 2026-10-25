@@ -1,4 +1,16 @@
+<p align="center">
+  <img src="RHP.png" alt="RHP - High-Performance Programming Language Combining Rust Speed & PHP Ergonomics" width="720">
+</p>
+
 # RHP (Rust-Powered High-Performance PHP)
+
+<p align="center">
+  <a href="https://rhp.dev/docs"><img src="https://img.shields.io/badge/docs-rhp.dev-orange.svg" alt="Documentation"></a>
+  <a href="https://github.com/vuenice/rhp/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status"></a>
+  <a href="https://github.com/vuenice/rhp/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+</p>
+
+> 📖 **Official Documentation:** Visit [**rhp.dev/docs**](https://rhp.dev/docs) for comprehensive guides, tutorials, syntax reference, and architecture deep dives.
 
 Welcome to RHP—a high-performance, drop-in syntax programming language designed to supercharge PHP and Laravel-style applications with the raw speed and memory safety of Rust.
 
@@ -390,8 +402,34 @@ Logger::info("User session verified", ["user_id" => 10]);
 - **Fast In-Process Fallback:** During development or testing without `rustc`, RHP transparently provides an in-process thread-safe native execution engine.
 - **Thread-Safety & Multi-Worker Concurrency:** State stored across worker threads utilizes `FrozenValue` boundaries, ensuring zero data races across multi-threaded Tokio execution pools without GC pauses.
 
+### 13. Magic Constants (`__DIR__`, `__FILE__`, `__LINE__`, ...)
+
+RHP provides zero-overhead compile-time and lexical metadata constants resolved during AST parsing:
+
+- `__DIR__`: Absolute directory path of the source file.
+- `__FILE__`: Absolute file path of the source file.
+- `__LINE__`: 1-based source line number (integer).
+- `__FUNCTION__`: Current function or closure name.
+- `__CLASS__`: Fully-qualified class name (e.g. `App\Services\PaymentGateway`).
+- `__METHOD__`: Fully-qualified method name (`Class::method`).
+- `__TRAIT__`: Fully-qualified trait name.
+- `__NAMESPACE__`: Active namespace (empty string `""` in global namespace).
+
+```php
+namespace App\Services;
+
+class OrderProcessor {
+    public function execute(int $orderId): void {
+        echo "Executing " . __METHOD__ . " on line " . __LINE__ . "\n";
+        echo "Source file: " . __FILE__ . " in " . __DIR__ . "\n";
+    }
+}
+```
+
 ---
 
-Have any questions or ready to test your first RHP script?
+## 📚 Documentation & Community
 
-
+- **Official Documentation:** [https://rhp.dev/docs](https://rhp.dev/docs)
+- **Architecture Deep Dives:** [Syntax & Core Architecture](https://rhp.dev/docs/reference/syntax-architecture)
+- **GitHub Repository:** [https://github.com/vuenice/rhp](https://github.com/vuenice/rhp)

@@ -340,6 +340,34 @@ pub fn run_source_with_file_id(
     Ok((vm, result))
 }
 
+/// Compile and execute an RHP source program with an explicit file path for `__FILE__` and `__DIR__` resolution.
+pub fn run_source_with_path(source: &str, path: impl Into<String>) -> Result<PhpValue, ExecutionError> {
+    let (_, val) = run_source_with_path_and_vm(source, path)?;
+    Ok(val)
+}
+
+/// Compile and execute an RHP source program with an explicit file path, returning both VM and return value.
+pub fn run_source_with_path_and_vm(
+    source: &str,
+    path: impl Into<String>,
+) -> Result<(VM, PhpValue), ExecutionError> {
+    run_source_with_path_vm_and_jit(source, path, false)
+}
+
+/// Compile and execute an RHP source program with an explicit file path and JIT option.
+pub fn run_source_with_path_vm_and_jit(
+    source: &str,
+    path: impl Into<String>,
+    jit_enabled: bool,
+) -> Result<(VM, PhpValue), ExecutionError> {
+    let typed = crate::type_system::parse_and_check_with_path(source, path).map_err(CompilationError::from)?;
+    let hierarchy = typed.type_info.hierarchy.clone();
+    let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
+    let mut vm = VM::new(module, jit_enabled).with_type_hierarchy(hierarchy);
+    let result = vm.run()?;
+    Ok((vm, result))
+}
+
 /// Execute an already-compiled [`IrModule`] in a fresh [`VM`] instance.
 pub fn run_module(module: IrModule, jit_enabled: bool) -> Result<PhpValue, RuntimeError> {
     let mut vm = VM::new(module, jit_enabled);

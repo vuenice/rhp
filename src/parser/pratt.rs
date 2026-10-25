@@ -180,6 +180,88 @@ impl<'s> CombinatorStream<'s> {
             )),
             Token::Null => Ok(Expr::new(ExprKind::Literal(Literal::Null), spanned.span)),
 
+            // Magic Constants
+            Token::MagicLine => {
+                let line = spanned.span.line as i64;
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::Int {
+                        raw: spanned.token.as_str(),
+                        value: line,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicFile => {
+                let file_path = self.current_file_path();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: file_path,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicDir => {
+                let dir_path = self.current_dir_path();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: dir_path,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicClass => {
+                let class_name = self.scope.current_class().unwrap_or("").to_string();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: class_name,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicMethod => {
+                let method_name = self.scope.current_method_fqn().unwrap_or_default();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: method_name,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicFunction => {
+                let func_name = self.scope.current_function().unwrap_or("").to_string();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: func_name,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicTrait => {
+                let trait_name = self.scope.current_trait().unwrap_or("").to_string();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: trait_name,
+                    }),
+                    spanned.span,
+                ))
+            }
+            Token::MagicNamespace => {
+                let ns_name = self.scope.current_namespace().unwrap_or("").to_string();
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::String {
+                        raw: spanned.token.as_str(),
+                        value: ns_name,
+                    }),
+                    spanned.span,
+                ))
+            }
+
             // Variables
             Token::Variable(name) => Ok(Expr::new(
                 ExprKind::Variable(Variable::new(name, spanned.span)),
@@ -187,10 +269,93 @@ impl<'s> CombinatorStream<'s> {
             )),
 
             // Identifiers & Contextual Type Identifiers
-            Token::Ident(name) => Ok(Expr::new(
-                ExprKind::Ident(Ident::new(name, spanned.span)),
-                spanned.span,
-            )),
+            Token::Ident(name) => {
+                if name.eq_ignore_ascii_case("__LINE__") {
+                    let line = spanned.span.line as i64;
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::Int {
+                            raw: spanned.token.as_str(),
+                            value: line,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__FILE__") {
+                    let file_path = self.current_file_path();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: file_path,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__DIR__") {
+                    let dir_path = self.current_dir_path();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: dir_path,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__CLASS__") {
+                    let class_name = self.scope.current_class().unwrap_or("").to_string();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: class_name,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__METHOD__") {
+                    let method_name = self.scope.current_method_fqn().unwrap_or_default();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: method_name,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__FUNCTION__") {
+                    let func_name = self.scope.current_function().unwrap_or("").to_string();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: func_name,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__TRAIT__") {
+                    let trait_name = self.scope.current_trait().unwrap_or("").to_string();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: trait_name,
+                        }),
+                        spanned.span,
+                    ));
+                }
+                if name.eq_ignore_ascii_case("__NAMESPACE__") {
+                    let ns_name = self.scope.current_namespace().unwrap_or("").to_string();
+                    return Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value: ns_name,
+                        }),
+                        spanned.span,
+                    ));
+                }
+
+                Ok(Expr::new(
+                    ExprKind::Ident(Ident::new(name, spanned.span)),
+                    spanned.span,
+                ))
+            }
             Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap | Token::Echo => Ok(Expr::new(
                 ExprKind::Ident(Ident::new(spanned.token.as_str(), spanned.span)),
                 spanned.span,
@@ -416,14 +581,17 @@ impl<'s> CombinatorStream<'s> {
             // Static closure or arrow function `static fn(...) => ...` / `static function(...) { ... }`
             Token::Static => {
                 if self.matches(&Token::Fn) {
-                    let params = self.parse_formal_parameters()?;
-                    let return_type = if self.matches(&Token::Colon) {
-                        Some(self.parse_type_hint()?)
-                    } else {
-                        None
-                    };
-                    self.expect(Token::DoubleArrow)?;
-                    let body = self.parse_expr(binding_power::LOWEST)?;
+                    let (params, return_type, body) = self.with_function_scope("{closure}", |stream| {
+                        let params = stream.parse_formal_parameters()?;
+                        let return_type = if stream.matches(&Token::Colon) {
+                            Some(stream.parse_type_hint()?)
+                        } else {
+                            None
+                        };
+                        stream.expect(Token::DoubleArrow)?;
+                        let body = stream.parse_expr(binding_power::LOWEST)?;
+                        Ok((params, return_type, body))
+                    })?;
                     let span = spanned.span.merge(body.span);
                     Ok(Expr::new(
                         ExprKind::ArrowFunction {
@@ -434,32 +602,35 @@ impl<'s> CombinatorStream<'s> {
                         span,
                     ))
                 } else if self.matches(&Token::Function) {
-                    let params = self.parse_formal_parameters()?;
-                    let mut uses = Vec::new();
-                    if self.matches(&Token::Use) {
-                        self.expect(Token::OpenParen)?;
-                        uses = self.separated_by(
-                            |s| {
-                                let u_start = s.current_span();
-                                let by_ref = s.matches(&Token::Ampersand);
-                                let var = s.expect_variable()?;
-                                let span = u_start.merge(var.span);
-                                Ok(ClosureUse { span, var, by_ref })
-                            },
-                            Token::Comma,
-                            &Token::CloseParen,
-                        )?;
-                        self.expect(Token::CloseParen)?;
-                    }
+                    let (params, uses, return_type, body, end_span) = self.with_function_scope("{closure}", |stream| {
+                        let params = stream.parse_formal_parameters()?;
+                        let mut uses = Vec::new();
+                        if stream.matches(&Token::Use) {
+                            stream.expect(Token::OpenParen)?;
+                            uses = stream.separated_by(
+                                |s| {
+                                    let u_start = s.current_span();
+                                    let by_ref = s.matches(&Token::Ampersand);
+                                    let var = s.expect_variable()?;
+                                    let span = u_start.merge(var.span);
+                                    Ok(ClosureUse { span, var, by_ref })
+                                },
+                                Token::Comma,
+                                &Token::CloseParen,
+                            )?;
+                            stream.expect(Token::CloseParen)?;
+                        }
 
-                    let return_type = if self.matches(&Token::Colon) {
-                        Some(self.parse_type_hint()?)
-                    } else {
-                        None
-                    };
+                        let return_type = if stream.matches(&Token::Colon) {
+                            Some(stream.parse_type_hint()?)
+                        } else {
+                            None
+                        };
 
-                    let body = self.parse_block_statements()?;
-                    let end_span = self.current_span();
+                        let body = stream.parse_block_statements()?;
+                        let end_span = stream.current_span();
+                        Ok((params, uses, return_type, body, end_span))
+                    })?;
                     let span = spanned.span.merge(end_span);
 
                     Ok(Expr::new(
@@ -480,14 +651,17 @@ impl<'s> CombinatorStream<'s> {
 
             // Arrow function `fn($n) => $n * 2`
             Token::Fn => {
-                let params = self.parse_formal_parameters()?;
-                let return_type = if self.matches(&Token::Colon) {
-                    Some(self.parse_type_hint()?)
-                } else {
-                    None
-                };
-                self.expect(Token::DoubleArrow)?;
-                let body = self.parse_expr(binding_power::LOWEST)?;
+                let (params, return_type, body) = self.with_function_scope("{closure}", |stream| {
+                    let params = stream.parse_formal_parameters()?;
+                    let return_type = if stream.matches(&Token::Colon) {
+                        Some(stream.parse_type_hint()?)
+                    } else {
+                        None
+                    };
+                    stream.expect(Token::DoubleArrow)?;
+                    let body = stream.parse_expr(binding_power::LOWEST)?;
+                    Ok((params, return_type, body))
+                })?;
                 let span = spanned.span.merge(body.span);
                 Ok(Expr::new(
                     ExprKind::ArrowFunction {
@@ -501,32 +675,35 @@ impl<'s> CombinatorStream<'s> {
 
             // Closure expression `function($x) use ($y) { ... }`
             Token::Function => {
-                let params = self.parse_formal_parameters()?;
-                let mut uses = Vec::new();
-                if self.matches(&Token::Use) {
-                    self.expect(Token::OpenParen)?;
-                    uses = self.separated_by(
-                        |s| {
-                            let u_start = s.current_span();
-                            let by_ref = s.matches(&Token::Ampersand);
-                            let var = s.expect_variable()?;
-                            let span = u_start.merge(var.span);
-                            Ok(ClosureUse { span, var, by_ref })
-                        },
-                        Token::Comma,
-                        &Token::CloseParen,
-                    )?;
-                    self.expect(Token::CloseParen)?;
-                }
+                let (params, uses, return_type, body, end_span) = self.with_function_scope("{closure}", |stream| {
+                    let params = stream.parse_formal_parameters()?;
+                    let mut uses = Vec::new();
+                    if stream.matches(&Token::Use) {
+                        stream.expect(Token::OpenParen)?;
+                        uses = stream.separated_by(
+                            |s| {
+                                let u_start = s.current_span();
+                                let by_ref = s.matches(&Token::Ampersand);
+                                let var = s.expect_variable()?;
+                                let span = u_start.merge(var.span);
+                                Ok(ClosureUse { span, var, by_ref })
+                            },
+                            Token::Comma,
+                            &Token::CloseParen,
+                        )?;
+                        stream.expect(Token::CloseParen)?;
+                    }
 
-                let return_type = if self.matches(&Token::Colon) {
-                    Some(self.parse_type_hint()?)
-                } else {
-                    None
-                };
+                    let return_type = if stream.matches(&Token::Colon) {
+                        Some(stream.parse_type_hint()?)
+                    } else {
+                        None
+                    };
 
-                let body = self.parse_block_statements()?;
-                let end_span = self.current_span();
+                    let body = stream.parse_block_statements()?;
+                    let end_span = stream.current_span();
+                    Ok((params, uses, return_type, body, end_span))
+                })?;
                 let span = spanned.span.merge(end_span);
                 Ok(Expr::new(
                     ExprKind::Closure {

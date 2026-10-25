@@ -424,6 +424,12 @@ impl ParentProcess {
         Self::boot_typed(typed)
     }
 
+    /// Boot with an explicit file path for `__FILE__` and `__DIR__` resolution.
+    pub fn boot_with_path(source: &str, path: impl Into<String>) -> Result<Arc<EngineState>, ExecutionError> {
+        let typed = crate::type_system::parse_and_check_with_path(source, path).map_err(CompilationError::from)?;
+        Self::boot_typed(typed)
+    }
+
     fn boot_typed(typed: crate::type_system::TypedProgram<'_>) -> Result<Arc<EngineState>, ExecutionError> {
         let mut singleton_classes = HashSet::new();
         for (name, class_info) in &typed.type_info.hierarchy.classes {

@@ -290,3 +290,27 @@ float $discount2026 = 15.5;
 // $0 = "invalid";    // Error: Variable names must start with a letter or underscore...
 // $ = 42;            // Error: Variable names must start with a letter or underscore...
 ```
+
+---
+
+## 9. Magic Constants & Compile-Time Scope Lowering
+
+### The Rule
+
+RHP supports standard PHP magic constants (`__LINE__`, `__FILE__`, `__DIR__`, `__CLASS__`, `__METHOD__`, `__FUNCTION__`, `__TRAIT__`, `__NAMESPACE__`) as **compile-time and scope-resolved placeholders** that fold directly into literal AST nodes without runtime performance penalties.
+
+### Technical Implementation
+
+* **Compile-Time File Bounds (`__LINE__`, `__FILE__`, `__DIR__`):**
+  * `__LINE__`: Replaced with an integer literal (`Literal::Int`) containing the 1-based line number from the token span (`Span.line`).
+  * `__FILE__`: Replaced with a string literal (`Literal::String`) containing the canonical absolute file path.
+  * `__DIR__`: Replaced with a string literal (`Literal::String`) containing the parent directory of `__FILE__`.
+* **Lexical Scope Resolution (`__CLASS__`, `__METHOD__`, `__FUNCTION__`, `__TRAIT__`, `__NAMESPACE__`):**
+  * During Pratt and Combinator parsing, `CombinatorStream` maintains a `ScopeContext` with class, trait, and function scope stacks.
+  * `__FUNCTION__`: Pulls the active function or method identifier (or `"{closure}"` inside closures).
+  * `__CLASS__`: Pulls the active enclosing class or enum name (including namespace).
+  * `__METHOD__`: Constructs the method FQN (e.g. `App\Services\Worker::handle`).
+  * `__TRAIT__`: Pulls the active enclosing trait name.
+  * `__NAMESPACE__`: Pulls the active namespace.
+* **Zero Runtime Overhead:** Because all magic constants are folded into static `ExprKind::Literal` values during parsing, bytecode generation and the Register Bytecode VM dispatch them as standard pre-allocated literals with no stack-trace or reflection overhead.
+

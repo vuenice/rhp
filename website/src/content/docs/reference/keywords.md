@@ -118,6 +118,43 @@ $x = new Int();
 
 ---
 
+## Magic Constants
+
+RHP supports standard PHP magic constants with **case-insensitive lexing** and **zero runtime overhead**. During parsing, the Pratt parser lowers them directly into compile-time integer and string literals (`ExprKind::Literal`), statically resolving active lexical and scope stacks without incurring performance penalties at runtime.
+
+| Constant | Type | Description |
+| :--- | :--- | :--- |
+| `__LINE__` | `int` | Current 1-based line number in the source file. |
+| `__FILE__` | `string` | Full canonical file path of the current script. |
+| `__DIR__` | `string` | Directory of the current script (parent of `__FILE__`). |
+| `__FUNCTION__` | `string` | Name of the active function/method (or `"{closure}"` inside anonymous functions / arrow closures, or `""` in global scope). |
+| `__CLASS__` | `string` | Fully qualified class or enum name including namespace (e.g. `App\Services\Worker`), or `""` if outside class context. |
+| `__METHOD__` | `string` | Method name including class FQN (e.g. `App\Services\Worker::handle`), function name for standalone functions, or `""` in global scope. |
+| `__TRAIT__` | `string` | Fully qualified trait name, or `""` if outside trait context. |
+| `__NAMESPACE__` | `string` | Current namespace name (e.g. `App\Services`), or `""` if in global scope. |
+
+### Case-Insensitivity & Usage Example
+
+All magic constants can be written in uppercase, lowercase, or mixed case (`__LINE__`, `__line__`, `__DIR__`, `__dir__`, `__CLASS__`, `__class__`):
+
+```php
+namespace App\Services;
+
+class Logger {
+    public int $created_line = __LINE__;
+
+    public function log(string $msg, int $line = __LINE__, string $file = __FILE__): void {
+        print("[{$file}:{$line}] " . __METHOD__ . "() -> " . $msg);
+    }
+}
+
+$logger = new Logger();
+$logger->log("Server initialized");
+// Outputs: [/var/www/app/Logger.rhp:7] App\Services\Logger::log() -> Server initialized
+```
+
+---
+
 ## Special Identifiers & Superglobals
 
 | Identifier | Context | Description |

@@ -111,8 +111,19 @@ pub fn parse_and_check_with_hierarchy<'s>(
 pub fn parse_and_check_with_file_id<'s>(
     source: &'s str,
     file_id: usize,
-) -> Result<TypedProgram<'s>, FrontendError> {
+    ) -> Result<TypedProgram<'s>, FrontendError> {
     let program = parse_with_file_id(source, file_id)?;
     let type_info = check_program(&program)?;
     Ok(TypedProgram { program, type_info })
 }
+
+/// Parse source code with an explicit file path and run the Medium/Gradual Type Checker.
+pub fn parse_and_check_with_path<'s>(
+    source: &'s str,
+    path: impl Into<String>,
+) -> Result<TypedProgram<'s>, FrontendError> {
+    let program = crate::parser::parse_with_path(source, path)?;
+    let type_info = check_program(&program)?;
+    Ok(TypedProgram { program, type_info })
+}
+
