@@ -16,8 +16,19 @@ fn print_help() {
             "    rhp build [PATH]                 Shorthand for 'rhp run build'\n",
             "    rhp serve [PATH] [OPTIONS]       Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
             "    rhp run lint [PATH] [OPTIONS]    Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
+            "    rhp rpm <COMMAND> [OPTIONS]      Run RPM (RHP Package Manager) commands\n",
+            "    rhp install [PACKAGE]            Install dependencies or add a package directly from GitHub\n",
+            "    rhp update                       Update installed packages to latest GitHub versions\n",
+            "    rhp un <PACKAGE>                 Uninstall package and remove from rpm.toml and vendor/\n",
             "    rhp --version                    Display version information\n",
             "    rhp --help                       Display this help message\n\n",
+            "PACKAGE MANAGER (RPM):\n",
+            "    rpm install                      Install all dependencies from rpm.toml / rpm.lock\n",
+            "    rpm install <PACKAGE>            Install package directly from GitHub (e.g. 'owner/repo')\n",
+            "    rpm update                       Update dependencies to latest versions\n",
+            "    rpm un <PACKAGE>                 Uninstall package and remove from dependencies\n",
+            "    rpm init                         Initialize a new rpm.toml manifest\n",
+            "    rpm list                         List installed packages\n\n",
             "COMPANION TOOLS:\n",
             "    rhp-play                         Launch the interactive desktop RHP Playground GUI\n\n",
             "OPTIONS for 'serve':\n",
@@ -47,6 +58,19 @@ fn print_playground_hint() {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    // Check if binary was invoked directly as `rpm`
+    let binary_name = args
+        .first()
+        .and_then(|a| Path::new(a).file_name().and_then(|f| f.to_str()))
+        .unwrap_or("");
+    let is_rpm_bin = binary_name == "rpm" || binary_name.starts_with("rpm-");
+
+    if is_rpm_bin {
+        let rpm_args = if args.len() > 1 { &args[1..] } else { &[] };
+        rhp::rpm::run_rpm_cli(rpm_args);
+        return;
+    }
+
     if args.len() < 2 {
         print_help();
         process::exit(1);
@@ -73,9 +97,24 @@ fn main() {
         "build" => {
             handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
         }
+        "rpm" => {
+            rhp::rpm::run_rpm_cli(&args[2..]);
+        }
+        "install" | "i" | "add" => {
+            rhp::rpm::run_rpm_cli(&args[1..]);
+        }
+        "update" | "up" | "upgrade" => {
+            rhp::rpm::run_rpm_cli(&args[1..]);
+        }
+        "un" | "uninstall" | "remove" | "rm" => {
+            rhp::rpm::run_rpm_cli(&args[1..]);
+        }
+        "init" => {
+            rhp::rpm::run_rpm_cli(&args[1..]);
+        }
         "run" => {
             if args.len() < 3 {
-                eprintln!("Error: Missing subcommand for 'rhp run'. Expected 'lint', 'dev', 'build', or 'serve'.");
+                eprintln!("Error: Missing subcommand for 'rhp run'. Expected 'lint', 'dev', 'build', 'serve', or 'rpm'.");
                 process::exit(1);
             }
             match args[2].as_str() {
@@ -94,8 +133,11 @@ fn main() {
                 "serve" => {
                     handle_serve(&args[3..]);
                 }
+                "rpm" => {
+                    rhp::rpm::run_rpm_cli(&args[3..]);
+                }
                 cmd => {
-                    eprintln!("Error: Unknown run command '{}'. Expected 'lint', 'dev', 'build', or 'serve'.", cmd);
+                    eprintln!("Error: Unknown run command '{}'. Expected 'lint', 'dev', 'build', 'serve', or 'rpm'.", cmd);
                     process::exit(1);
                 }
             }
@@ -330,13 +372,14 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
         target_path.to_path_buf()
     };
 
-    let source = match std::fs::read_to_string(&resolved_path) {
+    let raw_source = match std::fs::read_to_string(&resolved_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading script '{}': {}", resolved_path.display(), e);
             process::exit(1);
         }
     };
+    let source = resolve_autoloaded_source(&resolved_path, &raw_source);
 
     // Auto-detect if this is a web application or explicitly requested as server
     let is_web_app = opts.force_server
@@ -536,6 +579,25 @@ fn parse_query_or_form(query: &str) -> indexmap::IndexMap<String, rhp::FrozenVal
     map
 }
 
+/// If vendor/autoload.rhp exists, automatically prepend it so package classes/functions are loaded.
+fn resolve_autoloaded_source(script_path: &Path, raw_source: &str) -> String {
+    if raw_source.contains("vendor/autoload") {
+        return raw_source.to_string();
+    }
+    let candidates = [
+        script_path.parent().map(|p| p.join("vendor/autoload.rhp")),
+        Some(Path::new("vendor/autoload.rhp").to_path_buf()),
+    ];
+    for cand in candidates.into_iter().flatten() {
+        if cand.exists() {
+            if let Ok(autoload_code) = std::fs::read_to_string(&cand) {
+                return format!("{}\n\n{}", autoload_code, raw_source);
+            }
+        }
+    }
+    raw_source.to_string()
+}
+
 fn serve_http_connection(
     stream: &mut std::net::TcpStream,
     script_path: &str,
@@ -634,7 +696,7 @@ fn serve_http_connection(
     }
 
     // Dynamic execution of RHP script:
-    let source = match std::fs::read_to_string(script_path) {
+    let raw_source = match std::fs::read_to_string(script_path) {
         Ok(s) => s,
         Err(e) => {
             let err_body = format!("<h1>500 Internal Server Error</h1><p>Failed to read script '{}': {}</p>", script_path, e);
@@ -647,6 +709,7 @@ fn serve_http_connection(
             return;
         }
     };
+    let source = resolve_autoloaded_source(Path::new(script_path), &raw_source);
 
     let get_params = parse_query_or_form(&query_str);
     let mut post_params = parse_query_or_form(&body_str);

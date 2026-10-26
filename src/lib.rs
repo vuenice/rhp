@@ -10,6 +10,7 @@ pub mod jit;
 pub mod lexer;
 pub mod lint;
 pub mod parser;
+pub mod rpm;
 pub mod telemetry;
 pub mod type_system;
 pub mod vm;
