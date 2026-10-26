@@ -5,13 +5,13 @@
 # RHP (Rust-Powered High-Performance PHP)
 
 <p align="center">
-  <a href="https://vuenice.github.io/rhp/docs/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-orange.svg" alt="Documentation"></a>
+  <a href="https://vuenice.github.io/rhp/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-orange.svg" alt="Documentation"></a>
   <a href="https://discord.gg/DdCn4ySEv"><img src="https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/vuenice/rhp/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Build Status"></a>
   <a href="https://github.com/vuenice/rhp/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
 
-> 📖 **Official Documentation:** Visit [**vuenice.github.io/rhp/docs**](https://vuenice.github.io/rhp/docs/) for comprehensive guides, tutorials, syntax reference, and architecture deep dives.
+> 📖 **Official Documentation:** Visit [**vuenice.github.io/rhp**](https://vuenice.github.io/rhp/) for comprehensive guides, tutorials, syntax reference, and architecture deep dives.
 
 Welcome to RHP—a high-performance, drop-in syntax programming language designed to supercharge PHP and Laravel-style applications with the raw speed and memory safety of Rust.
 
@@ -431,7 +431,7 @@ class OrderProcessor {
 
 ## 📚 Documentation & Community
 
-- **Official Documentation:** [https://vuenice.github.io/rhp/docs/](https://vuenice.github.io/rhp/docs/)
+- **Official Documentation:** [https://vuenice.github.io/rhp/](https://vuenice.github.io/rhp/)
 - **Discord Community:** [Join RHP Discord Server](https://discord.gg/DdCn4ySEv)
 - **Architecture Deep Dives:** [Syntax & Core Architecture](https://vuenice.github.io/rhp/docs/reference/syntax-architecture)
 - **Memory Model & Borrow Checker:** [Zero-GC & Borrow Safety](https://vuenice.github.io/rhp/docs/advanced/memory-model#borrow-checker)

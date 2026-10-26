@@ -353,7 +353,7 @@ jobs:
           cargo install rhp
           ```
 
-          For language specifications, documentation, and tutorials, visit [rhp.dev](https://rhp.dev) or browse [documentation](https://rhp.dev/docs).
+          For language specifications, documentation, and tutorials, visit [GitHub Pages Documentation](https://vuenice.github.io/rhp/).
           EOF
 
       - name: Create or Update GitHub Release
