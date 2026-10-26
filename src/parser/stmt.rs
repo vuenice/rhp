@@ -3,7 +3,8 @@ use crate::ast::{
     stmt::{
         Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind,
         ElseIfBranch, EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, PropertyDecl,
-        Stmt, StmtKind, SwitchCase, TraitDecl, TraitUseDecl, UseImport,
+        Stmt, StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf,
+        TraitUseDecl, UseImport,
     },
     types::{ClassModifiers, Visibility},
 };
@@ -270,9 +271,9 @@ impl<'s> CombinatorStream<'s> {
             while self.matches(&Token::Catch) {
                 let catch_start = self.current_span();
                 self.expect(Token::OpenParen)?;
-                let mut types = vec![self.expect_ident()?];
+                let mut types = vec![self.expect_qualified_ident()?];
                 while self.matches(&Token::Pipe) {
-                    types.push(self.expect_ident()?);
+                    types.push(self.expect_qualified_ident()?);
                 }
                 let var = self.expect_variable()?;
                 self.expect(Token::CloseParen)?;
@@ -423,7 +424,7 @@ impl<'s> CombinatorStream<'s> {
             let imports = self.separated_by(
                 |s| {
                     let imp_start = s.current_span();
-                    let name = s.expect_ident()?;
+                    let name = s.expect_qualified_ident()?;
                     let alias = if s.matches(&Token::As) {
                         Some(s.expect_ident()?)
                     } else {
@@ -620,9 +621,10 @@ impl<'s> CombinatorStream<'s> {
                 register_tier3_facade(name.name, "User-defined Tier 3 script static facade", true);
             }
             let extends = if self.matches(&Token::Extends) {
-                let parent = self.expect_ident()?;
+                let parent = self.expect_qualified_ident()?;
                 // Extending static facades (e.g., `extends Arr`, `extends Str`, or Tier 2/3 static facades) is strictly forbidden
-                if is_static_facade(parent.name) || is_static_only(parent.name) {
+                let check_name = parent.name.strip_prefix('\\').unwrap_or(parent.name);
+                if is_static_facade(check_name) || is_static_only(check_name) {
                     return Err(ParseError::new(
                         ParseErrorKind::StaticFacadeInheritanceForbidden {
                             class_name: parent.name.to_string(),
@@ -635,7 +637,7 @@ impl<'s> CombinatorStream<'s> {
                 None
             };
             let implements = if self.matches(&Token::Implements) {
-                self.separated_by(|s| s.expect_ident(), Token::Comma, &Token::OpenBrace)?
+                self.separated_by(|s| s.expect_qualified_ident(), Token::Comma, &Token::OpenBrace)?
             } else {
                 Vec::new()
             };
@@ -676,7 +678,7 @@ impl<'s> CombinatorStream<'s> {
         if self.matches(&Token::Interface) {
             let name = self.expect_ident()?;
             let extends = if self.matches(&Token::Extends) {
-                self.separated_by(|s| s.expect_ident(), Token::Comma, &Token::OpenBrace)?
+                self.separated_by(|s| s.expect_qualified_ident(), Token::Comma, &Token::OpenBrace)?
             } else {
                 Vec::new()
             };
@@ -754,7 +756,7 @@ impl<'s> CombinatorStream<'s> {
                 None
             };
             let implements = if self.matches(&Token::Implements) {
-                self.separated_by(|s| s.expect_ident(), Token::Comma, &Token::OpenBrace)?
+                self.separated_by(|s| s.expect_qualified_ident(), Token::Comma, &Token::OpenBrace)?
             } else {
                 Vec::new()
             };
@@ -828,14 +830,110 @@ impl<'s> CombinatorStream<'s> {
         let start_span = self.current_span();
         let attributes = self.parse_attributes()?;
 
-        // Trait use statement inside class
+        // Trait use statement inside class or trait
         if self.matches(&Token::Use) {
-            let traits = self.separated_by(|s| s.expect_ident(), Token::Comma, &Token::SemiColon)?;
-            self.expect_statement_terminator()?;
+            let mut traits = Vec::new();
+            traits.push(self.expect_qualified_ident()?);
+            while self.matches(&Token::Comma) {
+                traits.push(self.expect_qualified_ident()?);
+            }
+
+            let mut adaptations = Vec::new();
+            if self.matches(&Token::OpenBrace) {
+                while !self.check(&Token::CloseBrace) && !self.is_eof() {
+                    if self.matches(&Token::SemiColon) {
+                        continue;
+                    }
+
+                    let item_start = self.current_span();
+                    let first_ident = self.expect_qualified_ident()?;
+                    let (trait_name, method) = if self.matches(&Token::DoubleColon) {
+                        let method_ident = self.expect_ident()?;
+                        (Some(first_ident), method_ident)
+                    } else {
+                        (None, first_ident)
+                    };
+
+                    if self.matches(&Token::Insteadof) {
+                        let mut instead_of = Vec::new();
+                        instead_of.push(self.expect_qualified_ident()?);
+                        while self.matches(&Token::Comma) {
+                            instead_of.push(self.expect_qualified_ident()?);
+                        }
+                        if self.check(&Token::SemiColon) {
+                            self.advance();
+                        } else if !self.check(&Token::CloseBrace) {
+                            self.expect_statement_terminator()?;
+                        }
+                        let span = item_start.merge(self.current_span());
+                        adaptations.push(TraitAdaptation::InsteadOf(TraitInsteadOf {
+                            span,
+                            trait_name,
+                            method,
+                            instead_of,
+                        }));
+                    } else if self.matches(&Token::As) {
+                        let visibility = if self.matches(&Token::Public) {
+                            Some(Visibility::Public)
+                        } else if self.matches(&Token::Protected) {
+                            Some(Visibility::Protected)
+                        } else if self.matches(&Token::Private) {
+                            Some(Visibility::Private)
+                        } else {
+                            None
+                        };
+
+                        let alias = if !self.check(&Token::SemiColon) && !self.check(&Token::CloseBrace) {
+                            Some(self.expect_ident()?)
+                        } else {
+                            None
+                        };
+
+                        if visibility.is_none() && alias.is_none() {
+                            return Err(ParseError::new(
+                                ParseErrorKind::UnexpectedToken {
+                                    expected: "method alias name or visibility modifier (public, protected, private)".to_string(),
+                                    found: self.peek().map(|t| t.token.as_str()).unwrap_or("EOF").to_string(),
+                                },
+                                self.current_span(),
+                            ));
+                        }
+
+                        if self.check(&Token::SemiColon) {
+                            self.advance();
+                        } else if !self.check(&Token::CloseBrace) {
+                            self.expect_statement_terminator()?;
+                        }
+                        let span = item_start.merge(self.current_span());
+                        adaptations.push(TraitAdaptation::Alias(TraitAlias {
+                            span,
+                            trait_name,
+                            method,
+                            visibility,
+                            alias,
+                        }));
+                    } else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::UnexpectedToken {
+                                expected: "'insteadof' or 'as'".to_string(),
+                                found: self.peek().map(|t| t.token.as_str()).unwrap_or("EOF").to_string(),
+                            },
+                            self.current_span(),
+                        ));
+                    }
+                }
+                self.expect(Token::CloseBrace)?;
+                if self.check(&Token::SemiColon) {
+                    self.advance();
+                }
+            } else {
+                self.expect_statement_terminator()?;
+            }
+
             let span = start_span.merge(self.current_span());
             return Ok(ClassMember {
                 span,
-                kind: ClassMemberKind::TraitUse(TraitUseDecl { traits }),
+                kind: ClassMemberKind::TraitUse(TraitUseDecl { traits, adaptations }),
             });
         }
 

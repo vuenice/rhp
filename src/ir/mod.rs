@@ -45,6 +45,7 @@ pub struct CompiledParam {
     pub has_default: bool,
     pub is_variadic: bool,
     pub is_readonly: bool,
+    pub is_reference: bool,
     pub visibility: Option<Visibility>,
     pub span: Span,
 }
@@ -100,10 +101,37 @@ pub struct CompiledClass {
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub traits: Vec<String>,
+    pub trait_uses: Vec<CompiledTraitUse>,
     pub properties: Vec<CompiledProperty>,
     pub constants: Vec<CompiledClassConst>,
     pub methods: HashMap<String, FunctionId>,
     pub span: Span,
+}
+
+/// Compiled trait use statement descriptor with conflict resolution and aliasing adaptations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledTraitUse {
+    pub traits: Vec<String>,
+    pub adaptations: Vec<CompiledTraitAdaptation>,
+    pub span: Span,
+}
+
+/// Compiled trait adaptation rule (`insteadof` or `as`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledTraitAdaptation {
+    InsteadOf {
+        span: Span,
+        trait_name: Option<String>,
+        method: String,
+        instead_of: Vec<String>,
+    },
+    Alias {
+        span: Span,
+        trait_name: Option<String>,
+        method: String,
+        visibility: Option<Visibility>,
+        alias: Option<String>,
+    },
 }
 
 /// Compiled interface contract descriptor.
@@ -172,8 +200,14 @@ impl IrModule {
 
     /// Look up a compiled class or trait by name.
     pub fn get_class_by_name(&self, name: &str) -> Option<&CompiledClass> {
-        let id = self.class_index.get(name)?;
-        self.classes.get(id.index())
+        let clean = name.strip_prefix('\\').unwrap_or(name);
+        if let Some(id) = self.class_index.get(clean) {
+            return self.classes.get(id.index());
+        }
+        if let Some(id) = self.class_index.get(name) {
+            return self.classes.get(id.index());
+        }
+        None
     }
 
     /// Disassemble the entire compiled module (top-level script and all functions/methods).

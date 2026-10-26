@@ -88,6 +88,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Static UTF-8 string transformation and inspection utilities (slug, contains, random) with runtime macro support",
     ),
     FacadeInfo::native(
+        "Regex",
+        "Static regular expression facade (isValid, testString, match, replace, quote)",
+    ),
+    FacadeInfo::native(
         "Future",
         "Dart-style non-blocking concurrency facade (run, wait, any, delayed, defer)",
     ),
@@ -170,6 +174,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     FacadeInfo::native(
         "Telemetry",
         "OpenTelemetry distributed tracing and metrics alias facade",
+    ),
+    FacadeInfo::native(
+        "Reflect",
+        "Static reflection and inspection facade (classExists, functionExists)",
     ),
 ];
 
@@ -470,6 +478,43 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "json_decode",
         rhp_signature: "phpFun::json_decode(string $json, bool $associative = true): mixed",
     },
+    LegacyPhpFunctionMapping {
+        php_name: "round",
+        rhp_facade: "Float",
+        rhp_method: "round",
+        rhp_signature: "Float::round(float $num, int $precision = 0): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "floor",
+        rhp_facade: "Float",
+        rhp_method: "floor",
+        rhp_signature: "Float::floor(float $num): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ceil",
+        rhp_facade: "Float",
+        rhp_method: "ceil",
+        rhp_signature: "Float::ceil(float $num): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ciel",
+        rhp_facade: "Float",
+        rhp_method: "ciel",
+        rhp_signature: "Float::ciel(float $num): float",
+    },
+    // Reflection functions -> Reflect::*
+    LegacyPhpFunctionMapping {
+        php_name: "class_exists",
+        rhp_facade: "Reflect",
+        rhp_method: "classExists",
+        rhp_signature: "Reflect::classExists(string $class): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "function_exists",
+        rhp_facade: "Reflect",
+        rhp_method: "functionExists",
+        rhp_signature: "Reflect::functionExists(string $function): bool",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function
@@ -593,6 +638,8 @@ impl FacadeRegistry {
             "session" => "Session",
             "cookie" => "Cookie",
             "request" => "Request",
+            "regex" => "Regex",
+            "reflect" => "Reflect",
             _ => return false,
         };
         self.get_facade(normalized)

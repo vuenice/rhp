@@ -4,7 +4,7 @@ use crate::ast::{
     expr::{Argument, ArrayElement, AssignOp, BinaryOp, Expr, ExprKind, Literal, StringPart, UnaryOp},
     stmt::{
         ClassDecl, ClassMemberKind, EnumDecl, FunctionDecl, InterfaceDecl, Param, Stmt, StmtKind,
-        SwitchCase, TraitDecl,
+        SwitchCase, TraitAdaptation, TraitDecl,
     },
     types::{CastType, TypeHint, Visibility},
     Program,
@@ -16,7 +16,8 @@ use crate::ir::{
         IrCollectionKind, IrUnaryOp, OpCode, Reg, RegisterInfo,
     },
     CompiledClass, CompiledClassConst, CompiledEnum, CompiledEnumCase, CompiledFunction,
-    CompiledInterface, CompiledParam, CompiledProperty, IrModule,
+    CompiledInterface, CompiledParam, CompiledProperty, CompiledTraitAdaptation, CompiledTraitUse,
+    IrModule,
 };
 use crate::lexer::{
     facade::{get_legacy_php_function, is_native_or_plugin_facade},
@@ -285,6 +286,9 @@ impl<'a> IrLowerer<'a> {
             self.lower_stmt(&mut main_builder, stmt)?;
         }
 
+        // Compose traits into module classes and traits
+        self.compose_traits();
+
         // Ensure the top-level script chunk ends with an explicit Return instruction
         let needs_terminal_return = main_builder
             .chunk
@@ -335,7 +339,7 @@ impl<'a> IrLowerer<'a> {
             } => {
                 let locked_ty = type_hint
                     .as_ref()
-                    .and_then(|th| RhpType::from_type_hint(th, b.enclosing_class.as_deref()).ok());
+                    .and_then(|th| self.resolve_type_hint(th, b.enclosing_class.as_deref()));
 
                 let reg = b.get_or_alloc_local(
                     var.name,
@@ -788,7 +792,11 @@ impl<'a> IrLowerer<'a> {
                         catch.span,
                     )?;
                     compiled_catches.push(CatchTarget {
-                        catch_types: catch.types.iter().map(|t| t.name.to_string()).collect(),
+                        catch_types: catch
+                            .types
+                            .iter()
+                            .map(|t| self.resolve_class_name(t.name, b.enclosing_class.as_deref()))
+                            .collect(),
                         exception_reg: exc_reg,
                         target_ip: catch_ip,
                     });
@@ -826,9 +834,14 @@ impl<'a> IrLowerer<'a> {
             }
 
             StmtKind::FunctionDecl(func) => {
+                let func_name = if let Some(ref ns) = self.current_namespace {
+                    format!("{}\\{}", ns, func.name.name)
+                } else {
+                    func.name.name.to_string()
+                };
                 let func_id = self.compile_function_decl(
                     func,
-                    &func.name.name,
+                    &func_name,
                     None,
                     Visibility::Public,
                     false,
@@ -837,7 +850,12 @@ impl<'a> IrLowerer<'a> {
                 )?;
                 self.module
                     .function_index
-                    .insert(func.name.name.to_string(), func_id);
+                    .insert(func_name.clone(), func_id);
+                if func_name != func.name.name {
+                    self.module
+                        .function_index
+                        .insert(func.name.name.to_string(), func_id);
+                }
                 Ok(())
             }
 
@@ -863,31 +881,39 @@ impl<'a> IrLowerer<'a> {
 
             StmtKind::Namespace { name, body } => {
                 let prev_ns = self.current_namespace.clone();
-                self.current_namespace = name.as_ref().map(|id| id.name.to_string());
+                let prev_aliases = self.use_aliases.clone();
+                if body.is_none() && prev_ns.is_some() {
+                    self.use_aliases.clear();
+                }
+                self.current_namespace = name.as_ref().map(|id| {
+                    let n = id.name.strip_prefix('\\').unwrap_or(id.name);
+                    n.to_string()
+                });
                 if let Some(stmts) = body {
                     for s in stmts {
                         self.lower_stmt(b, s)?;
                     }
                     self.current_namespace = prev_ns;
+                    self.use_aliases = prev_aliases;
                 }
                 Ok(())
             }
 
             StmtKind::Use(imports) => {
                 for imp in imports {
+                    let target = imp.name.name.strip_prefix('\\').unwrap_or(imp.name.name);
                     let alias = imp
                         .alias
                         .as_ref()
                         .map(|a| a.name.to_string())
                         .unwrap_or_else(|| {
-                            imp.name
-                                .name
+                            target
                                 .rsplit('\\')
                                 .next()
-                                .unwrap_or(imp.name.name)
+                                .unwrap_or(target)
                                 .to_string()
                         });
-                    self.use_aliases.insert(alias, imp.name.name.to_string());
+                    self.use_aliases.insert(alias, target.to_string());
                 }
                 Ok(())
             }
@@ -1161,6 +1187,7 @@ impl<'a> IrLowerer<'a> {
                                     src: *r,
                                     name: None,
                                     is_unpack: false,
+                                    is_reference: false,
                                 },
                                 expr.span,
                             );
@@ -1420,6 +1447,7 @@ impl<'a> IrLowerer<'a> {
                         expr.span,
                     );
                 }
+                self.sync_ref_globals(b, args, expr.span)?;
                 Ok(dst)
             }
 
@@ -1524,10 +1552,11 @@ impl<'a> IrLowerer<'a> {
                         return Ok(dst);
                     }
 
+                    let clean_target = target_name.strip_prefix('\\').unwrap_or(target_name);
                     // 5. Tier 1 Native Facades & Tier 2 Rust Plugins
-                    if is_native_or_plugin_facade(target_name) {
+                    if is_native_or_plugin_facade(clean_target) {
                         let arg_count = self.evaluate_and_push_args(b, args)?;
-                        let facade_const = b.intern_string(target_name);
+                        let facade_const = b.intern_string(clean_target);
                         let method_const = b.intern_string(method_name);
                         b.emit(
                             OpCode::FacadeCall {
@@ -2090,21 +2119,49 @@ impl<'a> IrLowerer<'a> {
         for arg in args {
             let val_reg = self.lower_expr(b, &arg.value, None)?;
             let name_const = arg.name.as_ref().map(|id| b.intern_string(id.name));
-            staged.push((val_reg, name_const, arg.is_unpack, arg.span));
+            staged.push((val_reg, name_const, arg.is_unpack, arg.is_reference, arg.span));
         }
 
-        for (src, name, is_unpack, span) in staged {
+        for (src, name, is_unpack, is_reference, span) in staged {
             b.emit(
                 OpCode::PushArg {
                     src,
                     name,
                     is_unpack,
+                    is_reference,
                 },
                 span,
             );
         }
 
         Ok(args.len() as u16)
+    }
+
+    fn sync_ref_globals(
+        &mut self,
+        b: &mut ChunkBuilder,
+        args: &[Argument<'_>],
+        span: Span,
+    ) -> Result<(), IrError> {
+        for arg in args {
+            if arg.is_reference {
+                if let ExprKind::Variable(var) = &arg.value.kind {
+                    let norm = normalize_var_name(var.name);
+                    if b.globals.contains(&norm) {
+                        let var_reg = b.get_or_alloc_local(var.name, None, false, false, span)?;
+                        let name_const = b.intern_string(var.bare_name());
+                        b.emit(
+                            OpCode::StoreGlobal {
+                                name: name_const,
+                                src: var_reg,
+                            },
+                            span,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn lower_inc_dec(
@@ -2698,7 +2755,7 @@ impl<'a> IrLowerer<'a> {
         let return_type = func
             .return_type
             .as_ref()
-            .and_then(|th| RhpType::from_type_hint(th, enclosing_class.as_deref()).ok())
+            .and_then(|th| self.resolve_type_hint(th, enclosing_class.as_deref()))
             .unwrap_or(RhpType::Void);
 
         let body_inferences = self
@@ -2734,7 +2791,7 @@ impl<'a> IrLowerer<'a> {
             let param_ty = param
                 .type_hint
                 .as_ref()
-                .and_then(|th| RhpType::from_type_hint(th, enclosing_class.as_deref()).ok())
+                .and_then(|th| self.resolve_type_hint(th, enclosing_class.as_deref()))
                 .unwrap_or(RhpType::Dynamic);
 
             let reg = fb.get_or_alloc_local(
@@ -2752,6 +2809,7 @@ impl<'a> IrLowerer<'a> {
                 has_default: param.default_value.is_some(),
                 is_variadic: param.is_variadic,
                 is_readonly: param.is_readonly,
+                is_reference: param.is_reference,
                 visibility: param.visibility,
                 span: param.span,
             });
@@ -2852,7 +2910,7 @@ impl<'a> IrLowerer<'a> {
         self.synthetic_counter += 1;
 
         let return_type = return_type_hint
-            .and_then(|th| RhpType::from_type_hint(th, parent.enclosing_class.as_deref()).ok())
+            .and_then(|th| self.resolve_type_hint(th, parent.enclosing_class.as_deref()))
             .unwrap_or(RhpType::Dynamic);
 
         let mut fb = ChunkBuilder::new(
@@ -2873,7 +2931,7 @@ impl<'a> IrLowerer<'a> {
             let param_ty = param
                 .type_hint
                 .as_ref()
-                .and_then(|th| RhpType::from_type_hint(th, parent.enclosing_class.as_deref()).ok())
+                .and_then(|th| self.resolve_type_hint(th, parent.enclosing_class.as_deref()))
                 .unwrap_or(RhpType::Dynamic);
             let reg = fb.get_or_alloc_local(
                 param.name.name,
@@ -2889,6 +2947,7 @@ impl<'a> IrLowerer<'a> {
                 has_default: param.default_value.is_some(),
                 is_variadic: param.is_variadic,
                 is_readonly: param.is_readonly,
+                is_reference: param.is_reference,
                 visibility: param.visibility,
                 span: param.span,
             });
@@ -2994,7 +3053,7 @@ impl<'a> IrLowerer<'a> {
         self.synthetic_counter += 1;
 
         let return_type = return_type_hint
-            .and_then(|th| RhpType::from_type_hint(th, parent.enclosing_class.as_deref()).ok())
+            .and_then(|th| self.resolve_type_hint(th, parent.enclosing_class.as_deref()))
             .unwrap_or(RhpType::Dynamic);
 
         let mut fb = ChunkBuilder::new(
@@ -3018,7 +3077,7 @@ impl<'a> IrLowerer<'a> {
             let param_ty = param
                 .type_hint
                 .as_ref()
-                .and_then(|th| RhpType::from_type_hint(th, parent.enclosing_class.as_deref()).ok())
+                .and_then(|th| self.resolve_type_hint(th, parent.enclosing_class.as_deref()))
                 .unwrap_or(RhpType::Dynamic);
             let reg = fb.get_or_alloc_local(
                 param.name.name,
@@ -3034,6 +3093,7 @@ impl<'a> IrLowerer<'a> {
                 has_default: param.default_value.is_some(),
                 is_variadic: param.is_variadic,
                 is_readonly: param.is_readonly,
+                is_reference: param.is_reference,
                 visibility: param.visibility,
                 span: param.span,
             });
@@ -3111,24 +3171,69 @@ impl<'a> IrLowerer<'a> {
     }
 
     fn compile_class_decl(&mut self, cls: &ClassDecl<'_>) -> Result<ClassId, IrError> {
-        let class_name = cls.name.name.to_string();
+        let class_name = if let Some(ref ns) = self.current_namespace {
+            format!("{}\\{}", ns, cls.name.name)
+        } else {
+            cls.name.name.to_string()
+        };
         let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = HashMap::new();
         let mut traits = Vec::new();
+        let mut trait_uses = Vec::new();
 
         for member in &cls.members {
             match &member.kind {
                 ClassMemberKind::TraitUse(tu) => {
+                    let mut use_traits = Vec::new();
                     for tr in &tu.traits {
-                        traits.push(tr.name.to_string());
+                        let tr_name = self.resolve_class_name(tr.name, None);
+                        use_traits.push(tr_name.clone());
+                        traits.push(tr_name);
                     }
+                    let mut adaptations = Vec::new();
+                    for adapt in &tu.adaptations {
+                        match adapt {
+                            TraitAdaptation::InsteadOf(io) => {
+                                adaptations.push(CompiledTraitAdaptation::InsteadOf {
+                                    span: io.span,
+                                    trait_name: io
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: io.method.name.to_string(),
+                                    instead_of: io
+                                        .instead_of
+                                        .iter()
+                                        .map(|t| self.resolve_class_name(t.name, None))
+                                        .collect(),
+                                });
+                            }
+                            TraitAdaptation::Alias(al) => {
+                                adaptations.push(CompiledTraitAdaptation::Alias {
+                                    span: al.span,
+                                    trait_name: al
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: al.method.name.to_string(),
+                                    visibility: al.visibility,
+                                    alias: al.alias.as_ref().map(|a| a.name.to_string()),
+                                });
+                            }
+                        }
+                    }
+                    trait_uses.push(CompiledTraitUse {
+                        traits: use_traits,
+                        adaptations,
+                        span: member.span,
+                    });
                 }
                 ClassMemberKind::Property(prop) => {
                     let rhp_type = prop
                         .type_hint
                         .as_ref()
-                        .and_then(|th| RhpType::from_type_hint(th, Some(&class_name)).ok())
+                        .and_then(|th| self.resolve_type_hint(th, Some(&class_name)))
                         .unwrap_or(RhpType::Dynamic);
                     let default_chunk = if let Some(ref def_expr) = prop.default {
                         Some(self.compile_initializer_expr(&class_name, def_expr)?)
@@ -3166,7 +3271,7 @@ impl<'a> IrLowerer<'a> {
                                         .type_hint
                                         .as_ref()
                                         .and_then(|th| {
-                                            RhpType::from_type_hint(th, Some(&class_name)).ok()
+                                            self.resolve_type_hint(th, Some(&class_name))
                                         })
                                         .unwrap_or(RhpType::Dynamic);
                                     properties.push(CompiledProperty {
@@ -3205,37 +3310,86 @@ impl<'a> IrLowerer<'a> {
             name: class_name.clone(),
             is_trait: false,
             modifiers: cls.modifiers,
-            extends: cls.extends.as_ref().map(|e| e.name.to_string()),
-            implements: cls.implements.iter().map(|i| i.name.to_string()).collect(),
+            extends: cls.extends.as_ref().map(|e| self.resolve_class_name(e.name, None)),
+            implements: cls.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             traits,
+            trait_uses,
             properties,
             constants,
             methods,
             span: cls.span,
         });
-        self.module.class_index.insert(class_name, class_id);
+        self.module.class_index.insert(class_name.clone(), class_id);
+        if class_name != cls.name.name {
+            self.module.class_index.insert(cls.name.name.to_string(), class_id);
+        }
         Ok(class_id)
     }
 
     fn compile_trait_decl(&mut self, tr: &TraitDecl<'_>) -> Result<ClassId, IrError> {
-        let trait_name = tr.name.name.to_string();
+        let trait_name = if let Some(ref ns) = self.current_namespace {
+            format!("{}\\{}", ns, tr.name.name)
+        } else {
+            tr.name.name.to_string()
+        };
         let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = HashMap::new();
         let mut traits = Vec::new();
+        let mut trait_uses = Vec::new();
 
         for member in &tr.members {
             match &member.kind {
                 ClassMemberKind::TraitUse(tu) => {
+                    let mut use_traits = Vec::new();
                     for sub_tr in &tu.traits {
-                        traits.push(sub_tr.name.to_string());
+                        let sub_name = self.resolve_class_name(sub_tr.name, None);
+                        use_traits.push(sub_name.clone());
+                        traits.push(sub_name);
                     }
+                    let mut adaptations = Vec::new();
+                    for adapt in &tu.adaptations {
+                        match adapt {
+                            TraitAdaptation::InsteadOf(io) => {
+                                adaptations.push(CompiledTraitAdaptation::InsteadOf {
+                                    span: io.span,
+                                    trait_name: io
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: io.method.name.to_string(),
+                                    instead_of: io
+                                        .instead_of
+                                        .iter()
+                                        .map(|t| self.resolve_class_name(t.name, None))
+                                        .collect(),
+                                });
+                            }
+                            TraitAdaptation::Alias(al) => {
+                                adaptations.push(CompiledTraitAdaptation::Alias {
+                                    span: al.span,
+                                    trait_name: al
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: al.method.name.to_string(),
+                                    visibility: al.visibility,
+                                    alias: al.alias.as_ref().map(|a| a.name.to_string()),
+                                });
+                            }
+                        }
+                    }
+                    trait_uses.push(CompiledTraitUse {
+                        traits: use_traits,
+                        adaptations,
+                        span: member.span,
+                    });
                 }
                 ClassMemberKind::Property(prop) => {
                     let rhp_type = prop
                         .type_hint
                         .as_ref()
-                        .and_then(|th| RhpType::from_type_hint(th, Some(&trait_name)).ok())
+                        .and_then(|th| self.resolve_type_hint(th, Some(&trait_name)))
                         .unwrap_or(RhpType::Dynamic);
                     let default_chunk = if let Some(ref def_expr) = prop.default {
                         Some(self.compile_initializer_expr(&trait_name, def_expr)?)
@@ -3288,17 +3442,172 @@ impl<'a> IrLowerer<'a> {
             extends: None,
             implements: Vec::new(),
             traits,
+            trait_uses,
             properties,
             constants,
             methods,
             span: tr.span,
         });
-        self.module.class_index.insert(trait_name, class_id);
+        self.module.class_index.insert(trait_name.clone(), class_id);
+        if trait_name != tr.name.name {
+            self.module.class_index.insert(tr.name.name.to_string(), class_id);
+        }
         Ok(class_id)
     }
 
+    fn compose_traits(&mut self) {
+        // Pass 1: Compose traits into traits
+        let trait_indices: Vec<usize> = self
+            .module
+            .classes
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_trait)
+            .map(|(i, _)| i)
+            .collect();
+        for idx in trait_indices {
+            self.compose_traits_for_class_at_index(idx);
+        }
+
+        // Pass 2: Compose traits into classes
+        let class_indices: Vec<usize> = self
+            .module
+            .classes
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.is_trait)
+            .map(|(i, _)| i)
+            .collect();
+        for idx in class_indices {
+            self.compose_traits_for_class_at_index(idx);
+        }
+    }
+
+    fn compose_traits_for_class_at_index(&mut self, idx: usize) {
+        let cls_name = self.module.classes[idx].name.clone();
+        let cls_traits = self.module.classes[idx].traits.clone();
+        let cls_trait_uses = self.module.classes[idx].trait_uses.clone();
+
+        if cls_traits.is_empty() {
+            return;
+        }
+
+        let trait_matches = |t1: &str, t2: &str| -> bool {
+            let c1 = t1.strip_prefix('\\').unwrap_or(t1);
+            let c2 = t2.strip_prefix('\\').unwrap_or(t2);
+            c1 == c2 || c1.ends_with(&format!("\\{}", c2)) || c2.ends_with(&format!("\\{}", c1))
+        };
+
+        // 1. Collect candidates for each method provided by used traits
+        let mut candidates_map: HashMap<String, Vec<(String, FunctionId)>> = HashMap::new();
+        for tr_name in &cls_traits {
+            let clean = tr_name.strip_prefix('\\').unwrap_or(tr_name);
+            let tr_class = self
+                .module
+                .get_class_by_name(clean)
+                .or_else(|| self.module.get_class_by_name(tr_name))
+                .cloned();
+
+            if let Some(tr) = tr_class {
+                for (m_name, &fn_id) in &tr.methods {
+                    candidates_map
+                        .entry(m_name.clone())
+                        .or_default()
+                        .push((tr_name.clone(), fn_id));
+                }
+            }
+        }
+
+        // 2. Resolve collisions and compose methods
+        for (m_name, mut candidates) in candidates_map {
+            if self.module.classes[idx].methods.contains_key(&m_name) {
+                continue;
+            }
+
+            if candidates.len() > 1 {
+                for tu in &cls_trait_uses {
+                    for adapt in &tu.adaptations {
+                        if let CompiledTraitAdaptation::InsteadOf { method, instead_of, .. } = adapt {
+                            if method == &m_name {
+                                for ex in instead_of {
+                                    candidates.retain(|(t, _)| !trait_matches(t, ex));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !candidates.is_empty() {
+                    let (_, fn_id) = candidates.remove(0);
+                    self.module.classes[idx].methods.insert(m_name, fn_id);
+                }
+            } else if candidates.len() == 1 {
+                let (_, fn_id) = candidates.remove(0);
+                self.module.classes[idx].methods.insert(m_name, fn_id);
+            }
+        }
+
+        // 3. Apply alias and visibility adaptations
+        for tu in &cls_trait_uses {
+            for adapt in &tu.adaptations {
+                if let CompiledTraitAdaptation::Alias { trait_name, method, visibility, alias, .. } = adapt {
+                    let mut target_fn_id = None;
+                    if let Some(tn) = trait_name {
+                        let clean = tn.strip_prefix('\\').unwrap_or(tn);
+                        if let Some(tr) = self.module.get_class_by_name(clean).or_else(|| self.module.get_class_by_name(tn)) {
+                            target_fn_id = tr.methods.get(method).copied();
+                        }
+                    } else {
+                        for tr_name in &cls_traits {
+                            let clean = tr_name.strip_prefix('\\').unwrap_or(tr_name);
+                            if let Some(tr) = self.module.get_class_by_name(clean).or_else(|| self.module.get_class_by_name(tr_name)) {
+                                if let Some(&f) = tr.methods.get(method) {
+                                    target_fn_id = Some(f);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(orig_fn_id) = target_fn_id {
+                        if let Some(alias_name) = alias {
+                            let orig_func = self.module.get_function(orig_fn_id).cloned().unwrap();
+                            let new_func_id = FunctionId(self.module.functions.len() as u32);
+                            let mut new_func = orig_func;
+                            new_func.id = new_func_id;
+                            let method_key = format!("{}::{}", cls_name, alias_name);
+                            new_func.name = method_key.clone();
+                            new_func.enclosing_class = Some(cls_name.clone());
+                            if let Some(vis) = visibility {
+                                new_func.visibility = *vis;
+                            }
+                            self.module.functions.push(new_func);
+                            self.module.function_index.insert(method_key, new_func_id);
+                            self.module.classes[idx].methods.insert(alias_name.clone(), new_func_id);
+                        } else if let Some(vis) = visibility {
+                            if let Some(&existing_fn_id) = self.module.classes[idx].methods.get(method) {
+                                let orig_func = self.module.get_function(existing_fn_id).cloned().unwrap();
+                                let new_func_id = FunctionId(self.module.functions.len() as u32);
+                                let mut new_func = orig_func;
+                                new_func.id = new_func_id;
+                                new_func.enclosing_class = Some(cls_name.clone());
+                                new_func.visibility = *vis;
+                                self.module.functions.push(new_func);
+                                self.module.classes[idx].methods.insert(method.clone(), new_func_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn compile_interface_decl(&mut self, iface: &InterfaceDecl<'_>) -> Result<(), IrError> {
-        let iface_name = iface.name.name.to_string();
+        let iface_name = if let Some(ref ns) = self.current_namespace {
+            format!("{}\\{}", ns, iface.name.name)
+        } else {
+            iface.name.name.to_string()
+        };
         let mut methods = HashMap::new();
         for m in &iface.methods {
             let method_key = format!("{}::{}", iface_name, m.function.name.name);
@@ -3318,21 +3627,36 @@ impl<'a> IrLowerer<'a> {
         self.module.interfaces.insert(
             iface_name.clone(),
             CompiledInterface {
-                name: iface_name,
-                extends: iface.extends.iter().map(|e| e.name.to_string()).collect(),
-                methods,
+                name: iface_name.clone(),
+                extends: iface.extends.iter().map(|e| self.resolve_class_name(e.name, None)).collect(),
+                methods: methods.clone(),
                 span: iface.span,
             },
         );
+        if iface_name != iface.name.name {
+            self.module.interfaces.insert(
+                iface.name.name.to_string(),
+                CompiledInterface {
+                    name: iface.name.name.to_string(),
+                    extends: iface.extends.iter().map(|e| self.resolve_class_name(e.name, None)).collect(),
+                    methods,
+                    span: iface.span,
+                },
+            );
+        }
         Ok(())
     }
 
     fn compile_enum_decl(&mut self, enm: &EnumDecl<'_>) -> Result<(), IrError> {
-        let enum_name = enm.name.name.to_string();
+        let enum_name = if let Some(ref ns) = self.current_namespace {
+            format!("{}\\{}", ns, enm.name.name)
+        } else {
+            enm.name.name.to_string()
+        };
         let backing_type = enm
             .backing_type
             .as_ref()
-            .and_then(|th| RhpType::from_type_hint(th, Some(&enum_name)).ok());
+            .and_then(|th| self.resolve_type_hint(th, Some(&enum_name)));
 
         let mut cases = Vec::with_capacity(enm.cases.len());
         for c in &enm.cases {
@@ -3367,14 +3691,27 @@ impl<'a> IrLowerer<'a> {
         self.module.enums.insert(
             enum_name.clone(),
             CompiledEnum {
-                name: enum_name,
-                backing_type,
-                implements: enm.implements.iter().map(|i| i.name.to_string()).collect(),
-                cases,
-                methods,
+                name: enum_name.clone(),
+                backing_type: backing_type.clone(),
+                implements: enm.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
+                cases: cases.clone(),
+                methods: methods.clone(),
                 span: enm.span,
             },
         );
+        if enum_name != enm.name.name {
+            self.module.enums.insert(
+                enm.name.name.to_string(),
+                CompiledEnum {
+                    name: enm.name.name.to_string(),
+                    backing_type,
+                    implements: enm.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
+                    cases,
+                    methods,
+                    span: enm.span,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -3410,13 +3747,53 @@ impl<'a> IrLowerer<'a> {
                 "parent".to_string()
             }
             other => {
-                if let Some(aliased) = self.use_aliases.get(other) {
-                    aliased.clone()
-                } else {
-                    other.to_string()
+                // 1. Fully qualified name (starts with leading `\`)
+                if let Some(stripped) = other.strip_prefix('\\') {
+                    return stripped.to_string();
                 }
+
+                // 2. Direct match in use aliases (`use App\Models\User;` or `use App\Models\User as ModelUser;`)
+                if let Some(aliased) = self.use_aliases.get(other) {
+                    let clean = aliased.strip_prefix('\\').unwrap_or(aliased);
+                    return clean.to_string();
+                }
+
+                // 3. Sub-namespace qualified name (e.g. `Models\User` where `use App\Models;`)
+                if let Some((first_seg, rest)) = other.split_once('\\') {
+                    if let Some(aliased_prefix) = self.use_aliases.get(first_seg) {
+                        let clean_prefix = aliased_prefix.strip_prefix('\\').unwrap_or(aliased_prefix);
+                        return format!("{}\\{}", clean_prefix, rest);
+                    }
+                    if let Some(ref ns) = self.current_namespace {
+                        return format!("{}\\{}", ns, other);
+                    }
+                    return other.to_string();
+                }
+
+                // 4. Built-in facades
+                if is_native_or_plugin_facade(other) {
+                    return other.to_string();
+                }
+
+                // 5. Unqualified name: if inside a namespace, qualify with current namespace
+                if let Some(ref ns) = self.current_namespace {
+                    return format!("{}\\{}", ns, other);
+                }
+
+                other.to_string()
             }
         }
+    }
+
+    pub fn resolve_type_hint(
+        &self,
+        hint: &TypeHint<'_>,
+        current_class: Option<&str>,
+    ) -> Option<RhpType> {
+        RhpType::from_type_hint_with_resolver(hint, current_class, &|raw| {
+            self.resolve_class_name(raw, current_class)
+        })
+        .ok()
     }
 }
 

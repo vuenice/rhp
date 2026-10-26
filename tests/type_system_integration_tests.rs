@@ -116,12 +116,12 @@ fn test_strict_function_and_method_boundary_signatures_enforced() {
 
 #[test]
 fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
-    // 1. Untyped pass-by-reference parameter `&$items`
+    // 1. Untyped pass-by-reference parameter `&$items` fails missing parameter type
     let untyped_ref = "function mutate(&$items): void {}";
-    let err = parse_and_check(untyped_ref).expect_err("Expected PassByReferenceForbidden");
+    let err = parse_and_check(untyped_ref).expect_err("Expected MissingParameterType");
     match err {
         FrontendError::Type(te) => match te.kind {
-            TypeErrorKind::PassByReferenceForbidden {
+            TypeErrorKind::MissingParameterType {
                 callable_name,
                 param_name,
                 ..
@@ -129,23 +129,70 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
                 assert_eq!(callable_name, "mutate");
                 assert_eq!(param_name, "$items");
             }
-            other => panic!("Expected PassByReferenceForbidden, got {:?}", other),
+            other => panic!("Expected MissingParameterType, got {:?}", other),
         },
         other => panic!("Expected TypeError, got {:?}", other),
     }
 
-    // 2. Typed pass-by-reference parameter `array &$items`
-    let typed_ref = "function mutate(array &$items): void {}";
-    let err = parse_and_check(typed_ref).expect_err("Expected PassByReferenceForbidden for typed &param");
+    // 2. Typed pass-by-reference parameter `array &$items` is valid, but calling without & is rejected
+    let typed_ref = r#"
+        function mutate(array &$items): void {}
+        $list = [1, 2, 3];
+        mutate($list);
+    "#;
+    let err = parse_and_check(typed_ref).expect_err("Expected MissingReferenceArgument when calling without &");
     match err {
         FrontendError::Type(te) => match te.kind {
-            TypeErrorKind::PassByReferenceForbidden { param_name, .. } => {
+            TypeErrorKind::MissingReferenceArgument { callable_name, param_name, .. } => {
+                assert_eq!(callable_name, "mutate");
                 assert_eq!(param_name, "$items");
             }
-            other => panic!("Expected PassByReferenceForbidden, got {:?}", other),
+            other => panic!("Expected MissingReferenceArgument, got {:?}", other),
         },
         other => panic!("Expected TypeError, got {:?}", other),
     }
+
+    // 3. Passing by reference to a non-reference parameter is rejected
+    let unexpected_ref = r#"
+        function inspect(array $items): void {}
+        $list = [1, 2, 3];
+        inspect(&$list);
+    "#;
+    let err = parse_and_check(unexpected_ref).expect_err("Expected UnexpectedReferenceArgument");
+    match err {
+        FrontendError::Type(te) => match te.kind {
+            TypeErrorKind::UnexpectedReferenceArgument { callable_name, param_name, .. } => {
+                assert_eq!(callable_name, "inspect");
+                assert_eq!(param_name, "$items");
+            }
+            other => panic!("Expected UnexpectedReferenceArgument, got {:?}", other),
+        },
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+
+    // 4. Passing a literal or expression by reference is rejected
+    let literal_ref = r#"
+        function mutate(int &$val): void {}
+        mutate(&10);
+    "#;
+    let err = parse_and_check(literal_ref).expect_err("Expected ReferenceArgumentMustBeVariable");
+    match err {
+        FrontendError::Type(te) => match te.kind {
+            TypeErrorKind::ReferenceArgumentMustBeVariable { callable_name, .. } => {
+                assert_eq!(callable_name, "mutate");
+            }
+            other => panic!("Expected ReferenceArgumentMustBeVariable, got {:?}", other),
+        },
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+
+    // 5. Valid pass-by-reference with &$x at both declaration and call site
+    let valid_ref = r#"
+        function mutate(array &$items): void {}
+        $list = [1, 2, 3];
+        mutate(&$list);
+    "#;
+    assert!(parse_and_check(valid_ref).is_ok());
 
     // 3. Closure capture-by-reference `use (&$count)`
     let closure_ref = r#"

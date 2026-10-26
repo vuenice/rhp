@@ -296,8 +296,8 @@ pub fn resolve_facade_static_call(
             "merge" | "keys" | "values" | "unique" | "slice" | "reverse" | "filter" | "map" => {
                 Ok(RhpType::Array(Box::new(RhpType::Mixed)))
             }
-            "count" | "push" | "unshift" => Ok(RhpType::Int),
-            "contains" | "hasKey" => Ok(RhpType::Bool),
+            "count" | "length" | "size" | "len" | "push" | "unshift" => Ok(RhpType::Int),
+            "check" | "contains" | "hasKey" | "hasValue" => Ok(RhpType::Bool),
             "search" => Ok(RhpType::Union(vec![
                 RhpType::Int,
                 RhpType::String,
@@ -308,6 +308,7 @@ pub fn resolve_facade_static_call(
         },
 
         "Str" => match method {
+            "check" => Ok(RhpType::Bool),
             "slug" => {
                 check_arg_type(
                     "Str::slug",
@@ -332,7 +333,7 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::String)
             }
-            "contains" | "startsWith" | "endsWith" => {
+            "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" => {
                 check_arg_type(
                     &format!("Str::{}", method),
                     "$haystack",
@@ -382,8 +383,15 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Int)
             }
             "split" => Ok(RhpType::Array(Box::new(RhpType::String))),
-            "pos" => Ok(RhpType::Union(vec![RhpType::Int, RhpType::Bool])),
+            "pos" | "indexOf" => Ok(RhpType::Int),
             _ => Ok(RhpType::String),
+        },
+
+        "Regex" => match method {
+            "isValid" | "testString" | "matches" | "isMatch" => Ok(RhpType::Bool),
+            "match" => Ok(RhpType::Nullable(Box::new(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))))),
+            "replace" | "escape" | "quote" => Ok(RhpType::String),
+            _ => Ok(RhpType::Dynamic),
         },
 
         "File" => match method {
@@ -646,6 +654,12 @@ pub fn resolve_facade_static_call(
             | "clearCrashes" | "configure" => Ok(RhpType::Void),
             _ => Ok(RhpType::Mixed),
         },
+        "Reflect" => match method {
+            "classExists" | "class_exists" | "functionExists" | "function_exists" => {
+                Ok(RhpType::Bool)
+            }
+            _ => Ok(RhpType::Mixed),
+        },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 if mapping.rhp_facade != "phpFun" {
@@ -676,7 +690,7 @@ pub fn resolve_builtin_fluent_method(
     match receiver_type {
         // Fluent numeric APIs (`Int::i64()->random()->add()->subtract()`, `Float::f64()->toDecimal(2)`)
         RhpType::Int | RhpType::RustInt(_) => match method {
-            "random" | "add" | "subtract" | "mul" | "div" | "abs" | "clamp" => {
+            "random" | "add" | "subtract" | "mul" | "div" | "abs" | "clamp" | "round" | "floor" | "ceil" | "ciel" => {
                 Some(receiver_type.clone())
             }
             "toDecimal" => Some(RhpType::RustFloat(RustFloatKind::F64)),
@@ -684,9 +698,10 @@ pub fn resolve_builtin_fluent_method(
             _ => None,
         },
         RhpType::Float | RhpType::RustFloat(_) => match method {
-            "toDecimal" | "round" | "floor" | "ceil" | "add" | "subtract" | "mul" | "div"
+            "toDecimal" | "round" | "floor" | "ceil" | "ciel" | "add" | "subtract" | "mul" | "div"
             | "abs" | "random" => Some(receiver_type.clone()),
             "toInt" => Some(RhpType::Int),
+            "toFloat" => Some(RhpType::Float),
             "toString" => Some(RhpType::String),
             _ => None,
         },
@@ -723,8 +738,10 @@ pub fn resolve_builtin_fluent_method(
                 Some(reduced)
             }
             "find" | "first" | "last" => Some(sub.element_type().clone().into_nullable()),
-            "count" => Some(RhpType::Int),
-            "contains" | "isEmpty" | "isNotEmpty" => Some(RhpType::Bool),
+            "count" | "length" | "size" | "len" => Some(RhpType::Int),
+            "check" | "contains" | "isEmpty" | "isNotEmpty" | "hasKey" | "hasValue" => Some(RhpType::Bool),
+            "keys" => Some(RhpType::Array(Box::new(RhpType::Mixed))),
+            "values" => Some(RhpType::Array(Box::new(sub.element_type().clone()))),
             "all" | "toArray" => Some(RhpType::Array(Box::new(sub.element_type().clone()))),
             _ => {
                 // Check if registered as a runtime macro on `Arr`
@@ -768,14 +785,31 @@ pub fn resolve_builtin_fluent_method(
                 Some(reduced)
             }
             "find" | "first" | "last" => Some((**inner).clone().into_nullable()),
-            "count" => Some(RhpType::Int),
-            "contains" | "isEmpty" | "isNotEmpty" | "hasKey" => Some(RhpType::Bool),
+            "count" | "length" | "size" | "len" => Some(RhpType::Int),
+            "check" | "contains" | "isEmpty" | "isNotEmpty" | "hasKey" | "hasValue" => Some(RhpType::Bool),
             "all" | "toArray" | "values" => Some(RhpType::Array(inner.clone())),
             "keys" => Some(RhpType::Array(Box::new(RhpType::Mixed))),
             "sum" | "avg" | "min" | "max" => Some(RhpType::Mixed),
             "get" => Some(RhpType::Mixed),
             _ => {
                 if crate::lexer::facade::has_macro("Arr", method) {
+                    Some(RhpType::Dynamic)
+                } else {
+                    Some(RhpType::Dynamic)
+                }
+            }
+        },
+
+        // Fluent string helper methods (`$str->trim()`, `$str->lower()`, `$str->upper()`, etc.)
+        RhpType::String => match method {
+            "trim" | "ltrim" | "rtrim" | "upper" | "toUpper" | "lower" | "toLower" | "slug"
+            | "replace" | "substr" | "reverse" | "repeat" | "utf8" => Some(RhpType::String),
+            "length" | "byteLength" | "bytesCount" | "indexOf" => Some(RhpType::Int),
+            "check" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" => Some(RhpType::Bool),
+            "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
+            "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
+            _ => {
+                if crate::lexer::facade::has_macro("Str", method) {
                     Some(RhpType::Dynamic)
                 } else {
                     Some(RhpType::Dynamic)

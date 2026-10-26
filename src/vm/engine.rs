@@ -11,7 +11,10 @@ use crate::ir::opcode::{
 };
 use crate::ir::IrModule;
 use crate::jit::{JitConfig, JitEngine};
-use crate::lexer::facade::{is_static_facade, is_static_only};
+use crate::lexer::facade::{
+    has_custom_helper, is_legacy_php_function, is_reserved_intrinsic, is_static_facade,
+    is_static_only, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
+};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::arena::{RequestArena, RequestDropStats};
@@ -33,6 +36,8 @@ struct StagedArg {
     value: PhpValue,
     name: Option<String>,
     is_unpack: bool,
+    is_reference: bool,
+    caller_reg: Option<usize>,
 }
 
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
@@ -87,6 +92,8 @@ pub struct CallFrame {
     pub active_try_handlers: Vec<u16>,
     /// Per-frame iterator table keyed by `iter_reg.index()`.
     pub(crate) iterators: HashMap<usize, ActiveIterator>,
+    /// Pass-by-reference bindings: (callee_abs_reg, caller_abs_reg)
+    pub ref_bindings: Vec<(usize, usize)>,
 }
 
 /// High-Performance Native Rust Register-Based Bytecode Virtual Machine (`VM`).
@@ -244,6 +251,105 @@ impl VM {
         self.globals.get(bare)
     }
 
+    /// Check whether a class exists (user-defined class, enum, native facade, or built-in standard class).
+    pub fn is_class_exists(&self, class_name: &str) -> bool {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+
+        // 1. User-defined classes in the compiled module (traits excluded)
+        if let Some(cls) = self.module.get_class_by_name(clean) {
+            if !cls.is_trait {
+                return true;
+            }
+        }
+        if self.module.classes.iter().any(|c| !c.is_trait && c.name.eq_ignore_ascii_case(clean)) {
+            return true;
+        }
+
+        // 2. Compiled enums
+        if self.module.enums.contains_key(clean)
+            || self.module.enums.values().any(|e| e.name.eq_ignore_ascii_case(clean))
+        {
+            return true;
+        }
+
+        // 3. Static facades (Tier 1, Tier 2, Tier 3)
+        if is_static_facade(clean)
+            || is_static_only(clean)
+            || NATIVE_FACADES
+                .iter()
+                .any(|f| f.name.eq_ignore_ascii_case(clean))
+        {
+            return true;
+        }
+
+        // 4. Built-in exception and standard classes
+        if clean.eq_ignore_ascii_case("stdClass")
+            || clean.eq_ignore_ascii_case("Exception")
+            || clean.eq_ignore_ascii_case("Error")
+            || clean.eq_ignore_ascii_case("Throwable")
+            || clean.eq_ignore_ascii_case("Closure")
+            || clean.eq_ignore_ascii_case("Future")
+            || clean.ends_with("Exception")
+            || clean.ends_with("Error")
+        {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check whether a standalone function exists (user-defined function, legacy PHP function, or intrinsic).
+    pub fn is_function_exists(&self, fn_name: &str) -> bool {
+        let clean = fn_name.strip_prefix('\\').unwrap_or(fn_name);
+
+        // 1. User-defined standalone functions in the compiled module
+        if let Some(id) = self.module.function_index.get(clean) {
+            if let Some(func) = self.module.functions.get(id.index()) {
+                if func.enclosing_class.is_none() && !func.is_closure && !func.name.starts_with("<anon") {
+                    return true;
+                }
+            }
+        }
+        if self.module.functions.iter().any(|f| {
+            f.enclosing_class.is_none()
+                && !f.is_closure
+                && !f.name.starts_with("<anon")
+                && f.name.eq_ignore_ascii_case(clean)
+        }) {
+            return true;
+        }
+
+        // 2. Legacy PHP functions
+        if is_legacy_php_function(clean)
+            || LEGACY_PHP_FUNCTIONS
+                .iter()
+                .any(|f| f.php_name.eq_ignore_ascii_case(clean))
+        {
+            return true;
+        }
+
+        // 3. Reserved intrinsics (echo, print, env, dd, dump, etc.)
+        if is_reserved_intrinsic(clean)
+            || RESERVED_INTRINSICS
+                .iter()
+                .any(|&i| i.eq_ignore_ascii_case(clean))
+        {
+            return true;
+        }
+
+        // 4. Custom helpers
+        if has_custom_helper(clean) {
+            return true;
+        }
+
+        // 5. Canonical reflection functions
+        if clean.eq_ignore_ascii_case("class_exists") || clean.eq_ignore_ascii_case("function_exists") {
+            return true;
+        }
+
+        false
+    }
+
     /// Reference to the underlying compiled [`IrModule`].
     pub fn module(&self) -> &IrModule {
         &self.module
@@ -356,6 +462,7 @@ impl VM {
             caller_dst: None,
             active_try_handlers: Vec::new(),
             iterators: HashMap::new(),
+            ref_bindings: Vec::new(),
         });
 
         let main_result = self.dispatch_loop(0)?;
@@ -809,6 +916,13 @@ impl VM {
                         Some(r) => self.registers[base_reg + r.index()].clone(),
                         None => PhpValue::Null,
                     };
+
+                    // Copy-out: Write back pass-by-reference parameter values to caller's registers
+                    for &(callee_reg, caller_reg) in &self.frames[frame_idx].ref_bindings {
+                        let final_val = self.registers[callee_reg].clone();
+                        self.registers[caller_reg] = final_val;
+                    }
+
                     let popped = self.frames.pop().unwrap();
                     if popped.base_reg > 0 {
                         self.registers.truncate(popped.base_reg);
@@ -1251,6 +1365,7 @@ impl VM {
                     src,
                     name,
                     is_unpack,
+                    is_reference,
                 } => {
                     let arg_name = if let Some(cid) = name {
                         let chunk = self.chunk_for_func(func_id);
@@ -1259,10 +1374,17 @@ impl VM {
                         None
                     };
                     let val = self.registers[base_reg + src.index()].clone();
+                    let caller_reg = if is_reference {
+                        Some(base_reg + src.index())
+                    } else {
+                        None
+                    };
                     self.arg_buffer.push(StagedArg {
                         value: val,
                         name: arg_name,
                         is_unpack,
+                        is_reference,
+                        caller_reg,
                     });
                 }
 
@@ -1590,12 +1712,30 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
+                    let clean_name = class_name.strip_prefix('\\').unwrap_or(&class_name).to_string();
 
-                    let instance = self.instantiate_class(&class_name, span)?;
+                    let instance = self.instantiate_class(&clean_name, span)?;
+
+                    // If constructor arguments were passed to built-in Exception/Error, initialize message/code
+                    if (clean_name.ends_with("Exception") || clean_name.ends_with("Error"))
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let Some(msg_val) = staged.first() {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("message", msg_val.value.clone());
+                            }
+                        }
+                        if let Some(code_val) = staged.get(1) {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("code", code_val.value.clone());
+                            }
+                        }
+                    }
+
                     self.registers[base_reg + dst.index()] = instance.clone();
 
                     // If the class defines `__construct`, invoke it with `$this = instance`
-                    if let Some(ctor_id) = self.resolve_method_id(&class_name, "__construct") {
+                    if let Some(ctor_id) = self.resolve_method_id(&clean_name, "__construct") {
                         self.push_compiled_call_frame(
                             ctor_id,
                             Some(instance),
@@ -1986,23 +2126,26 @@ impl VM {
         }
 
         // 2. Bind positional, unpacked, and named arguments to parameter registers
-        let mut positional_values = Vec::new();
-        let mut named_values = Vec::new();
+        let mut positional_values: Vec<(PhpValue, bool, Option<usize>)> = Vec::new();
+        let mut named_values: Vec<(String, PhpValue, bool, Option<usize>)> = Vec::new();
         for arg in staged_args {
             if let Some(ref name) = arg.name {
-                named_values.push((name.clone(), arg.value.clone()));
+                named_values.push((name.clone(), arg.value.clone(), arg.is_reference, arg.caller_reg));
             } else if arg.is_unpack {
-                positional_values.extend(Self::extract_items(&arg.value));
+                for item in Self::extract_items(&arg.value) {
+                    positional_values.push((item, false, None));
+                }
             } else {
-                positional_values.push(arg.value.clone());
+                positional_values.push((arg.value.clone(), arg.is_reference, arg.caller_reg));
             }
         }
 
+        let mut ref_bindings = Vec::new();
         let mut assigned_params = vec![false; func.params.len()];
         for (idx, param) in func.params.iter().enumerate() {
             if param.is_variadic {
                 let rest: Vec<PhpValue> = if idx < positional_values.len() {
-                    positional_values[idx..].to_vec()
+                    positional_values[idx..].iter().map(|(v, _, _)| v.clone()).collect()
                 } else {
                     Vec::new()
                 };
@@ -2010,12 +2153,37 @@ impl VM {
                 assigned_params[idx] = true;
                 break;
             } else if idx < positional_values.len() {
-                self.registers[new_base + param.reg.index()] = positional_values[idx].clone();
+                let (val, is_ref, caller_reg) = &positional_values[idx];
+                if param.is_reference {
+                    if !*is_ref {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::MissingReferenceArgument {
+                                callable: func.name.clone(),
+                                param_name: param.name.clone(),
+                                arg_index: idx + 1,
+                            },
+                            span,
+                        ));
+                    }
+                    if let Some(caller_r) = caller_reg {
+                        ref_bindings.push((new_base + param.reg.index(), *caller_r));
+                    }
+                } else if *is_ref {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UnexpectedReferenceArgument {
+                            callable: func.name.clone(),
+                            param_name: param.name.clone(),
+                            arg_index: idx + 1,
+                        },
+                        span,
+                    ));
+                }
+                self.registers[new_base + param.reg.index()] = val.clone();
                 assigned_params[idx] = true;
             }
         }
 
-        for (arg_name, arg_val) in named_values {
+        for (arg_name, arg_val, is_ref, caller_reg) in named_values {
             let norm = if arg_name.starts_with('$') {
                 arg_name.clone()
             } else {
@@ -2027,6 +2195,30 @@ impl VM {
                 .enumerate()
                 .find(|(_, p)| p.name == norm)
             {
+                if param.is_reference {
+                    if !is_ref {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::MissingReferenceArgument {
+                                callable: func.name.clone(),
+                                param_name: param.name.clone(),
+                                arg_index: idx + 1,
+                            },
+                            span,
+                        ));
+                    }
+                    if let Some(caller_r) = caller_reg {
+                        ref_bindings.push((new_base + param.reg.index(), caller_r));
+                    }
+                } else if is_ref {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UnexpectedReferenceArgument {
+                            callable: func.name.clone(),
+                            param_name: param.name.clone(),
+                            arg_index: idx + 1,
+                        },
+                        span,
+                    ));
+                }
                 self.registers[new_base + param.reg.index()] = arg_val.clone();
                 assigned_params[idx] = true;
             } else {
@@ -2075,6 +2267,7 @@ impl VM {
             caller_dst,
             active_try_handlers: Vec::new(),
             iterators: HashMap::new(),
+            ref_bindings,
         });
 
         Ok(())
@@ -2094,6 +2287,8 @@ impl VM {
                 value,
                 name: None,
                 is_unpack: false,
+                is_reference: false,
+                caller_reg: None,
             })
             .collect();
         let depth_before = self.frames.len();
@@ -2132,6 +2327,8 @@ impl VM {
                 value,
                 name: None,
                 is_unpack: false,
+                is_reference: false,
+                caller_reg: None,
             })
             .collect();
         let depth_before = self.frames.len();
@@ -2160,6 +2357,8 @@ impl VM {
                 value,
                 name: None,
                 is_unpack: false,
+                is_reference: false,
+                caller_reg: None,
             })
             .collect();
         let depth_before = self.frames.len();
@@ -2723,7 +2922,12 @@ impl VM {
                     }
                 }
                 "map" => {
-                    if let (Some(PhpValue::Closure(cb)), Some(arr)) = (args.first(), args.get(1)) {
+                    let (cb_opt, arr_opt) = match (args.first(), args.get(1)) {
+                        (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(cb), Some(arr)),
+                        (Some(arr), Some(PhpValue::Closure(cb))) => (Some(cb), Some(arr)),
+                        _ => (None, None),
+                    };
+                    if let (Some(cb), Some(arr)) = (cb_opt, arr_opt) {
                         let items = Self::extract_items(arr);
                         let mut mapped = Vec::with_capacity(items.len());
                         for (idx, item) in items.into_iter().enumerate() {
@@ -2737,10 +2941,16 @@ impl VM {
                     }
                 }
                 "filter" => {
-                    if let Some(arr) = args.first() {
+                    let (arr_opt, cb_opt) = match (args.first(), args.get(1)) {
+                        (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(arr), Some(cb)),
+                        (Some(arr), Some(PhpValue::Closure(cb))) => (Some(arr), Some(cb)),
+                        (Some(arr), _) => (Some(arr), None),
+                        _ => (None, None),
+                    };
+                    if let Some(arr) = arr_opt {
                         let items = Self::extract_items(arr);
                         let mut filtered = Vec::new();
-                        if let Some(PhpValue::Closure(cb)) = args.get(1) {
+                        if let Some(cb) = cb_opt {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let keep = self.invoke_closure_sync(
                                     cb,
@@ -2775,6 +2985,28 @@ impl VM {
             }
         }
 
+        if facade == "Reflect" || facade == "phpFun" {
+            match method {
+                "classExists" | "class_exists" => {
+                    let class_name = match args.first() {
+                        Some(PhpValue::String(s)) => s.to_string(),
+                        Some(val) => val.to_php_string(),
+                        None => return Ok(PhpValue::Bool(false)),
+                    };
+                    return Ok(PhpValue::Bool(self.is_class_exists(&class_name)));
+                }
+                "functionExists" | "function_exists" => {
+                    let fn_name = match args.first() {
+                        Some(PhpValue::String(s)) => s.to_string(),
+                        Some(val) => val.to_php_string(),
+                        None => return Ok(PhpValue::Bool(false)),
+                    };
+                    return Ok(PhpValue::Bool(self.is_function_exists(&fn_name)));
+                }
+                _ => {}
+            }
+        }
+
         dispatch_facade_call(facade, method, args, span)
     }
 
@@ -2790,6 +3022,16 @@ impl VM {
             // 1. Subtyped Dictionary methods (`Arr::dict()->map()->filter()->keys()->get()`, etc.)
             PhpValue::Dict(dict) => {
                 match method {
+                    "check" => {
+                        let ok = match args.first() {
+                            None => true,
+                            Some(sub) => {
+                                let clean = sub.to_php_string().trim().to_lowercase().replace(['-', '_', ' '], "");
+                                clean == "dict" || clean == "dictionary"
+                            }
+                        };
+                        Ok(PhpValue::Bool(ok))
+                    }
                     "keys" => {
                         let keys: Vec<PhpValue> = dict
                             .borrow()
@@ -2811,7 +3053,7 @@ impl VM {
                             Ok(dict.borrow().get(&key).cloned().unwrap_or(default))
                         }
                     }
-                    "has" => {
+                    "has" | "hasKey" => {
                         let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                         if key.contains('.') {
                             Ok(PhpValue::Bool(arr_has_dot(receiver, &key)))
@@ -3167,7 +3409,7 @@ impl VM {
                     "isEmpty" => Ok(PhpValue::Bool(dict.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!dict.borrow().is_empty())),
                     "all" | "toArray" => Ok(receiver.clone()),
-                    "contains" => {
+                    "contains" | "hasValue" => {
                         if let Some(PhpValue::Closure(cb)) = args.first() {
                             for (k, v) in dict.borrow().iter() {
                                 let matched = self.invoke_closure_sync(
@@ -3460,7 +3702,17 @@ impl VM {
             // 2. Subtyped Unique Set methods (`Arr::set()->contains()->add()->diff()`, etc.)
             PhpValue::Set(set) => {
                 match method {
-                    "contains" | "has" => {
+                    "check" => {
+                        let ok = match args.first() {
+                            None => true,
+                            Some(sub) => {
+                                let clean = sub.to_php_string().trim().to_lowercase().replace(['-', '_', ' '], "");
+                                clean == "set"
+                            }
+                        };
+                        Ok(PhpValue::Bool(ok))
+                    }
+                    "contains" | "has" | "hasKey" | "hasValue" => {
                         let target = match args.first() {
                             Some(v) => v,
                             None => return Ok(PhpValue::Bool(false)),
@@ -3477,9 +3729,13 @@ impl VM {
                         let removed = set.borrow_mut().remove(&val);
                         Ok(PhpValue::Bool(removed))
                     }
-                    "count" => Ok(PhpValue::Int(set.borrow().len() as i32)),
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(set.borrow().len() as i32)),
                     "isEmpty" => Ok(PhpValue::Bool(set.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!set.borrow().is_empty())),
+                    "keys" => {
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        Ok(PhpValue::list(items))
+                    }
                     "all" | "toArray" | "values" => {
                         let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
                         Ok(PhpValue::list(items))
@@ -3622,6 +3878,16 @@ impl VM {
             // 3. Subtyped Universal Hash Map methods (`Arr::hashMap()->get()->put()->keys()`, etc.)
             PhpValue::HashMap(map) => {
                 match method {
+                    "check" => {
+                        let ok = match args.first() {
+                            None => true,
+                            Some(sub) => {
+                                let clean = sub.to_php_string().trim().to_lowercase().replace(['-', '_', ' '], "");
+                                clean == "hashmap" || clean == "map"
+                            }
+                        };
+                        Ok(PhpValue::Bool(ok))
+                    }
                     "get" => {
                         let key = args.first().cloned().unwrap_or(PhpValue::Null);
                         let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
@@ -3630,6 +3896,11 @@ impl VM {
                     "has" | "contains" | "hasKey" => {
                         let key = args.first().cloned().unwrap_or(PhpValue::Null);
                         Ok(PhpValue::Bool(map.borrow().contains_key(&key)))
+                    }
+                    "hasValue" => {
+                        let target = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let found = map.borrow().values().any(|v| v == &target);
+                        Ok(PhpValue::Bool(found))
                     }
                     "put" => {
                         let key = args.first().cloned().unwrap_or(PhpValue::Null);
@@ -3664,7 +3935,7 @@ impl VM {
                             .collect();
                         Ok(PhpValue::list(entries))
                     }
-                    "count" => Ok(PhpValue::Int(map.borrow().len() as i32)),
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(map.borrow().len() as i32)),
                     "isEmpty" => Ok(PhpValue::Bool(map.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!map.borrow().is_empty())),
                     "map" => {
@@ -3867,6 +4138,22 @@ impl VM {
             | PhpValue::Array(_) => {
                 let items = Self::extract_items(receiver);
                 match method {
+                    "check" => {
+                        let ok = match args.first() {
+                            None => true,
+                            Some(sub) => {
+                                let clean = sub.to_php_string().trim().to_lowercase().replace(['-', '_', ' '], "");
+                                clean == "list" || clean == "array"
+                            }
+                        };
+                        Ok(PhpValue::Bool(ok))
+                    }
+                    "keys" => {
+                        let keys: Vec<PhpValue> = (0..items.len())
+                            .map(|i| PhpValue::Int(i as i32))
+                            .collect();
+                        Ok(PhpValue::list(keys))
+                    }
                     "map" => {
                         if let Some(PhpValue::Closure(cb)) = args.first() {
                             let mut out = Vec::with_capacity(items.len());
@@ -3981,7 +4268,7 @@ impl VM {
                     "isEmpty" => Ok(PhpValue::Bool(items.is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!items.is_empty())),
                     "all" | "toArray" | "values" => Ok(PhpValue::list(items)),
-                    "contains" | "includes" => {
+                    "contains" | "includes" | "hasValue" => {
                         if let Some(PhpValue::Closure(cb)) = args.first() {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
@@ -4121,7 +4408,7 @@ impl VM {
                             Ok(default)
                         }
                     }
-                    "has" => {
+                    "has" | "hasKey" => {
                         let idx = args.first().and_then(|v| v.to_i64()).unwrap_or(-1);
                         Ok(PhpValue::Bool(idx >= 0 && (idx as usize) < items.len()))
                     }
@@ -4358,10 +4645,43 @@ impl VM {
                 }
             }
 
-            // 2. Native Rust Integer Wrapper fluent methods (`Int::i64()->random()->add()->subtract()`)
+            // 2. Integer fluent methods
+            PhpValue::Int(value) => {
+                let val = *value;
+                let rhs = args.first().and_then(|v| v.to_i32()).unwrap_or(1);
+                let next_val = match method {
+                    "round" | "floor" | "ceil" | "ciel" => val,
+                    "add" => val.wrapping_add(rhs),
+                    "subtract" | "sub" => val.wrapping_sub(rhs),
+                    "multiply" | "mul" => val.wrapping_mul(rhs),
+                    "divide" | "div" => {
+                        if rhs == 0 {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        val / rhs
+                    }
+                    "abs" => val.abs(),
+                    "toInt" => return Ok(PhpValue::Int(val)),
+                    "toFloat" => return Ok(PhpValue::Float(val as f32)),
+                    "toString" => return Ok(PhpValue::string(val.to_string())),
+                    other => {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: "int".to_string(),
+                                method: other.to_string(),
+                            },
+                            span,
+                        ))
+                    }
+                };
+                Ok(PhpValue::Int(next_val))
+            }
+
+            // Native Rust Integer Wrapper fluent methods (`Int::i64()->random()->add()->subtract()`)
             PhpValue::RustInt { kind, value } => {
                 let rhs = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as i128;
                 let next_val = match method {
+                    "round" | "floor" | "ceil" | "ciel" => *value,
                     "random" => {
                         let bound = args.first().and_then(|v| v.to_i64()).unwrap_or(100).max(1) as i128;
                         ((*value).wrapping_add(42)) % bound
@@ -4401,7 +4721,12 @@ impl VM {
                 let val = *value;
                 let rhs = args.first().and_then(|v| v.to_f64()).unwrap_or(1.0);
                 let next_val = match method {
-                    "toDecimal" | "round" => {
+                    "round" => {
+                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(0).clamp(0, 15) as i32;
+                        let factor = 10_f64.powi(places);
+                        (val * factor).round() / factor
+                    }
+                    "toDecimal" => {
                         let places = args.first().and_then(|v| v.to_i64()).unwrap_or(2).clamp(0, 15) as i32;
                         let factor = 10_f64.powi(places);
                         (val * factor).round() / factor
@@ -4416,9 +4741,9 @@ impl VM {
                         val / rhs
                     }
                     "floor" => val.floor(),
-                    "ceil" => val.ceil(),
-                    "abs" => val.abs(),
+                    "ceil" | "ciel" => val.ceil(),
                     "toInt" => return Ok(PhpValue::Int(val as i32)),
+                    "toFloat" => return Ok(PhpValue::Float(val as f32)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -4440,7 +4765,12 @@ impl VM {
                 let val = *value;
                 let rhs = args.first().and_then(|v| v.to_f32()).unwrap_or(1.0);
                 let next_val = match method {
-                    "toDecimal" | "round" => {
+                    "round" => {
+                        let places = args.first().and_then(|v| v.to_i32()).unwrap_or(0).clamp(0, 15);
+                        let factor = 10_f32.powi(places);
+                        (val * factor).round() / factor
+                    }
+                    "toDecimal" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(2).clamp(0, 15);
                         let factor = 10_f32.powi(places);
                         (val * factor).round() / factor
@@ -4455,9 +4785,10 @@ impl VM {
                         val / rhs
                     }
                     "floor" => val.floor(),
-                    "ceil" => val.ceil(),
+                    "ceil" | "ciel" => val.ceil(),
                     "abs" => val.abs(),
                     "toInt" => return Ok(PhpValue::Int(val as i32)),
+                    "toFloat" => return Ok(PhpValue::Float(val)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -4605,6 +4936,15 @@ impl VM {
             // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
             // String helper methods are immutable by default, returning a new instance.
             PhpValue::String(s) => match method {
+                "check" => {
+                    if let Some(enc_val) = args.first() {
+                        let enc_str = enc_val.to_php_string();
+                        let is_valid = crate::vm::encoding::is_valid_encoding(s.as_bytes(), &enc_str);
+                        Ok(PhpValue::Bool(is_valid))
+                    } else {
+                        Ok(PhpValue::Bool(true))
+                    }
+                }
                 "trim" => {
                     let str_val = s.to_str_lossy();
                     let chars = if let Some(arg1) = args.first() {
@@ -4661,17 +5001,63 @@ impl VM {
                     }
                     Ok(PhpValue::string(slug))
                 }
-                "contains" => {
+                "contains" | "includes" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.to_str_lossy().contains(&needle)))
                 }
-                "startsWith" => {
+                "startsWith" | "starts_with" => {
                     let prefix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.to_str_lossy().starts_with(&prefix)))
                 }
-                "endsWith" => {
+                "endsWith" | "ends_with" => {
                     let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.to_str_lossy().ends_with(&suffix)))
+                }
+                "indexOf" | "index_of" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+                    let str_val = s.to_str_lossy();
+                    let char_indices: Vec<(usize, char)> = str_val.char_indices().collect();
+                    let total_chars = char_indices.len();
+                    let start_char_idx = if offset < 0 {
+                        (total_chars as i64 + offset).max(0) as usize
+                    } else {
+                        (offset as usize).min(total_chars)
+                    };
+                    let byte_offset = if start_char_idx < total_chars {
+                        char_indices[start_char_idx].0
+                    } else {
+                        str_val.len()
+                    };
+                    if needle.is_empty() {
+                        return Ok(PhpValue::Int(start_char_idx as i32));
+                    }
+                    if let Some(pos) = str_val[byte_offset..].find(&needle) {
+                        let actual_byte_pos = byte_offset + pos;
+                        let char_idx = str_val[..actual_byte_pos].chars().count();
+                        Ok(PhpValue::Int(char_idx as i32))
+                    } else {
+                        Ok(PhpValue::Int(-1))
+                    }
+                }
+                "testRegex" | "regex" | "matchesPattern" => {
+                    let str_val = s.to_str_lossy();
+                    match args.first() {
+                        None => {
+                            Ok(PhpValue::Bool(crate::vm::facade::parse_regex_pattern(&str_val).is_ok()))
+                        }
+                        Some(pattern_val) => {
+                            let pat_str = pattern_val.to_php_string();
+                            let matched = if let Ok(re) = crate::vm::facade::parse_regex_pattern(&pat_str) {
+                                re.is_match(&str_val)
+                            } else if let Ok(re) = crate::vm::facade::parse_regex_pattern(&str_val) {
+                                re.is_match(&pat_str)
+                            } else {
+                                false
+                            };
+                            Ok(PhpValue::Bool(matched))
+                        }
+                    }
                 }
                 "length" => {
                     Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i32))
@@ -5105,6 +5491,16 @@ impl VM {
                     Ok(PhpValue::string(""))
                 }
             }
+            (_, "getCode") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow()
+                        .get_property("code")
+                        .cloned()
+                        .unwrap_or(PhpValue::Int(0)))
+                } else {
+                    Ok(PhpValue::Int(0))
+                }
+            }
             _ => Err(self.make_error(
                 RuntimeErrorKind::UndefinedMethod {
                     class: class_name.to_string(),
@@ -5120,23 +5516,25 @@ impl VM {
     // =========================================================================
 
     fn instantiate_class(&mut self, class_name: &str, span: Span) -> Result<PhpValue, RuntimeError> {
+        let clean_name = class_name.strip_prefix('\\').unwrap_or(class_name);
+
         // Engine-Level Instantiation Guard:
         // Halts illegal instantiation attempts on static facades (Tier 1, Tier 2, Tier 3)
         // or any class marked `is_static_only: true` with a fatal error.
-        if is_static_facade(class_name) || is_static_only(class_name) {
+        if is_static_facade(clean_name) || is_static_only(clean_name) {
             return Err(self.make_error(
                 RuntimeErrorKind::StaticFacadeInstantiationForbidden {
-                    class: class_name.to_string(),
+                    class: clean_name.to_string(),
                 },
                 span,
             ));
         }
 
-        if let Some(cls) = self.module.get_class_by_name(class_name) {
+        if let Some(cls) = self.module.get_class_by_name(clean_name) {
             if cls.modifiers.is_static_only {
                 return Err(self.make_error(
                     RuntimeErrorKind::StaticFacadeInstantiationForbidden {
-                        class: class_name.to_string(),
+                        class: clean_name.to_string(),
                     },
                     span,
                 ));
@@ -5153,7 +5551,7 @@ impl VM {
                     if !caller_is_singleton {
                         return Err(self.make_error(
                             RuntimeErrorKind::SingletonInstantiationForbidden {
-                                singleton_class: class_name.to_string(),
+                                singleton_class: clean_name.to_string(),
                                 caller_class,
                             },
                             span,
@@ -5163,11 +5561,11 @@ impl VM {
             }
         }
 
-        let mut obj = VmObject::new(class_name);
+        let mut obj = VmObject::new(clean_name);
 
         // Built-in Exception / RuntimeException classes
-        if class_name.ends_with("Exception") || class_name.ends_with("Error") || class_name == "stdClass" {
-            if !self.module.class_index.contains_key(class_name) {
+        if clean_name.ends_with("Exception") || clean_name.ends_with("Error") || clean_name == "stdClass" {
+            if !self.module.class_index.contains_key(clean_name) {
                 obj.set_property("message", PhpValue::string(""));
                 obj.set_property("code", PhpValue::Int(0));
                 return Ok(PhpValue::object(obj));
@@ -5176,7 +5574,7 @@ impl VM {
 
         // Collect inheritance chain from root ancestor down to `class_name`
         let mut hierarchy_chain = Vec::new();
-        let mut cursor = Some(class_name.to_string());
+        let mut cursor = Some(clean_name.to_string());
         while let Some(ref current_cls_name) = cursor {
             if let Some(cls) = self.module.get_class_by_name(current_cls_name).cloned() {
                 if let Some(ref parent_name) = cls.extends {
@@ -5195,10 +5593,10 @@ impl VM {
                 let parent = cls.extends.clone();
                 hierarchy_chain.push(cls);
                 cursor = parent;
-            } else if current_cls_name == class_name {
+            } else if current_cls_name == clean_name {
                 return Err(self.make_error(
                     RuntimeErrorKind::UndefinedClass {
-                        name: class_name.to_string(),
+                        name: clean_name.to_string(),
                     },
                     span,
                 ));
@@ -5243,7 +5641,8 @@ impl VM {
     }
 
     fn resolve_method_id(&self, class_name: &str, method_name: &str) -> Option<FunctionId> {
-        let mut cursor = Some(class_name);
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        let mut cursor = Some(clean);
         while let Some(cls_name) = cursor {
             if let Some(cls) = self.module.get_class_by_name(cls_name) {
                 if let Some(&fn_id) = cls.methods.get(method_name) {
@@ -5267,29 +5666,38 @@ impl VM {
     }
 
     fn is_class_instance_of(&self, actual_cls: &str, target_cls: &str) -> bool {
-        if actual_cls == target_cls || target_cls == "object" {
+        let actual_clean = actual_cls.strip_prefix('\\').unwrap_or(actual_cls);
+        let target_clean = target_cls.strip_prefix('\\').unwrap_or(target_cls);
+        if actual_clean == target_clean || target_clean == "object" {
             return true;
         }
         if let Some(ref h) = self.type_hierarchy {
-            if h.is_subtype_of(actual_cls, target_cls) {
+            if h.is_subtype_of(actual_clean, target_clean) || h.is_subtype_of(actual_cls, target_cls) {
                 return true;
             }
         }
         // Walk compiled class extends / implements / traits
-        let mut cursor = Some(actual_cls);
+        let mut cursor = Some(actual_clean);
         while let Some(cls_name) = cursor {
-            if cls_name == target_cls {
+            if cls_name == target_clean {
                 return true;
             }
             if let Some(cls) = self.module.get_class_by_name(cls_name) {
-                if cls.implements.iter().any(|i| i == target_cls)
-                    || cls.traits.iter().any(|t| t == target_cls)
-                {
+                if cls.implements.iter().any(|i| {
+                    let ic = i.strip_prefix('\\').unwrap_or(i);
+                    ic == target_clean || i == target_cls
+                }) || cls.traits.iter().any(|t| {
+                    let tc = t.strip_prefix('\\').unwrap_or(t);
+                    tc == target_clean || t == target_cls
+                }) {
                     return true;
                 }
                 cursor = cls.extends.as_deref();
             } else if let Some(enm) = self.module.enums.get(cls_name) {
-                if enm.implements.iter().any(|i| i == target_cls) {
+                if enm.implements.iter().any(|i| {
+                    let ic = i.strip_prefix('\\').unwrap_or(i);
+                    ic == target_clean || i == target_cls
+                }) {
                     return true;
                 }
                 break;
@@ -5298,7 +5706,9 @@ impl VM {
             }
         }
         // Built-in Exception subtyping
-        if actual_cls.ends_with("Exception") && (target_cls == "Exception" || target_cls == "Throwable") {
+        if (actual_clean.ends_with("Exception") || actual_cls.ends_with("Exception"))
+            && (target_clean == "Exception" || target_clean == "Throwable")
+        {
             return true;
         }
         false

@@ -337,25 +337,54 @@ impl<'s> CombinatorStream<'s> {
         }
     }
 
-    /// Expect an identifier or namespace-qualified identifier (e.g. `App\Services\Worker`).
+    /// Expect an identifier or namespace-qualified identifier (e.g. `App\Services\Worker`, `\Exception`, or `\App\Models\User`).
     pub fn expect_qualified_ident(&mut self) -> Result<Ident<'s>, ParseError> {
+        let (has_leading_backslash, leading_span) = if self.check(&Token::Backslash) {
+            let sp = self.advance().unwrap().span;
+            (true, Some(sp))
+        } else {
+            (false, None)
+        };
+
         let first = self.expect_ident()?;
-        if !self.check(&Token::Backslash) {
+        if !has_leading_backslash && !self.check(&Token::Backslash) {
             return Ok(first);
         }
-        let start = first.span.start;
-        let mut span = first.span;
+
+        let start = leading_span.map(|s| s.start).unwrap_or(first.span.start);
+        let mut span = leading_span.map(|s| s.merge(first.span)).unwrap_or(first.span);
         let mut end = first.span.end;
+        let mut segments: Vec<&'s str> = Vec::new();
+        segments.push(first.name);
+
         while self.matches(&Token::Backslash) {
             let next = self.expect_ident()?;
             end = next.span.end;
             span = span.merge(next.span);
+            segments.push(next.name);
         }
+
         let name = if let Some(src) = self.source {
-            &src[start..end]
+            let raw = &src[start..end];
+            if raw.contains(char::is_whitespace) {
+                let mut s = String::new();
+                if has_leading_backslash {
+                    s.push('\\');
+                }
+                s.push_str(&segments.join("\\"));
+                Box::leak(s.into_boxed_str())
+            } else {
+                raw
+            }
         } else {
-            first.name
+            let mut s = String::new();
+            if has_leading_backslash {
+                s.push('\\');
+            }
+            s.push_str(&segments.join("\\"));
+            Box::leak(s.into_boxed_str())
         };
+
         Ok(Ident::new(name, span))
     }
 
@@ -459,7 +488,7 @@ impl<'s> CombinatorStream<'s> {
 
         while self.matches(&Token::AttributeStart) {
             let start_span = self.current_span();
-            let name = self.expect_ident()?;
+            let name = self.expect_qualified_ident()?;
             let mut args = Vec::new();
 
             if self.matches(&Token::OpenParen) {
@@ -500,7 +529,7 @@ impl<'s> CombinatorStream<'s> {
         Ok(attributes)
     }
 
-    /// Combinator: Parse a strongly-typed type hint (including nullable `?`, union `|`, intersection `&`).
+    /// Combinator: Parse a strongly-typed type hint (including nullable `?`, union `|`, intersection `&`, and DNF `(A&B)|C`).
     pub fn parse_type_hint(&mut self) -> Result<TypeHint<'s>, ParseError> {
         let start_span = self.current_span();
 
@@ -511,13 +540,22 @@ impl<'s> CombinatorStream<'s> {
             return Ok(TypeHint::new(TypeHintKind::Nullable(Box::new(inner)), span));
         }
 
-        let first = self.parse_single_type_hint()?;
+        let first = self.parse_type_segment()?;
 
         // Union types `Type1 | Type2`
         if self.check(&Token::Pipe) {
             let mut types = vec![first];
             while self.matches(&Token::Pipe) {
-                types.push(self.parse_single_type_hint()?);
+                let next_seg = self.parse_type_segment()?;
+                if self.check(&Token::Ampersand) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: "Cannot combine unparenthesized '&' with '|'. Intersection types within union types must be parenthesized (DNF), e.g. '(A&B)|C'.".to_string(),
+                        },
+                        self.current_span(),
+                    ));
+                }
+                types.push(next_seg);
             }
             let end_span = types.last().unwrap().span;
             let span = start_span.merge(end_span);
@@ -531,6 +569,14 @@ impl<'s> CombinatorStream<'s> {
                 Some(Token::Variable(_) | Token::Ellipsis)
             )
         {
+            if matches!(first.kind, TypeHintKind::Intersection(_)) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Cannot combine parenthesized intersection with unparenthesized '&'".to_string(),
+                    },
+                    self.current_span(),
+                ));
+            }
             let mut types = vec![first];
             while self.check(&Token::Ampersand)
                 && !matches!(
@@ -541,6 +587,14 @@ impl<'s> CombinatorStream<'s> {
                 self.advance();
                 types.push(self.parse_single_type_hint()?);
             }
+            if self.check(&Token::Pipe) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Cannot combine unparenthesized '&' with '|'. Intersection types within union types must be parenthesized (DNF), e.g. '(A&B)|C'.".to_string(),
+                    },
+                    self.current_span(),
+                ));
+            }
             let end_span = types.last().unwrap().span;
             let span = start_span.merge(end_span);
             return Ok(TypeHint::new(TypeHintKind::Intersection(types), span));
@@ -549,9 +603,51 @@ impl<'s> CombinatorStream<'s> {
         Ok(first)
     }
 
+    /// Parse a type segment: either a parenthesized intersection `(A & B)` or a single base type.
+    fn parse_type_segment(&mut self) -> Result<TypeHint<'s>, ParseError> {
+        if self.matches(&Token::OpenParen) {
+            let start_span = self.current_span();
+            let first = self.parse_single_type_hint()?;
+            let mut members = vec![first];
+            while self.matches(&Token::Ampersand) {
+                members.push(self.parse_single_type_hint()?);
+            }
+            self.expect(Token::CloseParen)?;
+            let span = start_span.merge(self.current_span());
+            if members.len() < 2 {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Parenthesized type in DNF must be an intersection of two or more types separated by '&' (e.g. '(A&B)')".to_string(),
+                    },
+                    span,
+                ));
+            }
+            Ok(TypeHint::new(TypeHintKind::Intersection(members), span))
+        } else {
+            self.parse_single_type_hint()
+        }
+    }
+
     /// Parse a single base type hint token.
     fn parse_single_type_hint(&mut self) -> Result<TypeHint<'s>, ParseError> {
         let span = self.current_span();
+
+        // 1. Qualified type hint with leading backslash (e.g. `\Exception`, `\App\Models\User`)
+        if self.check(&Token::Backslash) {
+            let ident = self.expect_qualified_ident()?;
+            let span = ident.span;
+            return Ok(TypeHint::new(TypeHintKind::Named(ident), span));
+        }
+
+        // 2. Qualified type hint with multiple segments (e.g. `App\Models\User`)
+        if matches!(self.peek().map(|t| &t.token), Some(Token::Ident(_)))
+            && matches!(self.peek_nth(1).map(|t| &t.token), Some(Token::Backslash))
+        {
+            let ident = self.expect_qualified_ident()?;
+            let span = ident.span;
+            return Ok(TypeHint::new(TypeHintKind::Named(ident), span));
+        }
+
         match self.advance() {
             Some(spanned) => match spanned.token {
                 Token::TypeInt
@@ -620,14 +716,59 @@ impl<'s> CombinatorStream<'s> {
 
         let mut found_type = false;
         loop {
+            // Check for parenthesized type segment `(` ... `)`
+            if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::OpenParen)) {
+                idx += 1;
+                let mut paren_depth = 1;
+                while paren_depth > 0 {
+                    match self.peek_nth(idx).map(|t| &t.token) {
+                        Some(Token::OpenParen) => {
+                            paren_depth += 1;
+                            idx += 1;
+                        }
+                        Some(Token::CloseParen) => {
+                            paren_depth -= 1;
+                            idx += 1;
+                        }
+                        Some(_) => {
+                            idx += 1;
+                        }
+                        None => return false,
+                    }
+                }
+                found_type = true;
+                if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Pipe)) {
+                    idx += 1;
+                    continue;
+                }
+                break;
+            }
+
+            // Optional leading backslash
+            if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Backslash)) {
+                idx += 1;
+            }
+
             match self.peek_nth(idx).map(|t| &t.token) {
-                Some(t) if t.is_type() => {
+                Some(t)
+                    if t.is_type()
+                        || matches!(
+                            t,
+                            Token::Null | Token::False | Token::True | Token::Static
+                        ) =>
+                {
                     found_type = true;
                     idx += 1;
                 }
                 Some(Token::Ident(_)) => {
                     found_type = true;
                     idx += 1;
+                    // Skip any subsequent \Ident segments
+                    while matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Backslash))
+                        && matches!(self.peek_nth(idx + 1).map(|t| &t.token), Some(Token::Ident(_)))
+                    {
+                        idx += 2;
+                    }
                 }
                 _ => break,
             }

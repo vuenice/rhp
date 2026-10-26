@@ -4,9 +4,9 @@ use crate::ast::{
     expr::{Argument, AssignOp, BinaryOp, Expr, ExprKind, Literal, UnaryOp},
     stmt::{
         ClassDecl, ClassMemberKind, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, Param,
-        PropertyDecl, Stmt, StmtKind, TraitDecl,
+        PropertyDecl, Stmt, StmtKind, TraitAdaptation, TraitDecl,
     },
-    types::{CastType, Visibility},
+    types::{CastType, TypeHint, Visibility},
     visitor::AstVisitor,
     Program,
 };
@@ -19,7 +19,8 @@ use crate::type_system::{
     error::{TypeError, TypeErrorKind},
     types::{
         ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FunctionSignature, InterfaceTypeInfo,
-        ParamSignature, PropertyTypeInfo, RhpType, TypeHierarchy,
+        ParamSignature, PropertyTypeInfo, RhpType, TraitAdaptationInfo, TraitUseInfo,
+        TypeHierarchy,
     },
 };
 
@@ -84,12 +85,16 @@ struct CallableContext {
 /// while performing dynamic type inference inside function bodies.
 pub struct TypeChecker {
     result: TypeCheckResult,
+    current_namespace: Option<String>,
+    use_aliases: HashMap<String, String>,
 }
 
 impl TypeChecker {
     pub fn new() -> Self {
         Self {
             result: TypeCheckResult::default(),
+            current_namespace: None,
+            use_aliases: HashMap::new(),
         }
     }
 
@@ -100,6 +105,8 @@ impl TypeChecker {
                 hierarchy,
                 ..Default::default()
             },
+            current_namespace: None,
+            use_aliases: HashMap::new(),
         }
     }
 
@@ -107,7 +114,11 @@ impl TypeChecker {
     pub fn check_program(mut self, program: &Program<'_>) -> Result<TypeCheckResult, TypeError> {
         // Pass 1: Collect and enforce strict boundary signatures across functions, classes, interfaces, traits, enums
         self.collect_declarations(&program.statements)?;
+        self.compose_and_validate_traits()?;
         self.validate_hierarchy_contracts()?;
+
+        self.current_namespace = None;
+        self.use_aliases.clear();
 
         // Pass 2: Perform dynamic type inference within function/method bodies & top-level statements
         let mut top_env = TypeEnvironment::new();
@@ -124,44 +135,113 @@ impl TypeChecker {
     fn collect_declarations(&mut self, stmts: &[Stmt<'_>]) -> Result<(), TypeError> {
         for stmt in stmts {
             match &stmt.kind {
-                StmtKind::Namespace {
-                    body: Some(inner), ..
-                } => {
-                    self.collect_declarations(inner)?;
+                StmtKind::Namespace { name, body } => {
+                    let prev_ns = self.current_namespace.clone();
+                    let prev_aliases = self.use_aliases.clone();
+                    if body.is_none() && prev_ns.is_some() {
+                        self.use_aliases.clear();
+                    }
+                    self.current_namespace = name.as_ref().map(|id| {
+                        let n = id.name.strip_prefix('\\').unwrap_or(id.name);
+                        n.to_string()
+                    });
+                    if let Some(inner) = body {
+                        self.collect_declarations(inner)?;
+                        self.current_namespace = prev_ns;
+                        self.use_aliases = prev_aliases;
+                    }
+                }
+                StmtKind::Use(imports) => {
+                    for imp in imports {
+                        let target = imp.name.name.strip_prefix('\\').unwrap_or(imp.name.name);
+                        let alias = imp
+                            .alias
+                            .as_ref()
+                            .map(|a| a.name.to_string())
+                            .unwrap_or_else(|| {
+                                target
+                                    .rsplit('\\')
+                                    .next()
+                                    .unwrap_or(target)
+                                    .to_string()
+                            });
+                        self.use_aliases.insert(alias, target.to_string());
+                    }
                 }
                 StmtKind::FunctionDecl(func) => {
+                    let func_name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, func.name.name)
+                    } else {
+                        func.name.name.to_string()
+                    };
                     let sig = self.build_function_signature(
                         func,
                         "function",
-                        &func.name.name,
+                        &func_name,
                         None,
                         Visibility::Public,
                         false,
                         false,
                         false,
                     )?;
-                    self.result.functions.insert(func.name.name.to_string(), sig);
+                    self.result.functions.insert(func_name.clone(), sig.clone());
+                    if func_name != func.name.name {
+                        self.result.functions.insert(func.name.name.to_string(), sig);
+                    }
                 }
                 StmtKind::InterfaceDecl(iface) => {
                     let info = self.build_interface_info(iface)?;
+                    let iface_name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, iface.name.name)
+                    } else {
+                        iface.name.name.to_string()
+                    };
                     self.result
                         .hierarchy
                         .interfaces
-                        .insert(iface.name.name.to_string(), info);
+                        .insert(iface_name.clone(), info.clone());
+                    if iface_name != iface.name.name {
+                        self.result
+                            .hierarchy
+                            .interfaces
+                            .insert(iface.name.name.to_string(), info);
+                    }
                 }
                 StmtKind::TraitDecl(tr) => {
                     let info = self.build_trait_info(tr)?;
+                    let trait_name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, tr.name.name)
+                    } else {
+                        tr.name.name.to_string()
+                    };
                     self.result
                         .hierarchy
                         .traits
-                        .insert(tr.name.name.to_string(), info);
+                        .insert(trait_name.clone(), info.clone());
+                    if trait_name != tr.name.name {
+                        self.result
+                            .hierarchy
+                            .traits
+                            .insert(tr.name.name.to_string(), info);
+                    }
                 }
                 StmtKind::EnumDecl(enm) => {
                     let info = self.build_enum_info(enm)?;
+                    let enum_name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, enm.name.name)
+                    } else {
+                        enm.name.name.to_string()
+                    };
                     self.result
                         .hierarchy
                         .enums
-                        .insert(enm.name.name.to_string(), info);
+                        .insert(enum_name.clone(), info.clone());
+                    if enum_name != enm.name.name {
+                        self.result
+                            .hierarchy
+                            .enums
+                            .insert(enm.name.name.to_string(), info);
+                    }
                 }
                 StmtKind::RustImport { path, alias } => {
                     let alias_str = alias.as_ref().map(|a| a.name);
@@ -169,10 +249,21 @@ impl TypeChecker {
                 }
                 StmtKind::ClassDecl(cls) => {
                     let info = self.build_class_info(cls)?;
+                    let class_name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, cls.name.name)
+                    } else {
+                        cls.name.name.to_string()
+                    };
                     self.result
                         .hierarchy
                         .classes
-                        .insert(cls.name.name.to_string(), info);
+                        .insert(class_name.clone(), info.clone());
+                    if class_name != cls.name.name {
+                        self.result
+                            .hierarchy
+                            .classes
+                            .insert(cls.name.name.to_string(), info);
+                    }
                 }
                 _ => {}
             }
@@ -197,19 +288,7 @@ impl TypeChecker {
 
         let mut param_sigs = Vec::with_capacity(func.params.len());
         for param in &func.params {
-            // 1. Reference mechanics: explicit pass-by-reference (`&$var`) is forbidden
-            if param.is_reference {
-                return Err(TypeError::new(
-                    TypeErrorKind::PassByReferenceForbidden {
-                        callable_kind: callable_kind.to_string(),
-                        callable_name: display_name.to_string(),
-                        param_name: param.name.name.to_string(),
-                    },
-                    param.span,
-                ));
-            }
-
-            // 2. Strict parameter type signature requirement across function/method boundaries
+            // Strict parameter type signature requirement across function/method boundaries
             let type_hint = param.type_hint.as_ref().ok_or_else(|| {
                 TypeError::new(
                     TypeErrorKind::MissingParameterType {
@@ -221,7 +300,7 @@ impl TypeChecker {
                 )
             })?;
 
-            let rhp_type = RhpType::from_type_hint(type_hint, current_class)?;
+            let rhp_type = self.resolve_type_hint(type_hint, current_class)?;
             if matches!(rhp_type, RhpType::Void | RhpType::Never) {
                 return Err(TypeError::new(
                     TypeErrorKind::InvalidTypeAnnotation {
@@ -240,6 +319,7 @@ impl TypeChecker {
                 rhp_type,
                 has_default: param.default_value.is_some(),
                 is_variadic: param.is_variadic,
+                is_reference: param.is_reference,
                 span: param.span,
             });
         }
@@ -247,7 +327,7 @@ impl TypeChecker {
         // 3. Strict return type signature requirement across function/method boundaries
         let return_type = if is_lifecycle_magic {
             if let Some(ref ret_hint) = func.return_type {
-                let resolved = RhpType::from_type_hint(ret_hint, current_class)?;
+                let resolved = self.resolve_type_hint(ret_hint, current_class)?;
                 if !matches!(resolved, RhpType::Void) {
                     return Err(TypeError::new(
                         TypeErrorKind::ConstructorReturnTypeForbidden {
@@ -261,7 +341,7 @@ impl TypeChecker {
             }
             RhpType::Void
         } else if let Some(ref ret_hint) = func.return_type {
-            RhpType::from_type_hint(ret_hint, current_class)?
+            self.resolve_type_hint(ret_hint, current_class)?
         } else {
             let has_value_return = func
                 .body
@@ -318,7 +398,7 @@ impl TypeChecker {
 
         Ok(InterfaceTypeInfo {
             name: iface_name.to_string(),
-            extends: iface.extends.iter().map(|i| i.name.to_string()).collect(),
+            extends: iface.extends.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             methods,
             span: iface.span,
         })
@@ -330,6 +410,7 @@ impl TypeChecker {
         let mut constants = HashMap::new();
         let mut methods = HashMap::new();
         let mut traits = Vec::new();
+        let mut trait_uses = Vec::new();
 
         for member in &tr.members {
             match &member.kind {
@@ -355,9 +436,49 @@ impl TypeChecker {
                     constants.insert(c.name.name.to_string(), RhpType::Mixed);
                 }
                 ClassMemberKind::TraitUse(tu) => {
+                    let mut use_traits = Vec::new();
                     for t in &tu.traits {
-                        traits.push(t.name.to_string());
+                        let resolved = self.resolve_class_name(t.name, None);
+                        use_traits.push(resolved.clone());
+                        traits.push(resolved);
                     }
+                    let mut adaptations = Vec::new();
+                    for adapt in &tu.adaptations {
+                        match adapt {
+                            TraitAdaptation::InsteadOf(io) => {
+                                adaptations.push(TraitAdaptationInfo::InsteadOf {
+                                    span: io.span,
+                                    trait_name: io
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: io.method.name.to_string(),
+                                    instead_of: io
+                                        .instead_of
+                                        .iter()
+                                        .map(|t| self.resolve_class_name(t.name, None))
+                                        .collect(),
+                                });
+                            }
+                            TraitAdaptation::Alias(al) => {
+                                adaptations.push(TraitAdaptationInfo::Alias {
+                                    span: al.span,
+                                    trait_name: al
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: al.method.name.to_string(),
+                                    visibility: al.visibility,
+                                    alias: al.alias.as_ref().map(|a| a.name.to_string()),
+                                });
+                            }
+                        }
+                    }
+                    trait_uses.push(TraitUseInfo {
+                        traits: use_traits,
+                        adaptations,
+                        span: member.span,
+                    });
                 }
             }
         }
@@ -372,6 +493,7 @@ impl TypeChecker {
             extends: None,
             implements: Vec::new(),
             traits,
+            trait_uses,
             properties,
             constants,
             methods,
@@ -382,7 +504,7 @@ impl TypeChecker {
     fn build_enum_info(&self, enm: &EnumDecl<'_>) -> Result<EnumTypeInfo, TypeError> {
         let enum_name = enm.name.name;
         let backing_type = if let Some(ref hint) = enm.backing_type {
-            let ty = RhpType::from_type_hint(hint, Some(enum_name))?;
+            let ty = self.resolve_type_hint(hint, Some(enum_name))?;
             if !matches!(ty, RhpType::Int | RhpType::String) {
                 return Err(TypeError::new(
                     TypeErrorKind::InvalidTypeAnnotation {
@@ -416,7 +538,7 @@ impl TypeChecker {
         Ok(EnumTypeInfo {
             name: enum_name.to_string(),
             backing_type,
-            implements: enm.implements.iter().map(|i| i.name.to_string()).collect(),
+            implements: enm.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             cases: enm.cases.iter().map(|c| c.name.name.to_string()).collect(),
             methods,
             span: enm.span,
@@ -429,6 +551,7 @@ impl TypeChecker {
         let mut constants = HashMap::new();
         let mut methods = HashMap::new();
         let mut traits = Vec::new();
+        let mut trait_uses = Vec::new();
 
         for member in &cls.members {
             match &member.kind {
@@ -476,9 +599,49 @@ impl TypeChecker {
                     constants.insert(c.name.name.to_string(), RhpType::Mixed);
                 }
                 ClassMemberKind::TraitUse(tu) => {
+                    let mut use_traits = Vec::new();
                     for t in &tu.traits {
-                        traits.push(t.name.to_string());
+                        let resolved = self.resolve_class_name(t.name, None);
+                        use_traits.push(resolved.clone());
+                        traits.push(resolved);
                     }
+                    let mut adaptations = Vec::new();
+                    for adapt in &tu.adaptations {
+                        match adapt {
+                            TraitAdaptation::InsteadOf(io) => {
+                                adaptations.push(TraitAdaptationInfo::InsteadOf {
+                                    span: io.span,
+                                    trait_name: io
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: io.method.name.to_string(),
+                                    instead_of: io
+                                        .instead_of
+                                        .iter()
+                                        .map(|t| self.resolve_class_name(t.name, None))
+                                        .collect(),
+                                });
+                            }
+                            TraitAdaptation::Alias(al) => {
+                                adaptations.push(TraitAdaptationInfo::Alias {
+                                    span: al.span,
+                                    trait_name: al
+                                        .trait_name
+                                        .as_ref()
+                                        .map(|t| self.resolve_class_name(t.name, None)),
+                                    method: al.method.name.to_string(),
+                                    visibility: al.visibility,
+                                    alias: al.alias.as_ref().map(|a| a.name.to_string()),
+                                });
+                            }
+                        }
+                    }
+                    trait_uses.push(TraitUseInfo {
+                        traits: use_traits,
+                        adaptations,
+                        span: member.span,
+                    });
                 }
             }
         }
@@ -490,9 +653,10 @@ impl TypeChecker {
             is_readonly: cls.modifiers.is_readonly,
             is_static_only: cls.modifiers.is_static_only,
             is_singleton: cls.modifiers.is_singleton,
-            extends: cls.extends.as_ref().map(|e| e.name.to_string()),
-            implements: cls.implements.iter().map(|i| i.name.to_string()).collect(),
+            extends: cls.extends.as_ref().map(|e| self.resolve_class_name(e.name, None)),
+            implements: cls.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             traits,
+            trait_uses,
             properties,
             constants,
             methods,
@@ -507,7 +671,7 @@ impl TypeChecker {
         span: Span,
     ) -> Result<PropertyTypeInfo, TypeError> {
         let rhp_type = if let Some(ref hint) = prop.type_hint {
-            let resolved = RhpType::from_type_hint(hint, Some(class_name))?;
+            let resolved = self.resolve_type_hint(hint, Some(class_name))?;
             if matches!(
                 resolved,
                 RhpType::Void | RhpType::Never | RhpType::Callable { .. }
@@ -537,6 +701,270 @@ impl TypeChecker {
             has_default: prop.default.is_some(),
             span,
         })
+    }
+
+    /// Compose used traits into declared traits and classes, resolving conflict adaptation rules (`insteadof`, `as`).
+    fn compose_and_validate_traits(&mut self) -> Result<(), TypeError> {
+        // Step 1: Compose traits that use other traits
+        let trait_names: Vec<String> = self.result.hierarchy.traits.keys().cloned().collect();
+        for tr_name in &trait_names {
+            let mut tr_info = self.result.hierarchy.traits.get(tr_name).unwrap().clone();
+            if !tr_info.traits.is_empty() {
+                Self::compose_traits_into_type_info(tr_name, &mut tr_info, &self.result.hierarchy.traits)?;
+                self.result.hierarchy.traits.insert(tr_name.clone(), tr_info);
+            }
+        }
+
+        // Step 2: Compose traits into declared classes
+        let class_names: Vec<String> = self.result.hierarchy.classes.keys().cloned().collect();
+        for cls_name in &class_names {
+            let mut cls_info = self.result.hierarchy.classes.get(cls_name).unwrap().clone();
+            if !cls_info.traits.is_empty() {
+                Self::compose_traits_into_type_info(cls_name, &mut cls_info, &self.result.hierarchy.traits)?;
+                self.result.hierarchy.classes.insert(cls_name.clone(), cls_info);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compose_traits_into_type_info(
+        target_name: &str,
+        target_info: &mut ClassTypeInfo,
+        all_traits: &HashMap<String, ClassTypeInfo>,
+    ) -> Result<(), TypeError> {
+        // 1. Validate used traits exist
+        for tr_name in &target_info.traits {
+            let clean = tr_name.strip_prefix('\\').unwrap_or(tr_name);
+            if !all_traits.contains_key(clean) && !all_traits.contains_key(tr_name) {
+                return Err(TypeError::new(
+                    TypeErrorKind::TraitAdaptationError {
+                        class_name: target_name.to_string(),
+                        reason: format!("Trait '{}' not found", tr_name),
+                    },
+                    target_info.span,
+                ));
+            }
+        }
+
+        let find_trait = |name: &str| -> Option<&ClassTypeInfo> {
+            let clean = name.strip_prefix('\\').unwrap_or(name);
+            all_traits.get(clean).or_else(|| all_traits.get(name))
+        };
+
+        let trait_matches = |t1: &str, t2: &str| -> bool {
+            let c1 = t1.strip_prefix('\\').unwrap_or(t1);
+            let c2 = t2.strip_prefix('\\').unwrap_or(t2);
+            c1 == c2 || c1.ends_with(&format!("\\{}", c2)) || c2.ends_with(&format!("\\{}", c1))
+        };
+
+        // 2. Validate adaptations
+        for use_decl in &target_info.trait_uses {
+            for adapt in &use_decl.adaptations {
+                match adapt {
+                    TraitAdaptationInfo::InsteadOf { span, trait_name, method, instead_of } => {
+                        if let Some(tn) = trait_name {
+                            if !target_info.traits.iter().any(|t| trait_matches(t, tn)) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait '{}' is not used by '{}'", tn, target_name),
+                                    },
+                                    *span,
+                                ));
+                            }
+                            let tn_info = find_trait(tn).unwrap();
+                            if !tn_info.methods.contains_key(method) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait method '{}::{}' does not exist", tn, method),
+                                    },
+                                    *span,
+                                ));
+                            }
+                        }
+
+                        for ex in instead_of {
+                            if !target_info.traits.iter().any(|t| trait_matches(t, ex)) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait '{}' is not used by '{}'", ex, target_name),
+                                    },
+                                    *span,
+                                ));
+                            }
+                            if let Some(tn) = trait_name {
+                                if trait_matches(tn, ex) {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::TraitAdaptationError {
+                                            class_name: target_name.to_string(),
+                                            reason: format!("Cannot exclude trait '{}' from itself in insteadof rule", ex),
+                                        },
+                                        *span,
+                                    ));
+                                }
+                            }
+                            let ex_info = find_trait(ex).unwrap();
+                            if !ex_info.methods.contains_key(method) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait method '{}::{}' does not exist", ex, method),
+                                    },
+                                    *span,
+                                ));
+                            }
+                        }
+                    }
+                    TraitAdaptationInfo::Alias { span, trait_name, method, visibility: _, alias: _ } => {
+                        if let Some(tn) = trait_name {
+                            if !target_info.traits.iter().any(|t| trait_matches(t, tn)) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait '{}' is not used by '{}'", tn, target_name),
+                                    },
+                                    *span,
+                                ));
+                            }
+                            let tn_info = find_trait(tn).unwrap();
+                            if !tn_info.methods.contains_key(method) {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait method '{}::{}' does not exist", tn, method),
+                                    },
+                                    *span,
+                                ));
+                            }
+                        } else {
+                            let matches_count = target_info
+                                .traits
+                                .iter()
+                                .filter(|t| find_trait(t).map(|ti| ti.methods.contains_key(method)).unwrap_or(false))
+                                .count();
+                            if matches_count == 0 {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("Trait method '{}' does not exist on any used traits", method),
+                                    },
+                                    *span,
+                                ));
+                            }
+                            if matches_count > 1 {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::TraitAdaptationError {
+                                        class_name: target_name.to_string(),
+                                        reason: format!("An alias rule for method '{}' is ambiguous; specify the trait explicitly (e.g. 'TraitName::{} as ...')", method, method),
+                                    },
+                                    *span,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Collect candidates for each method provided by used traits
+        let mut candidates_map: HashMap<String, Vec<(String, FunctionSignature)>> = HashMap::new();
+        for tr_name in &target_info.traits {
+            if let Some(tr_info) = find_trait(tr_name) {
+                for (m_name, sig) in &tr_info.methods {
+                    candidates_map
+                        .entry(m_name.clone())
+                        .or_default()
+                        .push((tr_name.clone(), sig.clone()));
+                }
+            }
+        }
+
+        // 4. Resolve collisions and compose methods
+        for (m_name, mut candidates) in candidates_map {
+            // Class/trait's own method takes precedence
+            if target_info.methods.contains_key(&m_name) {
+                continue;
+            }
+
+            if candidates.len() > 1 {
+                // Apply insteadof exclusions
+                for use_decl in &target_info.trait_uses {
+                    for adapt in &use_decl.adaptations {
+                        if let TraitAdaptationInfo::InsteadOf { method, instead_of, .. } = adapt {
+                            if method == &m_name {
+                                for ex in instead_of {
+                                    candidates.retain(|(t, _)| !trait_matches(t, ex));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if candidates.len() == 1 {
+                    let (_, sig) = candidates.remove(0);
+                    target_info.methods.insert(m_name, sig);
+                } else if candidates.len() > 1 {
+                    return Err(TypeError::new(
+                        TypeErrorKind::TraitMethodCollision {
+                            class_name: target_name.to_string(),
+                            trait_name: candidates[0].0.clone(),
+                            conflicting_trait: candidates[1].0.clone(),
+                            method_name: m_name,
+                        },
+                        target_info.span,
+                    ));
+                } else {
+                    return Err(TypeError::new(
+                        TypeErrorKind::TraitAdaptationError {
+                            class_name: target_name.to_string(),
+                            reason: format!("All traits providing method '{}' were excluded via insteadof", m_name),
+                        },
+                        target_info.span,
+                    ));
+                }
+            } else if candidates.len() == 1 {
+                let (_, sig) = candidates.remove(0);
+                target_info.methods.insert(m_name, sig);
+            }
+        }
+
+        // 5. Apply alias and visibility adaptations
+        for use_decl in &target_info.trait_uses {
+            for adapt in &use_decl.adaptations {
+                if let TraitAdaptationInfo::Alias { trait_name, method, visibility, alias, .. } = adapt {
+                    let orig_sig = if let Some(tn) = trait_name {
+                        find_trait(tn).and_then(|ti| ti.methods.get(method)).cloned()
+                    } else {
+                        target_info
+                            .traits
+                            .iter()
+                            .find_map(|t| find_trait(t).and_then(|ti| ti.methods.get(method)))
+                            .cloned()
+                    };
+
+                    if let Some(orig) = orig_sig {
+                        if let Some(alias_name) = alias {
+                            let mut alias_sig = orig.clone();
+                            alias_sig.name = format!("{}::{}", target_name, alias_name);
+                            if let Some(vis) = visibility {
+                                alias_sig.visibility = *vis;
+                            }
+                            target_info.methods.insert(alias_name.clone(), alias_sig);
+                        } else if let Some(vis) = visibility {
+                            // Visibility change on existing method
+                            if let Some(m_sig) = target_info.methods.get_mut(method) {
+                                m_sig.visibility = *vis;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Validate inheritance (`extends`) and interface (`implements`) boundary contracts across all declared classes.
@@ -811,7 +1239,47 @@ impl TypeChecker {
         ctx: Option<&CallableContext>,
     ) -> Result<bool, TypeError> {
         match &stmt.kind {
-            StmtKind::Empty | StmtKind::Use(_) | StmtKind::RustImport { .. } | StmtKind::InterfaceDecl(_) => Ok(false),
+            StmtKind::Empty | StmtKind::RustImport { .. } | StmtKind::InterfaceDecl(_) => Ok(false),
+
+            StmtKind::Namespace { name, body } => {
+                let prev_ns = self.current_namespace.clone();
+                let prev_aliases = self.use_aliases.clone();
+                if body.is_none() && prev_ns.is_some() {
+                    self.use_aliases.clear();
+                }
+                self.current_namespace = name.as_ref().map(|id| {
+                    let n = id.name.strip_prefix('\\').unwrap_or(id.name);
+                    n.to_string()
+                });
+                let res = if let Some(inner) = body {
+                    let r = self.check_statements(inner, env, ctx)?;
+                    self.current_namespace = prev_ns;
+                    self.use_aliases = prev_aliases;
+                    r
+                } else {
+                    false
+                };
+                Ok(res)
+            }
+
+            StmtKind::Use(imports) => {
+                for imp in imports {
+                    let target = imp.name.name.strip_prefix('\\').unwrap_or(imp.name.name);
+                    let alias = imp
+                        .alias
+                        .as_ref()
+                        .map(|a| a.name.to_string())
+                        .unwrap_or_else(|| {
+                            target
+                                .rsplit('\\')
+                                .next()
+                                .unwrap_or(target)
+                                .to_string()
+                        });
+                    self.use_aliases.insert(alias, target.to_string());
+                }
+                Ok(false)
+            }
 
             StmtKind::Global(vars) => {
                 for v in vars {
@@ -826,14 +1294,6 @@ impl TypeChecker {
                     }
                 }
                 Ok(false)
-            }
-
-            StmtKind::Namespace { body, .. } => {
-                if let Some(inner) = body {
-                    self.check_statements(inner, env, ctx)
-                } else {
-                    Ok(false)
-                }
             }
 
             StmtKind::Block(stmts) => self.check_statements(stmts, env, ctx),
@@ -856,7 +1316,7 @@ impl TypeChecker {
                 };
 
                 if let Some(hint) = type_hint {
-                    let declared_ty = RhpType::from_type_hint(hint, current_class)?;
+                    let declared_ty = self.resolve_type_hint(hint, current_class)?;
                     env.declare_typed(
                         var.name,
                         declared_ty,
@@ -1062,14 +1522,18 @@ impl TypeChecker {
                                 .map(|c| RhpType::Class(c.to_string()))
                                 .unwrap_or(RhpType::Object)
                         } else {
-                            RhpType::Class(name.to_string())
+                            let resolved = self.resolve_class_name(name, current_class);
+                            RhpType::Class(resolved)
                         }
                     } else {
                         RhpType::Union(
                             catch
                                 .types
                                 .iter()
-                                .map(|id| RhpType::Class(id.name.to_string()))
+                                .map(|id| {
+                                    let resolved = self.resolve_class_name(id.name, current_class);
+                                    RhpType::Class(resolved)
+                                })
                                 .collect(),
                         )
                     };
@@ -1648,7 +2112,7 @@ impl TypeChecker {
 
                 let inferred_body_ty = self.infer_expr(body, &mut fn_env, ctx, None)?;
                 let final_ret_ty = if let Some(ret_hint) = return_type {
-                    let declared_ret = RhpType::from_type_hint(ret_hint, current_class)?;
+                    let declared_ret = self.resolve_type_hint(ret_hint, current_class)?;
                     if !inferred_body_ty
                         .is_assignable_to(&declared_ret, Some(&self.result.hierarchy))
                     {
@@ -1733,7 +2197,7 @@ impl TypeChecker {
                 )?;
 
                 let declared_ret = if let Some(ret_hint) = return_type {
-                    Some(RhpType::from_type_hint(ret_hint, current_class)?)
+                    Some(self.resolve_type_hint(ret_hint, current_class)?)
                 } else {
                     None
                 };
@@ -1775,10 +2239,12 @@ impl TypeChecker {
             }
 
             ExprKind::New { class, args } => {
-                let class_name = match &class.kind {
-                    ExprKind::Ident(id) => id.name.to_string(),
-                    _ => "object".to_string(),
+                let raw_name = match &class.kind {
+                    ExprKind::Ident(id) => id.name,
+                    _ => "object",
                 };
+                let class_name =
+                    self.resolve_class_name(raw_name, ctx.and_then(|c| c.enclosing_class.as_deref()));
 
                 if is_static_facade(&class_name) || is_static_only(&class_name) {
                     return Err(TypeError::new(
@@ -1904,15 +2370,11 @@ impl TypeChecker {
             }
 
             ExprKind::StaticPropertyFetch { class, property } => {
-                let resolved_cls = if matches!(class.name, "self" | "static") {
-                    ctx.and_then(|c| c.enclosing_class.as_deref())
-                        .unwrap_or(class.name)
-                } else {
-                    class.name
-                };
+                let resolved_cls =
+                    self.resolve_class_name(class.name, ctx.and_then(|c| c.enclosing_class.as_deref()));
                 self.result
                     .hierarchy
-                    .lookup_property(resolved_cls, property.name)
+                    .lookup_property(&resolved_cls, property.name)
                     .map(|p| p.rhp_type.clone())
                     .unwrap_or(RhpType::Dynamic)
             }
@@ -1920,16 +2382,20 @@ impl TypeChecker {
             ExprKind::ClassConstFetch { class, const_name } => {
                 if const_name.name == "class" {
                     RhpType::String
-                } else if self.result.hierarchy.enums.contains_key(class.name) {
-                    RhpType::Class(class.name.to_string())
-                } else if let Some(cls_info) = self.result.hierarchy.classes.get(class.name) {
-                    cls_info
-                        .constants
-                        .get(const_name.name)
-                        .cloned()
-                        .unwrap_or(RhpType::Mixed)
                 } else {
-                    RhpType::Mixed
+                    let resolved_cls =
+                        self.resolve_class_name(class.name, ctx.and_then(|c| c.enclosing_class.as_deref()));
+                    if self.result.hierarchy.enums.contains_key(&resolved_cls) {
+                        RhpType::Class(resolved_cls)
+                    } else if let Some(cls_info) = self.result.hierarchy.classes.get(&resolved_cls) {
+                        cls_info
+                            .constants
+                            .get(const_name.name)
+                            .cloned()
+                            .unwrap_or(RhpType::Mixed)
+                    } else {
+                        RhpType::Mixed
+                    }
                 }
             }
 
@@ -1980,19 +2446,8 @@ impl TypeChecker {
                     _ => "",
                 };
 
-                let resolved_target: String = if matches!(target_name, "self" | "static") {
-                    ctx.and_then(|c| c.enclosing_class.as_deref())
-                        .unwrap_or(target_name)
-                        .to_string()
-                } else if target_name == "parent" {
-                    ctx.and_then(|c| c.enclosing_class.as_deref())
-                        .and_then(|cls| self.result.hierarchy.classes.get(cls))
-                        .and_then(|ci| ci.extends.as_deref())
-                        .unwrap_or(target_name)
-                        .to_string()
-                } else {
-                    target_name.to_string()
-                };
+                let resolved_target: String =
+                    self.resolve_class_name(target_name, ctx.and_then(|c| c.enclosing_class.as_deref()));
 
                 // 1. Check if calling a built-in Static Facade (`Arr`, `Str`, `Int`, `Float`, `Future`, `Sys`, `phpFun`, etc.)
                 if is_static_facade(&resolved_target) {
@@ -2185,17 +2640,6 @@ impl TypeChecker {
         let mut param_types = Vec::with_capacity(params.len());
 
         for (idx, param) in params.iter().enumerate() {
-            if param.is_reference {
-                return Err(TypeError::new(
-                    TypeErrorKind::PassByReferenceForbidden {
-                        callable_kind: "closure".to_string(),
-                        callable_name: "closure".to_string(),
-                        param_name: param.name.name.to_string(),
-                    },
-                    param.span,
-                ));
-            }
-
             let default_ty = if let Some(ref def_expr) = param.default_value {
                 Some(self.infer_expr(def_expr, fn_env, None, None)?)
             } else {
@@ -2203,7 +2647,7 @@ impl TypeChecker {
             };
 
             if let Some(ref hint) = param.type_hint {
-                let declared = RhpType::from_type_hint(hint, current_class)?;
+                let declared = self.resolve_type_hint(hint, current_class)?;
                 if let Some(ref def_t) = default_ty {
                     if !def_t.is_assignable_to(&declared, Some(&self.result.hierarchy)) {
                         return Err(TypeError::new(
@@ -2622,6 +3066,44 @@ impl TypeChecker {
                 continue;
             };
 
+            // Two-way pass-by-reference enforcement:
+            // Both function declaration and function call must declare/pass the variable as &$var
+            if target_param.is_reference {
+                if !arg.is_reference {
+                    let var_name = match &arg.value.kind {
+                        ExprKind::Variable(v) => v.name.to_string(),
+                        _ => target_param.name.clone(),
+                    };
+                    return Err(TypeError::new(
+                        TypeErrorKind::MissingReferenceArgument {
+                            callable_name: callable_name.to_string(),
+                            param_name: target_param.name.clone(),
+                            arg_index: idx + 1,
+                            var_name,
+                        },
+                        arg.span,
+                    ));
+                }
+                if !matches!(arg.value.kind, ExprKind::Variable(_)) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ReferenceArgumentMustBeVariable {
+                            callable_name: callable_name.to_string(),
+                            arg_index: idx + 1,
+                        },
+                        arg.span,
+                    ));
+                }
+            } else if arg.is_reference {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnexpectedReferenceArgument {
+                        callable_name: callable_name.to_string(),
+                        param_name: target_param.name.clone(),
+                        arg_index: idx + 1,
+                    },
+                    arg.span,
+                ));
+            }
+
             if !arg_ty.is_assignable_to(&target_param.rhp_type, hierarchy) {
                 return Err(TypeError::new(
                     TypeErrorKind::ArgumentTypeMismatch {
@@ -2733,6 +3215,68 @@ impl TypeChecker {
             }
         }
         Ok(())
+    }
+
+    fn resolve_class_name(&self, raw_name: &str, enclosing_class: Option<&str>) -> String {
+        match raw_name {
+            "self" | "static" => enclosing_class.unwrap_or(raw_name).to_string(),
+            "parent" => {
+                if let Some(cls) = enclosing_class {
+                    if let Some(info) = self.result.hierarchy.classes.get(cls) {
+                        if let Some(ref p) = info.extends {
+                            return p.clone();
+                        }
+                    }
+                }
+                "parent".to_string()
+            }
+            other => {
+                // 1. Fully qualified name (starts with leading `\`)
+                if let Some(stripped) = other.strip_prefix('\\') {
+                    return stripped.to_string();
+                }
+
+                // 2. Direct match in use aliases (`use App\Models\User;` or `use App\Models\User as ModelUser;`)
+                if let Some(aliased) = self.use_aliases.get(other) {
+                    let clean = aliased.strip_prefix('\\').unwrap_or(aliased);
+                    return clean.to_string();
+                }
+
+                // 3. Sub-namespace qualified name (e.g. `Models\User` where `use App\Models;`)
+                if let Some((first_seg, rest)) = other.split_once('\\') {
+                    if let Some(aliased_prefix) = self.use_aliases.get(first_seg) {
+                        let clean_prefix = aliased_prefix.strip_prefix('\\').unwrap_or(aliased_prefix);
+                        return format!("{}\\{}", clean_prefix, rest);
+                    }
+                    if let Some(ref ns) = self.current_namespace {
+                        return format!("{}\\{}", ns, other);
+                    }
+                    return other.to_string();
+                }
+
+                // 4. Built-in facades
+                if is_static_facade(other) || is_static_only(other) {
+                    return other.to_string();
+                }
+
+                // 5. Unqualified name: if inside a namespace, qualify with current namespace
+                if let Some(ref ns) = self.current_namespace {
+                    return format!("{}\\{}", ns, other);
+                }
+
+                other.to_string()
+            }
+        }
+    }
+
+    pub fn resolve_type_hint(
+        &self,
+        hint: &TypeHint<'_>,
+        current_class: Option<&str>,
+    ) -> Result<RhpType, TypeError> {
+        RhpType::from_type_hint_with_resolver(hint, current_class, &|raw| {
+            self.resolve_class_name(raw, current_class)
+        })
     }
 }
 

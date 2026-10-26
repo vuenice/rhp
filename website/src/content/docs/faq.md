@@ -78,24 +78,32 @@ Both rules ensure consistent parsing, avoid grammar ambiguities with grouping pa
 
 ---
 
-## Why are `$_GET`, `$_POST`, `$_SESSION`, and `$_COOKIE` deprecated, and how do I handle requests?
+## Why are superglobals like `$_ENV`, `$_FILES`, `$_SESSION`, `$_COOKIE`, and `$GLOBALS` not supported, and how do I handle them?
 
-Traditional PHP superglobals are mutable global arrays that lead to state pollution across requests in multi-threaded worker pools and lack type contracts.
+Traditional PHP superglobals are mutable global arrays that lead to state pollution and race conditions across concurrent requests in multi-threaded worker pools, while lacking strict type safety.
 
 In RHP:
-1. **Static Facades:** Use `Request::get()`, `Request::all()`, `Request::only()`, `Session::get()` / `Session::set()`, and `Cookie::get()` / `Cookie::set()`.
-2. **Default String Values:** All query and body request values are strings by default.
-3. **In-Place Type Formatting:** Use `Request::format()` to validate and convert parameter types on the request object:
-   ```php
-   Request::format([
-       'page' => 'int',
-       'active' => bool,
-   ]);
+- **`env()`**: **`$_ENV` is not supported**. Read system environment variables via `env('KEY', 'default')` or `Sys::env('KEY')`.
+- **`File::fromRequest()`**: **`$_FILES` is not supported**. Uploaded files from multi-part requests are retrieved as structured file instances via `File::fromRequest('upload_field')`.
+- **`Session::get()`**: **`$_SESSION` is not supported**. Session data is managed through the thread-isolated `Session` facade: `Session::get('user_id')`, `Session::set('user_id', 42)`, `Session::has('user_id')`, and `Session::clear()`.
+- **`Cookie::get()`**: **`$_COOKIE` is not supported**. Read and set HTTP cookies via `Cookie::get('theme', 'light')` and `Cookie::set('theme', 'dark')`.
+- **`Glob::`**: **`$GLOBALS` is also not supported**. Dynamic helper calls fallback to `Glob::customHelper()`, and global variables are declared lexically using `global $var;`.
+- **`Request::get()`**: `$_GET` and `$_POST` are deprecated in favor of `Request::get('key')`, `Request::all()`, and `Request::only()`.
 
-   int $page = Request::get('page');     // 1
-   bool $active = Request::get('active'); // true
-   ```
-4. **Parser Disambiguation:** Both quoted strings (`'int'`, `'bool'`) and bare type keywords (`int`, `bool`) are supported in `Request::format()`. The parser deterministically resolves bare keywords in expression positions without ambiguity against statement-level typed variable declarations (`int $x = 10;`).
+### Request Type Formatting with `Request::format()`
+All incoming query and body request values are strings by default. Use `Request::format()` to validate and convert parameter types on the request object:
+
+```php
+Request::format([
+    'page' => 'int',
+    'active' => bool,
+]);
+
+int $page = Request::get('page');     // 1
+bool $active = Request::get('active'); // true
+```
+
+Both quoted strings (`'int'`, `'bool'`) and bare type keywords (`int`, `bool`) are supported in `Request::format()`. The parser deterministically resolves bare keywords in expression positions without ambiguity against statement-level typed variable declarations (`int $x = 10;`).
 
 ---
 

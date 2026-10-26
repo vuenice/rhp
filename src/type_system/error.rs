@@ -53,6 +53,33 @@ pub enum TypeErrorKind {
     },
 
     #[error(
+        "Type Error: Argument #{arg_index} ('{param_name}') of '{callable_name}()' is declared as pass-by-reference ('&') and must be passed as a reference ('&${var_name}')."
+    )]
+    MissingReferenceArgument {
+        callable_name: String,
+        param_name: String,
+        arg_index: usize,
+        var_name: String,
+    },
+
+    #[error(
+        "Type Error: Argument #{arg_index} passed to '{callable_name}()' uses pass-by-reference ('&'), but parameter '{param_name}' does not accept references."
+    )]
+    UnexpectedReferenceArgument {
+        callable_name: String,
+        param_name: String,
+        arg_index: usize,
+    },
+
+    #[error(
+        "Type Error: Pass-by-reference argument #{arg_index} passed to '{callable_name}()' must be a variable."
+    )]
+    ReferenceArgumentMustBeVariable {
+        callable_name: String,
+        arg_index: usize,
+    },
+
+    #[error(
         "Type Error: Closure capture-by-reference ('&{var_name}') is forbidden. Objects pass by handle and arrays/strings use Copy-On-Write (COW) semantics."
     )]
     ClosureReferenceCaptureForbidden {
@@ -275,5 +302,23 @@ pub enum TypeErrorKind {
     NonSingletonExtendsSingletonForbidden {
         class_name: String,
         parent_name: String,
+    },
+
+    #[error(
+        "Type Error: Trait method '{trait_name}::{method_name}' has not been applied, because there are collisions with '{conflicting_trait}::{method_name}' on '{class_name}'. Use 'insteadof' to resolve the conflict."
+    )]
+    TraitMethodCollision {
+        class_name: String,
+        trait_name: String,
+        conflicting_trait: String,
+        method_name: String,
+    },
+
+    #[error(
+        "Type Error: Trait adaptation error on '{class_name}': {reason}"
+    )]
+    TraitAdaptationError {
+        class_name: String,
+        reason: String,
     },
 }

@@ -13,25 +13,26 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 
 ## Tier 1 Native Facades Summary
 
-| Facade | Responsibility | Key Methods |
-| :--- | :--- | :--- |
-| `Request` | HTTP input parameters, filtering & in-place type formatting | `get()`, `all()`, `only()`, `format()`, `has()`, `set()`, `merge()` |
-| `Session` | Session state management across requests | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` |
-| `Cookie` | HTTP cookie reading and setting | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` |
-| `Arr` | Subtyped collection creation & fluent operations | `list()`, `dict()`, `set()`, `hashMap()`, `macro()` |
-| `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `upper()`, `fromEncoding()` |
-| `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` |
-| `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` |
-| `File` | Synchronous filesystem I/O operations | `read()`, `write()`, `exists()`, `delete()` |
-| `AFile` | Non-blocking async filesystem I/O returning `Future` | `read()`, `write()`, `exists()`, `delete()`, `append()`, `size()` |
-| `HTTP` | Synchronous HTTP client and server kernel | `get()`, `post()`, `withHeaders()`, `serve()` |
-| `AHTTP` | Non-blocking async HTTP client returning `Future` | `get()`, `post()`, `put()`, `delete()`, `patch()`, `withHeaders()` |
-| `DB` | Synchronous database queries and transactions | `table()`, `find()`, `get()`, `select()`, `insert()` |
-| `ADB` | Non-blocking async database queries returning `Future` | `table()`, `find()`, `get()`, `select()`, `insert()`, `update()`, `delete()` |
-| `Log` | Lock-free mpsc async structured logger | `info()`, `warning()`, `error()`, `debug()` |
-| `Sys` | System intrinsics, formatted output & process environment | `env()`, `echo()`, `print()`, `dd()`, `version()`, `timestamp()` |
-| `Weak` | Ephemeral weak references for cycle prevention | `to()`, `get()`, `isValid()` |
-| `Trace` / `Telemetry` | Native OpenTelemetry distributed tracing, metrics & APM bridges | `startSpan()`, `endSpan()`, `span()`, `counter()`, `gauge()`, `histogram()`, `exportOtlp()`, `exportSentry()` |
+| Facade | Responsibility | Key Methods | Legacy Superglobal Status |
+| :--- | :--- | :--- | :--- |
+| `Request` | HTTP input parameters, filtering & in-place type formatting | `get()`, `all()`, `only()`, `format()`, `has()`, `set()`, `merge()` | `$_GET`, `$_POST` are deprecated |
+| `Session` | Session state management across requests | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_SESSION` is not supported** &mdash; use `Session::get()` |
+| `Cookie` | HTTP cookie reading and setting | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_COOKIE` is not supported** &mdash; use `Cookie::get()` |
+| `Arr` | Subtyped collection creation & fluent operations | `list()`, `dict()`, `set()`, `hashMap()`, `macro()` | &mdash; |
+| `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `upper()`, `fromEncoding()` | &mdash; |
+| `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` | &mdash; |
+| `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` | &mdash; |
+| `File` | Synchronous filesystem I/O operations & uploads | `read()`, `write()`, `exists()`, `delete()`, `fromRequest()` | **`$_FILES` is not supported** &mdash; use `File::fromRequest()` |
+| `AFile` | Non-blocking async filesystem I/O returning `Future` | `read()`, `write()`, `exists()`, `delete()`, `append()`, `size()` | &mdash; |
+| `HTTP` | Synchronous HTTP client and server kernel | `get()`, `post()`, `withHeaders()`, `serve()` | &mdash; |
+| `AHTTP` | Non-blocking async HTTP client returning `Future` | `get()`, `post()`, `put()`, `delete()`, `patch()`, `withHeaders()` | &mdash; |
+| `DB` | Synchronous database queries and transactions | `table()`, `find()`, `get()`, `select()`, `insert()` | &mdash; |
+| `ADB` | Non-blocking async database queries returning `Future` | `table()`, `find()`, `get()`, `select()`, `insert()`, `update()`, `delete()` | &mdash; |
+| `Log` | Lock-free mpsc async structured logger | `info()`, `warning()`, `error()`, `debug()` | &mdash; |
+| `Sys` | System intrinsics, formatted output & process environment | `env()`, `echo()`, `print()`, `dd()`, `version()`, `timestamp()` | **`$_ENV` is not supported** &mdash; use `env()` / `Sys::env()` |
+| `Glob` | Global helpers & fallback dynamic registry | `match()`, `getClass()`, `customHelper()` | **`$GLOBALS` is also not supported** &mdash; use `Glob::` |
+| `Weak` | Ephemeral weak references for cycle prevention | `to()`, `get()`, `isValid()` | &mdash; |
+| `Trace` / `Telemetry` | Native OpenTelemetry distributed tracing, metrics & APM bridges | `startSpan()`, `endSpan()`, `span()`, `counter()`, `gauge()`, `histogram()`, `exportOtlp()`, `exportSentry()` | &mdash; |
 
 ---
 
@@ -459,9 +460,20 @@ print($tags->joinCommas()); // "php, rust, rhp"
 
 ---
 
-## Web State Facades (`Request`, `Session`, `Cookie`)
+## Web State Facades & Helper Classes (`Request`, `Session`, `Cookie`, `File`, `env()`, `Glob`)
 
-In RHP, legacy PHP superglobals (`$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`) are deprecated. Instead, use static facades:
+In RHP's concurrent, zero-bootstrap architecture, legacy PHP superglobals are deprecated or completely unsupported. Instead, RHP provides modern, type-safe static facades and helper functions:
+
+| Helper Class / Function | Status of Legacy Superglobal | Recommended RHP Idiom |
+| :--- | :--- | :--- |
+| `Request::get()` | `$_GET` & `$_POST` are **Deprecated** | `Request::get('key')`, `Request::all()` |
+| `env()` / `Sys::env()` | **`$_ENV` is not supported** | `env('KEY')` or `Sys::env('KEY')` |
+| `File::fromRequest()` | **`$_FILES` is not supported** | `File::fromRequest('upload')` |
+| `Session::get()` | **`$_SESSION` is not supported** | `Session::get('key')` / `Session::set('key', $val)` |
+| `Cookie::get()` | **`$_COOKIE` is not supported** | `Cookie::get('name')` / `Cookie::set('name', $val)` |
+| `Glob::` | **`$GLOBALS` is also not supported** | `Glob::` helper dispatch or explicit `global $var;` |
+
+---
 
 ### 1. `Request` Facade & Type Formatting
 
@@ -490,33 +502,102 @@ dict $pageOnly = Request::only('page');
 > **Why bare type keywords work without ambiguity:**
 > In RHP's Pratt parser, type keywords in statement positions (`int $x = 10;`) are validated by the presence of a variable identifier `$var`. When a type keyword appears as a value in an array literal (`'active' => bool`), it parses cleanly as a value token resolving to the type name string without any grammar ambiguity.
 
-### 2. `Session` Facade
+---
+
+### 2. `Session` Facade (`Session::get()`) &mdash; `$_SESSION` is not supported
+
+Legacy `$_SESSION` is **not supported** in RHP. Because RHP runs requests concurrently on Tokio worker threads, mutable global session superglobals would risk data corruption and memory leaks across fibers. All session access is handled through the thread-isolated `Session` facade:
 
 ```php
 // Store session state
 Session::set('user_id', 42);
 
-// Retrieve session value with fallback default
+// Retrieve session value with fallback default ($_SESSION is not supported)
 $userId = Session::get('user_id', 0);
 $hasUser = Session::has('user_id');
+
+// Retrieve all session data
+dict $sessionData = Session::all();
 
 // Clear specific key or all session data
 Session::forget('user_id');
 Session::clear();
 ```
 
-### 3. `Cookie` Facade
+---
+
+### 3. `Cookie` Facade (`Cookie::get()`) &mdash; `$_COOKIE` is not supported
+
+Legacy `$_COOKIE` is **not supported** in RHP. HTTP cookies are accessed and manipulated cleanly via the static `Cookie` facade:
 
 ```php
 // Set a cookie (stored as string)
 Cookie::set('theme', 'dark');
 
-// Read cookie with fallback default
+// Read cookie with fallback default ($_COOKIE is not supported)
 string $theme = Cookie::get('theme', 'light');
 
-// Check and remove cookie
+// Check existence and inspect all cookies
 bool $hasTheme = Cookie::has('theme');
+dict $allCookies = Cookie::all();
+
+// Remove a cookie
 Cookie::forget('theme');
+```
+
+---
+
+### 4. `File` Facade (`File::fromRequest()`) &mdash; `$_FILES` is not supported
+
+Legacy `$_FILES` is **not supported** in RHP. In multi-part HTTP requests, uploaded files are parsed directly into typed file representations using `File::fromRequest()`:
+
+```php
+// Inspect uploaded file from incoming HTTP request ($_FILES is not supported)
+$uploaded = File::fromRequest('avatar');
+
+if ($uploaded !== null) {
+    // Read uploaded file metadata and contents
+    string $tmpPath = $uploaded->path();
+    string $origName = $uploaded->clientName();
+    int $fileSize = $uploaded->size();
+
+    // Persist to permanent storage using synchronous or async File facades
+    File::write("uploads/{$origName}", File::read($tmpPath));
+}
+```
+
+---
+
+### 5. `env()` Helper & `Sys::env()` &mdash; `$_ENV` is not supported
+
+Legacy `$_ENV` is **not supported** in RHP. Environment variables are read directly from the host process environment using the intrinsic `env()` helper function or `Sys::env()`:
+
+```php
+// Read environment variable with fallback default ($_ENV is not supported)
+$dbHost = env('DB_HOST', '127.0.0.1');
+$dbPort = env('DB_PORT', 5432);
+
+// Equivalent static call via Sys facade
+$apiKey = Sys::env('API_SECRET_KEY');
+```
+
+---
+
+### 6. `Glob::` Helper Class &mdash; `$GLOBALS` is also not supported
+
+Legacy `$GLOBALS` is **also not supported** in RHP. RHP eliminates global variable mutation arrays to maintain strict memory isolation across concurrent worker threads. To access global helpers or scoped global state, use the `Glob` facade or lexical `global` declarations:
+
+```php
+// 1. Dynamic global helper resolution ($GLOBALS is not supported)
+$matched = Glob::match('/^[a-z]+$/', 'rhp');
+
+// 2. Lexical global variable scoping in functions
+$configCount = 10;
+
+function incrementConfig(): void {
+    global $configCount; // Scoped lexical global
+    $configCount++;
+}
 ```
 
 ---

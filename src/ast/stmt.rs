@@ -225,10 +225,39 @@ pub struct ClassConstDecl<'s> {
     pub value: Expr<'s>,
 }
 
-/// Trait use declaration inside a class.
+/// Trait use declaration inside a class or trait.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitUseDecl<'s> {
     pub traits: Vec<Ident<'s>>,
+    pub adaptations: Vec<TraitAdaptation<'s>>,
+}
+
+/// Conflict resolution and aliasing adaptations inside trait `use` block `{ ... }`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitAdaptation<'s> {
+    InsteadOf(TraitInsteadOf<'s>),
+    Alias(TraitAlias<'s>),
+}
+
+/// `insteadof` conflict resolution statement.
+/// E.g.: `TraitA::method insteadof TraitB, TraitC;`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitInsteadOf<'s> {
+    pub span: Span,
+    pub trait_name: Option<Ident<'s>>,
+    pub method: Ident<'s>,
+    pub instead_of: Vec<Ident<'s>>,
+}
+
+/// `as` method aliasing or visibility modifier statement.
+/// E.g.: `TraitA::method as newName;`, `method as protected;`, `TraitA::method as private alias;`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitAlias<'s> {
+    pub span: Span,
+    pub trait_name: Option<Ident<'s>>,
+    pub method: Ident<'s>,
+    pub visibility: Option<Visibility>,
+    pub alias: Option<Ident<'s>>,
 }
 
 /// Interface declaration.

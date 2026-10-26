@@ -159,21 +159,7 @@ fn validate_function_boundaries(
     issues: &mut Vec<Issue>,
 ) {
     for param in &func.params {
-        if param.is_reference {
-            issues.push(Issue::new(
-                IssueLevel::Error,
-                "pass-by-reference-forbidden",
-                format!(
-                    "Type Error: Explicit pass-by-reference ('&{}') in {} '{}' is forbidden. Use explicit returns or mutable collection wrappers instead.",
-                    param.name.name, callable_kind, func.name.name
-                ),
-                file_name,
-                param.span.line,
-                param.span.col,
-                param.span.start,
-                param.span.end,
-            ));
-        } else if param.type_hint.is_none() {
+        if param.type_hint.is_none() {
             issues.push(Issue::new(
                 IssueLevel::Error,
                 "missing-parameter-type",
@@ -235,21 +221,7 @@ fn validate_method_boundaries(
     let display_name = format!("{}::{}", class_name, method.function.name.name);
 
     for param in &method.function.params {
-        if param.is_reference {
-            issues.push(Issue::new(
-                IssueLevel::Error,
-                "pass-by-reference-forbidden",
-                format!(
-                    "Type Error: Explicit pass-by-reference ('&{}') in method '{}' is forbidden. Use explicit returns or mutable collection wrappers instead.",
-                    param.name.name, display_name
-                ),
-                file_name,
-                param.span.line,
-                param.span.col,
-                param.span.start,
-                param.span.end,
-            ));
-        } else if param.type_hint.is_none() {
+        if param.type_hint.is_none() {
             issues.push(Issue::new(
                 IssueLevel::Error,
                 "missing-parameter-type",
@@ -380,8 +352,12 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::Array(Box::new(RhpType::Mixed)),
                     },
                     "Str" => match method.name {
-                        "contains" | "startsWith" | "endsWith" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
-                        "length" => RhpType::Int,
+                        "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
+                        "length" | "indexOf" => RhpType::Int,
+                        _ => RhpType::String,
+                    },
+                    "Regex" => match method.name {
+                        "isValid" | "testString" | "matches" | "isMatch" => RhpType::Bool,
                         _ => RhpType::String,
                     },
                     "Int" => RhpType::Int,
@@ -451,6 +427,9 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::MissingParameterType { .. } => "missing-parameter-type",
         TypeErrorKind::MissingReturnType { .. } => "missing-return-type",
         TypeErrorKind::PassByReferenceForbidden { .. } => "pass-by-reference-forbidden",
+        TypeErrorKind::MissingReferenceArgument { .. } => "missing-reference-argument",
+        TypeErrorKind::UnexpectedReferenceArgument { .. } => "unexpected-reference-argument",
+        TypeErrorKind::ReferenceArgumentMustBeVariable { .. } => "reference-argument-must-be-variable",
         TypeErrorKind::ClosureReferenceCaptureForbidden { .. } => "closure-reference-capture-forbidden",
         TypeErrorKind::CyclicClosureCaptureForbidden { .. } => "cyclic-closure-capture-forbidden",
         TypeErrorKind::CyclicReferenceRisk { .. } => "cyclic-reference-risk",
@@ -477,6 +456,8 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::NonStaticSingletonMethodCallForbidden { .. } => "non-static-singleton-method-call-forbidden",
         TypeErrorKind::SingletonInstantiationForbidden { .. } => "singleton-instantiation-forbidden",
         TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "non-singleton-extends-singleton-forbidden",
+        TypeErrorKind::TraitMethodCollision { .. } => "trait-method-collision",
+        TypeErrorKind::TraitAdaptationError { .. } => "trait-adaptation-error",
     }
 }
 

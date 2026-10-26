@@ -149,7 +149,16 @@ impl<'s> fmt::Display for TypeHint<'s> {
             TypeHintKind::Named(ident) => write!(f, "{}", ident.name),
             TypeHintKind::Nullable(inner) => write!(f, "?{}", inner),
             TypeHintKind::Union(types) => {
-                let s: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                let s: Vec<String> = types
+                    .iter()
+                    .map(|t| {
+                        if matches!(t.kind, TypeHintKind::Intersection(_)) {
+                            format!("({})", t)
+                        } else {
+                            t.to_string()
+                        }
+                    })
+                    .collect();
                 write!(f, "{}", s.join("|"))
             }
             TypeHintKind::Intersection(types) => {

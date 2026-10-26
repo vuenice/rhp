@@ -259,6 +259,21 @@ impl RhpType {
         hint: &TypeHint<'_>,
         current_class: Option<&str>,
     ) -> Result<Self, TypeError> {
+        Self::from_type_hint_with_resolver(hint, current_class, &|name| {
+            let clean = name.strip_prefix('\\').unwrap_or(name);
+            clean.to_string()
+        })
+    }
+
+    /// Convert a parsed AST `TypeHint` into a semantic `RhpType`, using a custom class name resolver.
+    pub fn from_type_hint_with_resolver<F>(
+        hint: &TypeHint<'_>,
+        current_class: Option<&str>,
+        resolver: &F,
+    ) -> Result<Self, TypeError>
+    where
+        F: Fn(&str) -> String,
+    {
         match &hint.kind {
             TypeHintKind::Named(ident) => {
                 let name = ident.name;
@@ -280,7 +295,9 @@ impl RhpType {
                     }),
                     "self" | "static" => {
                         if let Some(cls) = current_class {
-                            Ok(RhpType::Class(cls.to_string()))
+                            let resolved = resolver(cls);
+                            let clean = resolved.strip_prefix('\\').unwrap_or(&resolved);
+                            Ok(RhpType::Class(clean.to_string()))
                         } else {
                             Ok(RhpType::Object)
                         }
@@ -303,18 +320,21 @@ impl RhpType {
                         ))
                     }
                     other => {
-                        if let Some(int_kind) = RustIntKind::from_name(other) {
+                        let clean = other.strip_prefix('\\').unwrap_or(other);
+                        if let Some(int_kind) = RustIntKind::from_name(clean) {
                             return Ok(RhpType::RustInt(int_kind));
                         }
-                        if let Some(float_kind) = RustFloatKind::from_name(other) {
+                        if let Some(float_kind) = RustFloatKind::from_name(clean) {
                             return Ok(RhpType::RustFloat(float_kind));
                         }
-                        Ok(RhpType::Class(other.to_string()))
+                        let resolved = resolver(other);
+                        let clean_resolved = resolved.strip_prefix('\\').unwrap_or(&resolved);
+                        Ok(RhpType::Class(clean_resolved.to_string()))
                     }
                 }
             }
             TypeHintKind::Nullable(inner) => {
-                let resolved = Self::from_type_hint(inner, current_class)?;
+                let resolved = Self::from_type_hint_with_resolver(inner, current_class, resolver)?;
                 if matches!(resolved, RhpType::Void | RhpType::Never | RhpType::Mixed) {
                     return Err(TypeError::new(
                         TypeErrorKind::InvalidTypeAnnotation {
@@ -329,7 +349,7 @@ impl RhpType {
             TypeHintKind::Union(items) => {
                 let mut resolved_items = Vec::with_capacity(items.len());
                 for item in items {
-                    let t = Self::from_type_hint(item, current_class)?;
+                    let t = Self::from_type_hint_with_resolver(item, current_class, resolver)?;
                     if matches!(t, RhpType::Void) {
                         return Err(TypeError::new(
                             TypeErrorKind::InvalidTypeAnnotation {
@@ -352,7 +372,7 @@ impl RhpType {
             TypeHintKind::Intersection(items) => {
                 let mut resolved_items = Vec::with_capacity(items.len());
                 for item in items {
-                    let t = Self::from_type_hint(item, current_class)?;
+                    let t = Self::from_type_hint_with_resolver(item, current_class, resolver)?;
                     if !matches!(t, RhpType::Class(_) | RhpType::Object) {
                         return Err(TypeError::new(
                             TypeErrorKind::InvalidTypeAnnotation {
@@ -735,7 +755,16 @@ impl fmt::Display for RhpType {
             RhpType::Class(name) => write!(f, "{}", name),
             RhpType::Nullable(inner) => write!(f, "?{}", inner),
             RhpType::Union(types) => {
-                let s: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                let s: Vec<String> = types
+                    .iter()
+                    .map(|t| {
+                        if matches!(t, RhpType::Intersection(_)) {
+                            format!("({})", t)
+                        } else {
+                            t.to_string()
+                        }
+                    })
+                    .collect();
                 write!(f, "{}", s.join("|"))
             }
             RhpType::Intersection(types) => {
@@ -753,6 +782,7 @@ pub struct ParamSignature {
     pub rhp_type: RhpType,
     pub has_default: bool,
     pub is_variadic: bool,
+    pub is_reference: bool,
     pub span: Span,
 }
 
@@ -813,10 +843,37 @@ pub struct ClassTypeInfo {
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub traits: Vec<String>,
+    pub trait_uses: Vec<TraitUseInfo>,
     pub properties: HashMap<String, PropertyTypeInfo>,
     pub constants: HashMap<String, RhpType>,
     pub methods: HashMap<String, FunctionSignature>,
     pub span: Span,
+}
+
+/// Trait use descriptor with conflict and aliasing adaptations in type system.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitUseInfo {
+    pub traits: Vec<String>,
+    pub adaptations: Vec<TraitAdaptationInfo>,
+    pub span: Span,
+}
+
+/// Adaptation rule in type system (`insteadof` or `as`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitAdaptationInfo {
+    InsteadOf {
+        span: Span,
+        trait_name: Option<String>,
+        method: String,
+        instead_of: Vec<String>,
+    },
+    Alias {
+        span: Span,
+        trait_name: Option<String>,
+        method: String,
+        visibility: Option<Visibility>,
+        alias: Option<String>,
+    },
 }
 
 /// Complete boundary contract for a declared interface.

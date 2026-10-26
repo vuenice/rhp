@@ -178,9 +178,9 @@ rhp run lint src/ --no-case-change
 
 ---
 
-## Deprecated Superglobals Diagnostics
+## Deprecated & Unsupported Superglobals Diagnostics
 
-Direct usage of procedural PHP superglobals (`$_GET`, `$_POST`, `$_SESSION`, `$_COOKIE`) is flagged with actionable warnings recommending modern static facades:
+Direct usage of procedural PHP superglobals (`$_GET`, `$_POST`, `$_ENV`, `$_FILES`, `$_SESSION`, `$_COOKIE`, `$GLOBALS`) is flagged with actionable warnings recommending modern static facades and helper functions:
 
 ```json
 {
@@ -197,11 +197,13 @@ Direct usage of procedural PHP superglobals (`$_GET`, `$_POST`, `$_SESSION`, `$_
 }
 ```
 
-Recommended replacements:
-- `$_GET['key']` $\rightarrow$ `Request::get('key')`
-- `$_POST['action']` $\rightarrow$ `Request::get('action')`
-- `$_SESSION['user_id']` $\rightarrow$ `Session::get('user_id')`
-- `$_COOKIE['session_token']` $\rightarrow$ `Cookie::get('session_token')`
+Recommended replacements against each helper class:
+- **`env()`**: `$_ENV` is not supported &mdash; `$_ENV['KEY']` $\rightarrow$ `env('KEY')` / `Sys::env('KEY')`
+- **`File::fromRequest()`**: `$_FILES` is not supported &mdash; `$_FILES['upload']` $\rightarrow$ `File::fromRequest('upload')`
+- **`Session::get()`**: `$_SESSION` is not supported &mdash; `$_SESSION['user_id']` $\rightarrow$ `Session::get('user_id')`
+- **`Cookie::get()`**: `$_COOKIE` is not supported &mdash; `$_COOKIE['session_token']` $\rightarrow$ `Cookie::get('session_token')`
+- **`Glob::`**: `$GLOBALS` is also not supported &mdash; `$GLOBALS['key']` $\rightarrow$ `Glob::` helpers or `global $key;`
+- **`Request::get()`**: `$_GET['key']` / `$_POST['action']` $\rightarrow$ `Request::get('key')`
 
 ---
 

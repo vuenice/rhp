@@ -5,7 +5,11 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use indexmap::IndexMap;
 
-use crate::lexer::facade::{get_macro, register_tier2_facade, FacadeRegistry};
+use crate::lexer::facade::{
+    get_macro, has_custom_helper, is_legacy_php_function, is_reserved_intrinsic,
+    is_static_facade, is_static_only, register_tier2_facade, FacadeRegistry,
+    LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
+};
 use crate::lexer::span::Span;
 use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
@@ -271,12 +275,14 @@ pub fn dispatch_facade_call(
         "Request" => dispatch_request(method, args),
         "Image" => dispatch_image(method, args),
         "URL" => dispatch_url(method, args),
+        "Regex" => dispatch_regex(method, args),
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
         "Fiber" => dispatch_fiber(method, args),
         "Memory" => dispatch_memory(method, args),
         "Weak" => dispatch_weak(method, args),
         "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
+        "Reflect" => dispatch_reflect(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -299,20 +305,81 @@ pub fn dispatch_facade_call(
 
 fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
-        "contains" => {
+        "check" => {
+            let target = match args.first() {
+                Some(PhpValue::String(s)) => s,
+                _ => return Ok(PhpValue::Bool(false)),
+            };
+            if let Some(enc_val) = args.get(1) {
+                let enc_str = enc_val.to_php_string();
+                let is_valid = crate::vm::encoding::is_valid_encoding(target.as_bytes(), &enc_str);
+                Ok(PhpValue::Bool(is_valid))
+            } else {
+                Ok(PhpValue::Bool(true))
+            }
+        }
+        "contains" | "includes" => {
             let haystack = get_arg_str(args, 0, "Str::contains")?;
             let needle = get_arg_str(args, 1, "Str::contains")?;
             Ok(PhpValue::Bool(haystack.contains(&needle)))
         }
-        "startsWith" => {
+        "startsWith" | "starts_with" => {
             let s = get_arg_str(args, 0, "Str::startsWith")?;
             let prefix = get_arg_str(args, 1, "Str::startsWith")?;
             Ok(PhpValue::Bool(s.starts_with(&prefix)))
         }
-        "endsWith" => {
+        "endsWith" | "ends_with" => {
             let s = get_arg_str(args, 0, "Str::endsWith")?;
             let suffix = get_arg_str(args, 1, "Str::endsWith")?;
             Ok(PhpValue::Bool(s.ends_with(&suffix)))
+        }
+        "indexOf" | "pos" => {
+            let arg0 = get_arg_str(args, 0, "Str::indexOf")?;
+            let arg1 = get_arg_str(args, 1, "Str::indexOf")?;
+            let offset = args.get(2).and_then(|v| v.to_i64()).unwrap_or(0);
+            let (haystack, needle) = if arg0.contains(&arg1) || !arg1.contains(&arg0) {
+                (&arg0, &arg1)
+            } else {
+                (&arg1, &arg0)
+            };
+            let char_indices: Vec<(usize, char)> = haystack.char_indices().collect();
+            let total_chars = char_indices.len();
+            let start_char_idx = if offset < 0 {
+                (total_chars as i64 + offset).max(0) as usize
+            } else {
+                (offset as usize).min(total_chars)
+            };
+            let byte_offset = if start_char_idx < total_chars {
+                char_indices[start_char_idx].0
+            } else {
+                haystack.len()
+            };
+            if needle.is_empty() {
+                return Ok(PhpValue::Int(start_char_idx as i32));
+            }
+            if let Some(pos) = haystack[byte_offset..].find(needle.as_str()) {
+                let actual_byte_pos = byte_offset + pos;
+                let char_idx = haystack[..actual_byte_pos].chars().count();
+                Ok(PhpValue::Int(char_idx as i32))
+            } else {
+                Ok(PhpValue::Int(-1))
+            }
+        }
+        "testRegex" | "regex" => {
+            let arg0 = get_arg_str(args, 0, "Str::testRegex")?;
+            if let Some(arg1) = args.get(1) {
+                let arg1_str = arg1.to_php_string();
+                let matched = if let Ok(re) = parse_regex_pattern(&arg0) {
+                    re.is_match(&arg1_str)
+                } else if let Ok(re) = parse_regex_pattern(&arg1_str) {
+                    re.is_match(&arg0)
+                } else {
+                    false
+                };
+                Ok(PhpValue::Bool(matched))
+            } else {
+                Ok(PhpValue::Bool(parse_regex_pattern(&arg0).is_ok()))
+            }
         }
         "length" => {
             let s = get_arg_str(args, 0, "Str::length")?;
@@ -387,10 +454,15 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::list(parts))
         }
         "replace" => {
-            let search = get_arg_str(args, 0, "Str::replace")?;
-            let replace = get_arg_str(args, 1, "Str::replace")?;
-            let subject = get_arg_str(args, 2, "Str::replace")?;
-            Ok(PhpValue::string(subject.replace(&search, &replace)))
+            let arg0 = get_arg_str(args, 0, "Str::replace")?;
+            let arg1 = get_arg_str(args, 1, "Str::replace")?;
+            let arg2 = get_arg_str(args, 2, "Str::replace")?;
+            // Support both ($search, $replace, $subject) and ($subject, $search, $replace)
+            if arg0.contains(&arg1) && !arg2.contains(&arg0) {
+                Ok(PhpValue::string(arg0.replace(&arg1, &arg2)))
+            } else {
+                Ok(PhpValue::string(arg2.replace(&arg0, &arg1)))
+            }
         }
         "fromEncoding" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
@@ -742,7 +814,36 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::hash_map(entries))
         }
-        "count" => {
+        "check" => {
+            let target = match args.first() {
+                Some(v) => v,
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            let subtype_arg = args.get(1).map(|v| v.to_php_string());
+            let is_match = match subtype_arg.as_deref() {
+                None => matches!(
+                    target,
+                    PhpValue::Array(_)
+                        | PhpValue::List(_)
+                        | PhpValue::Dict(_)
+                        | PhpValue::Set(_)
+                        | PhpValue::HashMap(_)
+                ),
+                Some(sub) => {
+                    let clean = sub.trim().to_lowercase().replace(['-', '_', ' '], "");
+                    match clean.as_str() {
+                        "list" => matches!(target, PhpValue::List(_) | PhpValue::Array(_)),
+                        "dict" | "dictionary" => matches!(target, PhpValue::Dict(_)),
+                        "set" => matches!(target, PhpValue::Set(_)),
+                        "hashmap" | "map" => matches!(target, PhpValue::HashMap(_)),
+                        "array" => matches!(target, PhpValue::Array(_)),
+                        _ => false,
+                    }
+                }
+            };
+            Ok(PhpValue::Bool(is_match))
+        }
+        "count" | "length" | "size" | "len" => {
             let cnt = match args.first() {
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().len(),
                 Some(PhpValue::Dict(d)) => d.borrow().len(),
@@ -776,7 +877,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::list(merged))
             }
         }
-        "contains" => {
+        "contains" | "hasValue" => {
             let target = match args.get(1) {
                 Some(v) => v,
                 None => return Ok(PhpValue::Bool(false)),
@@ -801,6 +902,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => (0..a.borrow().len())
                     .map(|i| PhpValue::Int(i as i32))
                     .collect(),
+                Some(PhpValue::Set(s)) => s.borrow().iter().cloned().collect(),
                 _ => Vec::new(),
             };
             Ok(PhpValue::list(keys))
@@ -844,10 +946,37 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let default = args.get(2).cloned().unwrap_or(PhpValue::Null);
             Ok(arr_get_dot(&target, &key, default))
         }
-        "has" => {
-            let target = args.first().cloned().unwrap_or(PhpValue::Null);
-            let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
-            Ok(PhpValue::Bool(arr_has_dot(&target, &key)))
+        "has" | "hasKey" => {
+            let target = match args.first() {
+                Some(t) => t,
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            let key = match args.get(1) {
+                Some(k) => k,
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            let exists = match target {
+                PhpValue::Dict(d) => {
+                    let k_str = key.to_php_string();
+                    if k_str.contains('.') {
+                        arr_has_dot(target, &k_str)
+                    } else {
+                        d.borrow().contains_key(&k_str)
+                    }
+                }
+                PhpValue::HashMap(m) => {
+                    m.borrow().contains_key(key)
+                }
+                PhpValue::Array(a) | PhpValue::List(a) => {
+                    let idx = key.to_i64().unwrap_or(-1);
+                    idx >= 0 && (idx as usize) < a.borrow().len()
+                }
+                PhpValue::Set(s) => {
+                    s.borrow().contains(key)
+                }
+                _ => false,
+            };
+            Ok(PhpValue::Bool(exists))
         }
         "hasAny" => {
             let target = args.first().cloned().unwrap_or(PhpValue::Null);
@@ -1947,7 +2076,7 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
             Ok(PhpValue::Float(val.floor() as f32))
         }
-        "ceil" => {
+        "ceil" | "ciel" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
             Ok(PhpValue::Float(val.ceil() as f32))
         }
@@ -2334,6 +2463,96 @@ fn dispatch_url(method: &str, args: &[PhpValue]) -> FacadeResult {
     }
 }
 
+/// Parse regex pattern supporting standard PHP delimiters (`/.../i`, `#[0-9]+#`, `~pattern~s`)
+/// as well as standard unescaped regex strings (`^[a-z]+$`).
+pub fn parse_regex_pattern(pat: &str) -> Result<regex::Regex, regex::Error> {
+    let trimmed = pat.trim();
+    if trimmed.len() >= 2 {
+        let first = trimmed.chars().next().unwrap();
+        if first == '/' || first == '#' || first == '~' || first == '@' {
+            if let Some(last_delim_idx) = trimmed.rfind(first) {
+                if last_delim_idx > 0 {
+                    let inner_pat = &trimmed[1..last_delim_idx];
+                    let flags = &trimmed[last_delim_idx + 1..];
+                    let mut prefix = String::new();
+                    let mut case_insensitive = false;
+                    let mut multi_line = false;
+                    let mut dot_matches_new_line = false;
+                    for c in flags.chars() {
+                        match c {
+                            'i' => case_insensitive = true,
+                            'm' => multi_line = true,
+                            's' => dot_matches_new_line = true,
+                            _ => {}
+                        }
+                    }
+                    if case_insensitive {
+                        prefix.push_str("(?i)");
+                    }
+                    if multi_line {
+                        prefix.push_str("(?m)");
+                    }
+                    if dot_matches_new_line {
+                        prefix.push_str("(?s)");
+                    }
+                    return regex::Regex::new(&format!("{}{}", prefix, inner_pat));
+                }
+            }
+        }
+    }
+    regex::Regex::new(pat)
+}
+
+fn dispatch_regex(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "isValid" | "is_valid" | "check" => {
+            let pattern = get_arg_str(args, 0, "Regex::isValid")?;
+            Ok(PhpValue::Bool(parse_regex_pattern(&pattern).is_ok()))
+        }
+        "testString" | "test" | "matches" | "isMatch" => {
+            let arg0 = get_arg_str(args, 0, "Regex::testString")?;
+            let arg1 = get_arg_str(args, 1, "Regex::testString")?;
+            let is_matched = if let Ok(re) = parse_regex_pattern(&arg0) {
+                re.is_match(&arg1)
+            } else if let Ok(re) = parse_regex_pattern(&arg1) {
+                re.is_match(&arg0)
+            } else {
+                false
+            };
+            Ok(PhpValue::Bool(is_matched))
+        }
+        "match" => {
+            let pattern = get_arg_str(args, 0, "Regex::match")?;
+            let subject = get_arg_str(args, 1, "Regex::match")?;
+            let re = parse_regex_pattern(&pattern)
+                .map_err(|e| RuntimeErrorKind::Custom { message: format!("Invalid regex pattern: {e}") })?;
+            if let Some(caps) = re.captures(&subject) {
+                let matches: Vec<PhpValue> = caps.iter().flatten().map(|m| PhpValue::string(m.as_str())).collect();
+                Ok(PhpValue::list(matches))
+            } else {
+                Ok(PhpValue::Null)
+            }
+        }
+        "replace" => {
+            let pattern = get_arg_str(args, 0, "Regex::replace")?;
+            let replacement = get_arg_str(args, 1, "Regex::replace")?;
+            let subject = get_arg_str(args, 2, "Regex::replace")?;
+            let re = parse_regex_pattern(&pattern)
+                .map_err(|e| RuntimeErrorKind::Custom { message: format!("Invalid regex pattern: {e}") })?;
+            let replaced = re.replace_all(&subject, replacement.as_str());
+            Ok(PhpValue::string(replaced.into_owned()))
+        }
+        "escape" | "quote" => {
+            let s = get_arg_str(args, 0, "Regex::escape")?;
+            Ok(PhpValue::string(regex::escape(&s)))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Regex".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
 fn dispatch_glob(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "getClass" => {
@@ -2346,7 +2565,12 @@ fn dispatch_glob(method: &str, args: &[PhpValue]) -> FacadeResult {
         "match" => {
             let pattern = get_arg_str(args, 0, "Glob::match")?;
             let subject = get_arg_str(args, 1, "Glob::match")?;
-            Ok(PhpValue::Bool(subject.contains(&pattern)))
+            let matched = if let Ok(re) = parse_regex_pattern(&pattern) {
+                re.is_match(&subject)
+            } else {
+                subject.contains(&pattern)
+            };
+            Ok(PhpValue::Bool(matched))
         }
         "customHelper" => {
             // Forwarded dynamically registered custom helper
@@ -2371,10 +2595,26 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "array_merge" => dispatch_arr("merge", args),
         "count" => dispatch_arr("count", args),
+        "array_keys" => dispatch_arr("keys", args),
+        "array_values" => dispatch_arr("values", args),
+        "array_key_exists" => dispatch_arr("hasKey", args),
+        "in_array" => dispatch_arr("hasValue", args),
         "strlen" => dispatch_str("length", args),
         "str_contains" => dispatch_str("contains", args),
         "implode" => dispatch_str("join", args),
         "explode" => dispatch_str("split", args),
+        "trim" => dispatch_str("trim", args),
+        "ltrim" => dispatch_str("ltrim", args),
+        "rtrim" => dispatch_str("rtrim", args),
+        "strtolower" => dispatch_str("lower", args),
+        "strtoupper" => dispatch_str("upper", args),
+        "str_replace" => dispatch_str("replace", args),
+        "preg_match" => dispatch_regex("testString", args),
+        "preg_replace" => dispatch_regex("replace", args),
+        "preg_quote" => dispatch_regex("quote", args),
+        "round" => dispatch_float("round", args),
+        "floor" => dispatch_float("floor", args),
+        "ceil" | "ciel" => dispatch_float("ceil", args),
         "json_encode" => {
             let val = args.first().cloned().unwrap_or(PhpValue::Null);
             Ok(PhpValue::string(php_value_to_json(&val)))
@@ -2386,8 +2626,65 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Err(_) => Ok(PhpValue::Null),
             }
         }
+        "class_exists" => dispatch_reflect("classExists", args),
+        "function_exists" => dispatch_reflect("functionExists", args),
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Reflect Facade
+// =========================================================================
+
+fn dispatch_reflect(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "classExists" | "class_exists" => {
+            let class_name = match args.first() {
+                Some(PhpValue::String(s)) => s.to_string(),
+                Some(val) => val.to_php_string(),
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            let clean = class_name.strip_prefix('\\').unwrap_or(&class_name);
+            let exists = is_static_facade(clean)
+                || is_static_only(clean)
+                || NATIVE_FACADES
+                    .iter()
+                    .any(|f| f.name.eq_ignore_ascii_case(clean))
+                || clean.eq_ignore_ascii_case("stdClass")
+                || clean.eq_ignore_ascii_case("Exception")
+                || clean.eq_ignore_ascii_case("Error")
+                || clean.eq_ignore_ascii_case("Throwable")
+                || clean.eq_ignore_ascii_case("Closure")
+                || clean.eq_ignore_ascii_case("Future")
+                || clean.ends_with("Exception")
+                || clean.ends_with("Error");
+            Ok(PhpValue::Bool(exists))
+        }
+        "functionExists" | "function_exists" => {
+            let fn_name = match args.first() {
+                Some(PhpValue::String(s)) => s.to_string(),
+                Some(val) => val.to_php_string(),
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            let clean = fn_name.strip_prefix('\\').unwrap_or(&fn_name);
+            let exists = is_legacy_php_function(clean)
+                || LEGACY_PHP_FUNCTIONS
+                    .iter()
+                    .any(|f| f.php_name.eq_ignore_ascii_case(clean))
+                || is_reserved_intrinsic(clean)
+                || RESERVED_INTRINSICS
+                    .iter()
+                    .any(|&i| i.eq_ignore_ascii_case(clean))
+                || has_custom_helper(clean)
+                || clean.eq_ignore_ascii_case("class_exists")
+                || clean.eq_ignore_ascii_case("function_exists");
+            Ok(PhpValue::Bool(exists))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Reflect".to_string(),
+            method: method.to_string(),
         }),
     }
 }
@@ -2630,6 +2927,24 @@ pub fn arr_has_dot(target: &PhpValue, key: &str) -> bool {
                 } else {
                     return false;
                 }
+            }
+            PhpValue::Set(s) => {
+                let k = PhpValue::string(*part);
+                let b = s.borrow();
+                if b.contains(&k) {
+                    if i == parts.len() - 1 {
+                        return true;
+                    }
+                    return false;
+                } else if let Ok(idx) = part.parse::<i32>() {
+                    if b.contains(&PhpValue::Int(idx)) {
+                        if i == parts.len() - 1 {
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+                return false;
             }
             _ => return false,
         }

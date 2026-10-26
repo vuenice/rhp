@@ -234,16 +234,20 @@ fn test_prohibition_of_pass_by_reference_prevents_cyclic_leaks() {
     // create cyclic reference graphs that necessitate a complex cyclic tracing garbage collector.
     // In RHP, pass-by-reference and by-reference capture are strictly forbidden at the type checker level.
 
-    // 1. Pass-by-reference parameter must be rejected
-    let ref_param_code = "function leakTester(&$cyclicRef): void {}";
-    let err = parse_and_check(ref_param_code).expect_err("Pass-by-reference must be forbidden");
+    // 1. Pass-by-reference parameter with strict two-way contract: calling without & must be rejected
+    let ref_param_code = r#"
+        function leakTester(mixed &$cyclicRef): void {}
+        $x = 10;
+        leakTester($x);
+    "#;
+    let err = parse_and_check(ref_param_code).expect_err("Calling pass-by-reference without & must be rejected");
     match err {
         FrontendError::Type(te) => match te.kind {
-            TypeErrorKind::PassByReferenceForbidden { callable_name, param_name, .. } => {
+            TypeErrorKind::MissingReferenceArgument { callable_name, param_name, .. } => {
                 assert_eq!(callable_name, "leakTester");
                 assert_eq!(param_name, "$cyclicRef");
             }
-            other => panic!("Expected PassByReferenceForbidden, got {:?}", other),
+            other => panic!("Expected MissingReferenceArgument, got {:?}", other),
         },
         other => panic!("Expected TypeError, got {:?}", other),
     }

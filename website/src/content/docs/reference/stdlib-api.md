@@ -416,6 +416,21 @@ $future->wait(): mixed;         // Synchronously waits for completion and return
 
 ---
 
+## `File` Facade API (Synchronous Filesystem & Uploads)
+
+```php
+File::read(string $path): string;                    // Read file contents as string
+File::write(string $path, string $content): bool;    // Write string to file
+File::exists(string $path): bool;                   // Check if file exists
+File::delete(string $path): bool;                   // Remove file
+File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request
+```
+
+> **Note on `$_FILES`:**
+> `$_FILES` is **not supported** in RHP. Retrieve uploaded files using `File::fromRequest('upload_field')`.
+
+---
+
 ## `AFile` Facade API (Asynchronous Tokio Filesystem)
 
 ```php
@@ -517,6 +532,9 @@ Session::forget(string $key): void;
 Session::clear(): void;
 ```
 
+> **Note on `$_SESSION`:**
+> `$_SESSION` is **not supported** in RHP. Use `Session::get('key')` / `Session::set('key', $value)` to manage thread-isolated session state.
+
 ---
 
 ## `Cookie` Facade API
@@ -530,6 +548,9 @@ Cookie::all(): dict;
 Cookie::forget(string $key): void;
 Cookie::clear(): void;
 ```
+
+> **Note on `$_COOKIE`:**
+> `$_COOKIE` is **not supported** in RHP. Use `Cookie::get('name')` / `Cookie::set('name', $value)` for HTTP cookie management.
 
 ---
 
@@ -546,6 +567,9 @@ Sys::dd(mixed ...$vars): void;                   // Dump variables and terminate
 
 // NOTE: There is NO Sys::println function. Only echo and print exist in RHP.
 ```
+
+> **Note on `$_ENV`:**
+> `$_ENV` is **not supported** in RHP. Read environment variables via `env('KEY')` or `Sys::env('KEY')`.
 
 ### Formatting Syntax & Direct Parameter Mapping
 
@@ -570,6 +594,19 @@ Sys::print("{:b}", 5);                      // 101\n
 // Inline output on the same line
 Sys::echo("Age: {}, Name: {}", 30, "Bob");  // Age: 30, Name: Bob (same line)
 ```
+
+---
+
+## `Glob` Facade API
+
+```php
+Glob::match(string $pattern, string $subject): bool;           // Regex pattern matching
+Glob::getClass(mixed $object): string;                         // Inspect object class name
+Glob::customHelper(string $helperName, mixed ...$args): mixed; // Dynamic fallback registry for unresolved global functions
+```
+
+> **Note on `$GLOBALS`:**
+> `$GLOBALS` is **also not supported** in RHP. Unresolved global functions are dispatched through `Glob::customHelper()`, and global variable scope within functions is bound using lexical `global $var;` declarations.
 
 ---
 

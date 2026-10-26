@@ -14,10 +14,10 @@ abstract    as          async       break       case        catch
 class       const       continue    default     defer       do
 else        elseif      enum        extends     final       finally
 fn          for         foreach     function    if          implements
-interface   import      macro       match       namespace   new
-private     protected   public      readonly    return      singleton
-static      switch      throw       trait       try         use
-while       yield
+insteadof   interface   import      macro       match       namespace
+new         private     protected   public      readonly    return
+singleton   static      switch      throw       trait       try
+use         while       yield
 ```
 
 ---
@@ -157,19 +157,29 @@ $logger->log("Server initialized");
 
 ## Special Identifiers & Superglobals
 
-| Identifier | Context | Description |
+| Identifier | Context | Status & Recommended Helper Class |
 | :--- | :--- | :--- |
 | `$this` | Class instances | Reference to current instance |
 | `self` | Class scope | Reference to enclosing class definition |
 | `parent` | Subclasses | Reference to parent class implementation |
 | `$_SERVER` | Web requests | Server environment parameters dictionary |
-| `$_GET` | **Deprecated** | Use `Request::get()` instead |
-| `$_POST` | **Deprecated** | Use `Request::get()` instead |
-| `$_SESSION` | **Deprecated** | Use `Session::get()` / `Session::set()` instead |
-| `$_COOKIE` | **Deprecated** | Use `Cookie::get()` / `Cookie::set()` instead |
+| `$_GET` | Web query parameters | **Deprecated** &mdash; Use `Request::get()` instead |
+| `$_POST` | HTTP request body | **Deprecated** &mdash; Use `Request::get()` instead |
+| `$_ENV` | Environment variables | **Not Supported** &mdash; `$_ENV` is not supported; use `env()` or `Sys::env()` instead |
+| `$_FILES` | Uploaded files | **Not Supported** &mdash; `$_FILES` is not supported; use `File::fromRequest()` instead |
+| `$_SESSION` | Session data | **Not Supported** &mdash; `$_SESSION` is not supported; use `Session::get()` / `Session::set()` instead |
+| `$_COOKIE` | HTTP cookies | **Not Supported** &mdash; `$_COOKIE` is not supported; use `Cookie::get()` / `Cookie::set()` instead |
+| `$GLOBALS` | Global variables map | **Not Supported** &mdash; `$GLOBALS` is also not supported; use `Glob::` or `global $var;` instead |
 
-> **Note on Superglobals in RHP:**
-> Direct use of `$_GET`, `$_POST`, `$_SESSION`, and `$_COOKIE` is deprecated. RHP provides modern, type-safe static facades (`Request`, `Session`, and `Cookie`). The `rhp run lint` command reports `deprecated-superglobal` warnings when legacy superglobals are used.
+> **Superglobals & Helper Class Support in RHP:**
+> In RHP's concurrent, zero-bootstrap architecture, legacy mutable global variables are not supported or deprecated to guarantee thread safety and prevent cross-request memory leaks. Use the corresponding helper classes instead:
+> - **`env()`**: `$_ENV` is not supported &mdash; use `env('KEY')` or `Sys::env('KEY')`.
+> - **`File::fromRequest()`**: `$_FILES` is not supported &mdash; use `File::fromRequest('upload')`.
+> - **`Session::get()`**: `$_SESSION` is not supported &mdash; use `Session::get('key')` / `Session::set('key', $val)`.
+> - **`Cookie::get()`**: `$_COOKIE` is not supported &mdash; use `Cookie::get('token')` / `Cookie::set('name', $val)`.
+> - **`Glob::`**: `$GLOBALS` is also not supported &mdash; use `Glob::` helpers or explicit `global $var;` declarations.
+> 
+> The `rhp run lint` command flags deprecated and unsupported superglobals with actionable diagnostics.
 
 ---
 

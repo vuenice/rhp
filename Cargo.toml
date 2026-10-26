@@ -24,6 +24,7 @@ logos = "0.16.1"
 thiserror = "2.0.21"
 indexmap = "2"
 tokio = { version = "1.54.0", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "time", "net", "sync", "process"] }
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

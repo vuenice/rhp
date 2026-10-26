@@ -312,6 +312,7 @@ pub enum OpCode {
         src: Reg,
         name: Option<ConstantId>,
         is_unpack: bool,
+        is_reference: bool,
     },
 
     /// Invoke a named user function: `dst = func_name(args...)`.
@@ -564,8 +565,15 @@ impl fmt::Display for OpCode {
                 src,
                 name,
                 is_unpack,
+                is_reference,
             } => {
-                let prefix = if *is_unpack { "..." } else { "" };
+                let prefix = if *is_unpack {
+                    "..."
+                } else if *is_reference {
+                    "&"
+                } else {
+                    ""
+                };
                 match name {
                     Some(n) => write!(f, "PUSH_ARG        {}: {}{}", n, prefix, src),
                     None => write!(f, "PUSH_ARG        {}{}", prefix, src),

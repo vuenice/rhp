@@ -13,7 +13,7 @@ To eliminate global namespace pollution while preserving convenient developer sh
 | :--- | :--- | :--- |
 | `echo("text", ...$args)` | `Sys::echo("text", ...$args)` | Directly compiles to Rust `print!()` (stdout without trailing newline) |
 | `print("text", ...$args)` | `Sys::print("text", ...$args)` | Directly compiles to Rust `println!()` (stdout WITH trailing newline `\n`) |
-| `env('KEY', 'default')` | `Sys::env('KEY', 'default')` | Read system environment variable |
+| `env('KEY', 'default')` | `Sys::env('KEY', 'default')` | Read system environment variable (`$_ENV` is not supported) |
 | `dd($val1, $val2)` | `Sys::dd($val1, $val2)` | Dump variables and terminate execution |
 
 > **Formatting Engine & Parameters:**
@@ -21,6 +21,20 @@ To eliminate global namespace pollution while preserving convenient developer sh
 >
 > **Note on `Sys::println`:**
 > There is **no** `Sys::println` function in RHP. Only `echo` (inline, no newline) and `print` (with trailing newline) exist in the language and via the `Sys` facade (`Sys::echo` and `Sys::print`). Calling `Sys::println(...)` produces an `UndefinedFacadeMethod` error.
+
+---
+
+## Helper Classes vs. Unsupported Superglobals
+
+RHP completely drops procedural PHP mutable superglobals in favor of type-safe static helper classes and intrinsics:
+
+| Helper Class / Function | Unsupported Superglobal | Explanation & Idiom |
+| :--- | :--- | :--- |
+| **`env()`** | **`$_ENV` is not supported** | Read process environment variables with defaults: `env('APP_ENV', 'production')` or `Sys::env()`. |
+| **`File::fromRequest()`** | **`$_FILES` is not supported** | Retrieve uploaded files from multi-part HTTP requests: `File::fromRequest('avatar')`. |
+| **`Session::get()`** | **`$_SESSION` is not supported** | Access and mutate thread-safe session data: `Session::get('user_id')`, `Session::set('key', $val)`. |
+| **`Cookie::get()`** | **`$_COOKIE` is not supported** | Read and manage HTTP cookies: `Cookie::get('token')`, `Cookie::set('name', $val)`. |
+| **`Glob::`** | **`$GLOBALS` is also not supported** | Dynamic global helper fallback & class inspection: `Glob::match()`, `Glob::customHelper()`, or lexical `global $var;`. |
 
 ---
 
@@ -40,7 +54,7 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 
 ## Dynamic Global Helpers (`Glob::*`)
 
-Any unrecognized global function call that is not defined in userland is routed through the `Glob` fallback container:
+Legacy `$GLOBALS` is **also not supported** in RHP. Any unrecognized global function call that is not defined in userland is routed through the `Glob` fallback container:
 
 ```rust
 // Pratt parser lowering fallback:

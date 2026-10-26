@@ -10,7 +10,8 @@ pub use expr::{
 pub use stmt::{
     Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind, ElseIfBranch,
     EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, Param, PropertyDecl, Stmt,
-    StmtKind, SwitchCase, TraitDecl, TraitUseDecl, UseImport,
+    StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf, TraitUseDecl,
+    UseImport,
 };
 pub use types::{
     CastType, ClassModifiers, Ident, TypeHint, TypeHintKind, Variable, Visibility,

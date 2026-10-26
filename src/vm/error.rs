@@ -95,6 +95,24 @@ pub enum RuntimeErrorKind {
     #[error("Error: Unknown named parameter '${name}' in call to '{callable}()'")]
     UnknownNamedArgument { callable: String, name: String },
 
+    #[error(
+        "TypeError: Argument #{arg_index} ('{param_name}') passed to '{callable}()' must be passed by reference ('&')"
+    )]
+    MissingReferenceArgument {
+        callable: String,
+        param_name: String,
+        arg_index: usize,
+    },
+
+    #[error(
+        "TypeError: Argument #{arg_index} passed to '{callable}()' cannot be passed by reference ('&')"
+    )]
+    UnexpectedReferenceArgument {
+        callable: String,
+        param_name: String,
+        arg_index: usize,
+    },
+
     #[error("UncaughtException ({class}): {message}")]
     UncaughtException { class: String, message: String },
 

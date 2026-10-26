@@ -223,6 +223,9 @@ pub enum Token<'s> {
     #[token("instanceof")]
     Instanceof,
 
+    #[token("insteadof")]
+    Insteadof,
+
     // Namespaces & Imports
     #[token("namespace")]
     Namespace,
@@ -663,6 +666,7 @@ impl<'s> Token<'s> {
             Token::New => "new",
             Token::Clone => "clone",
             Token::Instanceof => "instanceof",
+            Token::Insteadof => "insteadof",
             Token::Namespace => "namespace",
             Token::Use => "use",
             Token::Import => "import",
@@ -823,6 +827,7 @@ impl<'s> Token<'s> {
                 | Token::New
                 | Token::Clone
                 | Token::Instanceof
+                | Token::Insteadof
                 | Token::Namespace
                 | Token::Use
                 | Token::Import

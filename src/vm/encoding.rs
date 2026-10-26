@@ -24,7 +24,7 @@ impl Encoding {
         let clean = name.trim().to_uppercase().replace(['-', '_', ' '], "");
         match clean.as_str() {
             "UTF8" => Some(Self::Utf8),
-            "SJIS" | "SHIFTJIS" | "CP932" | "WINDOWS31J" | "MS932" => Some(Self::ShiftJis),
+            "SJIS" | "SHIFTJIS" | "JSHIFT" | "CP932" | "WINDOWS31J" | "MS932" => Some(Self::ShiftJis),
             "EUCJP" | "EUC" => Some(Self::EucJp),
             "ISO2022JP" | "JIS" | "2022JP" => Some(Self::Iso2022Jp),
             "ASCII" | "USASCII" => Some(Self::Ascii),
@@ -597,3 +597,75 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static str {
         "Binary"
     }
 }
+
+/// Validates whether a byte slice represents valid Shift-JIS.
+pub fn is_valid_shift_jis(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b <= 0x7F {
+            i += 1;
+        } else if (0xA1..=0xDF).contains(&b) {
+            i += 1;
+        } else if (0x81..=0x9F).contains(&b) || (0xE0..=0xFC).contains(&b) {
+            if i + 1 >= bytes.len() {
+                return false;
+            }
+            let trail = bytes[i + 1];
+            if let Some((j1, j2)) = sjis_to_jis(b, trail) {
+                if jis_code_to_char(j1, j2).is_some() {
+                    i += 2;
+                    continue;
+                }
+            }
+            return false;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validates whether a byte slice represents valid EUC-JP.
+pub fn is_valid_euc_jp(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b <= 0x7F {
+            i += 1;
+        } else if b == 0x8E && i + 1 < bytes.len() && (0xA1..=0xDF).contains(&bytes[i + 1]) {
+            i += 2;
+        } else if (0xA1..=0xFE).contains(&b) && i + 1 < bytes.len() && (0xA1..=0xFE).contains(&bytes[i + 1]) {
+            let j1 = b - 0x80;
+            let j2 = bytes[i + 1] - 0x80;
+            if jis_code_to_char(j1, j2).is_some() {
+                i += 2;
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validates whether a byte slice is valid for the specified character encoding.
+pub fn is_valid_encoding(bytes: &[u8], encoding_name: &str) -> bool {
+    match Encoding::parse(encoding_name) {
+        Some(Encoding::Utf8) => std::str::from_utf8(bytes).is_ok(),
+        Some(Encoding::ShiftJis) => is_valid_shift_jis(bytes),
+        Some(Encoding::EucJp) => is_valid_euc_jp(bytes),
+        Some(Encoding::Iso2022Jp) => {
+            if bytes.windows(3).any(|w| w == b"\x1B$B" || w == b"\x1B$@") {
+                true
+            } else {
+                bytes.iter().all(|&b| b < 0x80)
+            }
+        }
+        Some(Encoding::Ascii) => bytes.iter().all(|&b| b < 0x80),
+        Some(Encoding::Iso8859_1 | Encoding::Binary) => true,
+        None => false,
+    }
+}
+

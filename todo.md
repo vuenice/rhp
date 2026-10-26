@@ -293,7 +293,7 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 - [ ] **Modern PHP OOP Constructs:**
   - **Namespaces:** Full support for namespaces, aliases (`use Foo\Bar as Baz`), and namespace resolution rules.
-  - **Traits:** Trait composition, conflict resolution (`insteadof`), method aliasing (`as`), and property precedence.
+  - [x] **Traits:** Trait composition, conflict resolution (`insteadof`), method aliasing (`as`), and property precedence.
   - **Enums:** Pure enums and Backed enums (`enum Status: string`), backed value casting, methods on enums, and `UnitEnum` / `BackedEnum` interfaces.
   - **Attributes:** First-class PHP 8+ attributes (`#[Attribute]`, `#[Route('/api')]`), reflection metadata API, and compile-time attribute extraction.
   - **Readonly Properties & Classes:** Enforce `readonly` immutability invariants at compile time and runtime initialization.

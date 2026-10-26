@@ -390,6 +390,7 @@ pub struct Argument<'s> {
     pub name: Option<Ident<'s>>,
     pub value: Expr<'s>,
     pub is_unpack: bool,
+    pub is_reference: bool,
 }
 
 impl<'s> Argument<'s> {
@@ -400,6 +401,7 @@ impl<'s> Argument<'s> {
             name: None,
             value,
             is_unpack: false,
+            is_reference: false,
         }
     }
 
@@ -410,6 +412,7 @@ impl<'s> Argument<'s> {
             name: Some(name),
             value,
             is_unpack: false,
+            is_reference: false,
         }
     }
 
@@ -420,6 +423,18 @@ impl<'s> Argument<'s> {
             name: None,
             value,
             is_unpack: true,
+            is_reference: false,
+        }
+    }
+
+    #[inline]
+    pub fn by_ref(value: Expr<'s>, span: Span) -> Self {
+        Self {
+            span,
+            name: None,
+            value,
+            is_unpack: false,
+            is_reference: true,
         }
     }
 }

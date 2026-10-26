@@ -268,8 +268,107 @@ impl<'s> CombinatorStream<'s> {
                 spanned.span,
             )),
 
+            // Fully qualified identifier with leading backslash (e.g. `\Exception`, `\App\Models\User`, `\strlen`)
+            Token::Backslash => {
+                let leading_span = spanned.span;
+                let first = self.expect_ident()?;
+                let mut end = first.span.end;
+                let mut span = leading_span.merge(first.span);
+                let mut segments = vec![first.name];
+
+                while self.matches(&Token::Backslash) {
+                    let next = self.expect_ident()?;
+                    end = next.span.end;
+                    span = span.merge(next.span);
+                    segments.push(next.name);
+                }
+
+                let qualified_name = if let Some(src) = self.source {
+                    let raw = &src[leading_span.start..end];
+                    if raw.contains(char::is_whitespace) {
+                        let s = format!("\\{}", segments.join("\\"));
+                        Box::leak(s.into_boxed_str())
+                    } else {
+                        raw
+                    }
+                } else {
+                    let s = format!("\\{}", segments.join("\\"));
+                    Box::leak(s.into_boxed_str())
+                };
+
+                Ok(Expr::new(
+                    ExprKind::Ident(Ident::new(qualified_name, span)),
+                    span,
+                ))
+            }
+
+            Token::Namespace if self.check(&Token::Backslash) => {
+                let start = spanned.span.start;
+                let mut end = spanned.span.end;
+                let mut span = spanned.span;
+                let mut segments = vec!["namespace"];
+
+                while self.matches(&Token::Backslash) {
+                    let next = self.expect_ident()?;
+                    end = next.span.end;
+                    span = span.merge(next.span);
+                    segments.push(next.name);
+                }
+
+                let qualified_name = if let Some(src) = self.source {
+                    let raw = &src[start..end];
+                    if raw.contains(char::is_whitespace) {
+                        let s = segments.join("\\");
+                        Box::leak(s.into_boxed_str())
+                    } else {
+                        raw
+                    }
+                } else {
+                    let s = segments.join("\\");
+                    Box::leak(s.into_boxed_str())
+                };
+
+                Ok(Expr::new(
+                    ExprKind::Ident(Ident::new(qualified_name, span)),
+                    span,
+                ))
+            }
+
             // Identifiers & Contextual Type Identifiers
             Token::Ident(name) => {
+                // If followed by backslash, this is a qualified identifier (e.g. `App\Models\User`)
+                if self.check(&Token::Backslash) {
+                    let start = spanned.span.start;
+                    let mut end = spanned.span.end;
+                    let mut span = spanned.span;
+                    let mut segments = vec![name];
+
+                    while self.matches(&Token::Backslash) {
+                        let next = self.expect_ident()?;
+                        end = next.span.end;
+                        span = span.merge(next.span);
+                        segments.push(next.name);
+                    }
+
+                    let qualified_name = if let Some(src) = self.source {
+                        let raw = &src[start..end];
+                        if raw.contains(char::is_whitespace) {
+                            let s = segments.join("\\");
+                            Box::leak(s.into_boxed_str())
+                        } else {
+                            raw
+                        }
+                    } else {
+                        let s = segments.join("\\");
+                        Box::leak(s.into_boxed_str())
+                    };
+
+                    return Ok(Expr::new(
+                        ExprKind::Ident(Ident::new(qualified_name, span)),
+                        span,
+                    ));
+                }
+
                 if name.eq_ignore_ascii_case("__LINE__") {
                     let line = spanned.span.line as i64;
                     return Ok(Expr::new(
@@ -774,10 +873,11 @@ impl<'s> CombinatorStream<'s> {
                     let v_span = var.span;
                     (Expr::new(ExprKind::Variable(var), v_span), v_span)
                 } else {
-                    let class_ident = self.expect_ident()?;
+                    let class_ident = self.expect_qualified_ident()?;
 
                     // Static facade instantiation is strictly forbidden by specification
-                    if is_static_facade(class_ident.name) || is_static_only(class_ident.name) {
+                    let check_name = class_ident.name.strip_prefix('\\').unwrap_or(class_ident.name);
+                    if is_static_facade(check_name) || is_static_only(check_name) {
                         return Err(ParseError::new(
                             ParseErrorKind::StaticFacadeInstantiationForbidden {
                                 class_name: class_ident.name.to_string(),
@@ -877,7 +977,8 @@ impl<'s> CombinatorStream<'s> {
                 // 3. Legacy PHP built-in function (`array_merge`, `implode`, etc.) -> rewrites to `phpFun::<callee_name>(args)`
                 // 4. Unrecognized global function -> rewrites to `Glob::customHelper(Literal(callee_name), ...args)`
                 if let ExprKind::Ident(ref callee_ident) = left.kind {
-                    let callee_name = callee_ident.name;
+                    let raw_name = callee_ident.name;
+                    let callee_name = raw_name.strip_prefix('\\').unwrap_or(raw_name);
                     let callee_span = callee_ident.span;
 
                     let call_node = if is_reserved_intrinsic(callee_name) {
@@ -1197,14 +1298,18 @@ impl<'s> CombinatorStream<'s> {
             |s| {
                 let arg_start = s.current_span();
                 let is_unpack = s.matches(&Token::Ellipsis);
+                let mut is_reference = s.matches(&Token::Ampersand);
 
-                // Named argument check `name: $val`
+                // Named argument check `name: $val` or `name: &$val`
                 if let Some(tok) = s.peek() {
                     if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
                         && s.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
                     {
                         let name = s.expect_ident()?;
                         s.expect(Token::Colon)?;
+                        if s.matches(&Token::Ampersand) {
+                            is_reference = true;
+                        }
                         let value = s.parse_expr_lowest()?;
                         let span = arg_start.merge(value.span);
                         return Ok(Argument {
@@ -1212,6 +1317,7 @@ impl<'s> CombinatorStream<'s> {
                             name: Some(name),
                             value,
                             is_unpack,
+                            is_reference,
                         });
                     }
                 }
@@ -1223,6 +1329,7 @@ impl<'s> CombinatorStream<'s> {
                     name: None,
                     value,
                     is_unpack,
+                    is_reference,
                 })
             },
             Token::Comma,

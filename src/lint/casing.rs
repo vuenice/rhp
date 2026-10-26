@@ -77,6 +77,25 @@ pub fn to_snake_case(s: &str) -> String {
 
 /// Convert identifier to `PascalCase`.
 pub fn to_pascal_case(s: &str) -> String {
+    if s.contains('\\') {
+        let has_leading = s.starts_with('\\');
+        let parts: Vec<String> = s
+            .split('\\')
+            .filter(|p| !p.is_empty())
+            .map(|p| to_pascal_case_single(p))
+            .collect();
+        let joined = parts.join("\\");
+        if has_leading {
+            format!("\\{}", joined)
+        } else {
+            joined
+        }
+    } else {
+        to_pascal_case_single(s)
+    }
+}
+
+fn to_pascal_case_single(s: &str) -> String {
     let words = split_words(s);
     if words.is_empty() {
         return s.to_string();
@@ -198,6 +217,7 @@ pub fn is_builtin_type_or_facade(name: &str) -> bool {
             | "ADB"
             | "Cache"
             | "Log"
+            | "Reflect"
             | "Env"
             | "Task"
             | "Channel"
