@@ -65,6 +65,7 @@ RHP is a **strict, gradually typed, PHP-style language with a Rust host runtime*
 - **`Cache::get/set` takes plain data only:** The cache accepts only primitive scalars and array structures—never live object references or closures. Backing cache drivers include file, database, or Redis, with an optional in-memory L1 cache in front.
 - **Everything finishes before the arena drops:** Post-response deferred work (`Future::defer`) executes completely before the request arena is dropped. Queued jobs are serialized into the queue prior to teardown.
 - **Resources belong to the host:** Operating system resources—including log file descriptors, database connections, and network sockets—live in host-owned pools. Request code only holds lightweight handles. Borrowed connections are automatically reset upon return and reclaimed on timeout.
+- **Borrow Checker & Zero-GC Guarantees:** Developers are freed from manual borrow checking or lifetime annotations; the runtime enforces memory safety through pass-by-value/CoW semantics, request bump arenas, and compile-time cycle elimination. See [Memory Model: Borrow Checker and Memory Safety](/docs/advanced/memory-model#borrow-checker).
 
 ---
 

@@ -51,6 +51,17 @@ By eliminating reference variables and enforcing immutable collections with Copy
 
 ---
 
+## How does RHP handle the borrow checker?
+
+RHP eliminates the cognitive burden of Rust's borrow checker for application developers while preserving Rust's memory safety guarantees:
+
+- **For script developers:** You do not write manual lifetimes (`'a`) or borrow annotations. Memory safety and Zero-GC execution are achieved through language constraints (forbidding pass-by-reference `&$var`), automatic Copy-On-Write (CoW) collection detachment, and $O(1)$ request bump arenas.
+- **For the runtime engine:** The underlying VM loop is built in Rust using scoped interior mutability (`Rc<RefCell<...>>`) and statically enforces thread safety by requiring cross-thread values to be converted into immutable `FrozenValue` (`Send + Sync`).
+
+For full architectural details, see the dedicated section in [Memory Model: Borrow Checker and Memory Safety](/docs/advanced/memory-model#borrow-checker).
+
+---
+
 ## What file extension should I use?
 
 RHP officially supports both:

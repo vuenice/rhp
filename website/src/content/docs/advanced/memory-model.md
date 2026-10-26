@@ -104,3 +104,28 @@ The boot script (`server.rhp`) executes once at startup. All parsed routes, comp
 - The VM checks execution deadlines at loop headers and function invocations.
 - A per-arena memory cap kills runaway requests before they exceed system capacity.
 
+---
+
+<a id="borrow-checker"></a>
+## Borrow Checker and Memory Safety
+
+A common question for engineers discovering RHP is: **how does RHP handle the borrow checker?**
+
+Do developers have to manage Rust-style lifetime parameters (`'a`), or does the runtime enforce memory safety without either borrow-checking friction or a traditional tracing garbage collector?
+
+RHP handles the borrow checker on two deliberate fronts:
+
+### 1. Script-Land: Safety Without Lifetime Annotations
+Application developers writing RHP code never need to declare lifetime annotations or battle borrow checker errors. Instead, the language guarantees memory safety through strict compile-time constraints combined with value semantics:
+- **Pass-By-Reference Elimination:** Explicit pass-by-reference (`&$var`) and closure reference captures (`use (&$var)`) are forbidden at the compiler/type-checker level (`PassByReferenceForbidden`). This eliminates pointer aliasing hazards and reference lifetime tracking from user code.
+- **Static Cycle Prevention:** The compiler statically detects cyclic assignment risks (such as closures capturing `$this` assigned into `$this->property`) and requires bidirectional object relationships to use explicit [`WeakReference`](#static-cycle-prevention-at-the-language-boundary) handles (`Weak::to($parent)`).
+- **Copy-On-Write (CoW) Detachment:** Reassignments (`$copy = $dict`) share underlying memory with zero allocations via reference counting. In-place mutations on shared buffers automatically detach and clone (`ensure_dict_mut()`, `ensure_list_mut()`), providing predictable value semantics without lifetime management.
+- **Request-Scoped Arenas:** Ephemeral request data is allocated inside linear bump arenas (`RequestArena`) and dropped in bulk in $O(1)$ time when the request completes.
+
+### 2. Runtime Engine: Navigating Rust's Borrow Checker Internally
+Under the hood, the RHP virtual machine is implemented entirely in Rust and strictly upholds Rust's compile-time ownership model and borrow rules (`Send + Sync`):
+- **Scoped Interior Mutability:** Complex runtime values (`Array`, `List`, `Dict`, `Set`, `HashMap`, `Object`, `Future`) use `Rc<RefCell<...>>` for single-threaded mutation within the VM execution loop. To prevent runtime `BorrowMutError` panics, all borrow guards (`borrow()` and `borrow_mut()`) are tightly scoped to discrete instruction cycles.
+- **Cursor-Based Streaming Iteration:** Loop iteration (`foreach`) relies on index offset cursors (`ActiveIterator`) rather than holding Rust references open across bytecode dispatch boundaries.
+- **Compile-Time Data Race Elimination (`FrozenValue`):** Active runtime values (`PhpValue`) are strictly `!Send` and `!Sync` due to thread-local reference counting. Any data moving across thread boundaries (such as parent boot state or background `Future::run` tasks) must convert into an immutable snapshot (`FrozenValue`), which implements `Send + Sync + 'static'`. This guarantees that multi-threaded concurrency in worker pools is verified statically by Rust's borrow checker.
+
+
