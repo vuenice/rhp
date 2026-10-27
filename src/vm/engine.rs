@@ -2457,6 +2457,26 @@ impl VM {
         args: &[PhpValue],
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
+        // 0. Boot Phase Invariant: Master process must stay strictly single-threaded before forking workers.
+        // POSIX fork() duplicates ONLY the calling thread. If the parent process creates a Tokio runtime,
+        // spawns background threads, or opens database pools prior to forking, child workers can deadlock
+        // on inherited locks. Therefore, database connections and async threads are prohibited during boot.
+        if self.is_parent_process
+            && (facade == "DB"
+                || facade == "ADB"
+                || (facade == "Future" && (method == "run" || method == "delayed" || method == "wait" || method == "any")))
+        {
+            return Err(self.make_error(
+                RuntimeErrorKind::Custom {
+                    message: format!(
+                        "BootPhaseViolation: Cannot invoke '{}::{}' during the master process boot phase. All boot-time execution must remain strictly single-threaded to prevent deadlocks across forked workers. Initialize database pools and async runtimes post-fork inside request handlers or worker lifecycle hooks.",
+                        facade, method
+                    ),
+                },
+                span,
+            ));
+        }
+
         // 1. Dynamic Macro definition: `Facade::macro('name', fn(...) => ...)`
         if method == "macro" {
             if let (Some(name_val), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {

@@ -208,12 +208,12 @@ rhp run dev
 rhp run build
 
 # Execute specific script via --file argument
-rhp run dev --file="/your-path/server.rhp"
-rhp run build --file="/your-path/server.rhp"
+rhp run dev --file="/your-path/custom.rhp"
+rhp run build --file="/your-path/custom.rhp"
 
 # Execute specific script via positional path
-rhp run dev server.rhp
-rhp run build server.rhp
+rhp run dev custom.rhp
+rhp run build custom.rhp
 ```
 
 ### 7. Code Formatting, Auto-Typing & Linting (`rhp run lint`)
@@ -431,6 +431,7 @@ class OrderProcessor {
 
 ## 📚 Documentation & Community
 
+- **Three-Layer Architecture (Language, Runtime, Framework):** [framework.md](framework.md)
 - **Official Documentation:** [https://vuenice.github.io/rhp/](https://vuenice.github.io/rhp/)
 - **Discord Community:** [Join RHP Discord Server](https://discord.gg/DdCn4ySEv)
 - **Architecture Deep Dives:** [Syntax & Core Architecture](https://vuenice.github.io/rhp/docs/reference/syntax-architecture)

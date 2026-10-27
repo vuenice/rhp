@@ -117,5 +117,5 @@ $csv = Arr::list([1, 2, 3])->toCsv();
 
 * **Zero Performance Cost on Core Types:** Macros reside in a global thread-safe runtime registry rather than modifying core class definitions or Rust struct layouts.
 * **Maintains Familiarity:** Matches the exact developer ergonomics of Laravel (`Macroable`), making migration painless for teams upgrading performance-critical applications.
-* **Thread-Safe Registration:** Macros can be registered once during application bootstrap (`server.rhp`) in the parent process, making them safely accessible across all concurrent worker threads with zero mutex contention on request paths.
+* **Thread-Safe Registration:** Macros can be registered once during application bootstrap (`index.rhp` boot phase) in the parent process, making them safely accessible across all concurrent worker processes with zero mutex contention on request paths.
 

@@ -68,6 +68,8 @@ export const docsNavigation: DocNavSection[] = [
     title: "Advanced",
     items: [
       item("Memory Model & Zero-GC", "advanced/memory-model"),
+      item("Runtime & Process Architecture", "advanced/runtime-architecture"),
+      item("Language Layer & Semantics", "advanced/language-layer"),
       item("FFI & Rust Native Interop", "advanced/ffi-interop"),
       item("Compiler & VM Internals", "advanced/compiler-internals"),
     ]

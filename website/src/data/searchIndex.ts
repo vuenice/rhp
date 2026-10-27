@@ -27,9 +27,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Core Architecture",
     section: "Getting Started",
-    description: "Decided runtime model: server.rhp/index.rhp split, bump arenas, zero-GC, and strict language rules.",
+    description: "Decided runtime model: master supervisor, pre-forked worker pool, single index.rhp, bump arenas, and zero-GC.",
     url: "/docs/getting-started/core-architecture",
-    keywords: ["architecture", "runtime", "server.rhp", "index.rhp", "arena", "zero-gc", "tokio", "boot heap", "milestone", "scope"]
+    keywords: ["architecture", "runtime", "supervisor", "pre-fork", "index.rhp", "arena", "zero-gc", "worker pool", "boot phase", "rhp.toml"]
   },
   {
     title: "Project Structure",
@@ -199,6 +199,20 @@ const rawSearchIndex: SearchItem[] = [
     description: "RAII destruction, Copy-on-Write detaching, bump request arena, and cycle prevention.",
     url: "/docs/advanced/memory-model",
     keywords: ["memory", "gc", "zero-gc", "raii", "cow", "arena", "request arena", "leaks"]
+  },
+  {
+    title: "Runtime & Process Architecture",
+    section: "Advanced",
+    description: "Master supervisor process, pre-forked worker pool, socket ownership, Tokio/sqlx post-fork init, hot reload, and rhpm.",
+    url: "/docs/advanced/runtime-architecture",
+    keywords: ["runtime", "supervisor", "pre-fork", "fork", "workers", "tokio", "sqlx", "socket", "hot reload", "rhpm", "defer", "process model"]
+  },
+  {
+    title: "Language Layer & Semantics",
+    section: "Advanced",
+    description: "Grammar, gradual typing, Cranelift unboxed scalars, subtyped collections, crash containment, and the CLI Test.",
+    url: "/docs/advanced/language-layer",
+    keywords: ["language", "semantics", "cli test", "types", "compiler", "phpvalue", "list", "dict", "set", "future", "arr", "str", "crash containment"]
   },
   {
     title: "FFI and Rust Native Interop",

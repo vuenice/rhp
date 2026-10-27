@@ -64,7 +64,7 @@ When deploying high-throughput microservices or running CPU-intensive algorithms
 rhp run build
 
 # Or pass a specific file via --file argument
-rhp run build --file="/your-path/server.rhp"
+rhp run build --file="hello.rhp"
 
 # Or pass as a positional argument
 rhp run build hello.rhp

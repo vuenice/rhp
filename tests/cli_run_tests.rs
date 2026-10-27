@@ -82,14 +82,14 @@ fn test_cli_run_build_with_file_equals_flag() {
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
-    let server_file = temp_dir.join("server.rhp");
-    fs::write(&server_file, "echo 'Server started successfully!';\n")
-        .expect("Failed to write server.rhp");
+    let custom_file = temp_dir.join("custom.rhp");
+    fs::write(&custom_file, "echo 'Server started successfully!';\n")
+        .expect("Failed to write custom.rhp");
 
     let exe_path = env!("CARGO_BIN_EXE_rhp");
 
-    // Test --file="/your-path/server.rhp"
-    let file_arg = format!("--file={}", server_file.to_str().unwrap());
+    // Test --file="/your-path/custom.rhp"
+    let file_arg = format!("--file={}", custom_file.to_str().unwrap());
     let output = Command::new(exe_path)
         .arg("run")
         .arg("build")
@@ -101,8 +101,8 @@ fn test_cli_run_build_with_file_equals_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.trim(), "Server started successfully!");
 
-    // Test --file="/your-path/server.rhp" with quoted string inside arg
-    let file_arg_quoted = format!("--file=\"{}\"", server_file.to_str().unwrap());
+    // Test --file="/your-path/custom.rhp" with quoted string inside arg
+    let file_arg_quoted = format!("--file=\"{}\"", custom_file.to_str().unwrap());
     let output_quoted = Command::new(exe_path)
         .arg("run")
         .arg("dev")

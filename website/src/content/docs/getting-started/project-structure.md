@@ -7,13 +7,13 @@ order: 4
 
 ## Standard Application Layout
 
-A typical RHP project follows a modular, separation-of-concerns layout designed for clean auto-loading and fast compiler discovery.
+A typical RHP project follows a clean, modular layout. The runtime owns the server process and worker pool, so your application needs only a single entrypoint (`index.rhp`):
 
 ```text
 my-rhp-app/
-├── server.rhp               # Boot entrypoint: runs once at startup (config, routes, container, Arc)
-├── index.rhp                # Request entrypoint: runs once per HTTP request (bump arena, zero-GC)
-├── rhp.json                 # Project configuration & dependencies
+├── index.rhp                # Application entrypoint: boot hooks + request handlers
+├── rhp.toml                 # Server & runtime configuration (port, workers, timeouts, watch)
+├── rhp.json                 # Project metadata, compilation options & linter settings
 ├── src/
 │   ├── Controllers/         # HTTP request handlers
 │   │   ├── UserController.rhp
@@ -32,33 +32,54 @@ my-rhp-app/
 
 ---
 
-## The Boot & Request Split: `server.rhp` vs `index.rhp`
+## Single Entrypoint (`index.rhp`) & Lifecycle Phases
 
-RHP separates application lifecycle into two distinct execution phases:
+In RHP, user code never has to write a server event loop or socket listen statement. The runtime supervisor (`rhp run dev` / `rhp run build`) manages the TCP socket and worker processes automatically.
 
-### 1. Boot Phase (`server.rhp`)
-Runs **once** when the server process starts up. It evaluates configuration, reads environment variables, registers routes, sets up the dependency container, and compiles application classes. The result is frozen into an immutable boot heap (`Arc<EngineState>`), shared read-only across all worker threads.
+Application lifecycle is divided into two phases managed via lifecycle hooks:
+
+### 1. Boot Phase (Master Process, Runs Once)
+Runs **once** in the parent supervisor process before worker processes are forked. Top-level registrations configure routing tables, dependency containers, and pre-compile bytecode/JIT. 
+
+> **Strict Boot Discipline:** The master process remains strictly single-threaded during boot. Spawning Tokio runtimes, threads, or opening database connections before forking is strictly prohibited to prevent POSIX `fork()` deadlocks.
+
+### 2. Request Phase (Worker Processes, Repeated)
+The master pre-forks $N$ worker processes (configured in `rhp.toml`). Each worker initializes its Tokio runtime and database connection pools post-fork. When requests arrive, they execute inside isolated, zero-GC bump arenas (`RequestArena`), which are dropped in $O(1)$ time upon response completion.
 
 ```php
-// server.rhp: Bootstraps global state once at startup
-use App\Services\PaymentGateway;
+// index.rhp: Single entrypoint
+use App\Controllers\OrderController;
+use RHP\Http\Request;
+use RHP\Http\Response;
+use RHP\Routing\Router;
 
-// Register routes & container
+// ─── 1. BOOT PHASE (Runs once in Master before worker fork) ───
 Router::get('/health', fn() => ['status' => 'healthy', 'gc_runs' => 0]);
-Router::get('/users', fn() => DB::table('users')->all());
-Router::post('/orders', 'OrderController@store');
+Router::post('/orders', [OrderController::class, 'store']);
 
-Log::info("Application boot complete. Immutable heap frozen.");
+Router::get('/users', function(Request $req): Response {
+    // ─── 2. REQUEST PHASE (Runs inside Worker on RequestArena) ───
+    $users = DB::table('users')->all();
+    return Response::json($users);
+});
 ```
 
-### 2. Request Phase (`index.rhp`)
-Runs **once per HTTP request** across worker threads. Each request receives its own bump arena (`RequestArena`). Every object created during request processing is allocated in this arena. When the response finishes, deferred work (`Future::defer`) runs, and the arena is dropped in one step ($O(1)$), eliminating memory leaks without a garbage collector.
+---
 
-```php
-// index.rhp: Executes per request in an isolated arena
-$response = Router::dispatch(Request::current());
-$response->send();
+## Server & Runtime Configuration (`rhp.toml`)
 
+Operational settings like host interfaces, port numbers, worker pool sizing, and watch paths are specified in `rhp.toml`:
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 8080
+workers = "auto" # or integer, e.g. 4
+max_arena_mb = 32
+timeout_ms = 5000
+
+[dev]
+watch = ["src/", "index.rhp"]
 ```
 
 ---

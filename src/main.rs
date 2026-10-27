@@ -326,7 +326,7 @@ fn print_run_script_help(mode: &RunMode) {
             "OPTIONS:\n",
             "    --port <PORT>, -p <PORT>  Port for web server mode (default: 8080)\n",
             "    --host <HOST>             Host interface to bind (default: 127.0.0.1)\n",
-            "    --file <PATH>, -f <PATH>  Script file to execute (e.g. --file=\"/your-path/server.rhp\")\n",
+            "    --file <PATH>, -f <PATH>  Script file to execute (e.g. --file=\"/your-path/index.rhp\")\n",
             "    --cli                     Force one-shot CLI execution even if web application\n",
             "    --server                  Force web server mode\n",
             "    PATH                      Positional script file to execute (alternative to --file)\n",
@@ -814,20 +814,20 @@ mod tests {
 
     #[test]
     fn test_parse_script_target_file_flag_equals() {
-        let args = vec!["--file=/your-path/server.rhp".to_string()];
-        assert_eq!(parse_script_target(&args).unwrap(), "/your-path/server.rhp");
+        let args = vec!["--file=/your-path/index.rhp".to_string()];
+        assert_eq!(parse_script_target(&args).unwrap(), "/your-path/index.rhp");
 
-        let args_quoted = vec!["--file=\"/your-path/server.rhp\"".to_string()];
-        assert_eq!(parse_script_target(&args_quoted).unwrap(), "/your-path/server.rhp");
+        let args_quoted = vec!["--file=\"/your-path/index.rhp\"".to_string()];
+        assert_eq!(parse_script_target(&args_quoted).unwrap(), "/your-path/index.rhp");
 
-        let args_single_quoted = vec!["--file='server.rhp'".to_string()];
-        assert_eq!(parse_script_target(&args_single_quoted).unwrap(), "server.rhp");
+        let args_single_quoted = vec!["--file='index.rhp'".to_string()];
+        assert_eq!(parse_script_target(&args_single_quoted).unwrap(), "index.rhp");
     }
 
     #[test]
     fn test_parse_script_target_file_flag_space() {
-        let args = vec!["--file".to_string(), "/your-path/server.rhp".to_string()];
-        assert_eq!(parse_script_target(&args).unwrap(), "/your-path/server.rhp");
+        let args = vec!["--file".to_string(), "/your-path/index.rhp".to_string()];
+        assert_eq!(parse_script_target(&args).unwrap(), "/your-path/index.rhp");
     }
 
     #[test]

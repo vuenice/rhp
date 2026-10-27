@@ -71,8 +71,8 @@ Executes the target script, project, or directory using the direct tree-walking 
 rhp dev
 
 # Explicitly specify file via positional path or --file argument
-rhp dev server.rhp
-rhp dev --file="server.rhp"
+rhp dev custom.rhp
+rhp dev --file="custom.rhp"
 
 # Start dev server for a web project directory on custom port
 rhp dev examples/todo --port 3000 --host 0.0.0.0

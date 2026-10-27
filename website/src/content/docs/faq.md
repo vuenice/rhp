@@ -36,9 +36,12 @@ Instead, existing PHP applications and frameworks are ported or rewritten using 
 
 ## What is the RHP runtime model?
 
-RHP runs as **one process with many worker threads**, hosted by a native Rust engine (Tokio for HTTP):
-- **`server.rhp` runs once at boot:** It sets up environment, config, routing tables, and the dependency container, and freezes the compiled classes into an immutable boot heap (`Arc<EngineState>`), shared read-only across all threads.
-- **`index.rhp` runs once per request:** Each request gets an isolated bump allocation arena (`RequestArena`). Everything allocated during the request is dropped in one $O(1)$ step at the end. There is no fork and no IPC between boot and request code.
+RHP employs a **master supervisor process with a pre-forked worker pool**:
+- **Runtime owns the server:** The runtime handles socket binding, worker process lifecycle, and reload management. User code only needs a single entrypoint: **`index.rhp`**.
+- **Boot Phase (Master process, runs once):** Evaluates top-level registrations, routing tables, service providers, and class compilation. The master process remains strictly single-threaded (no Tokio runtime, thread pools, or database connections before forking) to guarantee deadlock-free POSIX `fork()`.
+- **Pre-forked Worker Pool:** The master forks $N$ persistent worker processes. Post-fork, each worker initializes its Tokio runtime and database pools (`sqlx`, Redis).
+- **Request Phase (Workers, repeated):** Each incoming request executes inside a dedicated bump allocation arena (`RequestArena`). Everything allocated during the request is reclaimed in an instant $O(1)$ reset at the end, guaranteeing zero-GC pauses and zero leaks. If a worker encounters an unrecoverable failure, the supervisor respawns a clean replacement immediately.
+- **Configuration in `rhp.toml`:** Network interfaces, ports, worker counts, memory limits, and file-watching paths are defined declaratively in `rhp.toml` rather than hardcoded in user scripts.
 
 
 ---
@@ -122,8 +125,8 @@ Both quoted strings (`'int'`, `'bool'`) and bare type keywords (`int`, `bool`) a
 
 When executing `rhp run dev` or `rhp run build`:
 1. **Default (`pwd`):** If no file is specified, RHP automatically looks for `index.rhp` in the current working directory (`pwd`).
-2. **Explicit `--file` Argument:** If `--file` is provided (e.g. `rhp run build --file="/your-path/server.rhp"` or `rhp run dev --file="server.rhp"`), RHP executes that specific file. The short flag `-f` is also supported.
-3. **Positional Argument:** You can also pass the script path directly as a positional argument (e.g. `rhp run dev server.rhp`).
+2. **Explicit `--file` Argument:** If `--file` is provided (e.g. `rhp run build --file="/your-path/custom.rhp"` or `rhp run dev --file="custom.rhp"`), RHP executes that specific file. The short flag `-f` is also supported.
+3. **Positional Argument:** You can also pass the script path directly as a positional argument (e.g. `rhp run dev custom.rhp`).
 
 ---
 
@@ -154,6 +157,6 @@ $csv = Arr::list([1, 2, 3])->toCsv();
 **Why Macros Work Perfectly for RHP:**
 * **Zero Performance Cost on Core Types:** Macros are stored in a global thread-safe runtime registry rather than altering the core class definition or Rust struct layouts.
 * **Maintains Familiarity:** Matches the exact developer ergonomics of Laravel's `Macroable` trait, making migration seamless for teams upgrading high-traffic apps.
-* **Thread-Safe Registration:** Macros can be registered once during application bootstrap (`server.rhp`) in the parent process, making them safely accessible across all concurrent worker threads with zero mutex contention on request paths.
+* **Thread-Safe Registration:** Macros can be registered once during application bootstrap (`index.rhp` boot phase) in the parent process, making them safely accessible across all concurrent worker processes with zero mutex contention on request paths.
 
 

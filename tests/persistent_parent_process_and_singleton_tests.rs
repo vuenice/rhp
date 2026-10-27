@@ -451,3 +451,37 @@ fn test_worker_calling_non_static_singleton_method_rejected_at_request_time() {
         other => panic!("Expected compilation type error, got: {:?}", other),
     }
 }
+
+#[test]
+fn test_boot_phase_db_and_future_calls_forbidden() {
+    // 1. Top-level DB::table call in boot phase must fail immediately
+    let db_boot_code = r#"
+        $users = DB::table('users')->all();
+    "#;
+    let err = ParentProcess::boot(db_boot_code)
+        .expect_err("Calling DB::table in boot phase must fail");
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("BootPhaseViolation"),
+        "Expected BootPhaseViolation for DB::table, got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("All boot-time execution must remain strictly single-threaded"),
+        "Expected single-threaded guidance, got: {}",
+        err_msg
+    );
+
+    // 2. Top-level Future::run call in boot phase must fail immediately
+    let future_boot_code = r#"
+        $f = Future::run(fn() => 42);
+    "#;
+    let err2 = ParentProcess::boot(future_boot_code)
+        .expect_err("Calling Future::run in boot phase must fail");
+    let err2_msg = err2.to_string();
+    assert!(
+        err2_msg.contains("BootPhaseViolation"),
+        "Expected BootPhaseViolation for Future::run, got: {}",
+        err2_msg
+    );
+}

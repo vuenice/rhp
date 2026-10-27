@@ -88,40 +88,51 @@ Float::i64()->toDecimal(2)
 
 ```mermaid
 flowchart TD
-    subgraph Parent["PARENT PROCESS"]
+    subgraph Master["RHP SUPERVISOR (Master Process)"]
         direction TB
-        P1["- Bootstraps Framework & Application Code"]
-        P2["- Holds Immutable Global State & Routing Tables"]
-        P3["- Manages Shared Connection Pools (sqlx / Diesel)"]
-        P4["- Centralized Async Logging Manager"]
+        M1["- Reads rhp.toml (port, workers, timeouts, watch rules)"]
+        M2["- Single-threaded Boot Phase: loads index.rhp"]
+        M3["- Builds static routing table, container, compiled bytecode/JIT"]
+        M4["- Binds shared TCP listening socket"]
+        M5["- File watcher & process supervisor (SIGCHLD / respawn)"]
     end
 
-    Parent --> Bridge["Shared Memory / Arc  |  IPC / Direct Thread Dispatch"]
-
-    Bridge --> W1["WORKER THREAD 1<br/>(Tokio Fiber Execution)"]
-    Bridge --> W2["WORKER THREAD 2<br/>(Tokio Fiber Execution)"]
-    Bridge --> W3["WORKER THREAD 3<br/>(Tokio Fiber Execution)"]
+    Master -->|fork pre-forked pool| W1["WORKER PROCESS 1<br/>- Post-fork: Tokio & DB Pool<br/>- Request Loop: RequestArena O(1)"]
+    Master -->|fork pre-forked pool| W2["WORKER PROCESS 2<br/>- Post-fork: Tokio & DB Pool<br/>- Request Loop: RequestArena O(1)"]
+    Master -->|fork pre-forked pool| W3["WORKER PROCESS 3<br/>- Post-fork: Tokio & DB Pool<br/>- Request Loop: RequestArena O(1)"]
 ```
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                     PARENT PROCESS                      │
-│ - Bootstraps Framework & Application Code               │
-│ - Holds Immutable Global State & Routing Tables         │
-│ - Manages Shared Connection Pools (sqlx / Diesel)       │
-│ - Centralized Async Logging Manager                     │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-┌───────────────────────────┴─────────────────────────────┐
-│ Shared Memory / Arc       │ IPC / Direct Thread Dispatch │
-└───────────────────────────┬─────────────────────────────┘
-              ┌─────────────┼─────────────┐
-              ▼             ▼             ▼
-┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
-│    WORKER THREAD 1    │ │    WORKER THREAD 2    │ │    WORKER THREAD 3    │
-│(Tokio Fiber Execution)│ │(Tokio Fiber Execution)│ │(Tokio Fiber Execution)│
-└───────────────────────┘ └───────────────────────┘ └───────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                   RHP SUPERVISOR (Master Process)                      │
+│ - Reads rhp.toml (port, worker count, timeouts, file watch rules)      │
+│ - Executes index.rhp Boot Phase (Sync, strictly single-threaded)       │
+│ - Freezes routing tables, container singletons, bytecode into CoW heap │
+│ - Binds shared TCP listening socket (passed fd / SO_REUSEPORT)         │
+│ - File watcher (hot reloading) & process supervisor (reaps & respawns) │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │ fork() (Pre-forked pool at boot)│ fork()
+                    ▼                                ▼
+       ┌────────────────────────┐       ┌────────────────────────┐
+       │    WORKER PROCESS 1    │       │    WORKER PROCESS 2    │
+       │                        │       │                        │
+       │ Post-fork init:        │       │ Post-fork init:        │
+       │ - Starts Tokio/Async   │       │ - Starts Tokio/Async   │
+       │ - Inits DB Pool (sqlx) │       │ - Inits DB Pool (sqlx) │
+       │                        │       │                        │
+       │ Request Serving Loop:  │       │ Request Serving Loop:  │
+       │ - RequestArena (O(1)   │       │ - RequestArena (O(1)   │
+       │   bulk drop per req)   │       │   bulk drop per req)   │
+       │ - Dispatches handlers  │       │ - Dispatches handlers  │
+       └────────────────────────┘       └────────────────────────┘
 ```
+
+#### Core Process Rules:
+1. **Single Entrypoint (`index.rhp`) & Runtime Ownership:** The runtime owns the server; userland never writes a socket listen loop. Infrastructure settings (ports, worker count, memory limits) belong in `rhp.toml`.
+2. **Pre-forked Worker Pool:** The master forks $N$ persistent workers at boot. Each worker handles many requests concurrently. Fault isolation is guaranteed: a panic, crash, or memory cap violation in one worker is caught by the supervisor via `SIGCHLD`, and a fresh worker is respawned immediately without service interruption.
+3. **No Threads / No DB Connections in Boot Phase:** POSIX `fork()` copies only the calling thread. If the master process ran a multi-threaded Tokio runtime or held connection pool locks at fork time, child processes would deadlock. **Rule:** The master process remains strictly single-threaded during boot. Workers initialize their own Tokio runtime, thread pools, and database connection pools (`sqlx`, Redis) *after* fork.
+4. **Boot Code Discipline:** Data created during boot is shared read-only across workers via OS Copy-on-Write (CoW). Attempting to call `DB::*` or spawn `Future::*` during boot triggers a fatal `BootPhaseViolation` error.
+5. **Rolling Hot Reload:** In development mode (`rhp run dev`), the supervisor watches project files, re-executes boot, forks new workers, and sends `SIGQUIT` to drain and terminate older workers with zero downtime.
 
 ### 1. Compiler Pipeline & Execution Engine
 
@@ -551,16 +562,13 @@ Future::defer(fn() => Log::info('Request processed successfully'));
 
 ## Process Model & Database Pooling
 
-### Persistent Parent Process Architecture (`Arc<EngineState>`)
+### Supervisor Architecture & Pre-Forked Worker Pool
 
-- **Persistent Memory Model:** The parent process parses and compiles the framework and application code once into an immutable state (`Arc<EngineState>`), bypassing per-request bootstrapping.
-- **Singleton Process Services:** If a developer needs to run something as part of the parent process, they first declare a class with the `singleton` keyword (e.g. `singleton class DatabasePool { ... }` or `#[Singleton]`).
-- **Singleton Invocation Invariants:**
-  - **Within Other Singleton Classes:** Developers can use **both static and non-static methods** of a singleton class (e.g., `$pool->query()`, `DatabasePool::status()`). Singletons can also instantiate other singletons directly (`new ConfigManager()`).
-  - **Inside Non-Singleton Classes:** Developers can **only use static methods** of a singleton class (e.g., `DatabasePool::getConnection()`). Attempting to call non-static methods (or instantiate with `new SingletonClass()`, or extend `class Child extends SingletonClass`) inside a non-singleton class results in a compile-time `TypeError` and runtime `RuntimeError` (`NonStaticSingletonMethodCallForbidden`).
-- **Zero Bootstrap Overhead for Workers:** Worker tasks or threads hold `Arc<EngineState>` and instantiate lightweight request VMs (`engine_state.create_worker_vm()`) or evaluate request scripts (`engine_state.execute_request(req)`) with zero re-parsing or re-compilation of framework and application code.
-- **Connection Pooling:** The parent manages a database pool (e.g., `sqlx`). Worker tasks check out connections instantly during active requests/transactions without creating socket handshake bottlenecks.
-- **Centralized Logging (`Log::info`):** Log invocations push structured log payloads over a non-blocking multi-producer single-consumer (`mpsc`) channel directly to the parent process logging worker.
+- **Persistent Boot Memory Model:** The supervisor parent process parses and compiles the framework and `index.rhp` once into an immutable state (`Arc<EngineState>`), shared across pre-forked workers via OS Copy-on-Write (CoW).
+- **Strict Pre-Fork Single-Thread Invariant:** The master process remains strictly single-threaded during boot. It does NOT initialize database connections, open network sockets, or launch Tokio runtimes prior to forking. Violations (e.g. calling `DB::*` or `Future::*` during boot) throw a fatal runtime error.
+- **Post-Fork Connection Pooling:** Each pre-forked worker process initializes its own Tokio async reactor and database connection pool (`sqlx`, Redis) *after* the fork completes. Each worker checks out connections instantly during active requests without cross-process IPC or lock contention.
+- **Zero Bootstrap Overhead for Requests:** Workers process incoming HTTP requests in isolated request bump arenas (`RequestArena`), dropping memory in $O(1)$ time upon request completion.
+- **Centralized Structured Logging (`Log::info`):** Log invocations push structured log payloads over a non-blocking channel or pipe directly to the host process logging supervisor.
 
 ---
 
