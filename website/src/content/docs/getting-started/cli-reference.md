@@ -7,12 +7,13 @@ order: 5
 
 ## Overview
 
-The `rhp` binary is the unified, high-performance command-line interface for the RHP toolchain. It provides single-command script execution, runtime mode selection, built-in HTTP serving, code linting/formatting, and integrated package management.
+The `rhp` binary is the unified, high-performance command-line interface for the RHP toolchain. All commands follow a consistent and predictable structure:
 
 ```bash
-rhp [PATH] [OPTIONS]             # Execute script directly (e.g. 'rhp file.rhp')
-rhp [COMMAND] [PATH] [OPTIONS]   # Subcommand execution (dev, build, serve, lint, add, install, etc.)
+rhp [COMMAND] [OPTIONS]
 ```
+
+Target paths and script files are passed as options (such as `--file="server.rhp"` or optional positional arguments).
 
 ---
 
@@ -25,69 +26,49 @@ rhp [COMMAND] [PATH] [OPTIONS]   # Subcommand execution (dev, build, serve, lint
 
 ---
 
-## Direct Script Execution
-
-### `rhp [PATH] [OPTIONS]`
-
-Pass a script path directly to execute it immediately in Production Mode (Register VM bytecode + Cranelift JIT compilation)—matching the ergonomics of `php file.php` and `bun file.ts`.
-
-```bash
-# Execute a script directly
-rhp file.rhp
-
-# Relative or absolute file path
-rhp path/to/script.rhp
-
-# If no path is provided, automatically executes 'index.rhp' in current working directory
-rhp
-```
-
-#### Argument Resolution Logic
-When invoked, RHP inspects the first argument:
-- If the argument **ends with `.rhp`** or resolves to an existing file on disk, it is treated as a file target and executed directly.
-- Otherwise, it is parsed and dispatched as a subcommand (`add`, `remove`, `install`, `update`, `init`, `list`, `dev`, `build`, `serve`, `lint`).
-
-#### Automatic Web Application Detection
-If the target script uses web superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`) or renders HTML responses, RHP automatically starts the built-in HTTP server on port `8080` instead of exiting after a single CLI run:
-
-```bash
-# Starts HTTP server automatically if index.rhp is a web app
-rhp index.rhp
-
-# Force one-shot CLI execution (e.g., dump rendered HTML to stdout without starting server)
-rhp index.rhp --cli
-```
-
----
-
 ## Runtime & Server Commands
 
-### `rhp dev [PATH] [OPTIONS]` (or `rhp run dev`)
+### `rhp dev [OPTIONS]`
 
-Executes the target script, project, or directory using the direct tree-walking AST interpreter with instant sub-millisecond cold start and live hot-reloading. Defaults to `index.rhp` (or `app.rhp`) in the current working directory if no path is provided.
+Executes in Development Mode using the direct AST tree-walking interpreter with instant sub-millisecond cold start and live hot-reloading.
 
 ```bash
-# Automatically pick and execute index.rhp in current working directory
+# Execute with an explicit file (file name if present in current directory, or file path)
+rhp dev --file="server.rhp"
+rhp dev --file="path/to/server.rhp"
+
+# Positional third parameter is also supported as a shorthand:
+rhp dev server.rhp
+
+# If the third parameter (or --file option) is not provided, defaults to index.rhp in current directory:
 rhp dev
+```
 
-# Explicitly specify file via positional path or --file argument
-rhp dev custom.rhp
-rhp dev --file="custom.rhp"
+> [!NOTE]
+> **Default Resolution:** If the third parameter in the `dev` or `build` command (or the `--file` option) is not provided, RHP will automatically use `index.rhp` at the current working directory (`pwd`).
 
-# Start dev server for a web project directory on custom port
-rhp dev examples/todo --port 3000 --host 0.0.0.0
-# Shorthand port flag:
-rhp dev examples/todo -p 3000
+#### Automatic Web Application Detection
 
-# Force one-shot CLI execution (e.g. dump rendered HTML to stdout)
-rhp dev examples/todo --cli
+When the target script is a web application (i.e. it uses superglobals `$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST` or renders HTML), `rhp dev` automatically starts the interactive HTTP web server on port **8080** instead of terminating after a single CLI run:
+
+```bash
+# Automatically launches the web server on port 8080
+rhp dev --file="server.rhp"
+
+# Run on a custom port and host
+rhp dev --file="server.rhp" --port 3000 --host 0.0.0.0
+# Or shorthand port flag:
+rhp dev --file="server.rhp" -p 3000
+
+# Force one-shot CLI execution (e.g., dump rendered HTML to stdout without launching server)
+rhp dev --file="server.rhp" --cli
 ```
 
 #### Options for `dev` and `build`:
 
 | Option | Shorthand | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute | `index.rhp` in `pwd` |
+| `--file <PATH>` | `-f <PATH>` | Script file or path to execute (e.g. `--file="server.rhp"`) | `index.rhp` in `pwd` |
 | `--port <PORT>` | `-p <PORT>` | Port to bind when running as an HTTP server | `8080` |
 | `--host <HOST>` | | Network interface to bind | `127.0.0.1` |
 | `--cli` | | Force one-shot CLI execution even if script is a web app | `false` |
@@ -95,44 +76,46 @@ rhp dev examples/todo --cli
 
 ---
 
-### `rhp build [PATH] [OPTIONS]` (or `rhp run build`)
+### `rhp build [OPTIONS]`
 
 Compiles source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Register VM with Cranelift JIT compilation enabled.
 
-Like `dev`, it automatically defaults to `index.rhp` in `pwd` unless specified via `--file` or positional argument. If the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
-
 ```bash
-# Execute index.rhp in current directory with JIT
+# Execute in Production Mode with Cranelift JIT compilation
+rhp build --file="server.rhp"
+rhp build --file="path/to/server.rhp"
+
+# Positional third parameter is also supported as a shorthand:
+rhp build server.rhp
+
+# If the third parameter (or --file option) is not provided, defaults to index.rhp in current directory:
 rhp build
 
-# Run production web server on port 8000
-rhp build examples/todo --port 8000
-
-# Execute CLI script with JIT compilation
-rhp build scripts/compute_heavy.rhp
+# Run production web server on custom port
+rhp build --file="app.rhp" --port 8000
 ```
+
+> [!NOTE]
+> **Default Resolution:** Just like `rhp dev`, if the third parameter in the `build` command (or the `--file` option) is not provided, RHP will automatically use `index.rhp` at the current working directory (`pwd`).
 
 ---
 
-### `rhp serve [PATH] [OPTIONS]`
+### `rhp serve [OPTIONS]`
 
 Dedicated command to start the built-in RHP HTTP server for web applications. Routes incoming HTTP requests into isolated zero-bootstrap worker VMs with standard superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`).
 
 ```bash
-# Serve application on default port 8080
-rhp serve examples/todo
-
-# Serve on custom port and host
-rhp serve examples/todo --port 8080 --host 0.0.0.0
-
-# Automatically picks app.rhp or index.rhp in current directory
-cd examples/todo
+# Serve application on default port 8080 (picks app.rhp or index.rhp in current directory)
 rhp serve
+
+# Serve application directory or explicit file
+rhp serve examples/todo
+rhp serve --port 8080 --host 0.0.0.0
 ```
 
 ---
 
-### `rhp lint [PATH] [OPTIONS]` (or `rhp run lint`)
+### `rhp lint [PATH] [OPTIONS]`
 
 Lints, auto-formats code according to PER-CS standards, infers variable, parameter, and property type signatures, normalizes casing conventions, and outputs diagnostics in machine-readable JSON inspired by [Carthage Software Mago](https://github.com/carthage-software/mago).
 
@@ -318,3 +301,26 @@ use Symfony\Component\VarDumper\VarDumper;
 
 VarDumper::dump(['status' => 'success', 'engine' => 'rhp']);
 ```
+
+---
+
+## One-Time Script Execution (Direct Execution)
+
+### `rhp ./script.rhp`
+
+RHP also supports running scripts directly using `rhp ./script.rhp` for one-time execution and OS reliance (such as shell scripts, CLI automation, system administration utilities, and shebang scripts).
+
+```bash
+# Execute a script directly
+rhp ./script.rhp
+
+# Or with a relative or absolute file path
+rhp path/to/script.rhp
+```
+
+> [!IMPORTANT]
+> **Do not mix up `rhp ./script.rhp` with `rhp [COMMAND] [OPTIONS]`.**
+> When executing a script directly, do not pass subcommands (such as `dev` or `build`). The script executes immediately in production JIT mode.
+
+> [!NOTE]
+> The target file **must end with the `.rhp` format** (e.g. `rhp ./script.rhp`). This requirement ensures the RHP CLI unambiguously distinguishes one-time script execution from built-in subcommands.

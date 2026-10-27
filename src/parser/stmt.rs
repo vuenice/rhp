@@ -511,6 +511,7 @@ impl<'s> CombinatorStream<'s> {
         match self.peek().map(|t| &t.token) {
             Some(
                 Token::Function
+                | Token::Fn
                 | Token::Async
                 | Token::Class
                 | Token::Abstract
@@ -524,7 +525,7 @@ impl<'s> CombinatorStream<'s> {
             Some(Token::Static) => {
                 matches!(
                     self.peek_nth(1).map(|t| &t.token),
-                    Some(Token::Class | Token::Function)
+                    Some(Token::Class | Token::Function | Token::Fn)
                 )
             }
             _ => false,
@@ -540,7 +541,7 @@ impl<'s> CombinatorStream<'s> {
         let is_async = self.matches(&Token::Async);
 
         // Standalone Function
-        if self.matches(&Token::Function) {
+        if self.matches(&Token::Function) || self.matches(&Token::Fn) {
             let name = self.expect_ident()?;
             self.register_user_function(name.name);
             let (params, return_type, body) = self.with_function_scope(name.name, |stream| {

@@ -945,13 +945,32 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            _ => Err(ParseError::new(
-                ParseErrorKind::UnexpectedToken {
-                    expected: "expression".to_string(),
-                    found: spanned.token.as_str().to_string(),
-                },
-                spanned.span,
-            )),
+            _ => {
+                let mut err = ParseError::new(
+                    ParseErrorKind::UnexpectedToken {
+                        expected: "expression".to_string(),
+                        found: spanned.token.as_str().to_string(),
+                    },
+                    spanned.span,
+                );
+                err.found_token = Some(spanned.token.as_str().to_string());
+                err.expected_tokens = Some(vec![
+                    "identifier".to_string(),
+                    "number".to_string(),
+                    "string".to_string(),
+                    "`(`".to_string(),
+                ]);
+                if let Some((delim, delim_span)) = self.innermost_open_delimiter() {
+                    let delim_char = match delim {
+                        Token::OpenParen => "(",
+                        Token::OpenBrace => "{",
+                        Token::OpenBracket => "[",
+                        _ => "(",
+                    };
+                    err = err.with_secondary_label(*delim_span, format!("this `{}` is still open", delim_char));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -1294,47 +1313,86 @@ impl<'s> CombinatorStream<'s> {
 
     /// Parse call argument list inside parentheses `(...)`.
     pub fn parse_call_arguments(&mut self) -> Result<Vec<Argument<'s>>, ParseError> {
-        self.separated_by(
-            |s| {
-                let arg_start = s.current_span();
-                let is_unpack = s.matches(&Token::Ellipsis);
-                let mut is_reference = s.matches(&Token::Ampersand);
+        let mut args = Vec::new();
+        if self.check(&Token::CloseParen) {
+            return Ok(args);
+        }
 
-                // Named argument check `name: $val` or `name: &$val`
-                if let Some(tok) = s.peek() {
-                    if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
-                        && s.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
-                    {
-                        let name = s.expect_ident()?;
-                        s.expect(Token::Colon)?;
-                        if s.matches(&Token::Ampersand) {
-                            is_reference = true;
-                        }
-                        let value = s.parse_expr_lowest()?;
-                        let span = arg_start.merge(value.span);
-                        return Ok(Argument {
-                            span,
-                            name: Some(name),
-                            value,
-                            is_unpack,
-                            is_reference,
-                        });
+        loop {
+            let arg_start = self.current_span();
+            let is_unpack = self.matches(&Token::Ellipsis);
+            let mut is_reference = self.matches(&Token::Ampersand);
+
+            // Named argument check `name: $val` or `name: &$val`
+            if let Some(tok) = self.peek() {
+                if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
+                    && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
+                {
+                    let name = self.expect_ident()?;
+                    self.expect(Token::Colon)?;
+                    if self.matches(&Token::Ampersand) {
+                        is_reference = true;
                     }
+                    let value = self.parse_expr_lowest()?;
+                    let span = arg_start.merge(value.span);
+                    args.push(Argument {
+                        span,
+                        name: Some(name),
+                        value,
+                        is_unpack,
+                        is_reference,
+                    });
+                } else {
+                    let value = self.parse_expr_lowest()?;
+                    let span = arg_start.merge(value.span);
+                    args.push(Argument {
+                        span,
+                        name: None,
+                        value,
+                        is_unpack,
+                        is_reference,
+                    });
                 }
-
-                let value = s.parse_expr_lowest()?;
+            } else {
+                let value = self.parse_expr_lowest()?;
                 let span = arg_start.merge(value.span);
-                Ok(Argument {
+                args.push(Argument {
                     span,
                     name: None,
                     value,
                     is_unpack,
                     is_reference,
-                })
-            },
-            Token::Comma,
-            &Token::CloseParen,
-        )
+                });
+            }
+
+            if self.matches(&Token::Comma) {
+                if self.check(&Token::CloseParen) {
+                    let close_tok = self.peek().unwrap().clone();
+                    let mut err = ParseError::new(
+                        ParseErrorKind::UnexpectedToken {
+                            expected: "expression".to_string(),
+                            found: close_tok.token.as_str().to_string(),
+                        },
+                        close_tok.span,
+                    );
+                    err.found_token = Some(close_tok.token.as_str().to_string());
+                    err.expected_tokens = Some(vec![
+                        "identifier".to_string(),
+                        "number".to_string(),
+                        "string".to_string(),
+                        "`(`".to_string(),
+                    ]);
+                    if let Some((Token::OpenParen, open_span)) = self.innermost_open_delimiter() {
+                        err = err.with_secondary_label(*open_span, "this `(` is still open");
+                    }
+                    return Err(err);
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(args)
     }
 
     /// Parse formal function or method parameter list `(...)`.

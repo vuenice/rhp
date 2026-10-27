@@ -133,6 +133,35 @@ impl SourceFile {
         (line, col)
     }
 
+    /// Resolve a byte offset to a 1-based (line, column in UTF-16 code units).
+    /// Aligns with the Language Server Protocol (LSP) character position specification.
+    pub fn line_col_utf16(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.source.len());
+        let line_idx = match self.line_starts.binary_search(&offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        let line_start = self.line_starts[line_idx];
+        let line = line_idx + 1;
+        let col = self.source[line_start..offset].encode_utf16().count() + 1;
+        (line, col)
+    }
+
+    /// Total number of lines in this source file.
+    #[inline]
+    pub fn line_count(&self) -> usize {
+        self.line_starts.len()
+    }
+
+    /// Return the starting byte offset of line `line` (1-based).
+    pub fn line_start_offset(&self, line: usize) -> Option<usize> {
+        if line == 0 || line > self.line_starts.len() {
+            None
+        } else {
+            Some(self.line_starts[line - 1])
+        }
+    }
+
     /// Construct a Span for a byte range.
     pub fn span_for_range(&self, start: usize, end: usize) -> Span {
         let (line, col) = self.line_col(start);

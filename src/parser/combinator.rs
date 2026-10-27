@@ -71,6 +71,7 @@ pub struct CombinatorStream<'s> {
     pub(crate) source: Option<&'s str>,
     pub(crate) user_functions: HashSet<String>,
     pub(crate) scope: ScopeContext,
+    pub(crate) delimiter_stack: Vec<(Token<'s>, Span)>,
 }
 
 impl<'s> CombinatorStream<'s> {
@@ -80,7 +81,7 @@ impl<'s> CombinatorStream<'s> {
         // so that calls before or after declaration are recognized as user-defined functions.
         let mut i = 0;
         while i + 2 < tokens.len() {
-            if tokens[i].token == Token::Function {
+            if tokens[i].token == Token::Function || tokens[i].token == Token::Fn {
                 // Only standalone function declarations (not method declarations inside a class or anonymous closures)
                 if let Token::Ident(name) = tokens[i + 1].token {
                     if tokens[i + 2].token == Token::OpenParen {
@@ -125,6 +126,7 @@ impl<'s> CombinatorStream<'s> {
             source: None,
             user_functions,
             scope: ScopeContext::new(),
+            delimiter_stack: Vec::new(),
         }
     }
 
@@ -248,7 +250,44 @@ impl<'s> CombinatorStream<'s> {
         if self.cursor < self.tokens.len() {
             let tok = self.tokens[self.cursor].clone();
             self.cursor += 1;
+            match &tok.token {
+                Token::OpenParen | Token::OpenBrace | Token::OpenBracket => {
+                    self.delimiter_stack.push((tok.token.clone(), tok.span));
+                }
+                Token::CloseParen => {
+                    if let Some((Token::OpenParen, _)) = self.delimiter_stack.last() {
+                        self.delimiter_stack.pop();
+                    }
+                }
+                Token::CloseBrace => {
+                    if let Some((Token::OpenBrace, _)) = self.delimiter_stack.last() {
+                        self.delimiter_stack.pop();
+                    }
+                }
+                Token::CloseBracket => {
+                    if let Some((Token::OpenBracket, _)) = self.delimiter_stack.last() {
+                        self.delimiter_stack.pop();
+                    }
+                }
+                _ => {}
+            }
             Some(tok)
+        } else {
+            None
+        }
+    }
+
+    /// Return the currently active innermost open delimiter (e.g. `(`, `{`, `[`).
+    #[inline]
+    pub fn innermost_open_delimiter(&self) -> Option<&(Token<'s>, Span)> {
+        self.delimiter_stack.last()
+    }
+
+    /// Return the previous token before the current cursor, if any.
+    #[inline]
+    pub fn previous_token(&self) -> Option<&SpannedToken<'s>> {
+        if self.cursor > 0 && self.cursor - 1 < self.tokens.len() {
+            Some(&self.tokens[self.cursor - 1])
         } else {
             None
         }

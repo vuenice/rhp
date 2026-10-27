@@ -2,6 +2,10 @@ use std::env;
 use std::path::Path;
 use std::process;
 
+use rhp::diagnostic::{
+    all_diagnostic_codes, check_path, format_code_explanation, get_code_info,
+    DiagnosticBuilder, DiagnosticEmitter, DiagnosticFormat, DEFAULT_MAX_ERRORS_PER_FILE,
+};
 use rhp::lint::lint_path;
 use rhp::vm::RunMode;
 
@@ -10,20 +14,31 @@ fn print_help() {
         concat!(
             "RHP: High-Performance PHP-Family Programming Language Engine\n\n",
             "USAGE:\n",
-            "    rhp [PATH] [OPTIONS]             Execute script directly (e.g. 'rhp file.rhp', defaults to 'index.rhp')\n",
-            "    rhp dev [PATH] [OPTIONS]         Execute in Development Mode (direct AST tree-walking, hot-reload)\n",
-            "    rhp build [PATH] [OPTIONS]       Execute in Production Mode (register VM bytecode + JIT)\n",
-            "    rhp serve [PATH] [OPTIONS]       Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
-            "    rhp lint [PATH] [OPTIONS]        Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n\n",
+            "    rhp [COMMAND] [OPTIONS]\n\n",
+            "COMMANDS:\n",
+            "    dev [OPTIONS]                    Execute in Development Mode (e.g. 'rhp dev --file=\"server.rhp\"')\n",
+            "    build [OPTIONS]                  Execute in Production Mode (e.g. 'rhp build --file=\"server.rhp\"')\n",
+            "    serve [OPTIONS]                  Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
+            "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
+            "    check [PATH] [OPTIONS]           Check syntax and type boundary contracts (supports --format=json)\n",
+            "    explain <CODE> [OPTIONS]         Explain a compiler diagnostic code (e.g. 'rhp explain RHP0102')\n\n",
             "PACKAGE MANAGEMENT:\n",
-            "    rhp add <PACKAGE> [OPTIONS]      Add dependency to rhp.toml and lockfile (Git URL, GitHub 'owner/repo', or local path)\n",
-            "    rhp remove <PACKAGE>             Remove dependency from rhp.toml and vendor/\n",
-            "    rhp install [OPTIONS]            Install all dependencies from lockfile (for CI and fresh clones)\n",
-            "    rhp update [PACKAGE]             Update dependencies within version constraints\n",
-            "    rhp init [NAME]                  Initialize a new rhp.toml manifest in current directory\n",
-            "    rhp list                         List installed dependencies\n\n",
+            "    add <PACKAGE> [OPTIONS]          Add dependency to rhp.toml and lockfile (Git URL, GitHub 'owner/repo', or local path)\n",
+            "    remove <PACKAGE>                 Remove dependency from rhp.toml and vendor/\n",
+            "    install [OPTIONS]                Install all dependencies from lockfile (for CI and fresh clones)\n",
+            "    update [PACKAGE]                 Update dependencies within version constraints\n",
+            "    init [NAME]                      Initialize a new rhp.toml manifest in current directory\n",
+            "    list                             List installed dependencies\n\n",
+            "ONE-TIME SCRIPT EXECUTION:\n",
+            "    rhp ./script.rhp [OPTIONS]       Execute script directly in Production Mode (file must end with .rhp)\n\n",
             "COMPANION TOOLS:\n",
             "    rhp-play                         Launch the interactive desktop RHP Playground GUI\n\n",
+            "OPTIONS for 'dev' and 'build':\n",
+            "    --file <PATH>, -f <PATH>         Script file to execute (defaults to 'index.rhp' in current working directory)\n",
+            "    --port <PORT>, -p <PORT>         Port for web server mode (defaults to 8080)\n",
+            "    --host <HOST>                    Host interface to bind (defaults to 127.0.0.1)\n",
+            "    --cli                            Force one-shot CLI execution even if script is a web app\n",
+            "    --server                         Force web server mode\n\n",
             "OPTIONS for 'serve':\n",
             "    --port <PORT>, -p <PORT>         Port to listen on (defaults to 8080)\n",
             "    --host <HOST>                    Host to bind (defaults to 127.0.0.1)\n\n",
@@ -63,9 +78,9 @@ fn main() {
 
     let first_arg = &args[1];
 
-    // Direct script execution shorthand: `rhp file.rhp` or `rhp path/to/script`
-    // (the way 'php file.php' and 'bun file.ts' work)
-    if first_arg.ends_with(".rhp") || Path::new(first_arg).is_file() {
+    // Direct script execution shorthand: `rhp ./script.rhp`
+    // (One-time execution and OS reliance; file must end with .rhp format)
+    if first_arg.ends_with(".rhp") {
         handle_run_script(&args[1..], RunMode::Build { jit_enabled: true, opt_level: 2 });
         return;
     }
@@ -92,6 +107,12 @@ fn main() {
         }
         "build" => {
             handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
+        }
+        "check" => {
+            handle_run_check(&args[2..]);
+        }
+        "explain" => {
+            handle_run_explain(&args[2..]);
         }
         "lint" => {
             handle_run_lint(&args[2..]);
@@ -126,6 +147,12 @@ fn main() {
                 "lint" => {
                     handle_run_lint(&args[3..]);
                 }
+                "check" => {
+                    handle_run_check(&args[3..]);
+                }
+                "explain" => {
+                    handle_run_explain(&args[3..]);
+                }
                 "dev" => {
                     handle_run_script(&args[3..], RunMode::Dev { hot_reload: true, dap_port: None });
                 }
@@ -146,6 +173,171 @@ fn main() {
         }
         cmd => {
             eprintln!("Error: Unknown command '{}'. Run 'rhp --help' for usage.", cmd);
+            process::exit(1);
+        }
+    }
+}
+
+/// Handle `rhp check [PATH] [--format=human|json|json-short] [--max-errors=N]`
+fn handle_run_check(sub_args: &[String]) {
+    let mut format = DiagnosticFormat::Human;
+    let mut max_errors = DEFAULT_MAX_ERRORS_PER_FILE;
+    let mut target_path = ".".to_string();
+
+    let mut iter = sub_args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--help" || arg == "-h" {
+            println!(
+                concat!(
+                    "rhp check [PATH] [OPTIONS]\n\n",
+                    "Checks RHP source files for syntax and type errors without executing them.\n\n",
+                    "OPTIONS:\n",
+                    "    PATH                         Target file or directory (default: current directory '.')\n",
+                    "    --format, --error-format     Output format: 'human' (default), 'json' (NDJSON), or 'json-short'\n",
+                    "    --max-errors <N>             Maximum errors per file before cascading suppression (default: 5)\n",
+                    "    --help, -h                   Show this help message\n"
+                )
+            );
+            process::exit(0);
+        } else if let Some(val) = arg.strip_prefix("--format=") {
+            if let Some(fmt) = DiagnosticFormat::parse(val) {
+                format = fmt;
+            }
+        } else if arg == "--format" {
+            if let Some(next_val) = iter.next() {
+                if let Some(fmt) = DiagnosticFormat::parse(next_val) {
+                    format = fmt;
+                }
+            }
+        } else if let Some(val) = arg.strip_prefix("--error-format=") {
+            if let Some(fmt) = DiagnosticFormat::parse(val) {
+                format = fmt;
+            }
+        } else if arg == "--error-format" {
+            if let Some(next_val) = iter.next() {
+                if let Some(fmt) = DiagnosticFormat::parse(next_val) {
+                    format = fmt;
+                }
+            }
+        } else if let Some(val) = arg.strip_prefix("--max-errors=") {
+            max_errors = val.parse().unwrap_or(DEFAULT_MAX_ERRORS_PER_FILE);
+        } else if arg == "--max-errors" {
+            if let Some(next_val) = iter.next() {
+                max_errors = next_val.parse().unwrap_or(DEFAULT_MAX_ERRORS_PER_FILE);
+            }
+        } else if !arg.starts_with('-') {
+            target_path = arg.clone();
+        }
+    }
+
+    let mut emitter = DiagnosticEmitter::new(format);
+    let path = Path::new(&target_path);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        check_path(path, max_errors)
+    }));
+
+    match res {
+        Ok(Ok(diagnostics)) => {
+            for d in diagnostics {
+                emitter.emit(d);
+            }
+            let exit_code = emitter.finish();
+            process::exit(exit_code);
+        }
+        Ok(Err(e)) => {
+            let d = DiagnosticBuilder::internal_error(
+                target_path,
+                format!("Failed to read target path: {}", e),
+            );
+            emitter.emit(d);
+            let exit_code = emitter.finish();
+            process::exit(exit_code);
+        }
+        Err(panic_payload) => {
+            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unexpected panic in compiler check pass".to_string()
+            };
+            let d = DiagnosticBuilder::internal_error(target_path, msg);
+            emitter.emit(d);
+            process::exit(2);
+        }
+    }
+}
+
+/// Handle `rhp explain <CODE> [--format=human|json]`
+fn handle_run_explain(sub_args: &[String]) {
+    let mut code_arg: Option<String> = None;
+    let mut format = DiagnosticFormat::Human;
+    let mut list_all = false;
+
+    let mut iter = sub_args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--help" || arg == "-h" {
+            println!(
+                concat!(
+                    "rhp explain <CODE> [OPTIONS]\n\n",
+                    "Print a detailed explanation and resolution instructions for a diagnostic code.\n\n",
+                    "USAGE:\n",
+                    "    rhp explain RHP0102\n",
+                    "    rhp explain --list\n\n",
+                    "OPTIONS:\n",
+                    "    --list                       List all recognized diagnostic codes\n",
+                    "    --format <human|json>        Output format (default: human)\n",
+                    "    --help, -h                   Show this help message\n"
+                )
+            );
+            process::exit(0);
+        } else if arg == "--list" || arg == "list" {
+            list_all = true;
+        } else if let Some(val) = arg.strip_prefix("--format=") {
+            if let Some(fmt) = DiagnosticFormat::parse(val) {
+                format = fmt;
+            }
+        } else if arg == "--format" {
+            if let Some(next_val) = iter.next() {
+                if let Some(fmt) = DiagnosticFormat::parse(next_val) {
+                    format = fmt;
+                }
+            }
+        } else if !arg.starts_with('-') && code_arg.is_none() {
+            code_arg = Some(arg.clone());
+        }
+    }
+
+    if list_all || code_arg.is_none() {
+        let codes = all_diagnostic_codes();
+        if matches!(format, DiagnosticFormat::Json | DiagnosticFormat::JsonShort) {
+            println!("{}", serde_json::to_string(codes).unwrap_or_default());
+        } else {
+            println!("RHP Diagnostic Codes Catalogue:\n");
+            for c in codes {
+                println!("  {:<8}  {:<42}  {}", c.code, c.title, c.summary);
+            }
+            println!("\nRun 'rhp explain <CODE>' for full explanation and code fix examples.");
+        }
+        process::exit(0);
+    }
+
+    let code = code_arg.unwrap();
+    match get_code_info(&code) {
+        Some(info) => {
+            if matches!(format, DiagnosticFormat::Json | DiagnosticFormat::JsonShort) {
+                println!("{}", serde_json::to_string(info).unwrap_or_default());
+            } else {
+                println!("{}", format_code_explanation(info));
+            }
+            process::exit(0);
+        }
+        None => {
+            eprintln!(
+                "Error: Unknown diagnostic code '{}'. Run 'rhp explain --list' to see all valid codes.",
+                code
+            );
             process::exit(1);
         }
     }
@@ -320,13 +512,13 @@ fn print_run_script_help(mode: &RunMode) {
         concat!(
             "rhp run {mode} [PATH] [OPTIONS]\n\n",
             "{desc}\n\n",
-            "Defaults to 'index.rhp' in current working directory if no file is specified.\n",
+            "Defaults to 'index.rhp' in current working directory if the third parameter (or --file) is not provided.\n",
             "Web applications (using $_SERVER, $_GET, $_POST, or rendering HTML) automatically\n",
             "launch the interactive HTTP server on port 8080.\n\n",
             "OPTIONS:\n",
+            "    --file <PATH>, -f <PATH>  Script file to execute (e.g. --file=\"server.rhp\" or file path)\n",
             "    --port <PORT>, -p <PORT>  Port for web server mode (default: 8080)\n",
             "    --host <HOST>             Host interface to bind (default: 127.0.0.1)\n",
-            "    --file <PATH>, -f <PATH>  Script file to execute (e.g. --file=\"/your-path/index.rhp\")\n",
             "    --cli                     Force one-shot CLI execution even if web application\n",
             "    --server                  Force web server mode\n",
             "    PATH                      Positional script file to execute (alternative to --file)\n",

@@ -5,6 +5,7 @@
 //! - **Production Mode**: Linear IR opcode register VM with Cranelift JIT compilation.
 
 pub mod ast;
+pub mod diagnostic;
 pub mod ir;
 pub mod jit;
 pub mod lexer;
@@ -15,6 +16,14 @@ pub use pkg as rpm;
 pub mod telemetry;
 pub mod type_system;
 pub mod vm;
+
+pub use diagnostic::{
+    all_diagnostic_codes, check_file, check_path, check_source, format_code_explanation,
+    get_code_info, render_human, Applicability, Diagnostic, DiagnosticBuilder, DiagnosticCodeInfo,
+    DiagnosticEdit, DiagnosticEmitter, DiagnosticFormat, DiagnosticLabel, DiagnosticLevel,
+    DiagnosticSpan, DiagnosticSuggestion, DiagnosticSummary, EditPosition, LabelSpan, Position,
+    SnippetLine, SnippetMarker, DEFAULT_MAX_ERRORS_PER_FILE,
+};
 
 pub use ast::{
     walk_expr, walk_program, walk_stmt, Argument, ArrayElement, AssignOp, AstVisitor, BinaryOp,

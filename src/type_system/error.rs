@@ -6,12 +6,22 @@ use std::fmt;
 pub struct TypeError {
     pub span: Span,
     pub kind: TypeErrorKind,
+    pub secondary_label: Option<(Span, String)>,
 }
 
 impl TypeError {
     #[inline]
     pub fn new(kind: TypeErrorKind, span: Span) -> Self {
-        Self { span, kind }
+        Self {
+            span,
+            kind,
+            secondary_label: None,
+        }
+    }
+
+    pub fn with_secondary_label(mut self, span: Span, text: impl Into<String>) -> Self {
+        self.secondary_label = Some((span, text.into()));
+        self
     }
 }
 

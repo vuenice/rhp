@@ -6,12 +6,32 @@ use std::fmt;
 pub struct ParseError {
     pub span: Span,
     pub kind: ParseErrorKind,
+    pub secondary_label: Option<(Span, String)>,
+    pub expected_tokens: Option<Vec<String>>,
+    pub found_token: Option<String>,
 }
 
 impl ParseError {
     #[inline]
     pub fn new(kind: ParseErrorKind, span: Span) -> Self {
-        Self { span, kind }
+        Self {
+            span,
+            kind,
+            secondary_label: None,
+            expected_tokens: None,
+            found_token: None,
+        }
+    }
+
+    pub fn with_secondary_label(mut self, span: Span, text: impl Into<String>) -> Self {
+        self.secondary_label = Some((span, text.into()));
+        self
+    }
+
+    pub fn with_tokens(mut self, expected: Vec<String>, found: Option<String>) -> Self {
+        self.expected_tokens = Some(expected);
+        self.found_token = found;
+        self
     }
 }
 
