@@ -7,10 +7,11 @@ order: 5
 
 ## Overview
 
-The `rhp` binary is the central command-line interface for the RHP toolchain.
+The `rhp` binary is the unified, high-performance command-line interface for the RHP toolchain. It provides single-command script execution, runtime mode selection, built-in HTTP serving, code linting/formatting, and integrated package management.
 
 ```bash
-rhp [COMMAND] [PATH] [OPTIONS]
+rhp [PATH] [OPTIONS]             # Execute script directly (e.g. 'rhp file.rhp')
+rhp [COMMAND] [PATH] [OPTIONS]   # Subcommand execution (dev, build, serve, lint, add, install, etc.)
 ```
 
 ---
@@ -24,67 +25,69 @@ rhp [COMMAND] [PATH] [OPTIONS]
 
 ---
 
-## Commands
+## Direct Script Execution
 
-### `rhp run dev [PATH] [OPTIONS]` (or `rhp dev [PATH]`)
+### `rhp [PATH] [OPTIONS]`
 
-Executes the target script, project, or directory using the direct tree-walking AST interpreter with instant sub-millisecond cold start. Automatically defaults to `index.rhp` (or `app.rhp`) in the current working directory (`pwd`) if no path is provided.
+Pass a script path directly to execute it immediately in Production Mode (Register VM bytecode + Cranelift JIT compilation)—matching the ergonomics of `php file.php` and `bun file.ts`.
 
-#### Automatic Web Application Detection
+```bash
+# Execute a script directly
+rhp file.rhp
 
-When the target script is a web application (i.e. it uses superglobals `$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST` or renders HTML), `rhp run dev` **automatically launches the interactive HTTP web server** on port **8080** instead of terminating after a single CLI execution:
+# Relative or absolute file path
+rhp path/to/script.rhp
 
-```text
-=======================================================================
-🚀 RHP Development Server (Dev Mode)
-📡 Listening on: http://127.0.0.1:8080
-📂 Serving application: examples/todo/index.rhp
-⚡ Reactive UI: HTMX + Alpine.js
-⌨️  Press Ctrl+C to terminate the server.
-=======================================================================
+# If no path is provided, automatically executes 'index.rhp' in current working directory
+rhp
 ```
 
-#### Entrypoint File Resolution
+#### Argument Resolution Logic
+When invoked, RHP inspects the first argument:
+- If the argument **ends with `.rhp`** or resolves to an existing file on disk, it is treated as a file target and executed directly.
+- Otherwise, it is parsed and dispatched as a subcommand (`add`, `remove`, `install`, `update`, `init`, `list`, `dev`, `build`, `serve`, `lint`).
 
-When running `rhp run dev` or `rhp run build`:
-1. **Default (`pwd`):** If no path or `--file` option is supplied, RHP automatically picks `index.rhp` in the current working directory (`pwd`).
-2. **Explicit `--file` Argument:** If `--file` is supplied (e.g. `--file="/your-path/server.rhp"`), RHP executes that exact script.
-3. **Positional Argument:** Alternatively, pass the path directly as a positional argument (e.g. `rhp run dev server.rhp`).
+#### Automatic Web Application Detection
+If the target script uses web superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`) or renders HTML responses, RHP automatically starts the built-in HTTP server on port `8080` instead of exiting after a single CLI run:
 
-#### Usage Examples for `run dev`
+```bash
+# Starts HTTP server automatically if index.rhp is a web app
+rhp index.rhp
+
+# Force one-shot CLI execution (e.g., dump rendered HTML to stdout without starting server)
+rhp index.rhp --cli
+```
+
+---
+
+## Runtime & Server Commands
+
+### `rhp dev [PATH] [OPTIONS]` (or `rhp run dev`)
+
+Executes the target script, project, or directory using the direct tree-walking AST interpreter with instant sub-millisecond cold start and live hot-reloading. Defaults to `index.rhp` (or `app.rhp`) in the current working directory if no path is provided.
 
 ```bash
 # Automatically pick and execute index.rhp in current working directory
-rhp run dev
+rhp dev
 
-# Explicitly specify file via --file argument
-rhp run dev --file="/your-path/server.rhp"
-# or relative path:
-rhp run dev --file="server.rhp"
+# Explicitly specify file via positional path or --file argument
+rhp dev server.rhp
+rhp dev --file="server.rhp"
 
-# Start dev server for a web project directory
-rhp run dev examples/todo
-
-# Shorthand syntax
-rhp dev --file="/your-path/server.rhp"
-
-# Specify custom port and host
-rhp run dev examples/todo --port 3000 --host 0.0.0.0
-# or short flag:
+# Start dev server for a web project directory on custom port
+rhp dev examples/todo --port 3000 --host 0.0.0.0
+# Shorthand port flag:
 rhp dev examples/todo -p 3000
 
-# Force one-shot CLI execution (e.g., dump rendered HTML to stdout)
-rhp run dev examples/todo --cli
-
-# Run a standalone CLI script
-rhp run dev scripts/benchmark.rhp
+# Force one-shot CLI execution (e.g. dump rendered HTML to stdout)
+rhp dev examples/todo --cli
 ```
 
-#### Options for `run dev` & `run build`:
+#### Options for `dev` and `build`:
 
 | Option | Shorthand | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute (e.g. `--file="/your-path/server.rhp"`) | `index.rhp` in `pwd` |
+| `--file <PATH>` | `-f <PATH>` | Explicit script file to execute | `index.rhp` in `pwd` |
 | `--port <PORT>` | `-p <PORT>` | Port to bind when running as an HTTP server | `8080` |
 | `--host <HOST>` | | Network interface to bind | `127.0.0.1` |
 | `--cli` | | Force one-shot CLI execution even if script is a web app | `false` |
@@ -92,42 +95,21 @@ rhp run dev scripts/benchmark.rhp
 
 ---
 
-### `rhp run build [PATH] [OPTIONS]` (or `rhp build [PATH]`)
+### `rhp build [PATH] [OPTIONS]` (or `rhp run build`)
 
 Compiles source code into linear register-based bytecode IR and executes it within the high-performance multi-worker Register VM with Cranelift JIT compilation enabled.
 
-Like `run dev`, it automatically defaults to `index.rhp` in `pwd` unless specified via `--file` or positional argument. If the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
-
-```text
-=======================================================================
-🚀 RHP Production Server (Build Mode + JIT)
-📡 Listening on: http://127.0.0.1:8080
-📂 Serving application: examples/todo/index.rhp
-⚡ Reactive UI: HTMX + Alpine.js
-⌨️  Press Ctrl+C to terminate the server.
-=======================================================================
-```
+Like `dev`, it automatically defaults to `index.rhp` in `pwd` unless specified via `--file` or positional argument. If the target is a web application, it automatically launches the production HTTP server with JIT acceleration:
 
 ```bash
-# Automatically pick and execute index.rhp in current working directory with JIT
-rhp run build
+# Execute index.rhp in current directory with JIT
+rhp build
 
-# Explicitly specify file via --file argument
-rhp run build --file="/your-path/server.rhp"
-# or relative path:
-rhp run build --file="server.rhp"
-
-# Run production web server with JIT
-rhp run build examples/todo
-
-# Shorthand syntax
-rhp build --file="/your-path/server.rhp"
-
-# Production server on custom port
-rhp run build examples/todo --port 8000
+# Run production web server on port 8000
+rhp build examples/todo --port 8000
 
 # Execute CLI script with JIT compilation
-rhp run build scripts/compute_heavy.rhp
+rhp build scripts/compute_heavy.rhp
 ```
 
 ---
@@ -140,7 +122,7 @@ Dedicated command to start the built-in RHP HTTP server for web applications. Ro
 # Serve application on default port 8080
 rhp serve examples/todo
 
-# Serve on custom port
+# Serve on custom port and host
 rhp serve examples/todo --port 8080 --host 0.0.0.0
 
 # Automatically picks app.rhp or index.rhp in current directory
@@ -150,24 +132,24 @@ rhp serve
 
 ---
 
-### `rhp run lint [PATH] [OPTIONS]`
+### `rhp lint [PATH] [OPTIONS]` (or `rhp run lint`)
 
 Lints, auto-formats code according to PER-CS standards, infers variable, parameter, and property type signatures, normalizes casing conventions, and outputs diagnostics in machine-readable JSON inspired by [Carthage Software Mago](https://github.com/carthage-software/mago).
 
 ```bash
 # Auto-format and write changes to disk
-rhp run lint src/
+rhp lint src/
 
 # Dry run: check and report issues in JSON without writing files
-rhp run lint src/ --check
-# or
-rhp run lint src/ --no-fix
+rhp lint src/ --check
+# or alias:
+rhp lint src/ --no-fix
 
 # Auto-format and typecheck without changing identifier casing
-rhp run lint src/ --no-case-change
+rhp lint src/ --no-case-change
 ```
 
-#### Options for `run lint`:
+#### Options for `lint`:
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
@@ -176,46 +158,163 @@ rhp run lint src/ --no-case-change
 | `--fix` | Auto-formats code and writes inferred types and casing fixes to disk | `true` |
 | `--no-case-change` | Skips identifier casing transformations (`snake_case`, `PascalCase`, `camelCase`) | `false` |
 
-#### Key Capabilities:
+---
 
-1. **AST Code Formatting:** Enforces 4-space indentation, operator spacing, and normalized brace positioning while preserving comments and string literals.
-2. **Automated Type Inference:**
-   - Inactive untyped scalars: `$x = '';` $\rightarrow$ `string $x = '';`, `$y = 1;` $\rightarrow$ `int $y = 1;`.
-   - Initialized array classification: sequential $\rightarrow$ `list`, string-keyed $\rightarrow$ `dict`, integer/complex-keyed $\rightarrow$ `hashMap`, empty $\rightarrow$ `array`.
-   - Function parameter defaults and class property defaults.
-   - Preserves user-declared types; emits typecheck errors if values mismatch.
-3. **Casing Normalization:**
-   - Variables $\rightarrow$ `snake_case` (preserving `$this` and PHP superglobals).
-   - Classes, interfaces, traits, and enums $\rightarrow$ `PascalCase` (and all references).
-   - Functions and methods $\rightarrow$ `camelCase` (preserving magic methods).
-   - **Test function exception:** any function starting with `test` is normalized to `snake_case`.
+## Package Management
 
-#### Diagnostic Output Schema
+RHP includes a full package manager integrated directly into the `rhp` binary, following modern packaging conventions like Cargo, Go, and Bun. Projects declare dependencies in `rhp.toml` with deterministic resolutions pinned in `rhp.lock`. Installed packages follow standard PHP PSR-4 autoloader conventions.
 
-When run with `--check` or `--no-fix`, diagnostics are emitted in Carthage Mago-compatible JSON:
+### `rhp init [NAME]`
 
-```json
-{
-  "status": "ok",
-  "files_scanned": 8,
-  "files_modified": 0,
-  "total_issues": 1,
-  "errors": 0,
-  "warnings": 1,
-  "issues": [
-    {
-      "level": "warning",
-      "code": "casing/variable",
-      "message": "Variable '$userAccount' should be snake_case: '$user_account'",
-      "file": "src/Order.rhp",
-      "line": 14,
-      "column": 5,
-      "span": {
-        "start": 210,
-        "end": 222
-      }
-    }
-  ]
-}
+Initializes a new `rhp.toml` manifest in the current directory with package metadata and dependency tables.
+
+```bash
+# Initialize manifest using current directory name
+rhp init
+
+# Initialize with an explicit package name
+rhp init my-awesome-app
 ```
 
+Generated `rhp.toml`:
+```toml
+[package]
+name = "my-awesome-app"
+version = "0.1.0"
+authors = []
+
+[dependencies]
+
+[dev-dependencies]
+```
+
+---
+
+### `rhp add <PACKAGE> [OPTIONS]`
+
+Adds a dependency to `rhp.toml` and `rhp.lock`, downloads or links the package into `vendor/`, and updates the PSR-4 autoloader.
+
+```bash
+# Add from GitHub shorthand (owner/repo)
+rhp add symfony/var-dumper
+
+# Add with a specific Git branch or release tag
+rhp add spatie/ray --tag v1.40.0
+rhp add laravel/framework --branch 11.x
+
+# Add by exact commit hash
+rhp add owner/repo --rev a1b2c3d4e5f6
+
+# Add by custom Git repository URL
+rhp add --git https://github.com/vuenice/rhp-helpers.git
+
+# Add a local directory path dependency
+rhp add ./packages/local-sdk
+rhp add my-library --path ../shared-lib
+
+# Add as a development dependency ([dev-dependencies])
+rhp add phpunit/phpunit --dev
+```
+
+#### Options for `add`:
+
+| Option | Shorthand | Description |
+| :--- | :--- | :--- |
+| `--git <URL>` | | Specify custom git repository URL |
+| `--branch <BRANCH>` | `-b <BRANCH>` | Specify git branch to clone |
+| `--tag <TAG>` | `-t <TAG>` | Specify git tag or release version |
+| `--rev <COMMIT>` | | Pin to an exact git commit hash |
+| `--path <PATH>` | | Specify local directory path dependency |
+| `--dev` | | Add as development dependency in `[dev-dependencies]` |
+
+---
+
+### `rhp remove <PACKAGE>` (or `rhp rm <PACKAGE>`)
+
+Removes a dependency from `rhp.toml` and `rhp.lock`, deletes its directory from `vendor/`, and regenerates the autoloader.
+
+```bash
+# Remove a dependency
+rhp remove symfony/var-dumper
+
+# Shorthand alias
+rhp rm spatie/ray
+```
+
+---
+
+### `rhp install [OPTIONS]`
+
+Installs all dependencies strictly from `rhp.lock`. This command is designed for reproducible CI/CD environments, container builds, and fresh developer checkouts.
+
+```bash
+# Install all locked dependencies
+rhp install
+
+# Strict CI install (ensures lockfile is not modified)
+rhp install --frozen
+```
+
+> **Note on adding packages:**
+> Unlike npm or composer, `rhp install` only operates on the lockfile and does not accept package arguments. To add a new package, use `rhp add <package>`. Running `rhp install <package>` outputs a helpful reminder:
+> ```text
+> Error: 'rhp install' installs all dependencies from the lockfile.
+> 💡 To add a new dependency, use 'rhp add <package>'
+> ```
+
+#### Options for `install`:
+
+| Option | Description |
+| :--- | :--- |
+| `--frozen` | Strictly verify lockfile and prevent modifications |
+
+---
+
+### `rhp update [PACKAGE]` (or `rhp up [PACKAGE]`)
+
+Updates dependencies to their latest compatible commits, fetches updates, and refreshes `rhp.lock` and `vendor/`.
+
+```bash
+# Update all dependencies
+rhp update
+
+# Update a single package
+rhp update symfony/var-dumper
+
+# Shorthand alias
+rhp up
+```
+
+---
+
+### `rhp list` (or `rhp ls`)
+
+Lists all installed dependencies and dev-dependencies from `rhp.toml` and `rhp.lock`.
+
+```bash
+rhp list
+
+# Shorthand alias
+rhp ls
+```
+
+---
+
+### PSR-4 Autoloading Integration
+
+Whenever dependencies are installed, added, or removed, RHP generates standard PHP autoload files in `vendor/`:
+- `vendor/autoload.rhp`: Main entry point class autoloader.
+- `vendor/rhp/installed.json`: Package metadata and installation manifests.
+- `vendor/rhp/autoload_psr4.rhp`: PSR-4 namespace mapping table.
+- `vendor/rhp/autoload_files.rhp`: Static helper files autoloader.
+
+To consume installed packages in any RHP application or script:
+
+```php
+<?php
+require_once __DIR__ . '/vendor/autoload.rhp';
+
+use Symfony\Component\VarDumper\VarDumper;
+
+VarDumper::dump(['status' => 'success', 'engine' => 'rhp']);
+```
