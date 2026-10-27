@@ -4,21 +4,24 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
-use super::error::{Result, RpmError};
+use super::error::{PkgError, Result};
 
-/// Parsed package information from a GitHub specifier or URL.
+/// Parsed package information from a Git URL, GitHub specifier, or local path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitHubPackageSpec {
+pub struct PackageSourceSpec {
     pub raw_name: String,
     pub vendor: String,
     pub repo: String,
-    pub git_url: String,
+    pub source_url: String,
     pub branch: Option<String>,
     pub tag: Option<String>,
     pub rev: Option<String>,
+    pub is_local_path: bool,
 }
 
-impl GitHubPackageSpec {
+pub type GitHubPackageSpec = PackageSourceSpec;
+
+impl PackageSourceSpec {
     /// Parse a package string like:
     /// - `"vuenice/rhp-router"`
     /// - `"vuenice/rhp-router@main"`
@@ -26,10 +29,11 @@ impl GitHubPackageSpec {
     /// - `"https://github.com/vuenice/rhp-router"`
     /// - `"https://github.com/vuenice/rhp-router.git"`
     /// - `"git@github.com:vuenice/rhp-router.git"`
+    /// - `"./local-pkg"`, `"../shared-lib"`
     pub fn parse(input: &str) -> Result<Self> {
         let trimmed = input.trim().trim_matches(|c| c == '\'' || c == '"');
         if trimmed.is_empty() {
-            return Err(RpmError::InvalidPackageSpec {
+            return Err(PkgError::InvalidPackageSpec {
                 spec: input.to_string(),
                 reason: "Package specification cannot be empty".to_string(),
             });
@@ -47,7 +51,7 @@ impl GitHubPackageSpec {
             tag = Some(rest.to_string());
         }
 
-        let (vendor, repo, git_url) = if base.starts_with("https://github.com/")
+        let (vendor, repo, source_url, is_local_path) = if base.starts_with("https://github.com/")
             || base.starts_with("http://github.com/")
         {
             let path_part = base
@@ -57,7 +61,7 @@ impl GitHubPackageSpec {
                 .trim_end_matches('/');
             let parts: Vec<&str> = path_part.split('/').collect();
             if parts.len() < 2 {
-                return Err(RpmError::InvalidPackageSpec {
+                return Err(PkgError::InvalidPackageSpec {
                     spec: input.to_string(),
                     reason: "Expected 'https://github.com/<owner>/<repo>'".to_string(),
                 });
@@ -66,6 +70,7 @@ impl GitHubPackageSpec {
                 parts[0].to_string(),
                 parts[1].to_string(),
                 format!("https://github.com/{}/{}.git", parts[0], parts[1]),
+                false,
             )
         } else if base.starts_with("git@github.com:") {
             let path_part = base
@@ -74,7 +79,7 @@ impl GitHubPackageSpec {
                 .trim_end_matches('/');
             let parts: Vec<&str> = path_part.split('/').collect();
             if parts.len() < 2 {
-                return Err(RpmError::InvalidPackageSpec {
+                return Err(PkgError::InvalidPackageSpec {
                     spec: input.to_string(),
                     reason: "Expected 'git@github.com:<owner>/<repo>.git'".to_string(),
                 });
@@ -83,33 +88,41 @@ impl GitHubPackageSpec {
                 parts[0].to_string(),
                 parts[1].to_string(),
                 format!("https://github.com/{}/{}.git", parts[0], parts[1]),
+                false,
             )
-        } else if base.starts_with("file://") || base.starts_with('/') || base.starts_with("./") {
-            // Local file/git path for testing and local development
-            let p = Path::new(base.trim_start_matches("file://"));
+        } else if base.starts_with("file://")
+            || base.starts_with('/')
+            || base.starts_with("./")
+            || base.starts_with("../")
+            || Path::new(base).exists()
+        {
+            // Local file/git path
+            let clean_path = base.trim_start_matches("file://");
+            let p = Path::new(clean_path);
             let repo_name = p
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "local-pkg".to_string());
-            ("local".to_string(), repo_name, base.to_string())
+            ("local".to_string(), repo_name, clean_path.to_string(), true)
         } else {
-            // Standard "owner/repo" or "repo"
+            // Standard "owner/repo" or git URL
             let parts: Vec<&str> = base.split('/').collect();
             if parts.len() == 2 {
                 (
                     parts[0].to_string(),
                     parts[1].to_string(),
                     format!("https://github.com/{}/{}.git", parts[0], parts[1]),
+                    false,
                 )
             } else if parts.len() == 1 {
-                return Err(RpmError::InvalidPackageSpec {
+                return Err(PkgError::InvalidPackageSpec {
                     spec: input.to_string(),
-                    reason: "Package name must be in format 'owner/repo' (e.g. 'vuenice/rhp-router')".to_string(),
+                    reason: "Package name must be in format 'owner/repo' (e.g. 'vuenice/rhp-router') or a git/path URL".to_string(),
                 });
             } else {
-                return Err(RpmError::InvalidPackageSpec {
+                return Err(PkgError::InvalidPackageSpec {
                     spec: input.to_string(),
-                    reason: format!("Unrecognized GitHub repository specifier '{}'", input),
+                    reason: format!("Unrecognized repository or package specifier '{}'", input),
                 });
             }
         };
@@ -120,16 +133,21 @@ impl GitHubPackageSpec {
             raw_name,
             vendor,
             repo,
-            git_url,
+            source_url,
             branch,
             tag,
             rev: None,
+            is_local_path,
         })
     }
 
     /// Destination directory inside the `vendor/` tree.
     pub fn destination_path(&self, root_dir: &Path) -> PathBuf {
         root_dir.join("vendor").join(&self.vendor).join(&self.repo)
+    }
+
+    pub fn git_url(&self) -> &str {
+        &self.source_url
     }
 }
 
@@ -140,9 +158,9 @@ pub struct GitRepoInfo {
     pub checksum: String,
 }
 
-/// Clone or fetch a GitHub repository into `target_dir`.
+/// Clone, fetch, or copy a repository into `target_dir`.
 pub fn clone_or_fetch_repo(
-    git_url: &str,
+    source_url: &str,
     target_dir: &Path,
     branch: Option<&str>,
     tag: Option<&str>,
@@ -150,6 +168,20 @@ pub fn clone_or_fetch_repo(
 ) -> Result<GitRepoInfo> {
     if let Some(parent) = target_dir.parent() {
         fs::create_dir_all(parent)?;
+    }
+
+    // Check if source is a local directory without git
+    let local_path = Path::new(source_url.trim_start_matches("file://"));
+    if local_path.is_dir() && !local_path.join(".git").exists() {
+        if target_dir.exists() {
+            let _ = fs::remove_dir_all(target_dir);
+        }
+        copy_dir_recursive(local_path, target_dir)?;
+        let checksum = compute_directory_checksum(target_dir)?;
+        return Ok(GitRepoInfo {
+            commit_hash: "local".to_string(),
+            checksum,
+        });
     }
 
     let is_existing_git = target_dir.join(".git").exists();
@@ -162,11 +194,11 @@ pub fn clone_or_fetch_repo(
             fetch_cmd.args(["origin", b]);
         }
         let output = fetch_cmd.output().map_err(|e| {
-            RpmError::Git(format!("Failed to execute 'git fetch' at {}: {}", target_dir.display(), e))
+            PkgError::Git(format!("Failed to execute 'git fetch' at {}: {}", target_dir.display(), e))
         })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RpmError::Git(format!("git fetch failed: {}", stderr)));
+            return Err(PkgError::Git(format!("git fetch failed: {}", stderr)));
         }
 
         // Checkout target ref
@@ -174,7 +206,7 @@ pub fn clone_or_fetch_repo(
         let mut checkout_cmd = Command::new("git");
         checkout_cmd.current_dir(target_dir).args(["checkout", target_ref]);
         let output = checkout_cmd.output().map_err(|e| {
-            RpmError::Git(format!("Failed to execute 'git checkout' at {}: {}", target_dir.display(), e))
+            PkgError::Git(format!("Failed to execute 'git checkout' at {}: {}", target_dir.display(), e))
         })?;
         if !output.status.success() {
             // Try reset --hard in case of detached HEAD / origin
@@ -196,21 +228,21 @@ pub fn clone_or_fetch_repo(
             clone_cmd.args(["--branch", b]);
         }
         // Use shallow clone for fast downloads
-        clone_cmd.args(["--depth", "1", git_url]);
+        clone_cmd.args(["--depth", "1", source_url]);
         clone_cmd.arg(target_dir.to_string_lossy().as_ref());
 
         let output = clone_cmd.output().map_err(|e| {
-            RpmError::Git(format!(
+            PkgError::Git(format!(
                 "Failed to execute 'git clone' for '{}': {}",
-                git_url, e
+                source_url, e
             ))
         })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RpmError::Git(format!(
+            return Err(PkgError::Git(format!(
                 "Failed to clone repository '{}': {}",
-                git_url, stderr
+                source_url, stderr
             )));
         }
 
@@ -220,10 +252,10 @@ pub fn clone_or_fetch_repo(
                 .current_dir(target_dir)
                 .args(["checkout", r])
                 .output()
-                .map_err(|e| RpmError::Git(format!("Failed to checkout revision {}: {}", r, e)))?;
+                .map_err(|e| PkgError::Git(format!("Failed to checkout revision {}: {}", r, e)))?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(RpmError::Git(format!(
+                return Err(PkgError::Git(format!(
                     "Failed to checkout revision '{}': {}",
                     r, stderr
                 )));
@@ -240,6 +272,24 @@ pub fn clone_or_fetch_repo(
     })
 }
 
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            if entry.file_name() != ".git" {
+                copy_dir_recursive(&src_path, &dst_path)?;
+            }
+        } else if ty.is_file() {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Retrieve the HEAD commit hash using `git rev-parse HEAD`.
 pub fn get_head_commit(dir: &Path) -> Result<String> {
     let output = Command::new("git")
@@ -247,7 +297,7 @@ pub fn get_head_commit(dir: &Path) -> Result<String> {
         .args(["rev-parse", "HEAD"])
         .output()
         .map_err(|e| {
-            RpmError::Git(format!(
+            PkgError::Git(format!(
                 "Failed to run 'git rev-parse HEAD' at {}: {}",
                 dir.display(),
                 e
@@ -256,7 +306,7 @@ pub fn get_head_commit(dir: &Path) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RpmError::Git(format!("git rev-parse HEAD failed: {}", stderr)));
+        return Err(PkgError::Git(format!("git rev-parse HEAD failed: {}", stderr)));
     }
 
     let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();

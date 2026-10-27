@@ -10,37 +10,35 @@ fn print_help() {
         concat!(
             "RHP: High-Performance PHP-Family Programming Language Engine\n\n",
             "USAGE:\n",
-            "    rhp run dev [PATH] [OPTIONS]     Execute in Development Mode (direct AST tree-walking, defaults to 'index.rhp')\n",
-            "    rhp run build [PATH] [OPTIONS]   Execute in Production Mode (register VM bytecode + JIT, defaults to 'index.rhp')\n",
-            "    rhp dev [PATH]                   Shorthand for 'rhp run dev'\n",
-            "    rhp build [PATH]                 Shorthand for 'rhp run build'\n",
+            "    rhp [PATH] [OPTIONS]             Execute script directly (e.g. 'rhp file.rhp', defaults to 'index.rhp')\n",
+            "    rhp dev [PATH] [OPTIONS]         Execute in Development Mode (direct AST tree-walking, hot-reload)\n",
+            "    rhp build [PATH] [OPTIONS]       Execute in Production Mode (register VM bytecode + JIT)\n",
             "    rhp serve [PATH] [OPTIONS]       Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
-            "    rhp run lint [PATH] [OPTIONS]    Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
-            "    rhp rpm <COMMAND> [OPTIONS]      Run RPM (RHP Package Manager) commands\n",
-            "    rhp install [PACKAGE]            Install dependencies or add a package directly from GitHub\n",
-            "    rhp update                       Update installed packages to latest GitHub versions\n",
-            "    rhp un <PACKAGE>                 Uninstall package and remove from rpm.toml and vendor/\n",
-            "    rhp --version                    Display version information\n",
-            "    rhp --help                       Display this help message\n\n",
-            "PACKAGE MANAGER (RPM):\n",
-            "    rpm install                      Install all dependencies from rpm.toml / rpm.lock\n",
-            "    rpm install <PACKAGE>            Install package directly from GitHub (e.g. 'owner/repo')\n",
-            "    rpm update                       Update dependencies to latest versions\n",
-            "    rpm un <PACKAGE>                 Uninstall package and remove from dependencies\n",
-            "    rpm init                         Initialize a new rpm.toml manifest\n",
-            "    rpm list                         List installed packages\n\n",
+            "    rhp lint [PATH] [OPTIONS]        Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n\n",
+            "PACKAGE MANAGEMENT:\n",
+            "    rhp add <PACKAGE> [OPTIONS]      Add dependency to rhp.toml and lockfile (Git URL, GitHub 'owner/repo', or local path)\n",
+            "    rhp remove <PACKAGE>             Remove dependency from rhp.toml and vendor/\n",
+            "    rhp install [OPTIONS]            Install all dependencies from lockfile (for CI and fresh clones)\n",
+            "    rhp update [PACKAGE]             Update dependencies within version constraints\n",
+            "    rhp init [NAME]                  Initialize a new rhp.toml manifest in current directory\n",
+            "    rhp list                         List installed dependencies\n\n",
             "COMPANION TOOLS:\n",
             "    rhp-play                         Launch the interactive desktop RHP Playground GUI\n\n",
             "OPTIONS for 'serve':\n",
-            "    --port <PORT>, -p <PORT>         Port to listen on (defaults to 8000)\n",
+            "    --port <PORT>, -p <PORT>         Port to listen on (defaults to 8080)\n",
             "    --host <HOST>                    Host to bind (defaults to 127.0.0.1)\n\n",
-            "OPTIONS for 'run dev' and 'run build':\n",
-            "    --file <PATH>, -f <PATH>         Script file to execute (defaults to 'index.rhp' in current directory)\n",
-            "    PATH                             Script file to execute (optional positional argument)\n\n",
-            "OPTIONS for 'run lint':\n",
-            "    PATH                             Target file or directory (defaults to current directory '.')\n",
-            "    --check, --no-fix                Check only without modifying files on disk (dry run)\n",
-            "    --no-case-change                 Skip changing identifier casing or reporting casing issues\n"
+            "OPTIONS for 'add':\n",
+            "    --branch <BRANCH>, -b <BRANCH>   Specify git branch to clone\n",
+            "    --tag <TAG>, -t <TAG>            Specify git tag or release\n",
+            "    --rev <COMMIT>                   Specify exact git commit hash\n",
+            "    --git <URL>                      Specify custom git repository URL\n",
+            "    --path <PATH>                    Specify local path dependency\n",
+            "    --dev                            Add as development dependency in [dev-dependencies]\n\n",
+            "OPTIONS for 'install':\n",
+            "    --frozen                         Strict install respecting exact commits in rhp.lock\n\n",
+            "GLOBAL OPTIONS:\n",
+            "    --version, -v                    Display version information\n",
+            "    --help, -h                       Display this help message\n"
         )
     );
 }
@@ -58,25 +56,23 @@ fn print_playground_hint() {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Check if binary was invoked directly as `rpm`
-    let binary_name = args
-        .first()
-        .and_then(|a| Path::new(a).file_name().and_then(|f| f.to_str()))
-        .unwrap_or("");
-    let is_rpm_bin = binary_name == "rpm" || binary_name.starts_with("rpm-");
-
-    if is_rpm_bin {
-        let rpm_args = if args.len() > 1 { &args[1..] } else { &[] };
-        rhp::rpm::run_rpm_cli(rpm_args);
-        return;
-    }
-
     if args.len() < 2 {
         print_help();
         process::exit(1);
     }
 
-    match args[1].as_str() {
+    let first_arg = &args[1];
+
+    // Direct script execution shorthand: `rhp file.rhp` or `rhp path/to/script`
+    // (the way 'php file.php' and 'bun file.ts' work)
+    if first_arg.ends_with(".rhp") || Path::new(first_arg).is_file() {
+        handle_run_script(&args[1..], RunMode::Build { jit_enabled: true, opt_level: 2 });
+        return;
+    }
+
+    let root_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    match first_arg.as_str() {
         "--version" | "-V" | "-v" => {
             print_version();
             process::exit(0);
@@ -97,25 +93,31 @@ fn main() {
         "build" => {
             handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
         }
-        "rpm" => {
-            rhp::rpm::run_rpm_cli(&args[2..]);
+        "lint" => {
+            handle_run_lint(&args[2..]);
         }
-        "install" | "i" | "add" => {
-            rhp::rpm::run_rpm_cli(&args[1..]);
+        "add" => {
+            rhp::pkg::handle_add(&root_dir, &args[2..]);
         }
-        "update" | "up" | "upgrade" => {
-            rhp::rpm::run_rpm_cli(&args[1..]);
+        "remove" | "rm" => {
+            rhp::pkg::handle_remove(&root_dir, &args[2..]);
         }
-        "un" | "uninstall" | "remove" | "rm" => {
-            rhp::rpm::run_rpm_cli(&args[1..]);
+        "install" => {
+            rhp::pkg::handle_install(&root_dir, &args[2..]);
+        }
+        "update" | "up" => {
+            rhp::pkg::handle_update(&root_dir, &args[2..]);
         }
         "init" => {
-            rhp::rpm::run_rpm_cli(&args[1..]);
+            rhp::pkg::handle_init(&root_dir, &args[2..]);
+        }
+        "list" | "ls" => {
+            rhp::pkg::handle_list(&root_dir);
         }
         "run" => {
             if args.len() < 3 {
-                eprintln!("Error: Missing subcommand for 'rhp run'. Expected 'lint', 'dev', 'build', 'serve', or 'rpm'.");
-                process::exit(1);
+                handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
+                return;
             }
             match args[2].as_str() {
                 "playground" | "play" | "ui" | "gui" => {
@@ -133,11 +135,11 @@ fn main() {
                 "serve" => {
                     handle_serve(&args[3..]);
                 }
-                "rpm" => {
-                    rhp::rpm::run_rpm_cli(&args[3..]);
+                file if file.ends_with(".rhp") || Path::new(file).exists() => {
+                    handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
                 }
                 cmd => {
-                    eprintln!("Error: Unknown run command '{}'. Expected 'lint', 'dev', 'build', 'serve', or 'rpm'.", cmd);
+                    eprintln!("Error: Unknown run command '{}'. Expected 'dev', 'build', 'serve', 'lint', or a file path.", cmd);
                     process::exit(1);
                 }
             }

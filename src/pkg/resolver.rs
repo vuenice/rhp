@@ -1,22 +1,29 @@
 use std::path::{Path, PathBuf};
 
-use super::error::{Result, RpmError};
+use super::error::{PkgError, Result};
 use super::exporter::{discover_package_exports, generate_autoloader, InstalledPackageMeta};
-use super::github::{clone_or_fetch_repo, remove_package_dir, GitHubPackageSpec};
-use super::lock::{LockedPackage, Lockfile, LOCK_FILENAME};
+use super::github::{clone_or_fetch_repo, remove_package_dir, PackageSourceSpec};
+use super::lock::{LockedPackage, Lockfile, ALT_LOCK_FILENAME, LOCK_FILENAME};
 use super::manifest::{
     Dependency, DetailedDependency, Manifest, MANIFEST_FILENAME,
 };
 
 #[derive(Debug, Default, Clone)]
-pub struct InstallOptions {
+pub struct AddOptions {
     pub git: Option<String>,
     pub branch: Option<String>,
     pub tag: Option<String>,
     pub rev: Option<String>,
+    pub path: Option<String>,
     pub dev: bool,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct InstallOptions {
     pub frozen: bool,
 }
+
+pub type PackageOptions = AddOptions;
 
 #[derive(Debug, Clone)]
 pub struct PackageOperationResult {
@@ -26,37 +33,49 @@ pub struct PackageOperationResult {
     pub path: PathBuf,
 }
 
-/// Install all dependencies declared in `rpm.toml`.
-pub fn install_all(root_dir: &Path, options: &InstallOptions) -> Result<Vec<PackageOperationResult>> {
+/// Find the lockfile path to use (`rhp.lock` or fallback `rpm.lock`).
+fn resolve_lock_path(root_dir: &Path) -> PathBuf {
+    let rhp_lock = root_dir.join(LOCK_FILENAME);
+    if rhp_lock.exists() {
+        return rhp_lock;
+    }
+    let alt_lock = root_dir.join(ALT_LOCK_FILENAME);
+    if alt_lock.exists() {
+        return alt_lock;
+    }
+    rhp_lock
+}
+
+/// Install all dependencies declared in the lockfile / manifest (CI and fresh clone case).
+pub fn install(root_dir: &Path, options: &InstallOptions) -> Result<Vec<PackageOperationResult>> {
     let manifest_path = Manifest::find_in_dir(root_dir).ok_or_else(|| {
-        RpmError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
+        PkgError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
     })?;
 
     let manifest = Manifest::load_from_file(&manifest_path)?;
-    let lock_path = root_dir.join(LOCK_FILENAME);
+    let lock_path = resolve_lock_path(root_dir);
     let mut lockfile = Lockfile::load_from_file(&lock_path)?;
 
     let mut results = Vec::new();
     let mut installed_metas = Vec::new();
 
-    // Iterate over dependencies
     for (pkg_name, dep) in &manifest.dependencies {
-        let spec = GitHubPackageSpec::parse(pkg_name).unwrap_or_else(|_| {
+        let spec = PackageSourceSpec::parse(pkg_name).unwrap_or_else(|_| {
             let url = dep.git_url(pkg_name);
-            GitHubPackageSpec {
+            PackageSourceSpec {
                 raw_name: pkg_name.clone(),
                 vendor: "vendor".to_string(),
                 repo: pkg_name.clone(),
-                git_url: url,
+                source_url: url,
                 branch: dep.branch().map(|s| s.to_string()),
                 tag: dep.tag().map(|s| s.to_string()),
                 rev: dep.rev().map(|s| s.to_string()),
+                is_local_path: false,
             }
         });
 
         let dest_dir = spec.destination_path(root_dir);
 
-        // Check if locked commit should be used
         let locked_commit = lockfile.get_locked_commit(pkg_name);
         let rev_to_use = if options.frozen {
             locked_commit.as_deref().or_else(|| dep.rev())
@@ -67,24 +86,26 @@ pub fn install_all(root_dir: &Path, options: &InstallOptions) -> Result<Vec<Pack
         let branch_to_use = dep.branch().or(spec.branch.as_deref());
         let tag_to_use = dep.tag().or(spec.tag.as_deref());
 
-        let git_url = dep.git_url(pkg_name);
+        let source_url = if let Some(local_p) = dep.local_path() {
+            local_p.to_string()
+        } else {
+            dep.git_url(pkg_name)
+        };
 
-        // Perform clone or fetch
         let repo_info = clone_or_fetch_repo(
-            &git_url,
+            &source_url,
             &dest_dir,
             branch_to_use,
             tag_to_use,
             rev_to_use,
         )?;
 
-        // Discover package export rules
         let auto_config = discover_package_exports(&dest_dir, pkg_name);
 
         let locked_pkg = LockedPackage {
             name: pkg_name.clone(),
             version: dep.version_req().unwrap_or("0.1.0").to_string(),
-            source: Some(format!("git+{}#{}", spec.git_url, repo_info.commit_hash)),
+            source: Some(format!("git+{}#{}", source_url, repo_info.commit_hash)),
             checksum: Some(repo_info.checksum.clone()),
             dependencies: vec![],
         };
@@ -98,7 +119,7 @@ pub fn install_all(root_dir: &Path, options: &InstallOptions) -> Result<Vec<Pack
         installed_metas.push(InstalledPackageMeta {
             name: pkg_name.clone(),
             version: dep.version_req().unwrap_or("0.1.0").to_string(),
-            source: Some(spec.git_url.clone()),
+            source: Some(source_url),
             checksum: Some(repo_info.checksum),
             path: rel_path,
             autoload: auto_config,
@@ -112,20 +133,22 @@ pub fn install_all(root_dir: &Path, options: &InstallOptions) -> Result<Vec<Pack
         });
     }
 
-    // Save updated lockfile
     lockfile.save_to_file(&lock_path)?;
-
-    // Generate PHP-compatible autoloader
     generate_autoloader(root_dir, &installed_metas)?;
 
     Ok(results)
 }
 
-/// Install a single package by name / GitHub specifier.
-pub fn install_package(
+/// Backwards compatibility alias for `install`.
+pub fn install_all(root_dir: &Path, options: &InstallOptions) -> Result<Vec<PackageOperationResult>> {
+    install(root_dir, options)
+}
+
+/// Add a dependency to the manifest and lockfile (`rhp add <pkg>`).
+pub fn add_package(
     root_dir: &Path,
     pkg_spec: &str,
-    options: &InstallOptions,
+    options: &AddOptions,
 ) -> Result<PackageOperationResult> {
     let manifest_path = Manifest::find_in_dir(root_dir).unwrap_or_else(|| {
         root_dir.join(MANIFEST_FILENAME)
@@ -143,28 +166,50 @@ pub fn install_package(
         m
     };
 
-    let spec = GitHubPackageSpec::parse(pkg_spec)?;
+    let spec = PackageSourceSpec::parse(pkg_spec)?;
     let dest_dir = spec.destination_path(root_dir);
 
     let branch = options.branch.as_deref().or(spec.branch.as_deref());
     let tag = options.tag.as_deref().or(spec.tag.as_deref());
     let rev = options.rev.as_deref().or(spec.rev.as_deref());
 
-    let git_url = options.git.as_deref().unwrap_or(&spec.git_url);
+    let source_url = if let Some(ref p) = options.path {
+        p.as_str()
+    } else if let Some(ref g) = options.git {
+        g.as_str()
+    } else {
+        &spec.source_url
+    };
 
-    // Clone or fetch repository
     let repo_info = clone_or_fetch_repo(
-        git_url,
+        source_url,
         &dest_dir,
         branch,
         tag,
         rev,
     )?;
 
-    // Add dependency to manifest
-    let dep = if branch.is_some() || tag.is_some() || rev.is_some() || options.git.is_some() {
+    let dep = if let Some(ref p) = options.path {
         Dependency::Detailed(DetailedDependency {
-            git: Some(git_url.to_string()),
+            path: Some(p.clone()),
+            git: None,
+            branch: None,
+            tag: None,
+            rev: None,
+            version: None,
+        })
+    } else if spec.is_local_path {
+        Dependency::Detailed(DetailedDependency {
+            path: Some(source_url.to_string()),
+            git: None,
+            branch: None,
+            tag: None,
+            rev: None,
+            version: None,
+        })
+    } else if branch.is_some() || tag.is_some() || rev.is_some() || options.git.is_some() {
+        Dependency::Detailed(DetailedDependency {
+            git: Some(source_url.to_string()),
             branch: branch.map(|s| s.to_string()),
             tag: tag.map(|s| s.to_string()),
             rev: rev.map(|s| s.to_string()),
@@ -183,19 +228,17 @@ pub fn install_package(
 
     manifest.save_to_file(&manifest_path)?;
 
-    // Update lockfile
-    let lock_path = root_dir.join(LOCK_FILENAME);
+    let lock_path = resolve_lock_path(root_dir);
     let mut lockfile = Lockfile::load_from_file(&lock_path)?;
     lockfile.upsert_package(LockedPackage {
         name: spec.raw_name.clone(),
         version: "0.1.0".to_string(),
-        source: Some(format!("git+{}#{}", git_url, repo_info.commit_hash)),
+        source: Some(format!("git+{}#{}", source_url, repo_info.commit_hash)),
         checksum: Some(repo_info.checksum),
         dependencies: vec![],
     });
     lockfile.save_to_file(&lock_path)?;
 
-    // Regenerate autoloader with all installed packages
     refresh_autoloader(root_dir, &manifest, &lockfile)?;
 
     Ok(PackageOperationResult {
@@ -206,40 +249,58 @@ pub fn install_package(
     })
 }
 
-/// Update installed dependencies to their latest remote versions.
-pub fn update_all(root_dir: &Path) -> Result<Vec<PackageOperationResult>> {
+/// Backwards compatibility alias for `add_package`.
+pub fn install_package(
+    root_dir: &Path,
+    pkg_spec: &str,
+    options: &AddOptions,
+) -> Result<PackageOperationResult> {
+    add_package(root_dir, pkg_spec, options)
+}
+
+/// Update dependencies within version constraints (`rhp update [pkg]`).
+pub fn update(root_dir: &Path, target_pkg: Option<&str>) -> Result<Vec<PackageOperationResult>> {
     let manifest_path = Manifest::find_in_dir(root_dir).ok_or_else(|| {
-        RpmError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
+        PkgError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
     })?;
 
     let manifest = Manifest::load_from_file(&manifest_path)?;
-    let lock_path = root_dir.join(LOCK_FILENAME);
+    let lock_path = resolve_lock_path(root_dir);
     let mut lockfile = Lockfile::load_from_file(&lock_path)?;
 
     let mut results = Vec::new();
     let mut installed_metas = Vec::new();
 
     for (pkg_name, dep) in &manifest.dependencies {
-        let spec = GitHubPackageSpec::parse(pkg_name).unwrap_or_else(|_| {
+        if let Some(target) = target_pkg {
+            if pkg_name != target && !pkg_name.ends_with(&format!("/{}", target)) {
+                continue;
+            }
+        }
+
+        let spec = PackageSourceSpec::parse(pkg_name).unwrap_or_else(|_| {
             let url = dep.git_url(pkg_name);
-            GitHubPackageSpec {
+            PackageSourceSpec {
                 raw_name: pkg_name.clone(),
                 vendor: "vendor".to_string(),
                 repo: pkg_name.clone(),
-                git_url: url,
+                source_url: url,
                 branch: dep.branch().map(|s| s.to_string()),
                 tag: dep.tag().map(|s| s.to_string()),
                 rev: dep.rev().map(|s| s.to_string()),
+                is_local_path: false,
             }
         });
 
         let dest_dir = spec.destination_path(root_dir);
+        let source_url = if let Some(local_p) = dep.local_path() {
+            local_p.to_string()
+        } else {
+            dep.git_url(pkg_name)
+        };
 
-        let git_url = dep.git_url(pkg_name);
-
-        // Fetch latest updates
         let repo_info = clone_or_fetch_repo(
-            &git_url,
+            &source_url,
             &dest_dir,
             dep.branch(),
             dep.tag(),
@@ -249,7 +310,7 @@ pub fn update_all(root_dir: &Path) -> Result<Vec<PackageOperationResult>> {
         let locked_pkg = LockedPackage {
             name: pkg_name.clone(),
             version: dep.version_req().unwrap_or("0.1.0").to_string(),
-            source: Some(format!("git+{}#{}", spec.git_url, repo_info.commit_hash)),
+            source: Some(format!("git+{}#{}", source_url, repo_info.commit_hash)),
             checksum: Some(repo_info.checksum.clone()),
             dependencies: vec![],
         };
@@ -264,7 +325,7 @@ pub fn update_all(root_dir: &Path) -> Result<Vec<PackageOperationResult>> {
         installed_metas.push(InstalledPackageMeta {
             name: pkg_name.clone(),
             version: dep.version_req().unwrap_or("0.1.0").to_string(),
-            source: Some(spec.git_url.clone()),
+            source: Some(source_url),
             checksum: Some(repo_info.checksum),
             path: rel_path,
             autoload: auto_config,
@@ -284,15 +345,19 @@ pub fn update_all(root_dir: &Path) -> Result<Vec<PackageOperationResult>> {
     Ok(results)
 }
 
-/// Uninstall a package by name: remove from `rpm.toml`, `rpm.lock`, and `vendor/`.
-pub fn uninstall_package(root_dir: &Path, pkg_name: &str) -> Result<bool> {
+/// Backwards compatibility alias for `update(root_dir, None)`.
+pub fn update_all(root_dir: &Path) -> Result<Vec<PackageOperationResult>> {
+    update(root_dir, None)
+}
+
+/// Remove a package: remove from manifest, lockfile, and `vendor/` (`rhp remove <pkg>`).
+pub fn remove_package(root_dir: &Path, pkg_name: &str) -> Result<bool> {
     let manifest_path = Manifest::find_in_dir(root_dir).ok_or_else(|| {
-        RpmError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
+        PkgError::ManifestNotFound(root_dir.join(MANIFEST_FILENAME))
     })?;
 
     let mut manifest = Manifest::load_from_file(&manifest_path)?;
 
-    // Try finding by exact name or matching repo name
     let target_key = if manifest.dependencies.contains_key(pkg_name) {
         Some(pkg_name.to_string())
     } else {
@@ -305,21 +370,18 @@ pub fn uninstall_package(root_dir: &Path, pkg_name: &str) -> Result<bool> {
 
     let actual_name = match target_key {
         Some(k) => k,
-        None => return Err(RpmError::PackageNotFound(pkg_name.to_string())),
+        None => return Err(PkgError::PackageNotFound(pkg_name.to_string())),
     };
 
-    // Remove from manifest
     manifest.remove_dependency(&actual_name);
     manifest.save_to_file(&manifest_path)?;
 
-    // Remove from lockfile
-    let lock_path = root_dir.join(LOCK_FILENAME);
+    let lock_path = resolve_lock_path(root_dir);
     let mut lockfile = Lockfile::load_from_file(&lock_path)?;
     lockfile.remove_package(&actual_name);
     lockfile.save_to_file(&lock_path)?;
 
-    // Delete directory from vendor/
-    if let Ok(spec) = GitHubPackageSpec::parse(&actual_name) {
+    if let Ok(spec) = PackageSourceSpec::parse(&actual_name) {
         let dest = spec.destination_path(root_dir);
         let _ = remove_package_dir(&dest);
     } else {
@@ -327,17 +389,21 @@ pub fn uninstall_package(root_dir: &Path, pkg_name: &str) -> Result<bool> {
         let _ = remove_package_dir(&dest);
     }
 
-    // Regenerate autoloader
     refresh_autoloader(root_dir, &manifest, &lockfile)?;
 
     Ok(true)
 }
 
-/// Initialize a new `rpm.toml` manifest in `root_dir`.
+/// Backwards compatibility alias for `remove_package`.
+pub fn uninstall_package(root_dir: &Path, pkg_name: &str) -> Result<bool> {
+    remove_package(root_dir, pkg_name)
+}
+
+/// Initialize a new `rhp.toml` manifest in `root_dir` (`rhp init`).
 pub fn init_project(root_dir: &Path, custom_name: Option<&str>) -> Result<PathBuf> {
     let manifest_path = root_dir.join(MANIFEST_FILENAME);
     if manifest_path.exists() {
-        return Err(RpmError::General(format!(
+        return Err(PkgError::General(format!(
             "Manifest '{}' already exists.",
             manifest_path.display()
         )));
@@ -361,7 +427,7 @@ pub fn init_project(root_dir: &Path, custom_name: Option<&str>) -> Result<PathBu
 fn refresh_autoloader(root_dir: &Path, manifest: &Manifest, lockfile: &Lockfile) -> Result<()> {
     let mut installed_metas = Vec::new();
     for pkg_name in manifest.dependencies.keys() {
-        let spec = GitHubPackageSpec::parse(pkg_name).ok();
+        let spec = PackageSourceSpec::parse(pkg_name).ok();
         let dest_dir = if let Some(ref s) = spec {
             s.destination_path(root_dir)
         } else {

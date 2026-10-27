@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::error::{Result, RpmError};
+use super::error::{PkgError, Result};
 
-pub const MANIFEST_FILENAME: &str = "rpm.toml";
-pub const ALT_MANIFEST_FILENAME: &str = "rhp.toml";
+pub const MANIFEST_FILENAME: &str = "rhp.toml";
+pub const ALT_MANIFEST_FILENAME: &str = "rpm.toml";
 
-/// Root configuration of an RHP project (`rpm.toml` or `rhp.toml`).
+/// Root configuration of an RHP project (`rhp.toml` or `rpm.toml`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
     pub package: PackageMetadata,
@@ -163,7 +163,7 @@ impl Manifest {
                 name: name.into(),
                 version: "0.1.0".to_string(),
                 edition: Some("2024".to_string()),
-                description: Some("An RHP project managed with RPM".to_string()),
+                description: Some("An RHP project".to_string()),
                 authors: vec![],
                 license: Some("MIT".to_string()),
                 repository: None,
@@ -180,15 +180,15 @@ impl Manifest {
         }
     }
 
-    /// Search for `rpm.toml` or `rhp.toml` in `dir`.
+    /// Search for `rhp.toml` or `rpm.toml` in `dir`.
     pub fn find_in_dir(dir: &Path) -> Option<PathBuf> {
-        let rpm_path = dir.join(MANIFEST_FILENAME);
-        if rpm_path.exists() {
-            return Some(rpm_path);
-        }
-        let rhp_path = dir.join(ALT_MANIFEST_FILENAME);
+        let rhp_path = dir.join(MANIFEST_FILENAME);
         if rhp_path.exists() {
             return Some(rhp_path);
+        }
+        let alt_path = dir.join(ALT_MANIFEST_FILENAME);
+        if alt_path.exists() {
+            return Some(alt_path);
         }
         None
     }
@@ -196,10 +196,10 @@ impl Manifest {
     /// Load and parse manifest from file path.
     pub fn load_from_file(path: &Path) -> Result<Self> {
         if !path.exists() {
-            return Err(RpmError::ManifestNotFound(path.to_path_buf()));
+            return Err(PkgError::ManifestNotFound(path.to_path_buf()));
         }
         let content = fs::read_to_string(path)?;
-        let manifest: Manifest = toml::from_str(&content).map_err(|e| RpmError::ManifestParseError {
+        let manifest: Manifest = toml::from_str(&content).map_err(|e| PkgError::ManifestParseError {
             path: path.to_path_buf(),
             message: e.to_string(),
         })?;
@@ -208,7 +208,7 @@ impl Manifest {
 
     /// Serialize and write manifest to file path.
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self).map_err(|e| RpmError::ManifestWriteError {
+        let content = toml::to_string_pretty(self).map_err(|e| PkgError::ManifestWriteError {
             path: path.to_path_buf(),
             message: e.to_string(),
         })?;

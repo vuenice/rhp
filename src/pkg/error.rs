@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, RpmError>;
+pub type Result<T> = std::result::Result<T, PkgError>;
+pub type RpmError = PkgError;
 
 #[derive(Debug, Error)]
-pub enum RpmError {
-    #[error("Manifest file '{0}' not found. Run 'rpm init' to create one.")]
+pub enum PkgError {
+    #[error("Manifest file '{0}' not found. Run 'rhp init' to create one.")]
     ManifestNotFound(PathBuf),
 
     #[error("Failed to parse manifest '{path}': {message}")]
