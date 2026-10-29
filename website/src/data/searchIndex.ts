@@ -73,7 +73,7 @@ const rawSearchIndex: SearchItem[] = [
     section: "Language Guide",
     description: "Typed boundaries, fn arrow syntax, variadics, closures, and reference restrictions.",
     url: "/docs/guide/functions",
-    keywords: ["functions", "arrow", "fn", "closures", "parameters", "returns", "lambdas"]
+    keywords: ["functions", "arrow", "fn", "closures", "$this", "lexical capture", "parameters", "returns", "lambdas"]
   },
   {
     title: "Classes, Objects & Enums",

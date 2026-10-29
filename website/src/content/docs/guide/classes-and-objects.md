@@ -44,6 +44,25 @@ class User {
 }
 ```
 
+### Automatic Lexical Scope Capture of `$this` in Closures
+
+Anonymous callbacks (`function(...) { ... }`) created within non-static instance methods automatically capture `$this` from their enclosing lexical scope:
+
+```php
+class CartService {
+    private DiscountManager $discounts;
+
+    public function applyDiscounts(List $items): List {
+        // Automatically captures $this from the enclosing method scope
+        return $items->map(function(CartItem $item): CartItem {
+            return $this->discounts->apply($item);
+        });
+    }
+}
+```
+
+Methods and properties can be invoked directly inside closures without manual binding (`$closure->bindTo($this)`). For details, see [Anonymous Functions & Lexical Scope Capture of $this](/docs/guide/functions#anonymous-functions--automatic-lexical-scope-capture-of-this).
+
 ---
 
 ## Interfaces and Traits

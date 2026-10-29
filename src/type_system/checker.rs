@@ -2257,13 +2257,14 @@ impl TypeChecker {
                 let current_class = ctx.and_then(|c| c.enclosing_class.as_deref());
                 let mut closure_env = TypeEnvironment::new();
                 if !*is_static {
-                    let in_static_method = ctx.map(|c| c.callable_kind.as_str()) == Some("static method");
-                    if !in_static_method {
-                        let this_ty = if let Some(cls) = current_class {
-                            RhpType::Class(cls.to_string())
-                        } else {
-                            RhpType::Dynamic
-                        };
+                    let this_ty = if let Some(t) = env.get_type("$this") {
+                        Some(t)
+                    } else if current_class.is_none() {
+                        Some(RhpType::Dynamic)
+                    } else {
+                        None
+                    };
+                    if let Some(this_ty) = this_ty {
                         let _ = closure_env.declare_typed(
                             "$this",
                             this_ty,

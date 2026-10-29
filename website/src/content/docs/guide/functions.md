@@ -76,6 +76,29 @@ list $taxed = $prices->map(fn(float $price) => $price * (1 + $taxRate));
 
 ---
 
+## Anonymous Functions & Automatic Lexical Scope Capture of `$this`
+
+Non-static anonymous functions (`function(...) { ... }`) created within instance methods automatically capture `$this` from their enclosing lexical scope without manual binding:
+
+```php
+class OrderService {
+    private TaxCalculator $tax;
+
+    public function processOrders(List $orders): List {
+        // Automatically captures $this from the enclosing method scope
+        return $orders->map(function(Order $order): ProcessedOrder {
+            return $this->tax->calculate($order);
+        });
+    }
+}
+```
+
+- **Zero Manual Binding:** Access `$this->prop` or `$this->method()` directly without calling `->bindTo()` or passing `$this`.
+- **Lexical Scope Propagation:** Non-static closures capture `$this` transitively across nested closure boundaries.
+- **Static Closures (`static function`):** Mark closures with `static` (`static function(...) { ... }`) when `$this` should not be captured or to avoid strong cyclic captures into properties.
+
+---
+
 ## Global Function Lowering (`Glob::helperFunctions`)
 
 RHP eliminates PHP's global namespace performance degradation. Global calls are statically resolved and compiled at parse-time:

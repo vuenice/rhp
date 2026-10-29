@@ -1289,10 +1289,26 @@ impl PhpValue {
                 }
                 _ => false,
             },
-            RhpType::Iterable(_) => matches!(
-                self,
-                Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)
-            ),
+            RhpType::Iterable(_) => match self {
+                Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_) => true,
+                Self::Object(obj) => {
+                    let obj_cls = &obj.borrow().class_name;
+                    if let Some(h) = hierarchy {
+                        h.is_subtype_of(obj_cls, "Traversable")
+                            || h.is_subtype_of(obj_cls, "IteratorAggregate")
+                            || h.is_subtype_of(obj_cls, "Iterator")
+                    } else {
+                        let clean = obj_cls.strip_prefix('\\').unwrap_or(obj_cls);
+                        clean == "ArrayIterator"
+                            || clean == "LengthAwarePaginator"
+                            || clean == "Paginator"
+                            || clean == "Collection"
+                            || clean.ends_with("Collection")
+                            || clean.ends_with("Paginator")
+                    }
+                }
+                _ => false,
+            },
             RhpType::Callable { .. } => match self {
                 Self::Closure(_) => true,
                 Self::Object(obj) => {
@@ -1309,13 +1325,30 @@ impl PhpValue {
             RhpType::Class(class_name) => match self {
                 Self::Object(obj) => {
                     let obj_cls = &obj.borrow().class_name;
-                    if obj_cls == class_name {
+                    let obj_clean = obj_cls.strip_prefix('\\').unwrap_or(obj_cls);
+                    let cls_clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+                    if obj_clean == cls_clean {
                         return true;
                     }
                     if let Some(h) = hierarchy {
-                        h.is_subtype_of(obj_cls, class_name)
+                        h.is_subtype_of(obj_clean, cls_clean)
                     } else {
-                        false
+                        if cls_clean == "Traversable" {
+                            obj_clean == "ArrayIterator"
+                                || obj_clean == "LengthAwarePaginator"
+                                || obj_clean == "Paginator"
+                                || obj_clean == "Collection"
+                                || obj_clean.ends_with("Collection")
+                                || obj_clean.ends_with("Paginator")
+                        } else if cls_clean == "Iterator" {
+                            obj_clean == "ArrayIterator"
+                        } else if cls_clean == "IteratorAggregate" {
+                            obj_clean == "LengthAwarePaginator"
+                                || obj_clean == "Paginator"
+                                || obj_clean == "Collection"
+                        } else {
+                            false
+                        }
                     }
                 }
                 Self::Future(_) if class_name == "Future" => true,

@@ -2659,7 +2659,17 @@ fn dispatch_reflect(method: &str, args: &[PhpValue]) -> FacadeResult {
                 || clean.eq_ignore_ascii_case("Closure")
                 || clean.eq_ignore_ascii_case("Future")
                 || clean.ends_with("Exception")
-                || clean.ends_with("Error");
+                || clean.ends_with("Error")
+                || clean.eq_ignore_ascii_case("Traversable")
+                || clean.eq_ignore_ascii_case("IteratorAggregate")
+                || clean.eq_ignore_ascii_case("Iterator")
+                || clean.eq_ignore_ascii_case("ArrayIterator")
+                || clean.eq_ignore_ascii_case("Countable")
+                || clean.eq_ignore_ascii_case("ArrayAccess")
+                || clean.eq_ignore_ascii_case("LengthAwarePaginator")
+                || clean.eq_ignore_ascii_case("Paginator")
+                || clean.eq_ignore_ascii_case("Collection")
+                || clean.eq_ignore_ascii_case("Illuminate\\Support\\Collection");
             Ok(PhpValue::Bool(exists))
         }
         "functionExists" | "function_exists" => {

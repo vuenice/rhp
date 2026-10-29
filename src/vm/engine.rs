@@ -71,6 +71,11 @@ pub(crate) enum ActiveIterator {
         entries: Vec<(PhpValue, PhpValue)>,
         cursor: usize,
     },
+    /// Object implementing Iterator interface (`rewind`, `valid`, `current`, `key`, `next`).
+    IteratorObject {
+        iterator: PhpValue,
+        started: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -298,6 +303,16 @@ impl VM {
             || clean.eq_ignore_ascii_case("Future")
             || clean.ends_with("Exception")
             || clean.ends_with("Error")
+            || clean.eq_ignore_ascii_case("Traversable")
+            || clean.eq_ignore_ascii_case("IteratorAggregate")
+            || clean.eq_ignore_ascii_case("Iterator")
+            || clean.eq_ignore_ascii_case("ArrayIterator")
+            || clean.eq_ignore_ascii_case("Countable")
+            || clean.eq_ignore_ascii_case("ArrayAccess")
+            || clean.eq_ignore_ascii_case("LengthAwarePaginator")
+            || clean.eq_ignore_ascii_case("Paginator")
+            || clean.eq_ignore_ascii_case("Collection")
+            || clean.eq_ignore_ascii_case("Illuminate\\Support\\Collection")
         {
             return true;
         }
@@ -1265,41 +1280,8 @@ impl VM {
                 // 5. Iteration (`foreach`)
                 // -----------------------------------------------------------------
                 OpCode::IterInit { iter_reg, iterable } => {
-                    let iter_source = &self.registers[base_reg + iterable.index()];
-                    let active_iter = match iter_source {
-                        PhpValue::List(list) => ActiveIterator::List {
-                            items: list.clone(),
-                            cursor: 0,
-                        },
-                        PhpValue::Array(arr) => ActiveIterator::List {
-                            items: arr.clone(),
-                            cursor: 0,
-                        },
-                        PhpValue::Set(set) => {
-                            let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
-                            ActiveIterator::Set { items, cursor: 0 }
-                        }
-                        PhpValue::Dict(dict) => ActiveIterator::Dict {
-                            dict: dict.clone(),
-                            cursor: 0,
-                        },
-                        PhpValue::HashMap(map) => {
-                            let entries: Vec<(PhpValue, PhpValue)> = map
-                                .borrow()
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            ActiveIterator::Entries { entries, cursor: 0 }
-                        }
-                        other => {
-                            return Err(self.make_error(
-                                RuntimeErrorKind::NotIterable {
-                                    type_name: other.type_name().to_string(),
-                                },
-                                span,
-                            ));
-                        }
-                    };
+                    let iter_source = self.registers[base_reg + iterable.index()].clone();
+                    let active_iter = self.build_active_iterator(&iter_source, span)?;
 
                     self.frames[frame_idx].iterators.insert(
                         iter_reg.index(),
@@ -1313,72 +1295,117 @@ impl VM {
                     val_dst,
                     jump_end,
                 } => {
-                    let next_item = {
-                        if let Some(iter_state) =
-                            self.frames[frame_idx].iterators.get_mut(&iter_reg.index())
-                        {
-                            match iter_state {
-                                ActiveIterator::List { items, cursor } => {
-                                    let b = items.borrow();
-                                    if *cursor < b.len() {
-                                        let val = b[*cursor].clone();
-                                        let curr = *cursor;
-                                        *cursor += 1;
-                                        Some((Some(PhpValue::Int(curr as i32)), val))
-                                    } else {
-                                        None
-                                    }
-                                }
-                                ActiveIterator::Dict { dict, cursor } => {
-                                    let b = dict.borrow();
-                                    if *cursor < b.len() {
-                                        if let Some((k, v)) = b.get_index(*cursor) {
-                                            let key = PhpValue::string(k.clone());
-                                            let val = v.clone();
-                                            *cursor += 1;
-                                            Some((Some(key), val))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                ActiveIterator::Set { items, cursor } => {
-                                    if *cursor < items.len() {
-                                        let val = items[*cursor].clone();
-                                        let curr = *cursor;
-                                        *cursor += 1;
-                                        Some((Some(PhpValue::Int(curr as i32)), val))
-                                    } else {
-                                        None
-                                    }
-                                }
-                                ActiveIterator::Entries { entries, cursor } => {
-                                    if *cursor < entries.len() {
-                                        let (k, v) = entries[*cursor].clone();
-                                        *cursor += 1;
-                                        Some((Some(k), v))
-                                    } else {
-                                        None
-                                    }
-                                }
-                            }
-                        } else {
-                            None
+                    let mut iter_state = match self.frames[frame_idx].iterators.remove(&iter_reg.index()) {
+                        Some(s) => s,
+                        None => {
+                            self.frames[frame_idx].ip = jump_end as usize;
+                            continue;
                         }
                     };
 
-                    if let Some((k_opt, v)) = next_item {
-                        if let Some(k_reg) = key_dst {
-                            if let Some(k) = k_opt {
-                                self.registers[base_reg + k_reg.index()] = k;
+                    enum IterYield {
+                        Next { key: Option<PhpValue>, val: PhpValue },
+                        Done,
+                    }
+
+                    let yield_result: Result<IterYield, RuntimeError> = match &mut iter_state {
+                        ActiveIterator::List { items, cursor } => {
+                            let b = items.borrow();
+                            if *cursor < b.len() {
+                                let val = b[*cursor].clone();
+                                let curr = *cursor;
+                                *cursor += 1;
+                                Ok(IterYield::Next {
+                                    key: Some(PhpValue::Int(curr as i32)),
+                                    val,
+                                })
+                            } else {
+                                Ok(IterYield::Done)
                             }
                         }
-                        self.registers[base_reg + val_dst.index()] = v;
-                    } else {
-                        self.frames[frame_idx].iterators.remove(&iter_reg.index());
-                        self.frames[frame_idx].ip = jump_end as usize;
+                        ActiveIterator::Dict { dict, cursor } => {
+                            let b = dict.borrow();
+                            if *cursor < b.len() {
+                                if let Some((k, v)) = b.get_index(*cursor) {
+                                    let key_val = PhpValue::string(k.clone());
+                                    let val_val = v.clone();
+                                    *cursor += 1;
+                                    Ok(IterYield::Next {
+                                        key: Some(key_val),
+                                        val: val_val,
+                                    })
+                                } else {
+                                    Ok(IterYield::Done)
+                                }
+                            } else {
+                                Ok(IterYield::Done)
+                            }
+                        }
+                        ActiveIterator::Set { items, cursor } => {
+                            if *cursor < items.len() {
+                                let val = items[*cursor].clone();
+                                let curr = *cursor;
+                                *cursor += 1;
+                                Ok(IterYield::Next {
+                                    key: Some(PhpValue::Int(curr as i32)),
+                                    val,
+                                })
+                            } else {
+                                Ok(IterYield::Done)
+                            }
+                        }
+                        ActiveIterator::Entries { entries, cursor } => {
+                            if *cursor < entries.len() {
+                                let (k, v) = entries[*cursor].clone();
+                                *cursor += 1;
+                                Ok(IterYield::Next {
+                                    key: Some(k),
+                                    val: v,
+                                })
+                            } else {
+                                Ok(IterYield::Done)
+                            }
+                        }
+                        ActiveIterator::IteratorObject { iterator, started } => {
+                            let iter_obj = iterator.clone();
+                            if !*started {
+                                self.invoke_method_sync(iter_obj.clone(), "rewind", vec![], span)?;
+                                *started = true;
+                            } else {
+                                self.invoke_method_sync(iter_obj.clone(), "next", vec![], span)?;
+                            }
+
+                            let is_valid = self
+                                .invoke_method_sync(iter_obj.clone(), "valid", vec![], span)?
+                                .to_bool()
+                                .unwrap_or(false);
+                            if is_valid {
+                                let val = self.invoke_method_sync(iter_obj.clone(), "current", vec![], span)?;
+                                let key = if key_dst.is_some() {
+                                    Some(self.invoke_method_sync(iter_obj.clone(), "key", vec![], span)?)
+                                } else {
+                                    None
+                                };
+                                Ok(IterYield::Next { key, val })
+                            } else {
+                                Ok(IterYield::Done)
+                            }
+                        }
+                    };
+
+                    match yield_result? {
+                        IterYield::Next { key, val } => {
+                            self.frames[frame_idx].iterators.insert(iter_reg.index(), iter_state);
+                            if let Some(k_reg) = key_dst {
+                                if let Some(k) = key {
+                                    self.registers[base_reg + k_reg.index()] = k;
+                                }
+                            }
+                            self.registers[base_reg + val_dst.index()] = val;
+                        }
+                        IterYield::Done => {
+                            self.frames[frame_idx].ip = jump_end as usize;
+                        }
                     }
                 }
 
@@ -1836,6 +1863,33 @@ impl VM {
                                 o.borrow_mut().set_property("code", code_val.value.clone());
                             }
                         }
+                    } else if (clean_name == "ArrayIterator"
+                        || clean_name == "Collection"
+                        || clean_name == "Illuminate\\Support\\Collection")
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let Some(items_arg) = staged.first() {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("items", items_arg.value.clone());
+                            }
+                        }
+                    } else if (clean_name == "LengthAwarePaginator" || clean_name == "Paginator")
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let PhpValue::Object(ref o) = instance {
+                            if let Some(items_arg) = staged.first() {
+                                o.borrow_mut().set_property("items", items_arg.value.clone());
+                            }
+                            if let Some(total_arg) = staged.get(1) {
+                                o.borrow_mut().set_property("total", total_arg.value.clone());
+                            }
+                            if let Some(pp_arg) = staged.get(2) {
+                                o.borrow_mut().set_property("perPage", pp_arg.value.clone());
+                            }
+                            if let Some(cp_arg) = staged.get(3) {
+                                o.borrow_mut().set_property("currentPage", cp_arg.value.clone());
+                            }
+                        }
                     }
 
                     self.registers[base_reg + dst.index()] = instance.clone();
@@ -1860,11 +1914,55 @@ impl VM {
                 } => {
                     let staged = self.drain_staged_args(arg_count as usize);
                     let class_name = self.registers[base_reg + class_reg.index()].to_php_string();
+                    let clean_name = class_name.strip_prefix('\\').unwrap_or(&class_name).to_string();
 
-                    let instance = self.instantiate_class(&class_name, span)?;
+                    let instance = self.instantiate_class(&clean_name, span)?;
+
+                    if (clean_name.ends_with("Exception") || clean_name.ends_with("Error"))
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let Some(msg_val) = staged.first() {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("message", msg_val.value.clone());
+                            }
+                        }
+                        if let Some(code_val) = staged.get(1) {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("code", code_val.value.clone());
+                            }
+                        }
+                    } else if (clean_name == "ArrayIterator"
+                        || clean_name == "Collection"
+                        || clean_name == "Illuminate\\Support\\Collection")
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let Some(items_arg) = staged.first() {
+                            if let PhpValue::Object(ref o) = instance {
+                                o.borrow_mut().set_property("items", items_arg.value.clone());
+                            }
+                        }
+                    } else if (clean_name == "LengthAwarePaginator" || clean_name == "Paginator")
+                        && !self.module.class_index.contains_key(&clean_name)
+                    {
+                        if let PhpValue::Object(ref o) = instance {
+                            if let Some(items_arg) = staged.first() {
+                                o.borrow_mut().set_property("items", items_arg.value.clone());
+                            }
+                            if let Some(total_arg) = staged.get(1) {
+                                o.borrow_mut().set_property("total", total_arg.value.clone());
+                            }
+                            if let Some(pp_arg) = staged.get(2) {
+                                o.borrow_mut().set_property("perPage", pp_arg.value.clone());
+                            }
+                            if let Some(cp_arg) = staged.get(3) {
+                                o.borrow_mut().set_property("currentPage", cp_arg.value.clone());
+                            }
+                        }
+                    }
+
                     self.registers[base_reg + dst.index()] = instance.clone();
 
-                    if let Some(ctor_id) = self.resolve_method_id(&class_name, "__construct") {
+                    if let Some(ctor_id) = self.resolve_method_id(&clean_name, "__construct") {
                         self.push_compiled_call_frame(
                             ctor_id,
                             Some(instance),
@@ -2556,6 +2654,176 @@ impl VM {
             other => Err(self.make_error(
                 RuntimeErrorKind::NotCallable {
                     type_name: self.runtime_type_label(other),
+                },
+                span,
+            )),
+        }
+    }
+
+    /// Invoke an instance or built-in object method synchronously on this VM.
+    pub fn invoke_method_sync(
+        &mut self,
+        receiver: PhpValue,
+        method_name: &str,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let flat_args = args.clone();
+        let staged: Vec<StagedArg> = args
+            .into_iter()
+            .map(|value| StagedArg {
+                value,
+                name: None,
+                is_unpack: false,
+                is_reference: false,
+                caller_reg: None,
+            })
+            .collect();
+
+        match &receiver {
+            PhpValue::Object(obj_rc) => {
+                let cls_name = obj_rc.borrow().class_name.clone();
+
+                if let Some(target_id) = self.resolve_method_id(&cls_name, method_name) {
+                    let depth_before = self.frames.len();
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(receiver),
+                        &staged,
+                        &[],
+                        None,
+                        span,
+                    )?;
+                    self.dispatch_loop(depth_before)
+                } else {
+                    self.exec_builtin_object_method(
+                        &cls_name,
+                        &receiver,
+                        method_name,
+                        &flat_args,
+                        span,
+                    )
+                }
+            }
+            _ => self.exec_fluent_value_method(&receiver, method_name, &flat_args, span),
+        }
+    }
+
+    fn build_active_iterator(
+        &mut self,
+        iter_source: &PhpValue,
+        span: Span,
+    ) -> Result<ActiveIterator, RuntimeError> {
+        self.build_active_iterator_with_depth(iter_source, 0, span)
+    }
+
+    fn build_active_iterator_with_depth(
+        &mut self,
+        iter_source: &PhpValue,
+        depth: usize,
+        span: Span,
+    ) -> Result<ActiveIterator, RuntimeError> {
+        if depth > 20 {
+            return Err(self.make_error(
+                RuntimeErrorKind::NotIterable {
+                    type_name: iter_source.type_name().to_string(),
+                },
+                span,
+            ));
+        }
+
+        match iter_source {
+            PhpValue::List(list) => Ok(ActiveIterator::List {
+                items: list.clone(),
+                cursor: 0,
+            }),
+            PhpValue::Array(arr) => Ok(ActiveIterator::List {
+                items: arr.clone(),
+                cursor: 0,
+            }),
+            PhpValue::Set(set) => {
+                let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                Ok(ActiveIterator::Set { items, cursor: 0 })
+            }
+            PhpValue::Dict(dict) => Ok(ActiveIterator::Dict {
+                dict: dict.clone(),
+                cursor: 0,
+            }),
+            PhpValue::HashMap(map) => {
+                let entries: Vec<(PhpValue, PhpValue)> = map
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                Ok(ActiveIterator::Entries { entries, cursor: 0 })
+            }
+            PhpValue::Object(obj_rc) => {
+                let cls_name = obj_rc.borrow().class_name.clone();
+
+                // 1. ArrayIterator built-in: unwrap internal items directly
+                if cls_name == "ArrayIterator" {
+                    if let Some(items_val) = obj_rc.borrow().get_property("items").cloned() {
+                        return self.build_active_iterator_with_depth(&items_val, depth + 1, span);
+                    }
+                }
+
+                // 2. IteratorAggregate or objects implementing getIterator()
+                let has_get_iterator = self.resolve_method_id(&cls_name, "getIterator").is_some()
+                    || self.is_class_instance_of(&cls_name, "IteratorAggregate")
+                    || cls_name == "LengthAwarePaginator"
+                    || cls_name == "Paginator"
+                    || cls_name.ends_with("Collection");
+
+                if has_get_iterator {
+                    let iterator = self.invoke_method_sync(
+                        iter_source.clone(),
+                        "getIterator",
+                        vec![],
+                        span,
+                    )?;
+                    return self.build_active_iterator_with_depth(&iterator, depth + 1, span);
+                }
+
+                // 3. Iterator interface (rewind, valid, current, key, next)
+                let has_iterator_methods = (self.resolve_method_id(&cls_name, "valid").is_some()
+                    && self.resolve_method_id(&cls_name, "current").is_some()
+                    && self.resolve_method_id(&cls_name, "next").is_some())
+                    || self.is_class_instance_of(&cls_name, "Iterator");
+
+                if has_iterator_methods {
+                    return Ok(ActiveIterator::IteratorObject {
+                        iterator: iter_source.clone(),
+                        started: false,
+                    });
+                }
+
+                // 4. Plain object: iterate public/accessible properties
+                let obj = obj_rc.borrow();
+                let mut entries = Vec::new();
+                let shape = obj.shape.borrow();
+                let mut ordered_props: Vec<(usize, String)> = shape
+                    .property_indices
+                    .iter()
+                    .map(|(k, &idx)| (idx, k.clone()))
+                    .collect();
+                ordered_props.sort_by_key(|(idx, _)| *idx);
+                let mut seen = std::collections::HashSet::new();
+                for (_, prop_name) in ordered_props {
+                    if let Some(val) = obj.get_property(&prop_name) {
+                        entries.push((PhpValue::string(prop_name.clone()), val.clone()));
+                        seen.insert(prop_name);
+                    }
+                }
+                for (prop_name, val) in &obj.properties {
+                    if !seen.contains(prop_name) {
+                        entries.push((PhpValue::string(prop_name.clone()), val.clone()));
+                    }
+                }
+                Ok(ActiveIterator::Entries { entries, cursor: 0 })
+            }
+            other => Err(self.make_error(
+                RuntimeErrorKind::NotIterable {
+                    type_name: other.type_name().to_string(),
                 },
                 span,
             )),
