@@ -5851,6 +5851,35 @@ impl VM {
                 crate::vm::fiber::record_fiber_io_finish();
                 Ok(PhpValue::Int(1))
             }
+            ("DBQuery", "paginate") => {
+                let per_page = args.first().and_then(|v| v.to_i64()).unwrap_or(15) as i32;
+                let page = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1) as i32;
+                let tbl = if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+                crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::DbQuery {
+                    sql: format!("SELECT * FROM {} LIMIT {} OFFSET {}", tbl, per_page, (page - 1) * per_page),
+                });
+                crate::vm::fiber::record_fiber_io_finish();
+
+                let mut record = VmObject::new("ModelRecord");
+                record.set_property("id", PhpValue::Int(1));
+                record.set_property("table", PhpValue::string(tbl));
+                let items = PhpValue::list(vec![PhpValue::object(record)]);
+
+                let mut paginator = VmObject::new("LengthAwarePaginator");
+                paginator.set_property("items", items);
+                paginator.set_property("total", PhpValue::Int(1));
+                paginator.set_property("perPage", PhpValue::Int(per_page));
+                paginator.set_property("currentPage", PhpValue::Int(page));
+                Ok(PhpValue::object(paginator))
+            }
             ("ADBQuery", "where" | "orderBy" | "limit" | "offset" | "select") => {
                 Ok(receiver.clone())
             }
@@ -5939,6 +5968,244 @@ impl VM {
                     let _ = tx.send(Ok(crate::vm::parent_process::FrozenValue::Int(1)));
                 });
                 Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ADBQuery", "paginate") => {
+                let per_page = args.first().and_then(|v| v.to_i64()).unwrap_or(15) as i32;
+                let page = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1) as i32;
+                let tbl = if let PhpValue::Object(o) = receiver {
+                    if let Some(t) = o.borrow().get_property("table") {
+                        t.to_php_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+                let rt = crate::vm::facade::tokio_runtime();
+                let (tx, rx) = std::sync::mpsc::channel();
+                rt.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    let mut record = VmObject::new("ModelRecord");
+                    record.set_property("id", PhpValue::Int(1));
+                    record.set_property("table", PhpValue::string(tbl));
+                    let items = vec![crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(record))];
+
+                    let mut paginator = VmObject::new("LengthAwarePaginator");
+                    paginator.set_property(
+                        "items",
+                        PhpValue::List(Rc::new(RefCell::new(
+                            items.into_iter().map(|f| f.to_php_value()).collect(),
+                        ))),
+                    );
+                    paginator.set_property("total", PhpValue::Int(1));
+                    paginator.set_property("perPage", PhpValue::Int(per_page));
+                    paginator.set_property("currentPage", PhpValue::Int(page));
+                    let frozen = crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(paginator));
+                    let _ = tx.send(Ok(frozen));
+                });
+                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))))
+            }
+            ("ArrayIterator", "count") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        let cnt = match items {
+                            PhpValue::List(l) => l.borrow().len(),
+                            PhpValue::Array(a) => a.borrow().len(),
+                            PhpValue::Dict(d) => d.borrow().len(),
+                            PhpValue::Set(s) => s.borrow().len(),
+                            _ => 0,
+                        };
+                        return Ok(PhpValue::Int(cnt as i32));
+                    }
+                }
+                Ok(PhpValue::Int(0))
+            }
+            ("ArrayIterator", "getArrayCopy") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        return Ok(items.clone());
+                    }
+                }
+                Ok(PhpValue::list(vec![]))
+            }
+            ("ArrayIterator", "rewind") => {
+                if let PhpValue::Object(o) = receiver {
+                    o.borrow_mut().set_property("cursor", PhpValue::Int(0));
+                }
+                Ok(PhpValue::Null)
+            }
+            ("ArrayIterator", "valid") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    let cursor = b.get_property("cursor").and_then(|v| v.to_i64()).unwrap_or(0);
+                    if let Some(items) = b.get_property("items") {
+                        let len = match items {
+                            PhpValue::List(l) => l.borrow().len(),
+                            PhpValue::Array(a) => a.borrow().len(),
+                            PhpValue::Dict(d) => d.borrow().len(),
+                            PhpValue::Set(s) => s.borrow().len(),
+                            _ => 0,
+                        };
+                        return Ok(PhpValue::Bool(cursor >= 0 && (cursor as usize) < len));
+                    }
+                }
+                Ok(PhpValue::Bool(false))
+            }
+            ("ArrayIterator", "current") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    let cursor = b.get_property("cursor").and_then(|v| v.to_i64()).unwrap_or(0) as usize;
+                    if let Some(items) = b.get_property("items") {
+                        match items {
+                            PhpValue::List(l) => {
+                                let lb = l.borrow();
+                                if cursor < lb.len() {
+                                    return Ok(lb[cursor].clone());
+                                }
+                            }
+                            PhpValue::Array(a) => {
+                                let ab = a.borrow();
+                                if cursor < ab.len() {
+                                    return Ok(ab[cursor].clone());
+                                }
+                            }
+                            PhpValue::Dict(d) => {
+                                let db = d.borrow();
+                                if cursor < db.len() {
+                                    if let Some((_, v)) = db.get_index(cursor) {
+                                        return Ok(v.clone());
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
+            }
+            ("ArrayIterator", "key") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    let cursor = b.get_property("cursor").and_then(|v| v.to_i64()).unwrap_or(0) as usize;
+                    if let Some(items) = b.get_property("items") {
+                        match items {
+                            PhpValue::List(_) | PhpValue::Array(_) => {
+                                return Ok(PhpValue::Int(cursor as i32));
+                            }
+                            PhpValue::Dict(d) => {
+                                let db = d.borrow();
+                                if cursor < db.len() {
+                                    if let Some((k, _)) = db.get_index(cursor) {
+                                        return Ok(PhpValue::string(k.clone()));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
+            }
+            ("ArrayIterator", "next") => {
+                if let PhpValue::Object(o) = receiver {
+                    let mut b = o.borrow_mut();
+                    let cursor = b.get_property("cursor").and_then(|v| v.to_i64()).unwrap_or(0);
+                    b.set_property("cursor", PhpValue::Int((cursor + 1) as i32));
+                }
+                Ok(PhpValue::Null)
+            }
+            ("ArrayIterator", "getIterator") => Ok(receiver.clone()),
+            ("Collection" | "Illuminate\\Support\\Collection", "all" | "toArray" | "items") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        return Ok(items.clone());
+                    }
+                }
+                Ok(PhpValue::list(vec![]))
+            }
+            ("Collection" | "Illuminate\\Support\\Collection", "count") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        let cnt = match items {
+                            PhpValue::List(l) => l.borrow().len(),
+                            PhpValue::Array(a) => a.borrow().len(),
+                            PhpValue::Dict(d) => d.borrow().len(),
+                            PhpValue::Set(s) => s.borrow().len(),
+                            _ => 0,
+                        };
+                        return Ok(PhpValue::Int(cnt as i32));
+                    }
+                }
+                Ok(PhpValue::Int(0))
+            }
+            ("Collection" | "Illuminate\\Support\\Collection", "getIterator") => {
+                let items = if let PhpValue::Object(o) = receiver {
+                    o.borrow().get_property("items").cloned().unwrap_or_else(|| PhpValue::list(vec![]))
+                } else {
+                    PhpValue::list(vec![])
+                };
+                let mut iter_obj = VmObject::new("ArrayIterator");
+                iter_obj.set_property("items", items);
+                iter_obj.set_property("cursor", PhpValue::Int(0));
+                Ok(PhpValue::object(iter_obj))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "items") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        return Ok(items.clone());
+                    }
+                }
+                Ok(PhpValue::list(vec![]))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "total") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(tot) = o.borrow().get_property("total") {
+                        return Ok(tot.clone());
+                    }
+                }
+                Ok(PhpValue::Int(0))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "perPage") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(pp) = o.borrow().get_property("perPage") {
+                        return Ok(pp.clone());
+                    }
+                }
+                Ok(PhpValue::Int(15))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "currentPage") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(cp) = o.borrow().get_property("currentPage") {
+                        return Ok(cp.clone());
+                    }
+                }
+                Ok(PhpValue::Int(1))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "count") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(items) = o.borrow().get_property("items") {
+                        let cnt = match items {
+                            PhpValue::List(l) => l.borrow().len(),
+                            PhpValue::Array(a) => a.borrow().len(),
+                            PhpValue::Dict(d) => d.borrow().len(),
+                            PhpValue::Set(s) => s.borrow().len(),
+                            _ => 0,
+                        };
+                        return Ok(PhpValue::Int(cnt as i32));
+                    }
+                }
+                Ok(PhpValue::Int(0))
+            }
+            ("LengthAwarePaginator" | "Paginator" | "Illuminate\\Pagination\\LengthAwarePaginator" | "Illuminate\\Pagination\\Paginator", "getIterator") => {
+                let items = if let PhpValue::Object(o) = receiver {
+                    o.borrow().get_property("items").cloned().unwrap_or_else(|| PhpValue::list(vec![]))
+                } else {
+                    PhpValue::list(vec![])
+                };
+                let mut iter_obj = VmObject::new("ArrayIterator");
+                iter_obj.set_property("items", items);
+                iter_obj.set_property("cursor", PhpValue::Int(0));
+                Ok(PhpValue::object(iter_obj))
             }
             ("LoggerChannel", "info" | "error" | "debug" | "warning" | "warn" | "notice"
             | "alert" | "critical" | "emergency") => {
