@@ -278,14 +278,14 @@ impl RhpType {
             TypeHintKind::Named(ident) => {
                 let name = ident.name;
                 match name {
-                    "int" => Ok(RhpType::Int),
-                    "float" => Ok(RhpType::Float),
+                    "int" | "Int" => Ok(RhpType::Int),
+                    "float" | "Float" => Ok(RhpType::Float),
                     "string" => Ok(RhpType::String),
-                    "bool" | "true" | "false" => Ok(RhpType::Bool),
+                    "bool" | "Bool" | "true" | "false" => Ok(RhpType::Bool),
                     "void" => Ok(RhpType::Void),
                     "never" => Ok(RhpType::Never),
                     "mixed" => Ok(RhpType::Mixed),
-                    "null" => Ok(RhpType::Null),
+                    "null" | "Null" => Ok(RhpType::Null),
                     "object" => Ok(RhpType::Object),
                     "array" => Ok(RhpType::Array(Box::new(RhpType::Mixed))),
                     "iterable" => Ok(RhpType::Iterable(Box::new(RhpType::Mixed))),
@@ -310,7 +310,7 @@ impl RhpType {
                         Box::new(RhpType::Mixed),
                         Box::new(RhpType::Mixed),
                     ))),
-                    "String" | "Boolean" | "Integer" | "boolean" | "integer" | "Float" => {
+                    "String" | "Boolean" | "Integer" | "boolean" | "integer" => {
                         Err(TypeError::new(
                             TypeErrorKind::InvalidTypeAnnotation {
                                 type_name: name.to_string(),
@@ -413,6 +413,45 @@ impl RhpType {
     /// Returns true if this type is numeric (`int`, `float`, `RustInt`, or `RustFloat`).
     pub fn is_numeric(&self) -> bool {
         self.is_integer() || self.is_float()
+    }
+
+    /// Direct native Rust transformation type name:
+    /// - `Int` -> `i32`
+    /// - `Float` -> `f32`
+    /// - `Bool` -> `bool`
+    /// - `Null` -> `None`
+    /// - Primitives require zero `Rc<>` overhead.
+    pub fn to_native_rust_type(&self) -> &'static str {
+        match self {
+            RhpType::Int => "i32",
+            RhpType::Float => "f32",
+            RhpType::Bool => "bool",
+            RhpType::Null => "None",
+            RhpType::RustInt(k) => k.as_str(),
+            RhpType::RustFloat(k) => k.as_str(),
+            RhpType::Void => "()",
+            _ => "PhpValue",
+        }
+    }
+
+    /// Returns true if this type is a zero-cost primitive scalar (`int`, `float`, `bool`, `null`)
+    /// that never requires `Rc<>`.
+    pub fn is_scalar_primitive(&self) -> bool {
+        matches!(
+            self,
+            RhpType::Int
+                | RhpType::Float
+                | RhpType::Bool
+                | RhpType::Null
+                | RhpType::RustInt(_)
+                | RhpType::RustFloat(_)
+        )
+    }
+
+    /// Returns true if this type requires an `Rc<>` heap handle.
+    /// Primitives (int, float, bool, null) return false: zero `Rc<>` overhead.
+    pub fn requires_rc(&self) -> bool {
+        !self.is_scalar_primitive()
     }
 
     /// Returns true if `null` is a valid inhabitant of this type.

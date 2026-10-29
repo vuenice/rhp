@@ -583,6 +583,7 @@ impl VM {
                 OpCode::LoadNull { dst } => regs[dst.index()] = PhpValue::Null,
                 OpCode::LoadBool { dst, value } => regs[dst.index()] = PhpValue::Bool(value),
                 OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value),
+                OpCode::LoadFloat { dst, bits } => regs[dst.index()] = PhpValue::Float(f32::from_bits(bits)),
                 OpCode::LoadConst { dst, const_id } => {
                     let c = chunk.get_constant(const_id).ok_or_else(|| {
                         RuntimeError::new(
@@ -701,6 +702,10 @@ impl VM {
 
                 OpCode::LoadInt { dst, value } => {
                     self.registers[base_reg + dst.index()] = PhpValue::Int(value);
+                }
+
+                OpCode::LoadFloat { dst, bits } => {
+                    self.registers[base_reg + dst.index()] = PhpValue::Float(f32::from_bits(bits));
                 }
 
                 OpCode::LoadConst { dst, const_id } => {

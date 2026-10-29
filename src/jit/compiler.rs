@@ -90,6 +90,7 @@ impl JitCompiler {
                 OpCode::LoadNull { .. }
                 | OpCode::LoadBool { .. }
                 | OpCode::LoadInt { .. }
+                | OpCode::LoadFloat { .. }
                 | OpCode::Move { .. }
                 | OpCode::Unary { .. }
                 | OpCode::Binary { .. }
@@ -238,6 +239,17 @@ impl JitCompiler {
                 }
                 OpCode::LoadInt { dst, value } => {
                     let v = builder.ins().iconst(types::I64, value as i64);
+                    builder.def_var(vars[dst.index()], v);
+                    if let Some(next) = next_block {
+                        builder.ins().jump(next, &[]);
+                    } else {
+                        Self::emit_exit(&mut builder, slots_ptr, &vars, (ip + 1) as u32);
+                    }
+                }
+                OpCode::LoadFloat { dst, bits } => {
+                    let fl = f32::from_bits(bits);
+                    let f_bits = (fl as f64).to_bits() as i64;
+                    let v = builder.ins().iconst(types::I64, f_bits);
                     builder.def_var(vars[dst.index()], v);
                     if let Some(next) = next_block {
                         builder.ins().jump(next, &[]);

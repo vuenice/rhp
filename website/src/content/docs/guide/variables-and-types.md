@@ -369,71 +369,19 @@ foreach ($tags as $tag) {
 }
 ```
 
-### 4. `Arr::hashMap` / `Arr::map` (Universal Complex Maps - Step 11)
-Universal general key-value dictionary mapped directly to native Rust `HashMap<PhpValue, PhpValue>`. Unlike traditional PHP associative arrays which strictly coerce keys to integers or strings, `Arr::hashMap` supports **arbitrary complex keys** (arrays/lists, objects/class instances, sets, and scalars):
+### 4. Collection Architecture Roadmap: `list`, `dict`, and `set`
 
-```php
-class Coordinate {
-    public float $lat;
-    public float $lng;
-    public function __construct(float $lat, float $lng) {
-        $this->lat = $lat;
-        $this->lng = $lng;
-    }
-}
+To guarantee maximum CPU cache density, deterministic ordering, and SIMD/AES-accelerated lookups, RHP concentrates on three optimized collection primitives while deferring arbitrary `hashMap` and `tuple` structures:
 
-// 1. Instantiation (using Arr::hashMap or Arr::map alias)
-$map = Arr::hashMap();
+* **`list`** $\to$ Contiguous `Rc<Vec<Value>>`: Sequential flat array indexed by integer `0..n`.
+* **`dict`** $\to$ `Rc<IndexMap<Key, Value, ahash::RandomState>>`: Insertion-ordered dictionary keyed by strings or atoms, powered by AES-hardware accelerated `ahash`.
+* **`set`** $\to$ `Rc<IndexSet<Key, ahash::RandomState>>`: Unique value set preserving insertion order with $O(1)$ set algebra.
+* **`Rc<>` & Copy-On-Write (COW):** Collections use reference counting for zero-allocation parameter passing and assignment. Detachments and mutations only allocate or clone when shared (`Rc::strong_count > 1`).
 
-// 2. Arrays / Lists as Complex Keys
-$map[[10, 20]] = 'Alpha Base';
-$map[[30, 40]] = 'Beta Outpost';
-$loc = $map[[10, 20]]; // 'Alpha Base' (lookups use deep structural equality)
-
-// 3. Objects / Class Instances as Keys
-$c1 = new Coordinate(37.7749, -122.4194);
-$c2 = new Coordinate(40.7128, -74.0060);
-$map[$c1] = 'San Francisco';
-$map[$c2] = 'New York';
-$city = $map[$c1]; // 'San Francisco'
-
-// 4. Sets & Scalars as Keys
-$map[Arr::set(['read', 'write'])] = 'AdminPerms';
-$map[42] = 'integer key';
-$map[3.14] = 'float key';
-$map['tenant'] = 'string key';
-$map[true] = 'boolean key';
-
-// 5. Fluent Key-Value Operations
-$map->put('timeout', 5000);
-$timeout = $map->get('timeout', 1000); // 5000
-$fallback = $map->get('missing', 'default_val'); // 'default_val'
-bool $hasTimeout = $map->has('timeout'); // true (also: contains(), hasKey())
-$pulled = $map->pull('timeout', 0);      // Retrieves 5000 and removes key
-$map->remove('tenant');                  // Removes key (also: forget())
-
-// 6. Projections & Higher-Order Transforms
-list $allKeys = $map->keys();            // List of keys (including complex keys)
-list $allVals = $map->values();          // List of values
-list $entries = $map->entries();         // List of [[$key, $value], ...] pairs
-
-$doubled = $map
-    ->filter(fn($v, $k) => is_numeric($v))
-    ->map(fn($v, $k) => $v * 2);
-
-// Re-index entries via mapWithKeys
-$reindexed = $map->mapWithKeys(fn($v, $k) => ["transformed_" . (string)$k => $v]);
-
-// Diff, Intersect & Merge
-$other = Arr::hashMap(['a' => 1, 'b' => 2]);
-$diffMap = $map->diff($other);           // Keys in $map not in $other
-$merged  = $map->merge($other);          // Merged map
-
-// 7. Streaming Foreach with Complex Keys
-foreach ($map as $key => $val) {
-    // $key yields the complex key directly (array, object, set, or scalar)!
-}
-```
+> [!NOTE]
+> **Why `tuple` and `hashMap` are on hold:**
+> 1. **Zero Complex Key Overhead:** In web applications and APIs, associative keys are almost exclusively strings or integers. Avoiding universal complex keys (arrays or objects as keys) keeps hash routines free of expensive structural hashing and maintains high cache locality.
+> 2. **Focused Ergonomics:** `list` and `dict` cover virtually all array use cases in modern PHP and Laravel applications without type confusion or multiple competing dictionary abstractions.
 
 ---
 
@@ -442,16 +390,15 @@ foreach ($map as $key => $val) {
 RHP achieves the best of both worlds: full backward compatibility for dynamic PHP codebases alongside Rust-grade performance and memory layout optimization.
 
 ### 1. Unified Parent Wrapper (`RhpType::Array`)
-Under the hood, `RhpType::Array` serves as the **permissive parent datatype** for all collection variants (`list`, `dict`, `set`, and `hashmap`):
+Under the hood, `RhpType::Array` serves as the **permissive parent datatype** for all collection variants (`list`, `dict`, and `set`):
 
 | Syntax | Compiled Type | Underlying Rust Structure | Type Flexibility |
 | :--- | :--- | :--- | :--- |
-| `$arr = [];` | `RhpType::Array` | Dynamic `PhpValue::Array` | **Dynamic:** Freely reassignable across list, dict, set, hashmap |
+| `$arr = [];` | `RhpType::Array` | Dynamic `PhpValue::Array` | **Dynamic:** Freely reassignable across list, dict, and set |
 | `array $arr = [];` | `RhpType::Array` | Unified collection parent | **Permissive:** Accepts any collection variant interchangeably |
-| `list $arr = [];` | `CollectionSubtype::List` | Contiguous `Rc<RefCell<Vec<PhpValue>>>` | **Strict:** Sequential integer-indexed lists only |
-| `dict $arr = [];` | `CollectionSubtype::Dict` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | **Strict:** Insertion-ordered string-keyed dictionaries only |
-| `set $arr = [];` | `CollectionSubtype::Set` | `Rc<RefCell<HashSet<PhpValue>>>` | **Strict:** Unique value sets only |
-| `hashmap $arr = [];` | `CollectionSubtype::HashMap` | `Rc<RefCell<HashMap<PhpValue, PhpValue>>>` | **Strict:** Universal complex key-value maps only |
+| `list $arr = [];` | `CollectionSubtype::List` | Contiguous `Rc<Vec<Value>>` | **Strict:** Sequential integer-indexed lists only |
+| `dict $arr = [];` | `CollectionSubtype::Dict` | `Rc<IndexMap<Key, Value, ahash::RandomState>>` | **Strict:** Insertion-ordered string-keyed dictionaries only |
+| `set $arr = [];` | `CollectionSubtype::Set` | `Rc<IndexSet<Key, ahash::RandomState>>` | **Strict:** Unique value sets only |
 
 ### 2. Dynamic Typing via `PhpValue` & Flexible Reassignment
 Local variables initialized without a strict type constraint (or declared with the permissive `array` type hint) store values dynamically in a unified `PhpValue` enum handle. 
@@ -537,4 +484,93 @@ $copy[] = 4;
 print($original->count()); // 3 (untouched)
 print($copy->count());     // 4
 ```
+
+---
+
+## Undefined Variables, Missing Keys, and Null Semantics
+
+RHP implements a deliberate hybrid strategy combining Rust-level compile-time guarantees with PHP's developer ergonomics:
+
+### 1. First-Class `null` (No `None` Keyword)
+
+RHP uses **`null`** as a first-class scalar value and type keyword (unlike Rust, which represents absence through `None` of the `Option<T>` enum). RHP does not have a separate `undefined` type or value.
+
+### 2. Core Execution Invariants
+
+* **Undefined Variables $\to$ Compile Error:**
+  Reading an undeclared or uninitialized local variable is strictly rejected at compile time:
+  ```php
+  echo $x; // Compile Error: undefined variable $x
+  ```
+  Unlike PHP (which emits a runtime warning and evaluates to `null`), RHP ensures all variables are lexically defined before execution.
+
+* **Missing Array / Collection Keys $\to$ Warning Evaluates to `null`:**
+  Accessing a missing key or out-of-bounds offset on an array, list, or dictionary emits a runtime warning and evaluates safely to `null`:
+  ```php
+  $arr = ['a' => 1];
+  echo $arr['b']; // Warning: Undefined array key "b" -> evaluates to null
+  ```
+
+* **Missing Struct Property $\to$ Structs Not Present in RHP:**
+  The `struct` keyword is **not present in RHP**. Structured domain models are built using typed `class` declarations or native collection subtypes like `dict` (`Arr::dict`). On class instances, accessing undeclared properties triggers a compile-time or runtime `UndefinedProperty` error.
+
+* **Uninitialized Fields $\to$ Compile Error (Must Initialize at Creation):**
+  Typed class properties cannot be left in an uninitialized state. All properties without default values must be initialized upon object creation (e.g., in `__construct`):
+  ```php
+  class User {
+      public string $name; // typed, no default
+  }
+
+  $u = new User(); // Compile Error: field $name of class User must be initialized at creation
+  ```
+  If a property is allowed to be empty, declare it as explicitly nullable: `public ?string $name = null;`.
+
+### 3. Telling Missing Keys Apart from `null`
+
+Because reading a missing key evaluates to `null`, you cannot distinguish "key does not exist" from "key exists with a `null` value" by value alone. Use explicit existence checks:
+
+```php
+$arr = ['a' => null];
+
+isset($arr['a']);            // false (isset treats null as unset, identical to PHP)
+array_key_exists('a', $arr); // true  (key exists, value is null)
+array_key_exists('b', $arr); // false (key undefined)
+
+// With native RHP dict collections:
+dict $d = Arr::dict(['a' => null]);
+$d->has('a');                // true  (key exists)
+$d->has('b');                // false (key undefined)
+$d->get('a');                // null
+```
+
+### 4. Safe Access Operators (Work as in PHP)
+
+RHP implements PHP's null-coalescing and nullsafe operators, which cleanly suppress missing-key warnings:
+
+* **Safe Fallback (`??`):**
+  ```php
+  $v = $arr['b'] ?? 'default'; // Evaluates to 'default' (no warning emitted)
+  ```
+* **Safe Assign (`??=`):**
+  ```php
+  $arr['b'] ??= 'default'; // Assigns 'default' only if missing or null
+  ```
+* **Nullsafe Operator (`?->`):**
+  ```php
+  $name = $user?->profile?->name; // Evaluates safely to null if $user or $profile is null
+  ```
+
+### 5. Strategy Comparison Matrix
+
+| Scenario | PHP | Rust | **RHP** |
+| :--- | :--- | :--- | :--- |
+| **Value representation** | `null` | `None` (`Option<T>`) | **`null`** |
+| **Undefined variable** | Warning $\rightarrow$ evaluates to `null` | Compile Error | **Compile Error** |
+| **Missing array/dict key** | Warning $\rightarrow$ evaluates to `null` | Returns `None` | **Warning $\rightarrow$ evaluates to `null`** |
+| **Missing struct property** | Warning $\rightarrow$ evaluates to `null` | Compile Error | **N/A (Structs not present in RHP)** |
+| **Uninitialized field** | Runtime `Error` when accessed | Compile Error | **Compile Error (must initialize at creation)** |
+| **Safe fallback (`??`)** | `$arr['b'] ?? 'default'` | `.unwrap_or("default")` | **`$arr['b'] ?? 'default'`** |
+| **Safe assign (`??=`)** | `$arr['b'] ??= 'default'` | `entry().or_insert()` | **`$arr['b'] ??= 'default'`** |
+| **Existence check** | `array_key_exists('b', $arr)` | `map.contains_key("b")` | `array_key_exists('b', $arr)` / `$d->has('b')` |
+
 

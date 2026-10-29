@@ -76,11 +76,11 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["functions", "arrow", "fn", "closures", "parameters", "returns", "lambdas"]
   },
   {
-    title: "Classes, Structs & Singletons",
+    title: "Classes, Objects & Singletons",
     section: "Language Guide",
     description: "OOP architecture, visibility, interfaces, traits, persistent singleton classes, and facade macro extensibility.",
     url: "/docs/guide/classes-and-objects",
-    keywords: ["classes", "structs", "objects", "singleton", "interfaces", "traits", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
+    keywords: ["classes", "objects", "singleton", "interfaces", "traits", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
   },
   {
     title: "Error Handling",

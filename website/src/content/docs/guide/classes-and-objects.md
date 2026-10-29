@@ -1,6 +1,6 @@
 ---
-title: "Classes, Structs & Singletons"
-description: "Object-oriented programming in RHP: classes, visibility modifiers, interfaces, traits, and persistent singleton classes."
+title: "Classes, Objects & Singletons"
+description: "Object-oriented programming in RHP: classes, property initialization contracts, interfaces, traits, and persistent singleton classes."
 section: "Language Guide"
 order: 5
 ---
@@ -28,6 +28,20 @@ class UserProfile {
 
 $user = new UserProfile(1, "Alice", "alice@example.com");
 print("User: " . $user->name);
+```
+
+### Structs Are Not Present in RHP
+Unlike Rust or C++, RHP intentionally omits the `struct` construct. Structured entity models and composite domain data are represented via typed `class` declarations or high-performance native collections (`dict` / `Arr::dict`).
+
+### Field Initialization Guarantee (Compile-Time Strictness)
+In PHP, reading an uninitialized typed property throws a runtime `Error`. In RHP, this safety guarantee is moved to compile time: **all properties without default values must be initialized upon object creation** (e.g. within `__construct`). Leaving non-nullable properties uninitialized triggers a **Compile Error**.
+
+If a property can be empty at instantiation, declare it explicitly as nullable:
+```php
+class User {
+    public string $name;         // Must be initialized in __construct
+    public ?string $bio = null;  // Explicitly nullable, defaults to null
+}
 ```
 
 ---

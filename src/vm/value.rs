@@ -886,6 +886,57 @@ impl PhpValue {
         }
     }
 
+    /// Extract boolean value natively if this value is a boolean scalar.
+    #[inline]
+    pub fn to_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Convert `PhpValue` to an `Option<&PhpValue>`, mapping `PhpValue::Null` directly to `None`.
+    #[inline]
+    pub fn as_none(&self) -> Option<&Self> {
+        if matches!(self, Self::Null) {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    /// Convert `PhpValue` into `Option<PhpValue>`, mapping `PhpValue::Null` directly to `None`.
+    #[inline]
+    pub fn into_option(self) -> Option<Self> {
+        if matches!(self, Self::Null) {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    /// Check if this value is a zero-cost primitive scalar (`int`, `float`, `bool`, `null`)
+    /// that is stored unboxed without any `Rc<>` reference counting overhead.
+    #[inline]
+    pub fn is_scalar_primitive(&self) -> bool {
+        matches!(
+            self,
+            Self::Null
+                | Self::Bool(_)
+                | Self::Int(_)
+                | Self::Float(_)
+                | Self::RustInt { .. }
+                | Self::RustFloat { .. }
+        )
+    }
+
+    /// Check if this value requires an `Rc<>` reference counted heap handle.
+    /// Primitives (`int`, `float`, `bool`, `null`) return false: zero `Rc<>` overhead.
+    #[inline]
+    pub fn requires_rc(&self) -> bool {
+        !self.is_scalar_primitive()
+    }
+
     pub fn to_i32(&self) -> Option<i32> {
         match self {
             Self::Int(n) => Some(*n),
@@ -1817,3 +1868,35 @@ impl fmt::Display for PhpValue {
         write!(f, "{}", self.to_php_string())
     }
 }
+
+impl From<bool> for PhpValue {
+    #[inline]
+    fn from(b: bool) -> Self {
+        PhpValue::Bool(b)
+    }
+}
+
+impl From<i32> for PhpValue {
+    #[inline]
+    fn from(n: i32) -> Self {
+        PhpValue::Int(n)
+    }
+}
+
+impl From<f32> for PhpValue {
+    #[inline]
+    fn from(fl: f32) -> Self {
+        PhpValue::Float(fl)
+    }
+}
+
+impl<T: Into<PhpValue>> From<Option<T>> for PhpValue {
+    #[inline]
+    fn from(opt: Option<T>) -> Self {
+        match opt {
+            Some(val) => val.into(),
+            None => PhpValue::Null,
+        }
+    }
+}
+

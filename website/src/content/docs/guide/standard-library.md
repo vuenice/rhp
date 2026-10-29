@@ -38,14 +38,17 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 
 ## Arr Facade & Subtyped Collections Architecture
 
-RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor of **four high-performance collection subtypes** mapped directly to native Rust heap structures with Copy-On-Write (COW) semantics:
+RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor of **three streamlined, high-performance collection primitives** mapped directly to native Rust heap structures with `Rc` Copy-On-Write (COW) semantics:
 
 | Subtype | Constructor | Underlying Rust Structure | Primary Use Case & Characteristics |
 | :--- | :--- | :--- | :--- |
-| `list` | `Arr::list([...])` | `Rc<RefCell<Vec<PhpValue>>>` | Contiguous numerical index sequence, maximum CPU cache locality, $O(1)$ append |
-| `dict` | `Arr::dict([...])` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | String-keyed dictionary retaining strict insertion order, $O(1)$ key lookups |
-| `set` | `Arr::set([...])` | `Rc<RefCell<HashSet<PhpValue>>>` | Unique value collection, auto-deduplication, $O(1)$ membership checks, set algebra |
-| `hashmap` | `Arr::hashMap([...])` | `Rc<RefCell<HashMap<PhpValue, PhpValue>>>` | Universal dictionary supporting arbitrary complex keys (arrays, objects, sets, scalars) |
+| `list` | `Arr::list([...])` | `Rc<Vec<Value>>` | Contiguous numerical index sequence (`0..n`), maximum CPU cache locality, $O(1)$ append |
+| `dict` | `Arr::dict([...])` | `Rc<IndexMap<Key, Value, ahash::RandomState>>` | String/atom-keyed dictionary retaining strict insertion order, hardware AES-accelerated `ahash` |
+| `set` | `Arr::set([...])` | `Rc<IndexSet<Key, ahash::RandomState>>` | Unique value collection, auto-deduplication, $O(1)$ membership checks, insertion-ordered set algebra |
+
+> [!NOTE]
+> **Streamlined Architecture (`tuple` & `hashMap` on hold):**
+> Universal `hashMap` (arbitrary complex keys like arrays or objects) and `tuple` structures are deferred for now. The vast majority of data structures in web applications map cleanly and more efficiently to `list` and `dict` without paying the hashing overhead of complex keys.
 
 ---
 

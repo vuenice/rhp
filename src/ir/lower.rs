@@ -50,6 +50,7 @@ struct ChunkBuilder {
     /// Deduplication map for 64-bit integer constants (`i64 -> ConstantId`).
     int_pool: HashMap<i64, ConstantId>,
     /// Deduplication map for float bit patterns (`u64 -> ConstantId`).
+    #[allow(dead_code)]
     float_pool: HashMap<u64, ConstantId>,
     /// Deduplication map for semantic `RhpType` constants (`RhpType -> ConstantId`).
     type_pool: HashMap<RhpType, ConstantId>,
@@ -216,6 +217,7 @@ impl ChunkBuilder {
     }
 
     /// Intern a 64-bit float into the chunk's constant pool.
+    #[allow(dead_code)]
     fn intern_float(&mut self, value: f64) -> ConstantId {
         let bits = value.to_bits();
         if let Some(&id) = self.float_pool.get(&bits) {
@@ -1158,8 +1160,7 @@ impl<'a> IrLowerer<'a> {
                         }
                     }
                     Literal::Float { value, .. } => {
-                        let const_id = b.intern_float(*value);
-                        b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                        b.emit(OpCode::LoadFloat { dst, bits: (*value as f32).to_bits() }, expr.span);
                     }
                     Literal::String { value, .. } => {
                         let const_id = b.intern_string(value);

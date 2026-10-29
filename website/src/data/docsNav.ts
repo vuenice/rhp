@@ -36,7 +36,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Operators", "guide/operators"),
       item("Control Flow", "guide/control-flow"),
       item("Functions and Closures", "guide/functions"),
-      item("Classes, Structs & Singletons", "guide/classes-and-objects"),
+      item("Classes, Objects & Singletons", "guide/classes-and-objects"),
       item("Error Handling", "guide/error-handling"),
       item("Modules and Imports", "guide/modules-and-imports"),
       item("Concurrency & Async", "guide/concurrency-async"),

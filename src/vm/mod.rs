@@ -277,6 +277,43 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                 _ => Ok(v),
             }
         }
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Ident(ident) = &callee.kind {
+                match ident.name {
+                    "int" | "Int" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return Ok(PhpValue::Int(v.to_i32().unwrap_or(0)));
+                        }
+                        return Ok(PhpValue::Int(0));
+                    }
+                    "float" | "Float" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return Ok(PhpValue::Float(v.to_f32().unwrap_or(0.0)));
+                        }
+                        return Ok(PhpValue::Float(0.0));
+                    }
+                    "bool" | "Bool" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return Ok(PhpValue::Bool(v.is_truthy()));
+                        }
+                        return Ok(PhpValue::Bool(false));
+                    }
+                    _ => {}
+                }
+            }
+            let chunk = compile_to_bytecode(node).map_err(|e| {
+                RuntimeError::new(
+                    RuntimeErrorKind::Custom {
+                        message: e.to_string(),
+                    },
+                    node.span,
+                )
+            })?;
+            VM::new(chunk, false).run()
+        }
         _ => {
             let chunk = compile_to_bytecode(node).map_err(|e| {
                 RuntimeError::new(

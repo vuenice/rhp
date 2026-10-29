@@ -65,16 +65,25 @@ $result = Memory::scope(function(): int {
 
 ## Subtyped Collection Memory Layout & Streaming Iteration
 
-Rather than using Zend Engine's monolithic `zend_array` (which incurs massive memory overhead with 56-byte hash buckets and separate doubly linked list pointers for iteration order), RHP uses dedicated, cache-conscious Rust structures:
+Rather than using Zend Engine's monolithic `zend_array` (which incurs massive memory overhead with 56-byte hash buckets and separate doubly linked list pointers for iteration order), RHP uses dedicated, cache-conscious Rust structures with `Rc` Copy-On-Write semantics, focusing on three core primitives (`list`, `dict`, `set`) while deferring arbitrary `hashMap` and `tuple` structures:
 
-### 1. `Arr::dict`: `Rc<RefCell<IndexMap<String, PhpValue>>>`
+### 1. `Arr::list`: `Rc<Vec<Value>>`
+- **Contiguous Vector Buffer:** Stored directly as a dense vector of 8-byte `Value` registers, offering direct CPU L1/L2 cache prefetching and sequential $O(1)$ indexing without hash calculations or bucket indirections.
+- **Copy-On-Write (COW):** Parameter passing (`foo($list)`) and assignment (`$copy = $list`) perform an instantaneous $O(1)$ reference count increment (`Rc::clone`). In-place append/mutation uses `Rc::make_mut`—if unshared (`strong_count == 1`), mutation is in-place with zero reallocation.
+
+### 2. `Arr::dict`: `Rc<IndexMap<Key, Value, ahash::RandomState>>`
+- **Hardware AES-Accelerated Hashing (`ahash`):** Powered by `ahash::RandomState`, utilizing host CPU AES-NI instructions for 5x–10x faster key hashing than standard SipHash while remaining DOS-resistant.
 - **Dense Linear Storage:** Keys and values are stored in contiguous vectors indexed by a sparse hash table (`IndexMap`), achieving compact memory layout with near-zero pointer chasing.
 - **Strict Deterministic Ordering:** Iteration order strictly matches insertion order. Updating an existing key modifies its value in-place without altering its slot position in the iteration order.
-- **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` initializes an `ActiveIterator::Dict { dict, cursor: usize }`. Each iteration step reads `dict.get_index(cursor)` directly by index offset, allocating **zero temporary vectors or key-value tuples**.
-- **Copy-On-Write (CoW) Detachment:** Reassignment (`$copy = $dict`) shares the underlying reference-counted buffer with zero allocations (`Rc::clone`). In-place mutations on shared buffers trigger transparent detachment (`ensure_dict_mut()`), cloning only when necessary.
+- **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` iterates directly across the underlying slice by index cursor, allocating **zero temporary vectors or key-value tuples**.
 
-### 2. `Arr::list`: `Rc<RefCell<Vec<PhpValue>>>`
-- **Contiguous Vector Buffer:** Stored directly as a dense vector of `PhpValue` tagged unions, offering direct CPU L1/L2 cache prefetching and sequential indexing without hashtable hashing overhead.
+### 3. `Arr::set`: `Rc<IndexSet<Key, ahash::RandomState>>`
+- **Unique Value Buffer:** Backed by `IndexSet` with `ahash::RandomState` for $O(1)$ membership checks, deduplication, and mathematical set operations (`diff`, `intersect`, `union`).
+- **Insertion-Preserved Ordering:** Elements preserve their insertion sequence, enabling deterministic iteration and serializability.
+
+> [!NOTE]
+> **Streamlined Architecture (`tuple` & `hashMap` on hold):**
+> Universal `HashMap<Key, Value>` (with complex keys like arrays or objects) and heterogeneous `tuple` types are deliberately deferred. In web workloads, 99.9% of structured data maps cleanly to `list` (indexed items) and `dict` (string/atom-keyed attributes). Deferring complex maps eliminates expensive recursive equality hashing and keeps cache lines dense and predictable.
 
 ---
 
