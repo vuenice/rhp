@@ -120,8 +120,20 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Fluent image manipulation facade (make, resize, crop, save)",
     ),
     FacadeInfo::native(
+        "Crypt",
+        "Static cryptographic hashing, HMAC, OpenSSL encryption/decryption, and random bytes facade (hash, hashHmac, opensslEncrypt, opensslDecrypt, randomBytes, md5)",
+    ),
+    FacadeInfo::native(
+        "Html",
+        "Static HTML encoding, decoding, entity transformation, and tag stripping facade (specialChars, stripTags, entities, specialCharsDecode, entityDecode)",
+    ),
+    FacadeInfo::native(
+        "Url",
+        "URL parsing, query string construction, base64 encoding, and route inspection facade (parseUrl, httpBuildQuery, base64Encode, base64Decode, encode, decode)",
+    ),
+    FacadeInfo::native(
         "URL",
-        "URL generation and route inspection facade (to, route, current, full)",
+        "URL generation and route inspection facade (to, route, current, full, parseUrl, httpBuildQuery)",
     ),
     FacadeInfo::native(
         "DB",
@@ -521,6 +533,129 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "collect",
         rhp_signature: "phpFun::collect(mixed $items = null): object",
     },
+    // Crypt functions -> Crypt::*
+    LegacyPhpFunctionMapping {
+        php_name: "md5",
+        rhp_facade: "Crypt",
+        rhp_method: "md5",
+        rhp_signature: "Crypt::md5(string $string, bool $binary = false): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "sha1",
+        rhp_facade: "Crypt",
+        rhp_method: "sha1",
+        rhp_signature: "Crypt::sha1(string $string, bool $binary = false): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "hash",
+        rhp_facade: "Crypt",
+        rhp_method: "hash",
+        rhp_signature: "Crypt::hash(string $algo, string $data, bool $binary = false): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "hash_hmac",
+        rhp_facade: "Crypt",
+        rhp_method: "hashHmac",
+        rhp_signature: "Crypt::hashHmac(string $algo, string $data, string $key, bool $binary = false): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "openssl_encrypt",
+        rhp_facade: "Crypt",
+        rhp_method: "opensslEncrypt",
+        rhp_signature: "Crypt::opensslEncrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = ''): string|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "openssl_decrypt",
+        rhp_facade: "Crypt",
+        rhp_method: "opensslDecrypt",
+        rhp_signature: "Crypt::opensslDecrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = ''): string|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "random_bytes",
+        rhp_facade: "Crypt",
+        rhp_method: "randomBytes",
+        rhp_signature: "Crypt::randomBytes(int $length): string",
+    },
+    // HTML functions -> Html::*
+    LegacyPhpFunctionMapping {
+        php_name: "htmlspecialchars",
+        rhp_facade: "Html",
+        rhp_method: "specialChars",
+        rhp_signature: "Html::specialChars(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $double_encode = true): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "htmlspecialchars_decode",
+        rhp_facade: "Html",
+        rhp_method: "specialCharsDecode",
+        rhp_signature: "Html::specialCharsDecode(string $string, int $flags = 11): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strip_tags",
+        rhp_facade: "Html",
+        rhp_method: "stripTags",
+        rhp_signature: "Html::stripTags(string $string, array|string|null $allowed_tags = null): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "htmlentities",
+        rhp_facade: "Html",
+        rhp_method: "entities",
+        rhp_signature: "Html::entities(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $double_encode = true): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "html_entity_decode",
+        rhp_facade: "Html",
+        rhp_method: "entityDecode",
+        rhp_signature: "Html::entityDecode(string $string, int $flags = 11, ?string $encoding = 'UTF-8'): string",
+    },
+    // URL functions -> Url::*
+    LegacyPhpFunctionMapping {
+        php_name: "parse_url",
+        rhp_facade: "Url",
+        rhp_method: "parseUrl",
+        rhp_signature: "Url::parseUrl(string $url, int $component = -1): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "http_build_query",
+        rhp_facade: "Url",
+        rhp_method: "httpBuildQuery",
+        rhp_signature: "Url::httpBuildQuery(mixed $data, string $numeric_prefix = '', string $arg_separator = '&', int $encoding_type = 1): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "base64_encode",
+        rhp_facade: "Url",
+        rhp_method: "base64Encode",
+        rhp_signature: "Url::base64Encode(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "base64_decode",
+        rhp_facade: "Url",
+        rhp_method: "base64Decode",
+        rhp_signature: "Url::base64Decode(string $string, bool $strict = false): string|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "urlencode",
+        rhp_facade: "Url",
+        rhp_method: "encode",
+        rhp_signature: "Url::encode(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "urldecode",
+        rhp_facade: "Url",
+        rhp_method: "decode",
+        rhp_signature: "Url::decode(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rawurlencode",
+        rhp_facade: "Url",
+        rhp_method: "rawUrlEncode",
+        rhp_signature: "Url::rawUrlEncode(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rawurldecode",
+        rhp_facade: "Url",
+        rhp_method: "rawUrlDecode",
+        rhp_signature: "Url::rawUrlDecode(string $string): string",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function
@@ -646,6 +781,9 @@ impl FacadeRegistry {
             "request" => "Request",
             "regex" => "Regex",
             "reflect" => "Reflect",
+            "crypt" => "Crypt",
+            "html" => "Html",
+            "url" => "Url",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -696,7 +834,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         name.to_ascii_lowercase().as_str(),
         "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
-            | "adb" | "afile" | "ahttp"
+            | "adb" | "afile" | "ahttp" | "crypt" | "html"
     )
 }
 

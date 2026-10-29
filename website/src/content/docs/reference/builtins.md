@@ -50,6 +50,26 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `file_get_contents($path)` | `phpFun::file_get_contents($path)` | `File::read($path)` |
 | `file_put_contents($path, $data)` | `phpFun::file_put_contents($path, $data)` | `File::write($path, $data)` |
 | `collect($items)` | `phpFun::collect($items)` | Creates an iterable `Collection` instance |
+| `md5($str)` | `phpFun::md5($str)` | `Crypt::md5($str)` |
+| `sha1($str)` | `phpFun::sha1($str)` | `Crypt::sha1($str)` |
+| `hash($algo, $data)` | `phpFun::hash($algo, $data)` | `Crypt::hash($algo, $data)` |
+| `hash_hmac($algo, $data, $key)` | `phpFun::hash_hmac($algo, $data, $key)` | `Crypt::hashHmac($algo, $data, $key)` |
+| `openssl_encrypt(...)` | `phpFun::openssl_encrypt(...)` | `Crypt::opensslEncrypt(...)` |
+| `openssl_decrypt(...)` | `phpFun::openssl_decrypt(...)` | `Crypt::opensslDecrypt(...)` |
+| `random_bytes($len)` | `phpFun::random_bytes($len)` | `Crypt::randomBytes($len)` |
+| `htmlspecialchars($str)` | `phpFun::htmlspecialchars($str)` | `Html::specialChars($str)` |
+| `htmlspecialchars_decode($str)` | `phpFun::htmlspecialchars_decode($str)` | `Html::specialCharsDecode($str)` |
+| `strip_tags($str)` | `phpFun::strip_tags($str)` | `Html::stripTags($str)` |
+| `htmlentities($str)` | `phpFun::htmlentities($str)` | `Html::entities($str)` |
+| `html_entity_decode($str)` | `phpFun::html_entity_decode($str)` | `Html::entityDecode($str)` |
+| `parse_url($url)` | `phpFun::parse_url($url)` | `Url::parseUrl($url)` |
+| `http_build_query($data)` | `phpFun::http_build_query($data)` | `Url::httpBuildQuery($data)` |
+| `base64_encode($str)` | `phpFun::base64_encode($str)` | `Url::base64Encode($str)` |
+| `base64_decode($str)` | `phpFun::base64_decode($str)` | `Url::base64Decode($str)` |
+| `urlencode($str)` | `phpFun::urlencode($str)` | `Url::encode($str)` |
+| `urldecode($str)` | `phpFun::urldecode($str)` | `Url::decode($str)` |
+| `rawurlencode($str)` | `phpFun::rawurlencode($str)` | `Url::rawUrlEncode($str)` |
+| `rawurldecode($str)` | `phpFun::rawurldecode($str)` | `Url::rawUrlDecode($str)` |
 
 ---
 

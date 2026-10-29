@@ -440,6 +440,15 @@ pub fn infer_expression_type_name(
                         "isValid" | "testString" | "matches" | "isMatch" => Some("bool".to_string()),
                         _ => Some("string".to_string()),
                     },
+                    "Crypt" => match method.name {
+                        "hashAlgos" | "opensslCipherMethods" => Some("list".to_string()),
+                        _ => Some("string".to_string()),
+                    },
+                    "Html" => Some("string".to_string()),
+                    "Url" | "URL" => match method.name {
+                        "parseUrl" => Some("dict".to_string()),
+                        _ => Some("string".to_string()),
+                    },
                     "Int" => Some("int".to_string()),
                     "Float" => Some("float".to_string()),
                     _ => None,

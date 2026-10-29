@@ -544,9 +544,37 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Future(Box::new(RhpType::Class("HTTPResponse".to_string())))),
         },
         "Image" => Ok(RhpType::Class("ImageInstance".to_string())),
-        "URL" => match method {
-            "to" | "route" | "current" | "full" => Ok(RhpType::String),
-            _ => Ok(RhpType::String),
+        "URL" | "Url" => match method {
+            "to" | "route" | "current" | "full"
+            | "httpBuildQuery" | "http_build_query" | "buildQuery"
+            | "base64Encode" | "base64_encode" | "base64UrlEncode" | "base64_url_encode"
+            | "encode" | "urlencode" | "urlEncode" | "decode" | "urldecode" | "urlDecode"
+            | "rawUrlEncode" | "raw_url_encode" | "rawurlencode"
+            | "rawUrlDecode" | "raw_url_decode" | "rawurldecode" => Ok(RhpType::String),
+            "parseUrl" | "parse_url" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            "base64Decode" | "base64_decode" | "base64UrlDecode" | "base64_url_decode" => {
+                Ok(RhpType::Union(vec![RhpType::String, RhpType::Bool]))
+            }
+            _ => Ok(RhpType::Mixed),
+        },
+        "Crypt" => match method {
+            "hash" | "hashHmac" | "hash_hmac" | "opensslEncrypt" | "openssl_encrypt"
+            | "randomBytes" | "random_bytes" | "randomHex" | "random_hex"
+            | "md5" | "sha1" | "sha256" | "sha512" => Ok(RhpType::String),
+            "opensslDecrypt" | "openssl_decrypt" => Ok(RhpType::Union(vec![RhpType::String, RhpType::Bool])),
+            "hashAlgos" | "hash_algos" | "algos" | "opensslCipherMethods" | "openssl_cipher_methods" | "ciphers" => {
+                Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String))))
+            }
+            _ => Ok(RhpType::Mixed),
+        },
+        "Html" => match method {
+            "specialChars" | "special_chars" | "htmlspecialchars" | "escape"
+            | "specialCharsDecode" | "special_chars_decode" | "htmlspecialchars_decode"
+            | "stripTags" | "strip_tags"
+            | "entities" | "htmlentities"
+            | "entityDecode" | "entity_decode" | "html_entity_decode" | "decodeEntities" | "decode"
+            | "clean" | "tag" | "attributes" => Ok(RhpType::String),
+            _ => Ok(RhpType::Mixed),
         },
         "Session" => match method {
             "has" => Ok(RhpType::Bool),

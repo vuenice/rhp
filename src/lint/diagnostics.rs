@@ -360,6 +360,15 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         "isValid" | "testString" | "matches" | "isMatch" => RhpType::Bool,
                         _ => RhpType::String,
                     },
+                    "Crypt" => match method.name {
+                        "hashAlgos" | "opensslCipherMethods" => RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String))),
+                        _ => RhpType::String,
+                    },
+                    "Html" => RhpType::String,
+                    "Url" | "URL" => match method.name {
+                        "parseUrl" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+                        _ => RhpType::String,
+                    },
                     "Int" => RhpType::Int,
                     "Float" => RhpType::Float,
                     _ => RhpType::Dynamic,

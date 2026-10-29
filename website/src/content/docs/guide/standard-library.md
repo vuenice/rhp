@@ -20,6 +20,9 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Cookie` | HTTP cookie reading and setting | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_COOKIE` is not supported** &mdash; use `Cookie::get()` |
 | `Arr` | Subtyped collection creation & fluent operations | `list()`, `dict()`, `set()`, `hashMap()`, `macro()` | &mdash; |
 | `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `upper()`, `fromEncoding()` | &mdash; |
+| `Crypt` | Cryptographic hashing, HMAC, OpenSSL AES encryption & random bytes | `hash()`, `hashHmac()`, `opensslEncrypt()`, `opensslDecrypt()`, `randomBytes()`, `md5()` | &mdash; |
+| `Html` | HTML entity escaping, tag stripping, sanitization & tag generation | `specialChars()`, `stripTags()`, `entities()`, `specialCharsDecode()`, `clean()`, `tag()` | &mdash; |
+| `Url` | URL component parsing, query string building & Base64 encoding | `parseUrl()`, `httpBuildQuery()`, `base64Encode()`, `base64Decode()`, `to()`, `encode()` | &mdash; |
 | `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` | &mdash; |
 | `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` | &mdash; |
 | `File` | Synchronous filesystem I/O operations & uploads | `read()`, `write()`, `exists()`, `delete()`, `fromRequest()` | **`$_FILES` is not supported** &mdash; use `File::fromRequest()` |
@@ -822,6 +825,146 @@ $metricsJson = Trace::exportOtlpMetrics();
 
 For full architecture details, W3C context propagation, Sentry/Datadog bridges, and worker auto-instrumentation, see the [Observability & OpenTelemetry Guide](/docs/guide/observability-opentelemetry).
 
+---
+
+## Crypt Facade & Cryptographic Services (`Crypt::*`)
+
+The `Crypt` facade provides high-performance, constant-time cryptographic primitives, standard hashing, HMAC generation, OpenSSL AES encryption/decryption, and CSPRNG random byte generation implemented in pure Rust.
+
+```php
+// 1. Standard Hashing & Digest Computation
+string $sha256 = Crypt::hash('sha256', 'secure-password');
+string $md5 = Crypt::md5('content payload');
+string $sha1 = Crypt::sha1('legacy token');
+string $sha512 = Crypt::sha512('sensitive data');
+
+// Optional raw binary digest ($binary = true)
+string $rawBytes = Crypt::hash('sha256', 'payload', true);
+
+// 2. Hash-based Message Authentication Code (HMAC - RFC 2104)
+string $signature = Crypt::hashHmac('sha256', 'message payload', 'secret-key');
+
+// 3. OpenSSL-Compatible AES Encryption & Decryption
+string $key = "01234567890123456789012345678901"; // 32 bytes for AES-256
+string $iv  = "1234567890123456";                 // 16 bytes IV
+string $data = "Secret financial transaction data";
+
+// Encrypts with PKCS#7 padding, returning Base64 by default:
+string $cipherText = Crypt::opensslEncrypt($data, 'aes-256-cbc', $key, 0, $iv);
+
+// Decrypts and strips PKCS#7 padding:
+string|false $plainText = Crypt::opensslDecrypt($cipherText, 'aes-256-cbc', $key, 0, $iv);
+
+// Supports AES-128, AES-192, AES-256 across CBC, CTR, and ECB modes:
+string $ctrEnc = Crypt::opensslEncrypt($data, 'aes-128-ctr', '16bytekeyhere!', 0, $iv);
+string $ctrDec = Crypt::opensslDecrypt($ctrEnc, 'aes-128-ctr', '16bytekeyhere!', 0, $iv);
+
+// 4. Secure Random Byte & Hex Generation (CSPRNG)
+string $bytes = Crypt::randomBytes(32); // 32 cryptographically secure random bytes
+string $token = Crypt::randomHex(32);   // 32-character random hex string
+
+// 5. Algorithm & Cipher Method Introspection
+list $algos = Crypt::hashAlgos();              // ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
+list $ciphers = Crypt::opensslCipherMethods(); // ['aes-128-cbc', 'aes-256-cbc', 'aes-128-ctr', ...]
+```
+
+---
+
+## Html Facade & Web Sanitization (`Html::*`)
+
+The `Html` facade encapsulates modern HTML escaping, entity conversion, XSS sanitization, tag stripping, and tag generation:
+
+```php
+// 1. HTML Special Characters Escaping (XSS Prevention)
+string $safe = Html::specialChars('<script>alert("XSS & \'quote\'");</script>');
+// Result: "&lt;script&gt;alert(&quot;XSS &amp; &#039;quote&#039;&quot;);&lt;/script&gt;"
+
+// Decode back to raw characters:
+string $raw = Html::specialCharsDecode($safe);
+
+// 2. HTML Entities Encoding & Decoding
+string $encoded = Html::entities("Café & Bakery © 2026");
+// Result contains: "&copy;", "&eacute;", "&amp;"
+
+string $decoded = Html::entityDecode($encoded);
+// Result: "Café & Bakery © 2026"
+
+// 3. Tag Stripping with Tag Whitelisting
+string $html = '<p>Hello <b>World</b>! <script>bad();</script> <a href="#">Link</a></p>';
+string $stripped = Html::stripTags($html);             // "Hello World!  Link"
+string $allowed  = Html::stripTags($html, ['b', 'a']); // "Hello <b>World</b>!  <a href="#">Link</a>"
+
+// 4. Clean Sanitization Utility (strip tags + specialChars)
+string $cleaned = Html::clean('<p>User input with & and "quotes"</p>');
+
+// 5. HTML Tag & Attribute Generation
+string $btn = Html::tag('button', ['class' => 'btn btn-primary', 'disabled' => true], 'Save');
+// Result: '<button class="btn btn-primary" disabled>Save</button>'
+
+string $img = Html::tag('img', ['src' => '/logo.png', 'alt' => 'Logo']);
+// Result: '<img src="/logo.png" alt="Logo" />'
+
+string $attrs = Html::attributes(['id' => 'main-box', 'class' => 'card shadow']);
+// Result: 'id="main-box" class="card shadow"'
+```
+
+---
+
+## Url Facade & URL / Base64 Manipulation (`Url::*` / `URL::*`)
+
+The `Url` facade (aliased interchangeably as `Url` or `URL`) provides robust URL component parsing (both absolute and relative), query string generation with nested dictionary support, Base64 encoding/decoding, and route resolution:
+
+```php
+// 1. Parsing URLs into Dictionary Components
+$url = "https://admin:secret@rhp.dev:8080/docs/helpers?version=2.0&lang=en#section-crypt";
+dict $parts = Url::parseUrl($url);
+// $parts['scheme']   => 'https'
+// $parts['host']     => 'rhp.dev'
+// $parts['port']     => 8080
+// $parts['user']     => 'admin'
+// $parts['pass']     => 'secret'
+// $parts['path']     => '/docs/helpers'
+// $parts['query']    => 'version=2.0&lang=en'
+// $parts['fragment'] => 'section-crypt'
+
+// Extract a single component directly:
+string $host = Url::parseUrl($url, 1); // PHP_URL_HOST -> "rhp.dev"
+int $port    = Url::parseUrl($url, 2); // PHP_URL_PORT -> 8080
+string $path = Url::parseUrl($url, 5); // PHP_URL_PATH -> "/docs/helpers"
+
+// Relative URLs are also cleanly parsed:
+dict $rel = Url::parseUrl('/api/v1/items?sort=desc#top');
+// $rel['path'] => '/api/v1/items', $rel['query'] => 'sort=desc'
+
+// 2. HTTP Query String Construction (Nested Dict & RFC Support)
+dict $params = [
+    'search' => 'crypt & html',
+    'page' => 1,
+    'filter' => ['status' => 'active', 'tags' => ['rust', 'rhp']],
+];
+
+// RFC 1738 (default, '+' for spaces):
+string $query = Url::httpBuildQuery($params);
+// "search=crypt+%26+html&page=1&filter%5Bstatus%5D=active&filter%5Btags%5D%5B0%5D=rust&filter%5Btags%5D%5B1%5D=rhp"
+
+// RFC 3986 ('%20' for spaces):
+string $queryRfc = Url::httpBuildQuery($params, '', '&', 2);
+
+// 3. Base64 & URL-Safe Base64 Encoding
+string $b64 = Url::base64Encode("Hello from RHP!");
+string $original = Url::base64Decode($b64);
+
+string $urlSafeB64 = Url::base64UrlEncode("Data with +/-/=");
+string $urlSafeDec = Url::base64UrlDecode($urlSafeB64);
+
+// 4. URL Encoding & Decoding
+string $encodedUrl = Url::encode("hello world & foo=bar"); // "hello+world+%26+foo%3Dbar"
+string $decodedUrl = Url::decode($encodedUrl);              // "hello world & foo=bar"
+string $rawEnc     = Url::rawUrlEncode("hello world");     // "hello%20world"
+
+// 5. Route & App URL Generation
+string $dashUrl = Url::to('dashboard'); // "https://example.com/dashboard"
+```
 
 ---
 

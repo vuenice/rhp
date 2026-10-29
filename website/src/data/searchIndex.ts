@@ -106,9 +106,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
+    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
   },
   {
     title: "Observability & OpenTelemetry",
@@ -145,14 +145,14 @@ const rawSearchIndex: SearchItem[] = [
     section: "Reference",
     description: "Intrinsic intrinsics (env, print, dd) and legacy PHP bridge lowering (phpFun::*).",
     url: "/docs/reference/builtins",
-    keywords: ["builtins", "env", "print", "dd", "phpFun", "legacy functions"]
+    keywords: ["builtins", "env", "print", "dd", "phpFun", "legacy functions", "md5", "sha1", "htmlspecialchars", "strip_tags", "parse_url", "http_build_query", "base64_encode"]
   },
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
+    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "http", "file", "cache", "log", "tier 2", "rust"]
+    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
 
   // Tooling

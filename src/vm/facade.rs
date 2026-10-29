@@ -18,6 +18,9 @@ use crate::vm::fiber::{
     record_fiber_io_start, record_fiber_yield, set_fiber_local, with_current_fiber, IoKind,
 };
 use crate::vm::parent_process::FrozenValue;
+use crate::vm::crypto;
+use crate::vm::html;
+use crate::vm::url_helper;
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 use tokio::runtime::{Builder as TokioBuilder, Runtime as TokioRuntime};
 
@@ -274,7 +277,9 @@ pub fn dispatch_facade_call(
         "Cookie" => dispatch_cookie(method, args),
         "Request" => dispatch_request(method, args),
         "Image" => dispatch_image(method, args),
-        "URL" => dispatch_url(method, args),
+        "URL" | "Url" => dispatch_url(method, args),
+        "Crypt" => dispatch_crypt(method, args),
+        "Html" => dispatch_html(method, args),
         "Regex" => dispatch_regex(method, args),
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
@@ -2456,11 +2461,391 @@ fn dispatch_url(method: &str, args: &[PhpValue]) -> FacadeResult {
             let path = args.first().map(|v| v.to_php_string()).unwrap_or_default();
             Ok(PhpValue::string(format!("https://example.com/{}", path)))
         }
+        "parseUrl" | "parse_url" => {
+            let url_str = get_arg_str(args, 0, "Url::parseUrl")?;
+            if let Some(comp_val) = args.get(1) {
+                if !comp_val.is_null() {
+                    let comp_opt = if let Some(n) = comp_val.to_i64() {
+                        if n >= 0 {
+                            url_helper::get_url_component(&url_str, n)
+                        } else {
+                            None
+                        }
+                    } else {
+                        let comp_name = comp_val.to_php_string();
+                        let n = match comp_name.to_ascii_lowercase().as_str() {
+                            "scheme" => url_helper::PHP_URL_SCHEME,
+                            "host" => url_helper::PHP_URL_HOST,
+                            "port" => url_helper::PHP_URL_PORT,
+                            "user" => url_helper::PHP_URL_USER,
+                            "pass" => url_helper::PHP_URL_PASS,
+                            "path" => url_helper::PHP_URL_PATH,
+                            "query" => url_helper::PHP_URL_QUERY,
+                            "fragment" => url_helper::PHP_URL_FRAGMENT,
+                            _ => -1,
+                        };
+                        if n >= 0 {
+                            url_helper::get_url_component(&url_str, n)
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(res) = comp_opt {
+                        return Ok(res);
+                    } else if comp_val.to_i64().is_some() && comp_val.to_i64().unwrap() >= 0 {
+                        return Ok(PhpValue::Null);
+                    }
+                }
+            }
+
+            match url_helper::parse_url_components(&url_str) {
+                Some(map) => Ok(PhpValue::dict_from_map(map)),
+                None => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "httpBuildQuery" | "http_build_query" | "buildQuery" => {
+            let data = args.first().cloned().unwrap_or(PhpValue::Null);
+            let prefix = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let sep = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| "&".to_string());
+            let enc_type = args.get(3).and_then(|v| v.to_i64()).unwrap_or(url_helper::PHP_QUERY_RFC1738);
+            Ok(PhpValue::string(url_helper::http_build_query(&data, &prefix, &sep, enc_type)))
+        }
+        "base64Encode" | "base64_encode" => {
+            let s = get_arg_str(args, 0, "Url::base64Encode")?;
+            Ok(PhpValue::string(url_helper::base64_encode(s.as_bytes())))
+        }
+        "base64Decode" | "base64_decode" => {
+            let s = get_arg_str(args, 0, "Url::base64Decode")?;
+            let strict = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            match url_helper::base64_decode(&s, strict) {
+                Ok(bytes) => Ok(PhpValue::bytes(bytes)),
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "base64UrlEncode" | "base64_url_encode" => {
+            let s = get_arg_str(args, 0, "Url::base64UrlEncode")?;
+            Ok(PhpValue::string(url_helper::base64_url_encode(s.as_bytes())))
+        }
+        "base64UrlDecode" | "base64_url_decode" => {
+            let s = get_arg_str(args, 0, "Url::base64UrlDecode")?;
+            match url_helper::base64_url_decode(&s) {
+                Ok(bytes) => Ok(PhpValue::bytes(bytes)),
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "encode" | "urlencode" | "urlEncode" => {
+            let s = get_arg_str(args, 0, "Url::encode")?;
+            let enc = urlencoding::encode(&s).into_owned().replace("%20", "+");
+            Ok(PhpValue::string(enc))
+        }
+        "decode" | "urldecode" | "urlDecode" => {
+            let s = get_arg_str(args, 0, "Url::decode")?;
+            Ok(PhpValue::string(url_helper::url_decode(&s, false)))
+        }
+        "rawUrlEncode" | "raw_url_encode" | "rawurlencode" => {
+            let s = get_arg_str(args, 0, "Url::rawUrlEncode")?;
+            Ok(PhpValue::string(urlencoding::encode(&s).into_owned()))
+        }
+        "rawUrlDecode" | "raw_url_decode" | "rawurldecode" => {
+            let s = get_arg_str(args, 0, "Url::rawUrlDecode")?;
+            Ok(PhpValue::string(url_helper::url_decode(&s, true)))
+        }
+        "macro" => {
+            if let (Some(name_val), Some(PhpValue::Closure(closure))) = (args.first(), args.get(1)) {
+                let name = name_val.to_php_string();
+                register_runtime_closure_macro("Url", &name, (**closure).clone());
+                register_runtime_closure_macro("URL", &name, (**closure).clone());
+                return Ok(PhpValue::Bool(true));
+            }
+            Ok(PhpValue::Bool(false))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
-            facade: "URL".to_string(),
+            facade: "Url".to_string(),
             method: method.to_string(),
         }),
     }
+}
+
+fn dispatch_crypt(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "hash" => {
+            let algo = get_arg_str(args, 0, "Crypt::hash")?;
+            let data = get_arg_str(args, 1, "Crypt::hash")?;
+            let binary = args.get(2).map(|v| v.is_truthy()).unwrap_or(false);
+            let res = crypto::hash(&algo, data.as_bytes(), binary)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(if binary {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "hashHmac" | "hash_hmac" => {
+            let algo = get_arg_str(args, 0, "Crypt::hashHmac")?;
+            let data = get_arg_str(args, 1, "Crypt::hashHmac")?;
+            let key = get_arg_str(args, 2, "Crypt::hashHmac")?;
+            let binary = args.get(3).map(|v| v.is_truthy()).unwrap_or(false);
+            let res = crypto::hash_hmac(&algo, data.as_bytes(), key.as_bytes(), binary)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(if binary {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "opensslEncrypt" | "openssl_encrypt" => {
+            let data = get_arg_str(args, 0, "Crypt::opensslEncrypt")?;
+            let cipher_algo = get_arg_str(args, 1, "Crypt::opensslEncrypt")?;
+            let passphrase = get_arg_str(args, 2, "Crypt::opensslEncrypt")?;
+            let options = args.get(3).and_then(|v| v.to_i64()).unwrap_or(0);
+            let iv = args.get(4).map(|v| v.to_php_string()).unwrap_or_default();
+            let res = crypto::openssl_encrypt(
+                data.as_bytes(),
+                &cipher_algo,
+                passphrase.as_bytes(),
+                options,
+                iv.as_bytes(),
+            )
+            .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            let raw_data = (options & 1) != 0;
+            Ok(if raw_data {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "opensslDecrypt" | "openssl_decrypt" => {
+            let data = get_arg_str(args, 0, "Crypt::opensslDecrypt")?;
+            let cipher_algo = get_arg_str(args, 1, "Crypt::opensslDecrypt")?;
+            let passphrase = get_arg_str(args, 2, "Crypt::opensslDecrypt")?;
+            let options = args.get(3).and_then(|v| v.to_i64()).unwrap_or(0);
+            let iv = args.get(4).map(|v| v.to_php_string()).unwrap_or_default();
+            match crypto::openssl_decrypt(
+                data.as_bytes(),
+                &cipher_algo,
+                passphrase.as_bytes(),
+                options,
+                iv.as_bytes(),
+            ) {
+                Ok(res) => {
+                    let raw_data = (options & 1) != 0;
+                    if raw_data {
+                        Ok(PhpValue::bytes(res))
+                    } else {
+                        Ok(PhpValue::string(String::from_utf8_lossy(&res).to_string()))
+                    }
+                }
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "randomBytes" | "random_bytes" => {
+            let len = args.first().and_then(|v| v.to_i64()).unwrap_or(16).max(0) as usize;
+            let res = crypto::random_bytes(len)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(PhpValue::bytes(res))
+        }
+        "randomHex" | "random_hex" => {
+            let len = args.first().and_then(|v| v.to_i64()).unwrap_or(32).max(1) as usize;
+            let byte_len = (len + 1) / 2;
+            let bytes = crypto::random_bytes(byte_len)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            let mut hex_str = hex::encode(bytes);
+            hex_str.truncate(len);
+            Ok(PhpValue::string(hex_str))
+        }
+        "md5" => {
+            let data = get_arg_str(args, 0, "Crypt::md5")?;
+            let binary = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            let digest = crypto::md5::md5_digest(data.as_bytes());
+            if binary {
+                Ok(PhpValue::bytes(digest.to_vec()))
+            } else {
+                Ok(PhpValue::string(hex::encode(digest)))
+            }
+        }
+        "sha1" => {
+            let data = get_arg_str(args, 0, "Crypt::sha1")?;
+            let binary = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            let res = crypto::hash("sha1", data.as_bytes(), binary)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(if binary {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "sha256" => {
+            let data = get_arg_str(args, 0, "Crypt::sha256")?;
+            let binary = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            let res = crypto::hash("sha256", data.as_bytes(), binary)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(if binary {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "sha512" => {
+            let data = get_arg_str(args, 0, "Crypt::sha512")?;
+            let binary = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            let res = crypto::hash("sha512", data.as_bytes(), binary)
+                .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
+            Ok(if binary {
+                PhpValue::bytes(res)
+            } else {
+                PhpValue::string(String::from_utf8_lossy(&res).to_string())
+            })
+        }
+        "hashAlgos" | "hash_algos" | "algos" => {
+            let list: Vec<PhpValue> = crypto::hash_algos()
+                .iter()
+                .map(|s| PhpValue::string(*s))
+                .collect();
+            Ok(PhpValue::list(list))
+        }
+        "opensslCipherMethods" | "openssl_cipher_methods" | "ciphers" => {
+            let list: Vec<PhpValue> = crypto::openssl_cipher_methods()
+                .iter()
+                .map(|s| PhpValue::string(*s))
+                .collect();
+            Ok(PhpValue::list(list))
+        }
+        "macro" => {
+            if let (Some(name_val), Some(PhpValue::Closure(closure))) = (args.first(), args.get(1)) {
+                let name = name_val.to_php_string();
+                register_runtime_closure_macro("Crypt", &name, (**closure).clone());
+                return Ok(PhpValue::Bool(true));
+            }
+            Ok(PhpValue::Bool(false))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Crypt".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn dispatch_html(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "specialChars" | "special_chars" | "htmlspecialchars" | "escape" => {
+            let s = get_arg_str(args, 0, "Html::specialChars")?;
+            let flags = args.get(1).and_then(|v| v.to_i64()).unwrap_or(html::DEFAULT_FLAGS);
+            let double_encode = args.get(3).map(|v| v.is_truthy()).unwrap_or(true);
+            Ok(PhpValue::string(html::special_chars(&s, flags, double_encode)))
+        }
+        "specialCharsDecode" | "special_chars_decode" | "htmlspecialchars_decode" => {
+            let s = get_arg_str(args, 0, "Html::specialCharsDecode")?;
+            let flags = args.get(1).and_then(|v| v.to_i64()).unwrap_or(html::DEFAULT_FLAGS);
+            Ok(PhpValue::string(html::special_chars_decode(&s, flags)))
+        }
+        "stripTags" | "strip_tags" => {
+            let s = get_arg_str(args, 0, "Html::stripTags")?;
+            let allowed_tags = args.get(1).and_then(|v| match v {
+                PhpValue::Null => None,
+                PhpValue::String(str_val) => Some(html::parse_allowed_tags_string(str_val.as_str())),
+                PhpValue::Array(_) | PhpValue::List(_) | PhpValue::Set(_) => {
+                    let items = extract_array_elements(v);
+                    Some(items.into_iter().map(|it| it.to_php_string()).collect())
+                }
+                other => Some(html::parse_allowed_tags_string(&other.to_php_string())),
+            });
+            Ok(PhpValue::string(html::strip_tags(&s, allowed_tags.as_deref())))
+        }
+        "entities" | "htmlentities" => {
+            let s = get_arg_str(args, 0, "Html::entities")?;
+            let flags = args.get(1).and_then(|v| v.to_i64()).unwrap_or(html::DEFAULT_FLAGS);
+            let double_encode = args.get(3).map(|v| v.is_truthy()).unwrap_or(true);
+            Ok(PhpValue::string(html::entities(&s, flags, double_encode)))
+        }
+        "entityDecode" | "entity_decode" | "html_entity_decode" | "decodeEntities" | "decode" => {
+            let s = get_arg_str(args, 0, "Html::entityDecode")?;
+            let flags = args.get(1).and_then(|v| v.to_i64()).unwrap_or(html::DEFAULT_FLAGS);
+            Ok(PhpValue::string(html::entity_decode(&s, flags)))
+        }
+        "clean" => {
+            let s = get_arg_str(args, 0, "Html::clean")?;
+            let stripped = html::strip_tags(&s, None);
+            Ok(PhpValue::string(html::special_chars(&stripped, html::DEFAULT_FLAGS, true)))
+        }
+        "tag" => {
+            let tag_name = get_arg_str(args, 0, "Html::tag")?;
+            let attrs_str = if let Some(attr_val) = args.get(1) {
+                format_html_attributes(attr_val)
+            } else {
+                String::new()
+            };
+            let content = args.get(2).map(|v| v.to_php_string()).unwrap_or_default();
+            let is_void = matches!(
+                tag_name.to_ascii_lowercase().as_str(),
+                "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+            );
+            if is_void && content.is_empty() {
+                if attrs_str.is_empty() {
+                    Ok(PhpValue::string(format!("<{} />", tag_name)))
+                } else {
+                    Ok(PhpValue::string(format!("<{} {} />", tag_name, attrs_str)))
+                }
+            } else {
+                if attrs_str.is_empty() {
+                    Ok(PhpValue::string(format!("<{}>{}</{}>", tag_name, content, tag_name)))
+                } else {
+                    Ok(PhpValue::string(format!("<{} {}>{}</{}>", tag_name, attrs_str, content, tag_name)))
+                }
+            }
+        }
+        "attributes" => {
+            let attrs_val = args.first().cloned().unwrap_or(PhpValue::Null);
+            Ok(PhpValue::string(format_html_attributes(&attrs_val)))
+        }
+        "macro" => {
+            if let (Some(name_val), Some(PhpValue::Closure(closure))) = (args.first(), args.get(1)) {
+                let name = name_val.to_php_string();
+                register_runtime_closure_macro("Html", &name, (**closure).clone());
+                return Ok(PhpValue::Bool(true));
+            }
+            Ok(PhpValue::Bool(false))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Html".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn format_html_attributes(val: &PhpValue) -> String {
+    let mut parts = Vec::new();
+    match val {
+        PhpValue::Dict(d) => {
+            for (k, v) in d.borrow().iter() {
+                if v.is_null() || !v.is_truthy() && matches!(v, PhpValue::Bool(false)) {
+                    continue;
+                }
+                if matches!(v, PhpValue::Bool(true)) {
+                    parts.push(k.clone());
+                } else {
+                    let escaped = html::special_chars(&v.to_php_string(), html::ENT_COMPAT, true);
+                    parts.push(format!("{}=\"{}\"", k, escaped));
+                }
+            }
+        }
+        PhpValue::HashMap(m) => {
+            for (k, v) in m.borrow().iter() {
+                if v.is_null() || !v.is_truthy() && matches!(v, PhpValue::Bool(false)) {
+                    continue;
+                }
+                let k_str = k.to_php_string();
+                if matches!(v, PhpValue::Bool(true)) {
+                    parts.push(k_str);
+                } else {
+                    let escaped = html::special_chars(&v.to_php_string(), html::ENT_COMPAT, true);
+                    parts.push(format!("{}=\"{}\"", k_str, escaped));
+                }
+            }
+        }
+        _ => {}
+    }
+    parts.join(" ")
 }
 
 /// Parse regex pattern supporting standard PHP delimiters (`/.../i`, `#[0-9]+#`, `~pattern~s`)

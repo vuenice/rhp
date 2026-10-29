@@ -642,6 +642,92 @@ Trace::exportDatadog(): string;     // Datadog APM trace JSON
 
 ---
 
+## `Crypt` Facade API (Cryptographic Services)
+
+```php
+// Standard Hashing
+Crypt::hash(string $algo, string $data, bool $binary = false): string;
+Crypt::md5(string $data, bool $binary = false): string;
+Crypt::sha1(string $data, bool $binary = false): string;
+Crypt::sha256(string $data, bool $binary = false): string;
+Crypt::sha512(string $data, bool $binary = false): string;
+
+// HMAC Message Authentication (RFC 2104)
+Crypt::hashHmac(string $algo, string $data, string $key, bool $binary = false): string;
+
+// OpenSSL AES Encryption / Decryption
+Crypt::opensslEncrypt(string $data, string $cipherAlgo, string $passphrase, int $options = 0, string $iv = ''): string|false;
+Crypt::opensslDecrypt(string $data, string $cipherAlgo, string $passphrase, int $options = 0, string $iv = ''): string|false;
+
+// CSPRNG Random Generation
+Crypt::randomBytes(int $length = 16): string;
+Crypt::randomHex(int $length = 32): string;
+
+// Introspection & Macros
+Crypt::hashAlgos(): list;
+Crypt::opensslCipherMethods(): list;
+Crypt::macro(string $name, callable $closure): bool;
+```
+
+---
+
+## `Html` Facade API (Web Sanitization & Helpers)
+
+```php
+// Escaping & Decoding
+Html::specialChars(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $doubleEncode = true): string;
+Html::specialCharsDecode(string $string, int $flags = 11): string;
+Html::escape(string $string): string; // Alias for specialChars()
+
+// Tag Stripping & Sanitization
+Html::stripTags(string $string, array|list|string|null $allowedTags = null): string;
+Html::clean(string $string): string; // Strips tags and escapes special characters
+
+// Entity Transformation
+Html::entities(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $doubleEncode = true): string;
+Html::entityDecode(string $string, int $flags = 11, ?string $encoding = 'UTF-8'): string;
+
+// Markup Generation
+Html::tag(string $name, array|dict $attributes = [], string $content = ''): string;
+Html::attributes(array|dict $attributes = []): string;
+
+// Dynamic Macros
+Html::macro(string $name, callable $closure): bool;
+```
+
+---
+
+## `Url` Facade API (`Url` / `URL`)
+
+```php
+// Component Parsing & Query Strings
+Url::parseUrl(string $url, int|string $component = -1): mixed;
+Url::httpBuildQuery(mixed $data, string $numericPrefix = '', string $argSeparator = '&', int $encodingType = 1): string;
+
+// Base64 Encoding & Decoding
+Url::base64Encode(string $string): string;
+Url::base64Decode(string $string, bool $strict = false): string|false;
+Url::base64UrlEncode(string $string): string;
+Url::base64UrlDecode(string $string): string|false;
+
+// URL Encoding (RFC 1738 & RFC 3986)
+Url::encode(string $string): string;       // Spaces encoded as '+'
+Url::decode(string $string): string;
+Url::rawUrlEncode(string $string): string; // Spaces encoded as '%20'
+Url::rawUrlDecode(string $string): string;
+
+// Route & App URL Generation
+Url::to(string $path = ''): string;
+Url::route(string $name, array $params = []): string;
+Url::current(): string;
+Url::full(): string;
+
+// Dynamic Macros
+Url::macro(string $name, callable $closure): bool;
+```
+
+---
+
 ## Tier 2 Native Helper Classes API (`Cache`, `Log`)
 
 Imported via `import "./Cache.rs";` or `import "./Log.rs";`. These helper classes are not built into the core language syntax to avoid language bloat, but provide framework-level performance using thread-safe Rust stores with zero garbage collection overhead.
