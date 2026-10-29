@@ -1164,8 +1164,13 @@ impl TypeChecker {
         class_info: &ClassTypeInfo,
         iface_name: &str,
     ) -> Result<(), TypeError> {
+        let clean_iface = iface_name.strip_prefix('\\').unwrap_or(iface_name);
         let hierarchy = &self.result.hierarchy;
-        if let Some(iface_info) = hierarchy.interfaces.get(iface_name) {
+        if let Some(iface_info) = hierarchy
+            .interfaces
+            .get(clean_iface)
+            .or_else(|| hierarchy.interfaces.get(iface_name))
+        {
             for (method_name, iface_sig) in &iface_info.methods {
                 let impl_sig = hierarchy
                     .lookup_method(class_name, method_name)
@@ -1277,10 +1282,12 @@ impl TypeChecker {
         }
 
         // Return type covariance: child return type must be assignable to contract return type
-        if !child_sig
-            .return_type
-            .is_assignable_to(&contract_sig.return_type, hierarchy)
-        {
+        let return_compat = (is_interface && matches!(child_sig.return_type, RhpType::Mixed | RhpType::Dynamic))
+            || child_sig
+                .return_type
+                .is_assignable_to(&contract_sig.return_type, hierarchy);
+
+        if !return_compat {
             let reason = format!(
                 "return type '{}' is not compatible with contract return type '{}'",
                 child_sig.return_type, contract_sig.return_type
