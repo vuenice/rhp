@@ -71,9 +71,11 @@ print("User Role: " . $roleTitle);
 
 ---
 
-## Iteration: `foreach` Over Subtyped Collections
+## Iteration: `foreach` Over Collections and Objects
 
-The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`).
+The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`), plain objects, and objects implementing PHP's `Traversable` interface (`IteratorAggregate` and `Iterator`).
+
+### 1. Subtyped Collections (`list`, `dict`, `set`, `hashMap`)
 
 For dictionaries (`Arr::dict`), `foreach` drives a zero-allocation streaming iterator (`ActiveIterator::Dict`) that accesses entries directly via internal index offsets without allocating temporary key/value arrays, strictly maintaining insertion order:
 
@@ -92,6 +94,153 @@ dict $meta = Arr::dict([
 ]);
 foreach ($meta as $key => $value) {
     Sys::print("{} => {}", $key, (string)$value);
+}
+```
+
+### 2. Object Iteration via `IteratorAggregate` & `Iterator`
+
+RHP fully supports iterating over object instances using standard PHP iterator contracts:
+
+#### `IteratorAggregate`
+Objects implementing `IteratorAggregate` define a `getIterator()` method that returns a `Traversable` (such as `ArrayIterator` or another iterator):
+
+```php
+class TeamList implements IteratorAggregate {
+    public function __construct(private array $members) {}
+
+    public function getIterator(): Traversable {
+        return new ArrayIterator($this->members);
+    }
+}
+
+$team = new TeamList(['Alice', 'Bob', 'Charlie']);
+foreach ($team as $key => $member) {
+    print("Member {$key}: {$member}");
+}
+```
+
+When `getIterator()` yields an `ArrayIterator` wrapping a `list` or `dict`, RHP applies an automated **fast-path optimization**: the VM unwraps the inner vector or map directly into a cache-friendly register stream, bypassing per-element method call overhead entirely.
+
+#### Step-by-Step `Iterator`
+For custom lazy generators or cursor-driven iterators, implement `Iterator` with step-by-step methods:
+
+```php
+class NumberRange implements Iterator {
+    private int $current;
+
+    public function __construct(private int $start, private int $end) {
+        $this->current = $start;
+    }
+
+    public function rewind(): void {
+        $this->current = $this->start;
+    }
+
+    public function valid(): bool {
+        return $this->current <= $this->end;
+    }
+
+    public function current(): mixed {
+        return $this->current * 10;
+    }
+
+    public function key(): mixed {
+        return $this->current - $this->start;
+    }
+
+    public function next(): void {
+        $this->current++;
+    }
+}
+
+$range = new NumberRange(1, 5);
+foreach ($range as $step => $value) {
+    print("Step {$step}: {$value}");
+}
+```
+
+The RHP VM safely executes `rewind()`, `valid()`, `current()`, `key()`, and `next()` synchronously within isolated VM call frames, preserving iterator state and allowing nested loops.
+
+### 3. Plain Object Property Iteration
+
+Iterating over standard class instances yields all visible and accessible object properties as `$key => $value` pairs in declaration order:
+
+```php
+class UserDTO {
+    public string $name = "Alice";
+    public string $role = "Engineer";
+    public int $level = 7;
+}
+
+$dto = new UserDTO();
+foreach ($dto as $property => $value) {
+    print("{$property} = {$value}");
+}
+// Outputs:
+// name = Alice
+// role = Engineer
+// level = 7
+```
+
+### 4. Laravel Collections, Paginators, & Query Results
+
+RHP provides built-in native compatibility with common Laravel data structures:
+
+```php
+// 1. Eloquent / DB query results
+$users = DB::table('users')->where('active', true)->get();
+foreach ($users as $user) {
+    print("User #{$user->id}");
+}
+
+// 2. LengthAwarePaginator
+$paginator = DB::table('orders')->paginate(15);
+foreach ($paginator as $order) {
+    print("Order #{$order->id}");
+}
+print("Total orders: " . (string)$paginator->total());
+print("Current page: " . (string)$paginator->currentPage());
+
+// 3. Laravel Collections via collect()
+$collection = collect(['apple', 'banana', 'cherry']);
+foreach ($collection as $index => $fruit) {
+    print("{$index}: {$fruit}");
+}
+```
+
+### 5. `iterable` Parameter & Return Type Contracts
+
+Functions and methods can declare `iterable` or `Traversable` type hints, accepting plain arrays, subtyped collections, or custom iterator objects interchangeably:
+
+```php
+function processItems(iterable $items): int {
+    $count = 0;
+    foreach ($items as $item) {
+        $count++;
+    }
+    return $count;
+}
+
+processItems([1, 2, 3]);                           // Plain array
+processItems(new ArrayIterator(['a', 'b']));       // ArrayIterator
+processItems(collect([10, 20, 30]));               // Laravel Collection
+```
+
+Objects implementing `Iterator` or `IteratorAggregate` also satisfy `instanceof Traversable`, matching PHP 8 inheritance hierarchies.
+
+### 6. Loop Control: `break` and `continue`
+
+Both `break` and `continue` function cleanly within object and collection `foreach` loops, safely cleaning up iterator frames and register states:
+
+```php
+foreach ($team as $member) {
+    if ($member === 'Guest') {
+        continue;
+    }
+    if ($member === 'Admin') {
+        break;
+    }
+    print("Processing {$member}");
 }
 ```
 

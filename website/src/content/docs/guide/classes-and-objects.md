@@ -128,6 +128,75 @@ If an object without an `__invoke()` method is called as a function, RHP throws 
 
 ---
 
+## Object Iteration: `Traversable`, `IteratorAggregate`, & `Iterator`
+
+RHP supports standard object iteration interfaces, enabling custom collections and data domain objects to be looped over via `foreach`:
+
+### 1. `IteratorAggregate`
+The simplest and most efficient way to make a class iterable is by implementing `IteratorAggregate` and returning a `Traversable` (such as `ArrayIterator`):
+
+```php
+class OrderRepository implements IteratorAggregate {
+    private array $orders;
+
+    public function __construct(array $orders) {
+        $this->orders = $orders;
+    }
+
+    public function getIterator(): Traversable {
+        return new ArrayIterator($this->orders);
+    }
+}
+
+$repo = new OrderRepository(['ORD-101', 'ORD-102', 'ORD-103']);
+foreach ($repo as $order) {
+    print("Processing order: " . $order);
+}
+```
+
+> **Zero-Cost Vector Streaming:**
+> When `getIterator()` returns an `ArrayIterator` wrapping a native `list` or `dict`, the RHP runtime directly unwraps the inner vector into an `ActiveIterator::List` or `ActiveIterator::Dict`. This streams elements with zero method call overhead, matching native Rust array iteration speeds.
+
+### 2. Step-by-Step `Iterator`
+For on-demand streaming, database pagination cursors, or generator patterns, classes can implement `Iterator` with granular step methods:
+
+```php
+class PagedCursor implements Iterator {
+    private int $position = 0;
+    private array $buffer = [];
+
+    public function __construct(private int $totalRecords) {}
+
+    public function rewind(): void {
+        $this->position = 0;
+    }
+
+    public function valid(): bool {
+        return $this->position < $this->totalRecords;
+    }
+
+    public function current(): mixed {
+        return "Record #" . (string)$this->position;
+    }
+
+    public function key(): mixed {
+        return $this->position;
+    }
+
+    public function next(): void {
+        $this->position++;
+    }
+}
+```
+
+### 3. Nominal Type Hierarchy & `iterable` Contracts
+RHP pre-seeds the standard PHP nominal hierarchy:
+* Both `IteratorAggregate` and `Iterator` extend `Traversable`.
+* Objects implementing either interface satisfy `instanceof Traversable` and the unified `iterable` parameter and return type hint.
+* Built-in Laravel structures like `LengthAwarePaginator` and `Collection` (via `collect()`) implement `IteratorAggregate` out of the box.
+
+---
+
 ## Enumerations (`enum`)
 
 RHP provides first-class support for pure (unit) enums and backed enums (`string` or `int`), matching PHP 8.1+ semantics while integrating directly into RHP's high-performance memory model and gradual type system.

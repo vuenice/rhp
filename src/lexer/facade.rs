@@ -515,6 +515,12 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "functionExists",
         rhp_signature: "Reflect::functionExists(string $function): bool",
     },
+    LegacyPhpFunctionMapping {
+        php_name: "collect",
+        rhp_facade: "phpFun",
+        rhp_method: "collect",
+        rhp_signature: "phpFun::collect(mixed $items = null): object",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function

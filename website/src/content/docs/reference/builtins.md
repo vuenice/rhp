@@ -49,6 +49,7 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `implode($glue, $arr)` | `phpFun::implode($glue, $arr)` | `Arr::implode($glue, $arr)` |
 | `file_get_contents($path)` | `phpFun::file_get_contents($path)` | `File::read($path)` |
 | `file_put_contents($path, $data)` | `phpFun::file_put_contents($path, $data)` | `File::write($path, $data)` |
+| `collect($items)` | `phpFun::collect($items)` | Creates an iterable `Collection` instance |
 
 ---
 

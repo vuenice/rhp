@@ -2628,6 +2628,12 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "class_exists" => dispatch_reflect("classExists", args),
         "function_exists" => dispatch_reflect("functionExists", args),
+        "collect" => {
+            let items = args.first().cloned().unwrap_or_else(|| PhpValue::list(vec![]));
+            let mut obj = VmObject::new("Collection");
+            obj.set_property("items", items);
+            Ok(PhpValue::object(obj))
+        }
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),
@@ -2689,7 +2695,8 @@ fn dispatch_reflect(method: &str, args: &[PhpValue]) -> FacadeResult {
                     .any(|&i| i.eq_ignore_ascii_case(clean))
                 || has_custom_helper(clean)
                 || clean.eq_ignore_ascii_case("class_exists")
-                || clean.eq_ignore_ascii_case("function_exists");
+                || clean.eq_ignore_ascii_case("function_exists")
+                || clean.eq_ignore_ascii_case("collect");
             Ok(PhpValue::Bool(exists))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {

@@ -6316,6 +6316,22 @@ impl VM {
             }
         }
 
+        // Built-in Iterator / Collection / Paginator classes
+        if clean_name == "ArrayIterator"
+            || clean_name == "Collection"
+            || clean_name == "Illuminate\\Support\\Collection"
+            || clean_name == "LengthAwarePaginator"
+            || clean_name == "Paginator"
+            || clean_name == "Illuminate\\Pagination\\LengthAwarePaginator"
+            || clean_name == "Illuminate\\Pagination\\Paginator"
+        {
+            if !self.module.class_index.contains_key(clean_name) {
+                obj.set_property("items", PhpValue::list(vec![]));
+                obj.set_property("cursor", PhpValue::Int(0));
+                return Ok(PhpValue::object(obj));
+            }
+        }
+
         // Collect inheritance chain from root ancestor down to `class_name`
         let mut hierarchy_chain = Vec::new();
         let mut cursor = Some(clean_name.to_string());
@@ -6624,7 +6640,10 @@ impl VM {
             if let Some(cls) = self.module.get_class_by_name(cls_name) {
                 if cls.implements.iter().any(|i| {
                     let ic = i.strip_prefix('\\').unwrap_or(i);
-                    ic == target_clean || i == target_cls
+                    ic == target_clean
+                        || i == target_cls
+                        || (target_clean == "Traversable"
+                            && (ic == "IteratorAggregate" || ic == "Iterator" || ic == "SeekableIterator"))
                 }) || cls.traits.iter().any(|t| {
                     let tc = t.strip_prefix('\\').unwrap_or(t);
                     tc == target_clean || t == target_cls
@@ -6650,6 +6669,33 @@ impl VM {
                 break;
             }
         }
+
+        let is_target_traversable = target_clean == "Traversable";
+        let is_target_iter_agg = target_clean == "IteratorAggregate";
+        let is_target_iterator = target_clean == "Iterator" || target_clean == "SeekableIterator";
+        let is_target_array_access = target_clean == "ArrayAccess";
+        let is_target_countable = target_clean == "Countable";
+
+        if actual_clean == "ArrayIterator" {
+            if is_target_traversable || is_target_iterator || is_target_array_access || is_target_countable {
+                return true;
+            }
+        }
+        if actual_clean == "Collection" || actual_clean == "Illuminate\\Support\\Collection" {
+            if is_target_traversable || is_target_iter_agg || is_target_array_access || is_target_countable {
+                return true;
+            }
+        }
+        if actual_clean == "LengthAwarePaginator"
+            || actual_clean == "Paginator"
+            || actual_clean == "Illuminate\\Pagination\\LengthAwarePaginator"
+            || actual_clean == "Illuminate\\Pagination\\Paginator"
+        {
+            if is_target_traversable || is_target_iter_agg || is_target_array_access || is_target_countable {
+                return true;
+            }
+        }
+
         // Built-in Exception and Error subtyping
         if (actual_clean.ends_with("Exception")
             || actual_cls.ends_with("Exception")

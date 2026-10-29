@@ -2927,6 +2927,13 @@ impl TypeChecker {
                         Ok(RhpType::RustInt(*i))
                     }
                     (RhpType::Int, RhpType::Int) => Ok(RhpType::Int),
+                    (RhpType::Int, RhpType::Mixed | RhpType::Dynamic)
+                    | (RhpType::Mixed | RhpType::Dynamic, RhpType::Int) => Ok(RhpType::Int),
+                    (RhpType::RustInt(i), RhpType::Mixed | RhpType::Dynamic)
+                    | (RhpType::Mixed | RhpType::Dynamic, RhpType::RustInt(i)) => Ok(RhpType::RustInt(*i)),
+                    (RhpType::Mixed | RhpType::Dynamic, RhpType::Mixed | RhpType::Dynamic) => {
+                        Ok(RhpType::Mixed)
+                    }
                     _ => Ok(RhpType::Float),
                 }
             }

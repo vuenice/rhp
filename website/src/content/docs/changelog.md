@@ -23,5 +23,11 @@ Welcome to the initial public release of RHP!
   - `Sys`: System intrinsics (`env`, `print`, `dd`, `version`).
 - **Tooling:**
   - Integrated `rhp run lint` combining AST auto-formatting (4-space indent), casing normalization, automated variable type inference, and JSON diagnostic reporting.
+- **Object Iteration & Laravel Compatibility:**
+  - First-class support for iterating objects via `foreach ($obj as $v)` and `foreach ($obj as $k => $v)`.
+  - Seamless execution of `IteratorAggregate` and step-by-step `Iterator` with re-entrant VM call frames.
+  - Zero-cost vector unwrapping optimization for `ArrayIterator` wrapping native `list` or `dict`.
+  - Plain object visible property iteration.
+  - Native support for Laravel query results (`DBQuery::get()`), paginators (`LengthAwarePaginator`, `DBQuery::paginate()`), collections (`Collection`, `collect()`), and `iterable` / `Traversable` type contracts.
 - **Documentation & Website:**
   - Modern marketing landing page and comprehensive documentation site built with Astro and Tailwind CSS.
