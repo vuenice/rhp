@@ -73,6 +73,13 @@ pub(crate) enum ActiveIterator {
     },
 }
 
+#[derive(Debug)]
+pub(crate) enum EnumStaticCallResult {
+    Handled(PhpValue),
+    DispatchedToCatch,
+    NotAnEnumMethod,
+}
+
 /// Call frame on the register VM execution stack.
 #[derive(Debug, Clone)]
 pub struct CallFrame {
@@ -550,18 +557,30 @@ impl VM {
         let enums: Vec<_> = self.module.enums.values().cloned().collect();
         for enm in &enums {
             for (idx, case) in enm.cases.iter().enumerate() {
-                let backing_val = if let Some(ref chunk) = case.value_chunk {
-                    self.eval_isolated_chunk(chunk)?
-                } else {
-                    PhpValue::Int(idx as i32)
-                };
+                let key = (enm.name.clone(), case.name.clone());
+                if self.class_constants.contains_key(&key) {
+                    continue;
+                }
                 let mut case_obj = VmObject::new(enm.name.clone());
                 case_obj.set_property("name", PhpValue::string(case.name.clone()));
-                case_obj.set_property("value", backing_val);
-                self.class_constants.insert(
-                    (enm.name.clone(), case.name.clone()),
-                    PhpValue::object(case_obj),
-                );
+                case_obj.readonly_props.insert("name".to_string(), true);
+                if enm.backing_type.is_some() || case.value_chunk.is_some() {
+                    let backing_val = if let Some(ref chunk) = case.value_chunk {
+                        self.eval_isolated_chunk(chunk)?
+                    } else {
+                        PhpValue::Int(idx as i32)
+                    };
+                    case_obj.set_property("value", backing_val);
+                    case_obj.readonly_props.insert("value".to_string(), true);
+                }
+                let obj_val = PhpValue::object(case_obj);
+                self.class_constants.insert(key, obj_val.clone());
+                if let Some(short) = enm.name.split('\\').last() {
+                    if short != enm.name {
+                        self.class_constants
+                            .insert((short.to_string(), case.name.clone()), obj_val.clone());
+                    }
+                }
             }
         }
 
@@ -1493,6 +1512,53 @@ impl VM {
                                 span,
                             )?;
                         }
+                        PhpValue::Object(ref obj_rc) => {
+                            let cls_name = obj_rc.borrow().class_name.clone();
+
+                            // Check Singleton Invocation Invariant:
+                            // "one can use both static and non-static methods of singleton class within other singleton class
+                            //  but can only use static methods of singleton class inside non-singleton class."
+                            if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
+                                if target_cls.modifiers.is_singleton {
+                                    if let Some(caller_class) = self.current_caller_class() {
+                                        let caller_is_singleton = self
+                                            .module
+                                            .get_class_by_name(&caller_class)
+                                            .map(|c| c.modifiers.is_singleton)
+                                            .unwrap_or(false);
+
+                                        if !caller_is_singleton {
+                                            return Err(self.make_error(
+                                                RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
+                                                    singleton_class: cls_name,
+                                                    method: "__invoke".to_string(),
+                                                    caller_class,
+                                                },
+                                                span,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
+                                self.push_compiled_call_frame(
+                                    target_id,
+                                    Some(callee_val),
+                                    &staged,
+                                    &[],
+                                    Some(base_reg + dst.index()),
+                                    span,
+                                )?;
+                            } else {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::NotCallable {
+                                        type_name: cls_name,
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
                         PhpValue::String(fn_name) => {
                             let target_id = self
                                 .module
@@ -1519,7 +1585,7 @@ impl VM {
                         other => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::NotCallable {
-                                    type_name: other.type_name().to_string(),
+                                    type_name: self.runtime_type_label(&other),
                                 },
                                 span,
                             ));
@@ -1590,6 +1656,19 @@ impl VM {
                         let res = self.invoke_closure_sync(&macro_closure, arg_values, span)?;
                         self.registers[base_reg + dst.index()] = res;
                         continue;
+                    }
+
+                    let flat_args = Self::flatten_positional_args(&staged);
+
+                    match self.exec_enum_static_method(&class_name, &method_name, &flat_args, stop_depth, span)? {
+                        EnumStaticCallResult::Handled(res) => {
+                            self.registers[base_reg + dst.index()] = res;
+                            continue;
+                        }
+                        EnumStaticCallResult::DispatchedToCatch => {
+                            continue;
+                        }
+                        EnumStaticCallResult::NotAnEnumMethod => {}
                     }
 
                     let target_id = self
@@ -1679,6 +1758,16 @@ impl VM {
                                     span,
                                 )?;
                             } else {
+                                match self.exec_enum_static_method(&cls_name, &method_name, &flat_args, stop_depth, span)? {
+                                    EnumStaticCallResult::Handled(res) => {
+                                        self.registers[base_reg + dst.index()] = res;
+                                        continue;
+                                    }
+                                    EnumStaticCallResult::DispatchedToCatch => {
+                                        continue;
+                                    }
+                                    EnumStaticCallResult::NotAnEnumMethod => {}
+                                }
                                 let res = self.exec_builtin_object_method(
                                     &cls_name,
                                     &receiver,
@@ -1690,6 +1779,18 @@ impl VM {
                             }
                         }
                         _ => {
+                            if let PhpValue::String(ref cls_str) = receiver {
+                                match self.exec_enum_static_method(cls_str.as_str(), &method_name, &flat_args, stop_depth, span)? {
+                                    EnumStaticCallResult::Handled(res) => {
+                                        self.registers[base_reg + dst.index()] = res;
+                                        continue;
+                                    }
+                                    EnumStaticCallResult::DispatchedToCatch => {
+                                        continue;
+                                    }
+                                    EnumStaticCallResult::NotAnEnumMethod => {}
+                                }
+                            }
                             let res = self.exec_fluent_value_method(
                                 &receiver,
                                 &method_name,
@@ -2124,9 +2225,10 @@ impl VM {
             .resize(new_base + num_regs, PhpValue::Null);
 
         // 1. Bind `$this` to `r0` for instance methods
-        if let Some(this_val) = receiver {
+        let has_explicit_receiver = receiver.is_some();
+        if let Some(ref this_val) = receiver {
             if !func.is_static {
-                self.registers[new_base] = this_val;
+                self.registers[new_base] = this_val.clone();
             }
         }
 
@@ -2258,6 +2360,9 @@ impl VM {
 
         // 3. Bind captured closure/arrow upvalues (`use ($var)`)
         for (upval_name, upval_val) in func.upvalues.iter().zip(upvalues.iter()) {
+            if upval_name == "$this" && has_explicit_receiver {
+                continue;
+            }
             if let Some(reg) = func.chunk.register_for_var(upval_name) {
                 self.registers[new_base + reg.index()] = upval_val.clone();
             }
@@ -2376,6 +2481,85 @@ impl VM {
             span,
         )?;
         self.dispatch_loop(depth_before)
+    }
+
+    /// Invoke any callable [`PhpValue`] (Closure, invokable Object, or function name string)
+    /// synchronously and return its evaluated `PhpValue`.
+    pub fn invoke_callable_sync(
+        &mut self,
+        callable: &PhpValue,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        match callable {
+            PhpValue::Closure(closure) => self.invoke_closure_sync(closure, args, span),
+            PhpValue::Object(obj_rc) => {
+                let cls_name = obj_rc.borrow().class_name.clone();
+                let staged: Vec<StagedArg> = args
+                    .into_iter()
+                    .map(|value| StagedArg {
+                        value,
+                        name: None,
+                        is_unpack: false,
+                        is_reference: false,
+                        caller_reg: None,
+                    })
+                    .collect();
+                if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
+                    let depth_before = self.frames.len();
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(callable.clone()),
+                        &staged,
+                        &[],
+                        None,
+                        span,
+                    )?;
+                    self.dispatch_loop(depth_before)
+                } else {
+                    Err(self.make_error(
+                        RuntimeErrorKind::NotCallable {
+                            type_name: cls_name,
+                        },
+                        span,
+                    ))
+                }
+            }
+            PhpValue::String(fn_name) => {
+                let staged: Vec<StagedArg> = args
+                    .into_iter()
+                    .map(|value| StagedArg {
+                        value,
+                        name: None,
+                        is_unpack: false,
+                        is_reference: false,
+                        caller_reg: None,
+                    })
+                    .collect();
+                let target_id = self
+                    .module
+                    .function_index
+                    .get(fn_name.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        self.make_error(
+                            RuntimeErrorKind::UndefinedFunction {
+                                name: (*fn_name).to_string(),
+                            },
+                            span,
+                        )
+                    })?;
+                let depth_before = self.frames.len();
+                self.push_compiled_call_frame(target_id, None, &staged, &[], None, span)?;
+                self.dispatch_loop(depth_before)
+            }
+            other => Err(self.make_error(
+                RuntimeErrorKind::NotCallable {
+                    type_name: self.runtime_type_label(other),
+                },
+                span,
+            )),
+        }
     }
 
     /// Spawn a background task executing a [`VmClosure`] concurrently on an OS thread pool,
@@ -5665,6 +5849,201 @@ impl VM {
         Ok(PhpValue::object(obj))
     }
 
+    fn exec_enum_static_method(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        args: &[PhpValue],
+        stop_depth: usize,
+        span: Span,
+    ) -> Result<EnumStaticCallResult, RuntimeError> {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        let enm_opt = self
+            .module
+            .enums
+            .get(clean)
+            .or_else(|| self.module.enums.get(class_name))
+            .or_else(|| {
+                self.module
+                    .enums
+                    .values()
+                    .find(|e| e.name.eq_ignore_ascii_case(clean))
+            })
+            .cloned();
+
+        let enm = match enm_opt {
+            Some(e) => e,
+            None => return Ok(EnumStaticCallResult::NotAnEnumMethod),
+        };
+
+        match method_name.to_ascii_lowercase().as_str() {
+            "cases" => {
+                let mut list = Vec::with_capacity(enm.cases.len());
+                for case in &enm.cases {
+                    let case_val = self
+                        .class_constants
+                        .get(&(enm.name.clone(), case.name.clone()))
+                        .or_else(|| self.class_constants.get(&(clean.to_string(), case.name.clone())))
+                        .or_else(|| {
+                            let short = enm.name.split('\\').last().unwrap_or(&enm.name);
+                            self.class_constants.get(&(short.to_string(), case.name.clone()))
+                        })
+                        .cloned();
+                    if let Some(val) = case_val {
+                        list.push(val);
+                    }
+                }
+                Ok(EnumStaticCallResult::Handled(PhpValue::list(list)))
+            }
+            "from" => {
+                if enm.backing_type.is_none() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UndefinedMethod {
+                            class: class_name.to_string(),
+                            method: "from".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if args.is_empty() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TooFewArguments {
+                            callable: format!("{}::from", class_name),
+                            passed: 0,
+                            expected: 1,
+                        },
+                        span,
+                    ));
+                }
+                let target_val = &args[0];
+
+                if let Some(ref back_ty) = enm.backing_type {
+                    if !target_val.matches_type_contract(back_ty, self.type_hierarchy.as_ref()) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::TypeContractViolation {
+                                expected: back_ty.clone(),
+                                actual: self.runtime_type_label(target_val),
+                                value_preview: format!("{:?}", target_val),
+                            },
+                            span,
+                        ));
+                    }
+                }
+
+                let mut matched = None;
+                for case in &enm.cases {
+                    let case_val = self
+                        .class_constants
+                        .get(&(enm.name.clone(), case.name.clone()))
+                        .or_else(|| self.class_constants.get(&(clean.to_string(), case.name.clone())))
+                        .or_else(|| {
+                            let short = enm.name.split('\\').last().unwrap_or(&enm.name);
+                            self.class_constants.get(&(short.to_string(), case.name.clone()))
+                        });
+                    if let Some(val) = case_val {
+                        if let PhpValue::Object(rc) = val {
+                            let obj = rc.borrow();
+                            if let Some(backing_val) = obj.get_property("value") {
+                                if backing_val == target_val {
+                                    matched = Some(val.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(case_val) = matched {
+                    Ok(EnumStaticCallResult::Handled(case_val))
+                } else {
+                    let val_preview = match target_val {
+                        PhpValue::String(s) => format!("\"{}\"", s),
+                        other => other.to_php_string(),
+                    };
+                    let msg = format!(
+                        "{} is not a valid backing value for enum {}",
+                        val_preview, enm.name
+                    );
+                    let mut err_obj = VmObject::new("ValueError");
+                    err_obj.set_property("message", PhpValue::string(msg.clone()));
+                    if self.try_dispatch_to_catch(PhpValue::object(err_obj), stop_depth) {
+                        Ok(EnumStaticCallResult::DispatchedToCatch)
+                    } else {
+                        Err(self.make_error(
+                            RuntimeErrorKind::ValueError { message: msg },
+                            span,
+                        ))
+                    }
+                }
+            }
+            "tryfrom" => {
+                if enm.backing_type.is_none() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UndefinedMethod {
+                            class: class_name.to_string(),
+                            method: "tryFrom".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if args.is_empty() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TooFewArguments {
+                            callable: format!("{}::tryFrom", class_name),
+                            passed: 0,
+                            expected: 1,
+                        },
+                        span,
+                    ));
+                }
+                let target_val = &args[0];
+
+                if !target_val.is_null() {
+                    if let Some(ref back_ty) = enm.backing_type {
+                        if !target_val.matches_type_contract(back_ty, self.type_hierarchy.as_ref()) {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::TypeContractViolation {
+                                    expected: back_ty.clone(),
+                                    actual: self.runtime_type_label(target_val),
+                                    value_preview: format!("{:?}", target_val),
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
+
+                let mut matched = None;
+                for case in &enm.cases {
+                    let case_val = self
+                        .class_constants
+                        .get(&(enm.name.clone(), case.name.clone()))
+                        .or_else(|| self.class_constants.get(&(clean.to_string(), case.name.clone())))
+                        .or_else(|| {
+                            let short = enm.name.split('\\').last().unwrap_or(&enm.name);
+                            self.class_constants.get(&(short.to_string(), case.name.clone()))
+                        });
+                    if let Some(val) = case_val {
+                        if let PhpValue::Object(rc) = val {
+                            let obj = rc.borrow();
+                            if let Some(backing_val) = obj.get_property("value") {
+                                if backing_val == target_val {
+                                    matched = Some(val.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok(EnumStaticCallResult::Handled(
+                    matched.unwrap_or(PhpValue::Null),
+                ))
+            }
+            _ => Ok(EnumStaticCallResult::NotAnEnumMethod),
+        }
+    }
+
     fn resolve_method_id(&self, class_name: &str, method_name: &str) -> Option<FunctionId> {
         let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
         let mut cursor = Some(clean);
@@ -5719,6 +6098,12 @@ impl VM {
                 }
                 cursor = cls.extends.as_deref();
             } else if let Some(enm) = self.module.enums.get(cls_name) {
+                if target_clean == "UnitEnum" {
+                    return true;
+                }
+                if enm.backing_type.is_some() && (target_clean == "BackedEnum" || target_clean == "UnitEnum") {
+                    return true;
+                }
                 if enm.implements.iter().any(|i| {
                     let ic = i.strip_prefix('\\').unwrap_or(i);
                     ic == target_clean || i == target_cls
@@ -5730,9 +6115,16 @@ impl VM {
                 break;
             }
         }
-        // Built-in Exception subtyping
-        if (actual_clean.ends_with("Exception") || actual_cls.ends_with("Exception"))
-            && (target_clean == "Exception" || target_clean == "Throwable")
+        // Built-in Exception and Error subtyping
+        if (actual_clean.ends_with("Exception")
+            || actual_cls.ends_with("Exception")
+            || actual_clean.ends_with("Error")
+            || actual_cls.ends_with("Error"))
+            && (target_clean == "Exception"
+                || target_clean == "Throwable"
+                || target_clean == "Error"
+                || target_clean == actual_clean
+                || target_cls == actual_cls)
         {
             return true;
         }

@@ -119,6 +119,9 @@ pub enum RuntimeErrorKind {
     #[error("UnhandledMatchError: Unhandled match value '{subject}'")]
     UnhandledMatchError { subject: String },
 
+    #[error("ValueError: {message}")]
+    ValueError { message: String },
+
     #[error("StackOverflowError: Maximum VM call stack depth ({max_depth}) exceeded")]
     StackOverflow { max_depth: usize },
 

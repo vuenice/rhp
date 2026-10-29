@@ -1293,7 +1293,17 @@ impl PhpValue {
                 self,
                 Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)
             ),
-            RhpType::Callable { .. } => matches!(self, Self::Closure(_)),
+            RhpType::Callable { .. } => match self {
+                Self::Closure(_) => true,
+                Self::Object(obj) => {
+                    if let Some(h) = hierarchy {
+                        h.lookup_method(&obj.borrow().class_name, "__invoke").is_some()
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            },
             RhpType::Future(_) => matches!(self, Self::Future(_)),
             RhpType::Object => matches!(self, Self::Object(_) | Self::Closure(_) | Self::Future(_)),
             RhpType::Class(class_name) => match self {

@@ -535,12 +535,111 @@ impl TypeChecker {
             methods.insert(m.function.name.name.to_string(), sig);
         }
 
+        // Built-in synthetic enum method: cases() -> List<Enum>
+        if !methods.contains_key("cases") {
+            methods.insert(
+                "cases".to_string(),
+                FunctionSignature {
+                    name: "cases".to_string(),
+                    params: vec![],
+                    return_type: RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Class(
+                        enum_name.to_string(),
+                    )))),
+                    is_async: false,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    visibility: Visibility::Public,
+                    span: enm.span,
+                },
+            );
+        }
+
+        // Built-in synthetic backed enum methods: from($value), tryFrom($value)
+        if let Some(ref b_ty) = backing_type {
+            if !methods.contains_key("from") {
+                methods.insert(
+                    "from".to_string(),
+                    FunctionSignature {
+                        name: "from".to_string(),
+                        params: vec![ParamSignature {
+                            name: "value".to_string(),
+                            rhp_type: b_ty.clone(),
+                            has_default: false,
+                            is_variadic: false,
+                            is_reference: false,
+                            span: enm.span,
+                        }],
+                        return_type: RhpType::Class(enum_name.to_string()),
+                        is_async: false,
+                        is_static: true,
+                        is_abstract: false,
+                        is_final: false,
+                        visibility: Visibility::Public,
+                        span: enm.span,
+                    },
+                );
+            }
+            if !methods.contains_key("tryFrom") {
+                methods.insert(
+                    "tryFrom".to_string(),
+                    FunctionSignature {
+                        name: "tryFrom".to_string(),
+                        params: vec![ParamSignature {
+                            name: "value".to_string(),
+                            rhp_type: RhpType::Nullable(Box::new(b_ty.clone())),
+                            has_default: false,
+                            is_variadic: false,
+                            is_reference: false,
+                            span: enm.span,
+                        }],
+                        return_type: RhpType::Nullable(Box::new(RhpType::Class(enum_name.to_string()))),
+                        is_async: false,
+                        is_static: true,
+                        is_abstract: false,
+                        is_final: false,
+                        visibility: Visibility::Public,
+                        span: enm.span,
+                    },
+                );
+            }
+        }
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            "name".to_string(),
+            PropertyTypeInfo {
+                name: "name".to_string(),
+                rhp_type: RhpType::String,
+                visibility: Visibility::Public,
+                is_static: false,
+                is_readonly: true,
+                has_default: true,
+                span: enm.span,
+            },
+        );
+        if let Some(ref b_ty) = backing_type {
+            properties.insert(
+                "value".to_string(),
+                PropertyTypeInfo {
+                    name: "value".to_string(),
+                    rhp_type: b_ty.clone(),
+                    visibility: Visibility::Public,
+                    is_static: false,
+                    is_readonly: true,
+                    has_default: true,
+                    span: enm.span,
+                },
+            );
+        }
+
         Ok(EnumTypeInfo {
             name: enum_name.to_string(),
             backing_type,
             implements: enm.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             cases: enm.cases.iter().map(|c| c.name.name.to_string()).collect(),
             methods,
+            properties,
             span: enm.span,
         })
     }
@@ -2148,18 +2247,21 @@ impl TypeChecker {
                 let current_class = ctx.and_then(|c| c.enclosing_class.as_deref());
                 let mut closure_env = TypeEnvironment::new();
                 if !*is_static {
-                    let this_ty = if let Some(cls) = current_class {
-                        RhpType::Class(cls.to_string())
-                    } else {
-                        RhpType::Dynamic
-                    };
-                    let _ = closure_env.declare_typed(
-                        "$this",
-                        this_ty,
-                        None,
-                        expr.span,
-                        Some(&self.result.hierarchy),
-                    );
+                    let in_static_method = ctx.map(|c| c.callable_kind.as_str()) == Some("static method");
+                    if !in_static_method {
+                        let this_ty = if let Some(cls) = current_class {
+                            RhpType::Class(cls.to_string())
+                        } else {
+                            RhpType::Dynamic
+                        };
+                        let _ = closure_env.declare_typed(
+                            "$this",
+                            this_ty,
+                            None,
+                            expr.span,
+                            Some(&self.result.hierarchy),
+                        );
+                    }
                 }
 
                 // Validate `use ($x)` captures (reject `&$x` reference capture!)
@@ -2424,15 +2526,65 @@ impl TypeChecker {
                 }
 
                 let callee_ty = self.infer_expr(callee, env, ctx, None)?;
-                let arg_types = self.infer_arguments(args, env, ctx, None)?;
                 let ret_ty = match callee_ty {
                     RhpType::Callable {
                         return_type: Some(r),
                         ..
-                    } => *r,
-                    _ => RhpType::Dynamic,
+                    } => {
+                        let _ = self.infer_arguments(args, env, ctx, None)?;
+                        *r
+                    }
+                    RhpType::Class(ref cls_name) => {
+                        // Check singleton rule
+                        if let Some(target_ci) = self.result.hierarchy.classes.get(cls_name) {
+                            if target_ci.is_singleton {
+                                if let Some(caller_ctx) = ctx {
+                                    if let Some(ref caller_class) = caller_ctx.enclosing_class {
+                                        let caller_is_singleton = self
+                                            .result
+                                            .hierarchy
+                                            .classes
+                                            .get(caller_class)
+                                            .map(|c| c.is_singleton)
+                                            .unwrap_or(false);
+                                        if !caller_is_singleton {
+                                            return Err(TypeError::new(
+                                                TypeErrorKind::NonStaticSingletonMethodCallForbidden {
+                                                    singleton_class: cls_name.clone(),
+                                                    method: "__invoke".to_string(),
+                                                    caller_class: caller_class.clone(),
+                                                },
+                                                expr.span,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(sig) = self
+                            .result
+                            .hierarchy
+                            .lookup_method(cls_name, "__invoke")
+                            .cloned()
+                        {
+                            let param_hints: Vec<RhpType> =
+                                sig.params.iter().map(|p| p.rhp_type.clone()).collect();
+                            let arg_types =
+                                self.infer_arguments(args, env, ctx, Some(&param_hints))?;
+                            let display = format!("{}::__invoke", cls_name);
+                            self.verify_call_arguments(&display, &sig, args, &arg_types, expr.span)?;
+                            sig.return_type
+                        } else {
+                            let _ = self.infer_arguments(args, env, ctx, None)?;
+                            RhpType::Dynamic
+                        }
+                    }
+                    _ => {
+                        let _ = self.infer_arguments(args, env, ctx, None)?;
+                        RhpType::Dynamic
+                    }
                 };
-                let _ = arg_types;
                 ret_ty
             }
 

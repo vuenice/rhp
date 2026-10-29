@@ -104,3 +104,31 @@ $counter = updateCounter($counter);
 ```
 
 Similarly, closure capture-by-reference (`use (&$var)`) is rejected to ensure closures cannot construct hidden circular memory graphs that would require a tracing garbage collector.
+
+---
+
+## Callable Type Contract & Invokable Objects
+
+The `callable` type hint accepts closures, arrow functions, global function names (`string`), and invokable class instances implementing `__invoke()`:
+
+```php
+function dispatch(callable $action, mixed $payload): mixed {
+    return $action($payload);
+}
+
+// 1. Arrow closure
+dispatch(fn($d) => print("Handled: " . $d), "event-1");
+
+// 2. Invokable Object ($action($params))
+class CreateSiteAction {
+    public function __invoke(array $data): string {
+        return "Created site: " . $data['domain'];
+    }
+}
+
+$action = new CreateSiteAction();
+$res = dispatch($action, ['domain' => 'rhp.dev']);
+```
+
+For detailed class-level invokable patterns (such as Laravel single-action controllers), see [Classes, Objects & Enums](/docs/guide/classes-and-objects#invokable-objects-__invoke).
+

@@ -1,6 +1,6 @@
 ---
-title: "Classes, Objects & Singletons"
-description: "Object-oriented programming in RHP: classes, property initialization contracts, interfaces, traits, and persistent singleton classes."
+title: "Classes, Objects, Enums & Singletons"
+description: "Object-oriented programming in RHP: classes, property initialization contracts, enumerations, interfaces, traits, and persistent singleton classes."
 section: "Language Guide"
 order: 5
 ---
@@ -69,6 +69,192 @@ class AuditLog implements Loggable {
     }
 }
 ```
+
+---
+
+## Invokable Objects (`__invoke`)
+
+Classes in RHP can implement the magic `__invoke()` method to allow instances of the class to be directly called as functions (`$obj(...)`). This pattern is ubiquitous in modern PHP frameworks such as Laravel for single-action controllers, action services, and invokable commands.
+
+```php
+class CreateSite {
+    public function __construct(private string $environment) {}
+
+    public function __invoke(array $data): string {
+        return "Created site [" . $data['domain'] . "] in " . $this->environment;
+    }
+}
+
+$createSite = new CreateSite("production");
+
+// Directly invoke the object instance:
+$result = $createSite(["domain" => "laravel.com"]);
+print($result); // "Created site [laravel.com] in production"
+```
+
+### Callable Type Contract Acceptance
+
+Invokable objects fully satisfy PHP's `callable` type hint at both compile-time and runtime boundary assertions:
+
+```php
+function executeAction(callable $action, array $params): mixed {
+    return $action($params);
+}
+
+$createSite = new CreateSite("staging");
+executeAction($createSite, ["domain" => "test.local"]);
+```
+
+If an object without an `__invoke()` method is called as a function, RHP throws a `TypeError: Value of type 'ClassName' is not callable`, matching standard PHP 8 semantics.
+
+---
+
+## Enumerations (`enum`)
+
+RHP provides first-class support for pure (unit) enums and backed enums (`string` or `int`), matching PHP 8.1+ semantics while integrating directly into RHP's high-performance memory model and gradual type system.
+
+### Declaring Enums
+
+#### 1. Pure (Unit) Enums
+Pure enums define a finite set of discrete case objects without an underlying primitive value:
+
+```php
+enum PlanType {
+    case Free;
+    case Pro;
+    case Enterprise;
+}
+
+$plan = PlanType::Pro;
+print("Selected plan: " . $plan->name); // "Pro"
+```
+
+#### 2. Backed Enums (`string` or `int`)
+Backed enums associate each case with an immutable scalar backing value (`string` or `int`):
+
+```php
+enum SiteStatus: string {
+    case Draft = 'draft';
+    case Published = 'published';
+    case Archived = 'archived';
+}
+
+enum Priority: int {
+    case Low = 1;
+    case Medium = 2;
+    case High = 3;
+}
+
+$status = SiteStatus::Published;
+print($status->name);  // "Published"
+print($status->value); // "published"
+```
+
+Each enum case is initialized as an immutable singleton object in memory. Mutating `$status->name` or `$status->value` triggers a runtime `ReadonlyPropertyModification` error.
+
+---
+
+### Built-in Static Methods
+
+RHP automatically synthesizes standard enum static methods:
+
+#### 1. `Enum::cases(): list<Enum>`
+Available on **all** enums (both pure and backed). Returns a packed list (`Arr::list`) containing all declared cases in declaration order:
+
+```php
+$allPlans = PlanType::cases();
+// [$allPlans[0] === PlanType::Free, $allPlans[1] === PlanType::Pro, ...]
+
+foreach (SiteStatus::cases() as $case) {
+    print($case->name . " => " . $case->value . "\n");
+}
+
+$count = count(PlanType::cases()); // 3
+```
+
+#### 2. `Enum::from(int|string $value): static`
+Available exclusively on **backed enums**. Maps a scalar value to its corresponding enum case instance:
+
+```php
+// Retrieve from request and map to enum:
+$status = SiteStatus::from($request->status); // e.g. SiteStatus::Published
+
+$priority = Priority::from(2); // Priority::Medium
+$isMedium = ($priority === Priority::Medium); // true
+```
+
+* **Invalid Value Handling (`ValueError`):** If no matching case exists, `from()` raises a standard PHP-compatible `ValueError`:
+  ```php
+  try {
+      SiteStatus::from('invalid_status');
+  } catch (ValueError $e) {
+      print("Caught error: " . $e->message);
+      // 'Caught error: "invalid_status" is not a valid backing value for enum SiteStatus'
+  }
+  ```
+* **Strict Type Safety:** Calling `SiteStatus::from(123)` on a `string`-backed enum triggers a `TypeError` (boundary contract violation).
+* **Pure Enums:** Calling `from()` on a non-backed enum produces an `UndefinedMethod` error (`Call to undefined method PlanType::from()`).
+
+#### 3. `Enum::tryFrom(int|string|null $value): ?static`
+Available exclusively on **backed enums**. Maps a scalar value to its enum instance, or returns `null` if the value is not valid or if `null` is passed:
+
+```php
+// Returns SiteStatus::Published
+$status = SiteStatus::tryFrom($request->status);
+
+// Returns null safely without throwing ValueError:
+$unknown = SiteStatus::tryFrom('nonexistent'); // null
+
+// Convenient for optional or missing query parameters:
+$optional = SiteStatus::tryFrom(null); // null
+```
+
+---
+
+### Custom Methods & Interfaces
+
+Enums can implement interfaces and declare custom instance or static methods:
+
+```php
+interface HasBadge {
+    public function badgeColor(): string;
+}
+
+enum SiteStatus: string implements HasBadge {
+    case Draft = 'draft';
+    case Published = 'published';
+    case Archived = 'archived';
+
+    public function badgeColor(): string {
+        return match ($this) {
+            self::Draft => 'yellow',
+            self::Published => 'green',
+            self::Archived => 'gray',
+        };
+    }
+
+    public static function defaultStatus(): self {
+        return self::Draft;
+    }
+}
+
+$status = SiteStatus::from('published');
+print($status->badgeColor()); // "green"
+```
+
+### Subtyping & `instanceof` Contracts
+
+Enums participate fully in RHP's nominal type hierarchy:
+* All enums implement the built-in `UnitEnum` interface contract:
+  ```php
+  $isUnit = (PlanType::Free instanceof UnitEnum); // true
+  $isUnit = (SiteStatus::Draft instanceof UnitEnum); // true
+  ```
+* Backed enums additionally implement `BackedEnum`:
+  ```php
+  $isBacked = (SiteStatus::Draft instanceof BackedEnum); // true
+  $isBacked = (PlanType::Free instanceof BackedEnum);    // false
+  ```
 
 ---
 

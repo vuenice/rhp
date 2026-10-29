@@ -1856,10 +1856,16 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
-                let upvalues: Vec<String> = uses
+                let mut upvalues: Vec<String> = uses
                     .iter()
                     .map(|u| normalize_var_name(u.var.name))
                     .collect();
+                if !*is_static
+                    && b.chunk.local_map.contains_key("$this")
+                    && !upvalues.iter().any(|u| u == "$this")
+                {
+                    upvalues.push("$this".to_string());
+                }
                 let func_id = self.compile_closure(
                     b,
                     *is_static,
@@ -3916,7 +3922,10 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
                 }
             }
         }
-        ExprKind::Closure { uses, .. } => {
+        ExprKind::Closure { is_static, uses, .. } => {
+            if !*is_static {
+                out.push("$this".to_string());
+            }
             for u in uses {
                 out.push(normalize_var_name(u.var.name));
             }

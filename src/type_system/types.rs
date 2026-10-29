@@ -657,6 +657,21 @@ impl RhpType {
             (RhpType::Array(src_el), RhpType::Iterable(dst_el)) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
             }
+            (RhpType::Class(sub), RhpType::Iterable(_)) => {
+                let sub_clean = sub.strip_prefix('\\').unwrap_or(sub);
+                if let Some(h) = hierarchy {
+                    h.is_subtype_of(sub_clean, "Traversable")
+                        || h.is_subtype_of(sub_clean, "IteratorAggregate")
+                        || h.is_subtype_of(sub_clean, "Iterator")
+                } else {
+                    sub_clean == "ArrayIterator"
+                        || sub_clean == "Traversable"
+                        || sub_clean == "IteratorAggregate"
+                        || sub_clean == "Iterator"
+                        || sub_clean.ends_with("Collection")
+                        || sub_clean.ends_with("Paginator")
+                }
+            }
             (RhpType::Array(src_el), RhpType::Collection(CollectionSubtype::List(dst_el))) => {
                 src_el.is_assignable_to(dst_el, hierarchy)
             }
@@ -715,6 +730,38 @@ impl RhpType {
                 };
                 params_ok && ret_ok
             }
+            (
+                RhpType::Class(class_name),
+                RhpType::Callable {
+                    params: dst_p,
+                    return_type: dst_r,
+                },
+            ) => {
+                if let Some(h) = hierarchy {
+                    if let Some(sig) = h.lookup_method(class_name, "__invoke") {
+                        let params_ok = match dst_p {
+                            None => true,
+                            Some(dp) => {
+                                sig.params.len() == dp.len()
+                                    && sig
+                                        .params
+                                        .iter()
+                                        .zip(dp.iter())
+                                        .all(|(s, d)| d.is_assignable_to(&s.rhp_type, hierarchy))
+                            }
+                        };
+                        let ret_ok = match dst_r {
+                            None => true,
+                            Some(dr) => sig.return_type.is_assignable_to(dr, hierarchy),
+                        };
+                        params_ok && ret_ok
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
 
             // Future compatibility:
             (RhpType::Future(src_inner), RhpType::Future(dst_inner)) => {
@@ -731,11 +778,13 @@ impl RhpType {
 
             // Class & Interface subtyping:
             (RhpType::Class(sub), RhpType::Class(sup)) => {
-                if sub == sup {
+                let sub_clean = sub.strip_prefix('\\').unwrap_or(sub);
+                let sup_clean = sup.strip_prefix('\\').unwrap_or(sup);
+                if sub_clean == sup_clean {
                     return true;
                 }
                 if let Some(h) = hierarchy {
-                    h.is_subtype_of(sub, sup)
+                    h.is_subtype_of(sub_clean, sup_clean)
                 } else {
                     false
                 }
@@ -932,16 +981,237 @@ pub struct EnumTypeInfo {
     pub implements: Vec<String>,
     pub cases: Vec<String>,
     pub methods: HashMap<String, FunctionSignature>,
+    pub properties: HashMap<String, PropertyTypeInfo>,
     pub span: Span,
 }
 
-/// Nominal class, interface, trait, and enum hierarchy for subtype checking.
-#[derive(Debug, Clone, Default)]
+/// Complete nominal class, interface, trait, and enum hierarchy for subtype checking.
+#[derive(Debug, Clone)]
 pub struct TypeHierarchy {
     pub classes: HashMap<String, ClassTypeInfo>,
     pub interfaces: HashMap<String, InterfaceTypeInfo>,
     pub traits: HashMap<String, ClassTypeInfo>,
     pub enums: HashMap<String, EnumTypeInfo>,
+}
+
+fn default_standard_interfaces() -> HashMap<String, InterfaceTypeInfo> {
+    let mut interfaces = HashMap::new();
+
+    // 1. Traversable
+    interfaces.insert(
+        "Traversable".to_string(),
+        InterfaceTypeInfo {
+            name: "Traversable".to_string(),
+            extends: Vec::new(),
+            methods: HashMap::new(),
+            span: Span::default(),
+        },
+    );
+
+    // 2. IteratorAggregate
+    let mut iter_agg_methods = HashMap::new();
+    iter_agg_methods.insert(
+        "getIterator".to_string(),
+        FunctionSignature {
+            name: "getIterator".to_string(),
+            params: Vec::new(),
+            return_type: RhpType::Class("Traversable".to_string()),
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    interfaces.insert(
+        "IteratorAggregate".to_string(),
+        InterfaceTypeInfo {
+            name: "IteratorAggregate".to_string(),
+            extends: vec!["Traversable".to_string()],
+            methods: iter_agg_methods,
+            span: Span::default(),
+        },
+    );
+
+    // 3. Iterator
+    let mut iter_methods = HashMap::new();
+    for (m_name, ret_ty) in [
+        ("current", RhpType::Mixed),
+        ("next", RhpType::Void),
+        ("key", RhpType::Mixed),
+        ("valid", RhpType::Bool),
+        ("rewind", RhpType::Void),
+    ] {
+        iter_methods.insert(
+            m_name.to_string(),
+            FunctionSignature {
+                name: m_name.to_string(),
+                params: Vec::new(),
+                return_type: ret_ty,
+                is_async: false,
+                is_static: false,
+                is_abstract: true,
+                is_final: false,
+                visibility: Visibility::Public,
+                span: Span::default(),
+            },
+        );
+    }
+    interfaces.insert(
+        "Iterator".to_string(),
+        InterfaceTypeInfo {
+            name: "Iterator".to_string(),
+            extends: vec!["Traversable".to_string()],
+            methods: iter_methods,
+            span: Span::default(),
+        },
+    );
+
+    // 4. Countable
+    let mut countable_methods = HashMap::new();
+    countable_methods.insert(
+        "count".to_string(),
+        FunctionSignature {
+            name: "count".to_string(),
+            params: Vec::new(),
+            return_type: RhpType::Int,
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    interfaces.insert(
+        "Countable".to_string(),
+        InterfaceTypeInfo {
+            name: "Countable".to_string(),
+            extends: Vec::new(),
+            methods: countable_methods,
+            span: Span::default(),
+        },
+    );
+
+    // 5. ArrayAccess
+    let mut array_access_methods = HashMap::new();
+    array_access_methods.insert(
+        "offsetExists".to_string(),
+        FunctionSignature {
+            name: "offsetExists".to_string(),
+            params: vec![ParamSignature {
+                name: "offset".to_string(),
+                rhp_type: RhpType::Mixed,
+                has_default: false,
+                is_variadic: false,
+                is_reference: false,
+                span: Span::default(),
+            }],
+            return_type: RhpType::Bool,
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    array_access_methods.insert(
+        "offsetGet".to_string(),
+        FunctionSignature {
+            name: "offsetGet".to_string(),
+            params: vec![ParamSignature {
+                name: "offset".to_string(),
+                rhp_type: RhpType::Mixed,
+                has_default: false,
+                is_variadic: false,
+                is_reference: false,
+                span: Span::default(),
+            }],
+            return_type: RhpType::Mixed,
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    array_access_methods.insert(
+        "offsetSet".to_string(),
+        FunctionSignature {
+            name: "offsetSet".to_string(),
+            params: vec![
+                ParamSignature {
+                    name: "offset".to_string(),
+                    rhp_type: RhpType::Mixed,
+                    has_default: false,
+                    is_variadic: false,
+                    is_reference: false,
+                    span: Span::default(),
+                },
+                ParamSignature {
+                    name: "value".to_string(),
+                    rhp_type: RhpType::Mixed,
+                    has_default: false,
+                    is_variadic: false,
+                    is_reference: false,
+                    span: Span::default(),
+                },
+            ],
+            return_type: RhpType::Void,
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    array_access_methods.insert(
+        "offsetUnset".to_string(),
+        FunctionSignature {
+            name: "offsetUnset".to_string(),
+            params: vec![ParamSignature {
+                name: "offset".to_string(),
+                rhp_type: RhpType::Mixed,
+                has_default: false,
+                is_variadic: false,
+                is_reference: false,
+                span: Span::default(),
+            }],
+            return_type: RhpType::Void,
+            is_async: false,
+            is_static: false,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    interfaces.insert(
+        "ArrayAccess".to_string(),
+        InterfaceTypeInfo {
+            name: "ArrayAccess".to_string(),
+            extends: Vec::new(),
+            methods: array_access_methods,
+            span: Span::default(),
+        },
+    );
+
+    interfaces
+}
+
+impl Default for TypeHierarchy {
+    fn default() -> Self {
+        Self {
+            classes: HashMap::new(),
+            interfaces: default_standard_interfaces(),
+            traits: HashMap::new(),
+            enums: HashMap::new(),
+        }
+    }
 }
 
 impl TypeHierarchy {
@@ -951,39 +1221,82 @@ impl TypeHierarchy {
 
     /// Returns true if `sub` is a nominal subtype of `sup` via `extends`, `implements`, or `use` traits.
     pub fn is_subtype_of(&self, sub: &str, sup: &str) -> bool {
-        if sub == sup {
+        let sub_clean = sub.strip_prefix('\\').unwrap_or(sub);
+        let sup_clean = sup.strip_prefix('\\').unwrap_or(sup);
+        if sub_clean == sup_clean {
             return true;
         }
 
-        if let Some(cls) = self.classes.get(sub) {
+        // Built-in Iterator / Traversable / Collection relationships
+        if sup_clean == "Traversable" {
+            if sub_clean == "Iterator"
+                || sub_clean == "IteratorAggregate"
+                || sub_clean == "ArrayIterator"
+                || sub_clean == "LengthAwarePaginator"
+                || sub_clean == "Paginator"
+                || sub_clean == "Collection"
+                || sub_clean == "Illuminate\\Support\\Collection"
+                || sub_clean.ends_with("Collection")
+                || sub_clean.ends_with("Paginator")
+            {
+                return true;
+            }
+        }
+        if sup_clean == "Iterator" && sub_clean == "ArrayIterator" {
+            return true;
+        }
+        if (sup_clean == "IteratorAggregate" || sup_clean == "Countable")
+            && (sub_clean == "LengthAwarePaginator"
+                || sub_clean == "Paginator"
+                || sub_clean == "Collection"
+                || sub_clean == "Illuminate\\Support\\Collection")
+        {
+            return true;
+        }
+        if (sup_clean == "ArrayAccess" || sup_clean == "Countable") && sub_clean == "ArrayIterator" {
+            return true;
+        }
+
+        if let Some(cls) = self.classes.get(sub_clean).or_else(|| self.classes.get(sub)) {
             if let Some(parent) = &cls.extends {
-                if parent == sup || self.is_subtype_of(parent, sup) {
+                let p_clean = parent.strip_prefix('\\').unwrap_or(parent);
+                if p_clean == sup_clean || self.is_subtype_of(p_clean, sup_clean) {
                     return true;
                 }
             }
             for iface in &cls.implements {
-                if iface == sup || self.is_subtype_of(iface, sup) {
+                let i_clean = iface.strip_prefix('\\').unwrap_or(iface);
+                if i_clean == sup_clean || self.is_subtype_of(i_clean, sup_clean) {
                     return true;
                 }
             }
             for tr in &cls.traits {
-                if tr == sup || self.is_subtype_of(tr, sup) {
+                let t_clean = tr.strip_prefix('\\').unwrap_or(tr);
+                if t_clean == sup_clean || self.is_subtype_of(t_clean, sup_clean) {
                     return true;
                 }
             }
         }
 
-        if let Some(iface) = self.interfaces.get(sub) {
+        if let Some(iface) = self.interfaces.get(sub_clean).or_else(|| self.interfaces.get(sub)) {
             for parent_iface in &iface.extends {
-                if parent_iface == sup || self.is_subtype_of(parent_iface, sup) {
+                let pi_clean = parent_iface.strip_prefix('\\').unwrap_or(parent_iface);
+                if pi_clean == sup_clean || self.is_subtype_of(pi_clean, sup_clean) {
                     return true;
                 }
             }
         }
 
-        if let Some(enm) = self.enums.get(sub) {
+        if let Some(enm) = self.enums.get(sub_clean).or_else(|| self.enums.get(sub)) {
+            if sup_clean == "UnitEnum" {
+                return true;
+            }
+            if enm.backing_type.is_some() && (sup_clean == "BackedEnum" || sup_clean == "UnitEnum") {
+                return true;
+            }
             for iface in &enm.implements {
-                if iface == sup || self.is_subtype_of(iface, sup) {
+                let i_clean = iface.strip_prefix('\\').unwrap_or(iface);
+                if i_clean == sup_clean || self.is_subtype_of(i_clean, sup_clean) {
                     return true;
                 }
             }
@@ -994,12 +1307,14 @@ impl TypeHierarchy {
 
     /// Look up a method signature on a class (walking up its parent chain and traits), interface, or enum.
     pub fn lookup_method(&self, class_name: &str, method_name: &str) -> Option<&FunctionSignature> {
-        if let Some(cls) = self.classes.get(class_name) {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        if let Some(cls) = self.classes.get(clean) {
             if let Some(sig) = cls.methods.get(method_name) {
                 return Some(sig);
             }
             for tr in &cls.traits {
-                if let Some(trait_info) = self.traits.get(tr) {
+                let clean_tr = tr.strip_prefix('\\').unwrap_or(tr);
+                if let Some(trait_info) = self.traits.get(clean_tr) {
                     if let Some(sig) = trait_info.methods.get(method_name) {
                         return Some(sig);
                     }
@@ -1009,7 +1324,7 @@ impl TypeHierarchy {
                 return self.lookup_method(parent, method_name);
             }
         }
-        if let Some(iface) = self.interfaces.get(class_name) {
+        if let Some(iface) = self.interfaces.get(clean) {
             if let Some(sig) = iface.methods.get(method_name) {
                 return Some(sig);
             }
@@ -1019,12 +1334,12 @@ impl TypeHierarchy {
                 }
             }
         }
-        if let Some(enm) = self.enums.get(class_name) {
+        if let Some(enm) = self.enums.get(clean) {
             if let Some(sig) = enm.methods.get(method_name) {
                 return Some(sig);
             }
         }
-        if let Some(tr) = self.traits.get(class_name) {
+        if let Some(tr) = self.traits.get(clean) {
             if let Some(sig) = tr.methods.get(method_name) {
                 return Some(sig);
             }
@@ -1058,6 +1373,15 @@ impl TypeHierarchy {
             }
             if let Some(parent) = &cls.extends {
                 return self.lookup_property(parent, prop_name);
+            }
+        }
+        if let Some(enm) = self.enums.get(class_name) {
+            if let Some(p) = enm
+                .properties
+                .get(&with_dollar)
+                .or_else(|| enm.properties.get(bare))
+            {
+                return Some(p);
             }
         }
         None
