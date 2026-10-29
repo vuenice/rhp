@@ -1536,6 +1536,9 @@ impl TypeChecker {
                         }
                         (RhpType::Int, acc.unwrap_or(RhpType::Mixed))
                     }
+                    RhpType::Class(_) | RhpType::Object => {
+                        (RhpType::Union(vec![RhpType::Int, RhpType::String]), RhpType::Mixed)
+                    }
                     _ => (RhpType::Dynamic, RhpType::Dynamic),
                 };
 
