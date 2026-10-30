@@ -753,6 +753,215 @@ Url::macro(string $name, callable $closure): bool;
 
 ---
 
+## `Carbon` Facade API (Date & Time Services)
+
+```php
+// Factory Constructors
+Carbon::now(?string $tz = null): Carbon;
+Carbon::today(?string $tz = null): Carbon;
+Carbon::yesterday(?string $tz = null): Carbon;
+Carbon::tomorrow(?string $tz = null): Carbon;
+Carbon::parse(string $time, ?string $tz = null): Carbon;
+Carbon::create(int $year = 0, int $month = 1, int $day = 1, int $hour = 0, int $minute = 0, int $second = 0, ?string $tz = null): Carbon;
+Carbon::createFromDate(int $year, int $month, int $day, ?string $tz = null): Carbon;
+Carbon::createFromTime(int $hour, int $minute, int $second, ?string $tz = null): Carbon;
+Carbon::createFromTimestamp(int $timestamp, ?string $tz = null): Carbon;
+Carbon::createFromTimestampMs(int $timestampMs, ?string $tz = null): Carbon;
+Carbon::createFromFormat(string $format, string $time, ?string $tz = null): Carbon;
+Carbon::maxValue(): Carbon;
+Carbon::minValue(): Carbon;
+
+// Mock Test Time
+Carbon::setTestNow(mixed $testNow = null): void;
+Carbon::getTestNow(): ?Carbon;
+Carbon::hasTestNow(): bool;
+
+// Class Constants
+Carbon::SUNDAY;             // 0
+Carbon::MONDAY;             // 1
+Carbon::TUESDAY;            // 2
+Carbon::WEDNESDAY;          // 3
+Carbon::THURSDAY;           // 4
+Carbon::FRIDAY;             // 5
+Carbon::SATURDAY;           // 6
+Carbon::DAYS_PER_WEEK;      // 7
+Carbon::HOURS_PER_DAY;      // 24
+Carbon::MINUTES_PER_HOUR;   // 60
+Carbon::SECONDS_PER_MINUTE; // 60
+
+// Instance Output & Formatting
+$date->toDateTimeString(): string;
+$date->toDateString(): string;
+$date->toDatString(): string; // Alias for toDateString()
+$date->toTimeString(): string;
+$date->toISOString(): string;
+$date->toIso8601String(): string;
+$date->toAtomString(): string;
+$date->toRfc2822String(): string;
+$date->toRfc822String(): string;
+$date->toRfc3339String(): string;
+$date->toFormattedDateString(): string;
+$date->toDayDateTimeString(): string;
+$date->format(string $format): string;
+$date->toJson(): string;
+
+// Static Shortcut Invocations (Evaluated on Carbon::now())
+Carbon::toDateTimeString(): string;
+Carbon::toDateString(): string;
+Carbon::toDatString(): string;
+Carbon::toTimeString(): string;
+Carbon::toISOString(): string;
+Carbon::format(string $format): string;
+
+// Public Properties & Queries
+$date->year: int;
+$date->month: int;
+$date->day: int;
+$date->hour: int;
+$date->minute: int;
+$date->second: int;
+$date->micro: int;
+$date->timestamp: int;
+$date->timezone: string;
+$date->dayOfWeek: int;
+$date->dayOfYear: int;
+$date->weekOfYear: int;
+$date->quarter: int;
+$date->daysInMonth: int;
+$date->age(): int;
+$date->getTimestamp(): int;
+$date->getTimestampMs(): int;
+$date->getTimezone(): string;
+
+// Fluent Addition & Subtraction (Mutates & Returns $this)
+$date->addDay(int $count = 1): Carbon;
+$date->addDays(int $count): Carbon;
+$date->subDay(int $count = 1): Carbon;
+$date->subDays(int $count): Carbon;
+$date->addWeek(int $count = 1): Carbon;
+$date->addWeeks(int $count): Carbon;
+$date->subWeek(int $count = 1): Carbon;
+$date->subWeeks(int $count): Carbon;
+$date->addMonth(int $count = 1): Carbon;
+$date->addMonths(int $count): Carbon;
+$date->subMonth(int $count = 1): Carbon;
+$date->subMonths(int $count): Carbon;
+$date->addQuarter(int $count = 1): Carbon;
+$date->addQuarters(int $count): Carbon;
+$date->subQuarter(int $count = 1): Carbon;
+$date->subQuarters(int $count): Carbon;
+$date->addYear(int $count = 1): Carbon;
+$date->addYears(int $count): Carbon;
+$date->subYear(int $count = 1): Carbon;
+$date->subYears(int $count): Carbon;
+$date->addHour(int $count = 1): Carbon;
+$date->addHours(int $count): Carbon;
+$date->subHour(int $count = 1): Carbon;
+$date->subHours(int $count): Carbon;
+$date->addMinute(int $count = 1): Carbon;
+$date->addMinutes(int $count): Carbon;
+$date->subMinute(int $count = 1): Carbon;
+$date->subMinutes(int $count): Carbon;
+$date->addSecond(int $count = 1): Carbon;
+$date->addSeconds(int $count): Carbon;
+$date->subSecond(int $count = 1): Carbon;
+$date->subSeconds(int $count): Carbon;
+$date->addUnit(string $unit, int $count = 1): Carbon;
+$date->subUnit(string $unit, int $count = 1): Carbon;
+
+// Period Boundaries
+$date->startOfDay(): Carbon;
+$date->endOfDay(): Carbon;
+$date->startOfMonth(): Carbon;
+$date->firstOfMonth(): Carbon;
+$date->endOfMonth(): Carbon;
+$date->lastOfMonth(): Carbon;
+$date->startOfWeek(): Carbon;
+$date->endOfWeek(): Carbon;
+$date->startOfQuarter(): Carbon;
+$date->endOfQuarter(): Carbon;
+$date->startOfYear(): Carbon;
+$date->endOfYear(): Carbon;
+$date->lastOfYear(): Carbon;
+$date->startOfHour(): Carbon;
+$date->endOfHour(): Carbon;
+$date->startOfMinute(): Carbon;
+$date->endOfMinute(): Carbon;
+
+// Modifiers & Setters
+$date->setYear(int $year): Carbon;
+$date->setMonth(int $month): Carbon;
+$date->setDay(int $day): Carbon;
+$date->setHour(int $hour): Carbon;
+$date->setMinute(int $minute): Carbon;
+$date->setSecond(int $second): Carbon;
+$date->setTime(int $hour, int $minute, int $second = 0, int $micro = 0): Carbon;
+$date->setDate(int $year, int $month, int $day): Carbon;
+$date->setTimezone(string $tz): Carbon;
+$date->next(?int $dayOfWeek = null): Carbon;
+$date->previous(?int $dayOfWeek = null): Carbon;
+$date->copy(): Carbon;
+$date->clone(): Carbon;
+
+// Comparisons & Boolean Checks
+$date->isToday(): bool;
+$date->isYesterday(): bool;
+$date->isTomorrow(): bool;
+$date->isFuture(): bool;
+$date->isPast(): bool;
+$date->isCurrentYear(): bool;
+$date->isCurrentMonth(): bool;
+$date->isWeekend(): bool;
+$date->isWeekday(): bool;
+$date->isMonday(): bool;
+$date->isTuesday(): bool;
+$date->isWednesday(): bool;
+$date->isThursday(): bool;
+$date->isFriday(): bool;
+$date->isSaturday(): bool;
+$date->isSunday(): bool;
+$date->isLeapYear(): bool;
+$date->isStartOfDay(): bool;
+$date->isEndOfDay(): bool;
+$date->isSameDay(mixed $other): bool;
+$date->isSameMonth(mixed $other): bool;
+$date->isSameYear(mixed $other): bool;
+$date->isBirthday(mixed $other = null): bool;
+$date->eq(mixed $other): bool;
+$date->equalTo(mixed $other): bool;
+$date->ne(mixed $other): bool;
+$date->notEqualTo(mixed $other): bool;
+$date->gt(mixed $other): bool;
+$date->greaterThan(mixed $other): bool;
+$date->gte(mixed $other): bool;
+$date->greaterThanOrEqualTo(mixed $other): bool;
+$date->lt(mixed $other): bool;
+$date->lessThan(mixed $other): bool;
+$date->lte(mixed $other): bool;
+$date->lessThanOrEqualTo(mixed $other): bool;
+$date->between(mixed $start, mixed $end, bool $equal = true): bool;
+
+// Differences & Humans
+$date->diffInSeconds(mixed $other = null, bool $abs = true): int;
+$date->diffInMinutes(mixed $other = null, bool $abs = true): int;
+$date->diffInHours(mixed $other = null, bool $abs = true): int;
+$date->diffInDays(mixed $other = null, bool $abs = true): int;
+$date->diffInWeeks(mixed $other = null, bool $abs = true): int;
+$date->diffInMonths(mixed $other = null, bool $abs = true): int;
+$date->diffInQuarters(mixed $other = null, bool $abs = true): int;
+$date->diffInYears(mixed $other = null, bool $abs = true): int;
+$date->diffForHumans(mixed $other = null): string;
+
+// Min / Max Helpers
+$date->min(mixed $other = null): Carbon;
+$date->max(mixed $other = null): Carbon;
+
+// Dynamic Macros
+Carbon::macro(string $name, callable $closure): bool;
+```
+
+---
+
 ## Tier 2 Native Helper Classes API (`Cache`, `Log`)
 
 Imported via `import "./Cache.rs";` or `import "./Log.rs";`. These helper classes are not built into the core language syntax to avoid language bloat, but provide framework-level performance using thread-safe Rust stores with zero garbage collection overhead.

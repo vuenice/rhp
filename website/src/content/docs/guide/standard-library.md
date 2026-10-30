@@ -23,6 +23,7 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Crypt` | Cryptographic hashing, HMAC, OpenSSL AES encryption & random bytes | `hash()`, `hashHmac()`, `opensslEncrypt()`, `opensslDecrypt()`, `randomBytes()`, `md5()` | &mdash; |
 | `Html` | HTML entity escaping, tag stripping, sanitization & tag generation | `specialChars()`, `stripTags()`, `entities()`, `specialCharsDecode()`, `clean()`, `tag()` | &mdash; |
 | `Url` | URL component parsing, query string building & Base64 encoding | `parseUrl()`, `httpBuildQuery()`, `base64Encode()`, `base64Decode()`, `to()`, `encode()` | &mdash; |
+| `Carbon` | High-performance date & time manipulation modeled after Laravel Carbon | `now()`, `parse()`, `today()`, `toDateTimeString()`, `toDateString()`, `addDay()`, `lastOfMonth()`, `diffForHumans()` | &mdash; |
 | `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` | &mdash; |
 | `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` | &mdash; |
 | `File` | Synchronous filesystem I/O operations & uploads | `read()`, `write()`, `exists()`, `delete()`, `fromRequest()` | **`$_FILES` is not supported** &mdash; use `File::fromRequest()` |
@@ -964,6 +965,109 @@ string $rawEnc     = Url::rawUrlEncode("hello world");     // "hello%20world"
 
 // 5. Route & App URL Generation
 string $dashUrl = Url::to('dashboard'); // "https://example.com/dashboard"
+```
+
+---
+
+## Carbon Facade & DateTime Manipulation (`Carbon::*`)
+
+The `Carbon` facade brings Laravel's beloved fluent date and time manipulation library natively into RHP. Implemented in pure Rust over `chrono`, it provides high-throughput datetime arithmetic, RFC/ISO formatting, period boundary adjustments, and human-readable diffs with zero garbage collection overhead.
+
+### Creating and Parsing Dates
+
+```php
+// Factory constructors
+Carbon $now = Carbon::now();
+Carbon $today = Carbon::today();         // Today at 00:00:00
+Carbon $yesterday = Carbon::yesterday(); // Yesterday at 00:00:00
+Carbon $tomorrow = Carbon::tomorrow();   // Tomorrow at 00:00:00
+
+// Explicit component constructors
+Carbon $d1 = Carbon::create(2024, 5, 20, 14, 30, 45);
+Carbon $fromTs = Carbon::createFromTimestamp(1716206400);
+
+// Parsing ISO 8601, RFC 3339, standard date strings & relative phrases
+Carbon $parsed = Carbon::parse("2024-12-25 08:00:00");
+Carbon $nextWeek = Carbon::parse("+1 week");
+Carbon $firstNext = Carbon::parse("first day of next month");
+```
+
+### Output & Formatting
+
+```php
+Carbon $dt = Carbon::now();
+
+string $dateTime = $dt->toDateTimeString();       // "2024-05-20 14:30:45"
+string $dateOnly = $dt->toDateString();           // "2024-05-20"
+string $dateAlias = $dt->toDatString();           // "2024-05-20" (alias for toDateString)
+string $timeOnly = $dt->toTimeString();           // "14:30:45"
+string $iso = $dt->toISOString();                 // "2024-05-20T14:30:45.000000Z"
+string $formatted = $dt->toFormattedDateString(); // "May 20, 2024"
+string $custom = $dt->format("Y/m/d H:i");        // "2024/05/20 14:30"
+
+// Static shortcut: calling formatting methods on Carbon executes on Carbon::now()
+string $currentDate = Carbon::toDateString();
+string $currentDateTime = Carbon::toDateTimeString();
+
+// String casting & echo automatically format as toDateTimeString()
+echo "Event at: " . $dt; // "Event at: 2024-05-20 14:30:45"
+```
+
+### Fluent Date Arithmetic & Boundaries
+
+```php
+// Fluent modification (mutates and returns $this)
+$dt->addDay();
+$dt->addDays(5);
+$dt->subDay();
+$dt->subDays(3);
+$dt->addWeek();
+$dt->addMonth();
+$dt->addYear();
+
+// Period boundary adjustment
+$lastDay = Carbon::parse("2024-02-10")->lastOfMonth()->toDateTimeString(); // "2024-02-29 23:59:59"
+$startDay = Carbon::now()->startOfDay()->toDateTimeString();                // "2024-05-20 00:00:00"
+$endDay = Carbon::now()->endOfDay()->toDateTimeString();                    // "2024-05-20 23:59:59"
+$startWeek = Carbon::now()->startOfWeek()->toDateTimeString();
+$endWeek = Carbon::now()->endOfWeek()->toDateTimeString();
+$startMonth = Carbon::now()->startOfMonth()->toDateTimeString();
+$endMonth = Carbon::now()->endOfMonth()->toDateTimeString();
+$startYear = Carbon::now()->startOfYear()->toDateTimeString();
+$endYear = Carbon::now()->endOfYear()->toDateTimeString();
+```
+
+### Comparisons and Differences
+
+```php
+Carbon $past = Carbon::parse("2024-05-10 12:00:00");
+Carbon $future = Carbon::parse("2024-05-20 12:00:00");
+
+bool $isPast = $past->isPast();
+bool $isFuture = $future->isFuture();
+bool $isToday = Carbon::now()->isToday();
+bool $isWeekend = Carbon::now()->isWeekend();
+bool $isLeap = Carbon::parse("2024-01-01")->isLeapYear();
+
+int $daysDiff = $future->diffInDays($past);     // 10
+int $hoursDiff = $future->diffInHours($past);   // 240
+string $forHumans = $past->diffForHumans();     // "10 days ago"
+string $forHumansFuture = $future->diffForHumans(); // "in 10 days"
+```
+
+### Test Time Mocking (`setTestNow`)
+
+```php
+// Mock current time in unit test suites
+Carbon::setTestNow("2024-05-15 12:00:00");
+
+if (Carbon::hasTestNow()) {
+    Carbon $mocked = Carbon::now();
+    assert($mocked->toDateString() === "2024-05-15");
+}
+
+// Reset mock fixture
+Carbon::setTestNow(null);
 ```
 
 ---

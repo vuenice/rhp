@@ -106,9 +106,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
+    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
   },
   {
     title: "Observability & OpenTelemetry",
@@ -150,9 +150,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
+    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
+    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
   {
     title: "Unsupported PHP",
