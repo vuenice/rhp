@@ -59,7 +59,7 @@ const rawSearchIndex: SearchItem[] = [
     section: "Language Guide",
     description: "Arithmetic, null-coalescing (??), assignment, bitwise, and comparison operators.",
     url: "/docs/guide/operators",
-    keywords: ["operators", "arithmetic", "null-coalesce", "ternary", "comparison", "spaceship"]
+    keywords: ["operators", "arithmetic", "null-coalesce", "ternary", "elvis", "comparison", "relational", "spaceship", "bitwise", "logical", "precedence", "less than", "greater than", "?:", "??", "<", ">"]
   },
   {
     title: "Control Flow",
