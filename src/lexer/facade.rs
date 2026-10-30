@@ -445,6 +445,30 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "delete",
         rhp_signature: "File::delete(string $path): bool",
     },
+    LegacyPhpFunctionMapping {
+        php_name: "mime_content_type",
+        rhp_facade: "File",
+        rhp_method: "mimeType",
+        rhp_signature: "File::mimeType(string $path): string|bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "filesize",
+        rhp_facade: "File",
+        rhp_method: "size",
+        rhp_signature: "File::size(string $path): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_file",
+        rhp_facade: "File",
+        rhp_method: "isFile",
+        rhp_signature: "File::isFile(string $path): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_dir",
+        rhp_facade: "File",
+        rhp_method: "isDirectory",
+        rhp_signature: "File::isDirectory(string $path): bool",
+    },
     // System & Type functions -> Sys::* / Glob::*
     LegacyPhpFunctionMapping {
         php_name: "getenv",

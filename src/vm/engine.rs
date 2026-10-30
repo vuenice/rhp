@@ -5821,6 +5821,126 @@ impl VM {
                 }
                 Ok(PhpValue::Bool(false))
             }
+            ("UploadedFile", "path" | "getRealPath" | "getPath") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow().get_property("path").cloned().unwrap_or_else(|| PhpValue::string("")))
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            ("UploadedFile", "clientName" | "getClientOriginalName") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow().get_property("clientName").cloned().unwrap_or_else(|| PhpValue::string("")))
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            ("UploadedFile", "size" | "getSize") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(path_val) = o.borrow().get_property("path") {
+                        let path_str = path_val.to_php_string();
+                        if let Ok(meta) = std::fs::metadata(&path_str) {
+                            return Ok(PhpValue::Int(meta.len() as i32));
+                        }
+                    }
+                    Ok(o.borrow().get_property("size").cloned().unwrap_or(PhpValue::Int(0)))
+                } else {
+                    Ok(PhpValue::Int(0))
+                }
+            }
+            ("UploadedFile", "mimeType" | "getMimeType") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(path_val) = o.borrow().get_property("path") {
+                        let path_str = path_val.to_php_string();
+                        if let Some(detected) = crate::vm::mime::detect_mime_type_for_path(std::path::Path::new(&path_str)) {
+                            return Ok(PhpValue::string(detected));
+                        }
+                    }
+                    Ok(o.borrow().get_property("mimeType").cloned().unwrap_or_else(|| PhpValue::string("application/octet-stream")))
+                } else {
+                    Ok(PhpValue::string("application/octet-stream"))
+                }
+            }
+            ("UploadedFile", "clientMimeType" | "getClientMimeType") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow().get_property("clientMimeType").cloned().unwrap_or_else(|| PhpValue::string("application/octet-stream")))
+                } else {
+                    Ok(PhpValue::string("application/octet-stream"))
+                }
+            }
+            ("UploadedFile", "extension" | "getClientOriginalExtension") => {
+                if let PhpValue::Object(o) = receiver {
+                    let name = o.borrow().get_property("clientName").map(|v| v.to_php_string()).unwrap_or_default();
+                    let ext = std::path::Path::new(&name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Ok(PhpValue::string(ext))
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            ("UploadedFile", "guessExtension") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(path_val) = o.borrow().get_property("path") {
+                        let path_str = path_val.to_php_string();
+                        if let Some(ext) = crate::vm::mime::guess_extension(&path_str) {
+                            return Ok(PhpValue::string(ext));
+                        }
+                    }
+                    if let Some(mime_val) = o.borrow().get_property("mimeType") {
+                        let mime_str = mime_val.to_php_string();
+                        if let Some(ext) = crate::vm::mime::guess_extension(&mime_str) {
+                            return Ok(PhpValue::string(ext));
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
+            }
+            ("UploadedFile", "isValid") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(path_val) = o.borrow().get_property("path") {
+                        let path_str = path_val.to_php_string();
+                        return Ok(PhpValue::Bool(std::path::Path::new(&path_str).exists()));
+                    }
+                }
+                Ok(PhpValue::Bool(false))
+            }
+            ("UploadedFile", "move" | "store") => {
+                let target_dir = args.get(0).map(|v| v.to_php_string()).unwrap_or_else(|| "uploads".to_string());
+                if let PhpValue::Object(o) = receiver {
+                    let src_path = o.borrow().get_property("path").map(|v| v.to_php_string()).unwrap_or_default();
+                    let target_name = if let Some(arg1) = args.get(1) {
+                        arg1.to_php_string()
+                    } else {
+                        o.borrow().get_property("clientName").map(|v| v.to_php_string()).unwrap_or_else(|| "file".to_string())
+                    };
+                    let _ = std::fs::create_dir_all(&target_dir);
+                    let dest = format!("{}/{}", target_dir.trim_end_matches('/'), target_name);
+                    if std::fs::copy(&src_path, &dest).is_ok() {
+                        let _ = std::fs::remove_file(&src_path);
+                        o.borrow_mut().set_property("path", PhpValue::string(&dest));
+                        return Ok(PhpValue::string(dest));
+                    } else {
+                        return Err(RuntimeError::new(RuntimeErrorKind::Custom {
+                            message: format!("Failed to move uploaded file to '{}'", dest),
+                        }, span));
+                    }
+                }
+                Ok(PhpValue::Bool(false))
+            }
+            ("UploadedFile", "getContent" | "read") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(path_val) = o.borrow().get_property("path") {
+                        let path_str = path_val.to_php_string();
+                        if let Ok(content) = std::fs::read_to_string(&path_str) {
+                            return Ok(PhpValue::string(content));
+                        }
+                    }
+                }
+                Ok(PhpValue::string(""))
+            }
             ("HTTPResponse", "json") => {
                 let mut entries = Vec::new();
                 entries.push(("status".to_string(), PhpValue::string("ok")));

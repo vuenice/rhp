@@ -21,6 +21,7 @@ pub mod fiber;
 pub mod format;
 pub mod html;
 pub mod memory;
+pub mod mime;
 pub mod parent_process;
 pub mod rust_loader;
 pub mod url_helper;
@@ -65,6 +66,10 @@ pub use memory::{
     is_gc_free, live_objects, peak_usage, record_alloc, record_cow_detachment, record_dealloc,
     record_live_object, release_live_object, reset_memory_tracker, reset_peak, MemoryScope,
     MemoryStats, OwnershipEnforcer,
+};
+pub use mime::{
+    detect_mime_type_for_path, detect_mime_type_from_bytes, extension_to_mime, guess_extension,
+    mime_to_extension,
 };
 pub use parent_process::{EngineState, FrozenValue, ParentProcess};
 pub use rust_loader::{

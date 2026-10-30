@@ -185,6 +185,8 @@ pub struct WorkerRequest {
     pub globals: HashMap<String, FrozenValue>,
     /// Session parameters.
     pub session: IndexMap<String, FrozenValue>,
+    /// Uploaded files from multipart request.
+    pub files: IndexMap<String, FrozenValue>,
 }
 
 impl WorkerRequest {
@@ -200,6 +202,7 @@ impl WorkerRequest {
             headers: IndexMap::new(),
             globals: HashMap::new(),
             session: IndexMap::new(),
+            files: IndexMap::new(),
         }
     }
 
@@ -218,6 +221,7 @@ impl WorkerRequest {
             headers: IndexMap::new(),
             globals: HashMap::new(),
             session: IndexMap::new(),
+            files: IndexMap::new(),
         }
     }
 
@@ -236,6 +240,12 @@ impl WorkerRequest {
     /// Add a `$_POST` parameter.
     pub fn with_post(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
         self.post_params.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add an uploaded file parameter.
+    pub fn with_file(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
+        self.files.insert(key.into(), value.into());
         self
     }
 
@@ -1106,6 +1116,12 @@ fn setup_request_context(request: &WorkerRequest) {
         session_map.insert(k.clone(), v.to_php_value());
     }
     crate::vm::facade::init_session_data(session_map);
+
+    let mut files_map = IndexMap::new();
+    for (k, v) in &request.files {
+        files_map.insert(k.clone(), v.to_php_value());
+    }
+    crate::vm::facade::init_request_files(files_map);
 }
 
 /// Extract human-readable string message from panic payload.

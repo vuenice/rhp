@@ -423,11 +423,32 @@ File::read(string $path): string;                    // Read file contents as st
 File::write(string $path, string $content): bool;    // Write string to file
 File::exists(string $path): bool;                   // Check if file exists
 File::delete(string $path): bool;                   // Remove file
-File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request
+File::mimeType(string $path): string|false;         // Sniff magic bytes & detect MIME type (like Laravel)
+File::guessExtension(string $pathOrMime): ?string;  // Guess extension from MIME type or file content
+File::extension(string $path): string;              // Extract file extension from path
+File::type(string $path): string;                   // Get file type: "file", "dir", or "link"
+File::size(string $path): int;                      // Get file size in bytes
+File::name(string $path): string;                   // Get filename without extension
+File::basename(string $path): string;               // Get trailing name component
+File::dirname(string $path): string;                // Get directory name
+File::isFile(string $path): bool;                   // Check if path is a regular file
+File::isDirectory(string $path): bool;              // Check if path is a directory
+File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request (UploadedFile)
+
+// UploadedFile instance methods ($file = File::fromRequest('avatar')):
+$file->path(): string;                              // Temporary uploaded file path
+$file->clientName(): string;                        // Original client filename
+$file->size(): int;                                 // File size in bytes
+$file->mimeType(): string;                          // Detected MIME type via content sniffing
+$file->clientMimeType(): string;                    // Client-provided MIME type
+$file->extension(): string;                         // Client file extension
+$file->guessExtension(): ?string;                   // Guessed extension from detected MIME type
+$file->isValid(): bool;                             // Check if uploaded file is valid
+$file->move(string $dir, ?string $name = null): string; // Move/persist uploaded file to destination
 ```
 
 > **Note on `$_FILES`:**
-> `$_FILES` is **not supported** in RHP. Retrieve uploaded files using `File::fromRequest('upload_field')`.
+> `$_FILES` is **not supported** in RHP. Retrieve uploaded files using `File::fromRequest('upload_field')` or `Request::file('upload_field')`.
 
 ---
 
@@ -435,11 +456,15 @@ File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file fr
 
 ```php
 AFile::read(string $path): Future;                  // Resolves to string (file contents)
-AFile::write(string $path, string $content): Future; // Resolves to int (bytes written)
+AFile::write(string $path, string $content): Future; // Resolves to bool
 AFile::exists(string $path): Future;                 // Resolves to bool
 AFile::delete(string $path): Future;                 // Resolves to bool
-AFile::append(string $path, string $content): Future;// Resolves to int (bytes written)
+AFile::append(string $path, string $content): Future;// Resolves to bool
 AFile::size(string $path): Future;                   // Resolves to int (byte size)
+AFile::mimeType(string $path): Future;               // Resolves to string|false (detected MIME type)
+AFile::guessExtension(string $path): Future;         // Resolves to ?string (guessed extension)
+AFile::extension(string $path): Future;              // Resolves to string (file extension)
+AFile::type(string $path): Future;                   // Resolves to string ("file" | "dir")
 ```
 
 ---

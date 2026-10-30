@@ -20,6 +20,7 @@ use crate::vm::fiber::{
 use crate::vm::parent_process::FrozenValue;
 use crate::vm::crypto;
 use crate::vm::html;
+use crate::vm::mime::{detect_mime_type_for_path, guess_extension};
 use crate::vm::url_helper;
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 use tokio::runtime::{Builder as TokioBuilder, Runtime as TokioRuntime};
@@ -195,6 +196,9 @@ thread_local! {
 
     /// Active cookies.
     static COOKIE_DATA: RefCell<IndexMap<String, PhpValue>> = RefCell::new(IndexMap::new());
+
+    /// Active uploaded files from multipart request.
+    static REQUEST_FILES: RefCell<IndexMap<String, PhpValue>> = RefCell::new(IndexMap::new());
 }
 
 /// Initialize or replace current request parameters.
@@ -208,6 +212,45 @@ pub fn init_request_params(params: impl IntoIterator<Item = (String, PhpValue)>)
             map.insert(k, str_val);
         }
     });
+}
+
+/// Initialize or replace current request uploaded files.
+pub fn init_request_files(files: impl IntoIterator<Item = (String, PhpValue)>) {
+    REQUEST_FILES.with(|cell| {
+        let mut map = cell.borrow_mut();
+        map.clear();
+        for (k, v) in files {
+            map.insert(k, v);
+        }
+    });
+}
+
+/// Helper to create a structured UploadedFile VmObject.
+pub fn create_uploaded_file_object(
+    tmp_path: &str,
+    client_name: Option<&str>,
+    client_mime: Option<&str>,
+) -> VmObject {
+    let mut obj = VmObject::new("UploadedFile");
+    let c_name = client_name
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            std::path::Path::new(tmp_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string())
+        });
+    let detected_mime = detect_mime_type_for_path(std::path::Path::new(tmp_path))
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let c_mime = client_mime.unwrap_or(&detected_mime).to_string();
+    let size = std::fs::metadata(tmp_path).map(|m| m.len()).unwrap_or(0);
+
+    obj.set_property("path", PhpValue::string(tmp_path));
+    obj.set_property("clientName", PhpValue::string(c_name));
+    obj.set_property("clientMimeType", PhpValue::string(c_mime));
+    obj.set_property("mimeType", PhpValue::string(detected_mime));
+    obj.set_property("size", PhpValue::Int(size as i32));
+    obj
 }
 
 /// Initialize or replace current cookies.
@@ -232,12 +275,13 @@ pub fn init_session_data(data: impl IntoIterator<Item = (String, PhpValue)>) {
     });
 }
 
-/// Clear request, cookie, and session state (for request cleanup and test isolation).
+/// Clear request, cookie, session, and uploaded files state (for request cleanup and test isolation).
 pub fn clear_request_context() {
     REQUEST_PARAMS.with(|cell| cell.borrow_mut().clear());
     REQUEST_TYPE_FORMATS.with(|cell| cell.borrow_mut().clear());
     COOKIE_DATA.with(|cell| cell.borrow_mut().clear());
     SESSION_DATA.with(|cell| cell.borrow_mut().clear());
+    REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
 }
 
 /// Result type for standard facade dispatch functions.
@@ -1313,12 +1357,135 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             record_fiber_io_finish();
             Ok(PhpValue::Bool(exists))
         }
-        "delete" => {
+        "delete" | "remove" => {
             let path = get_arg_str(args, 0, "File::delete")?;
             record_fiber_io_start(IoKind::FileDelete { path: path.clone() });
             let ok = std::fs::remove_file(&path).is_ok();
             record_fiber_io_finish();
             Ok(PhpValue::Bool(ok))
+        }
+        "mimeType" | "mime_type" => {
+            let path = get_arg_str(args, 0, "File::mimeType")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let res = match detect_mime_type_for_path(std::path::Path::new(&path)) {
+                Some(mime) => Ok(PhpValue::string(mime)),
+                None => Ok(PhpValue::Bool(false)),
+            };
+            record_fiber_io_finish();
+            res
+        }
+        "guessExtension" | "guess_extension" => {
+            let target = get_arg_str(args, 0, "File::guessExtension")?;
+            match guess_extension(&target) {
+                Some(ext) => Ok(PhpValue::string(ext)),
+                None => Ok(PhpValue::Null),
+            }
+        }
+        "extension" => {
+            let path = get_arg_str(args, 0, "File::extension")?;
+            let ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            Ok(PhpValue::string(ext))
+        }
+        "type" => {
+            let path = get_arg_str(args, 0, "File::type")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let p = std::path::Path::new(&path);
+            let res = match std::fs::symlink_metadata(p) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        Ok(PhpValue::string("link"))
+                    } else if meta.is_dir() {
+                        Ok(PhpValue::string("dir"))
+                    } else {
+                        Ok(PhpValue::string("file"))
+                    }
+                }
+                Err(err) => Err(RuntimeErrorKind::Custom {
+                    message: format!("File::type failed: {}", err),
+                }),
+            };
+            record_fiber_io_finish();
+            res
+        }
+        "size" => {
+            let path = get_arg_str(args, 0, "File::size")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let res = match std::fs::metadata(&path) {
+                Ok(meta) => {
+                    let len = meta.len();
+                    if let Ok(narrow) = i32::try_from(len) {
+                        Ok(PhpValue::Int(narrow))
+                    } else {
+                        Ok(PhpValue::RustInt {
+                            kind: RustIntKind::I64,
+                            value: len as i128,
+                        })
+                    }
+                }
+                Err(err) => Err(RuntimeErrorKind::Custom {
+                    message: format!("File::size failed: {}", err),
+                }),
+            };
+            record_fiber_io_finish();
+            res
+        }
+        "name" => {
+            let path = get_arg_str(args, 0, "File::name")?;
+            let name = std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            Ok(PhpValue::string(name))
+        }
+        "basename" => {
+            let path = get_arg_str(args, 0, "File::basename")?;
+            let base = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            Ok(PhpValue::string(base))
+        }
+        "dirname" => {
+            let path = get_arg_str(args, 0, "File::dirname")?;
+            let dir = std::path::Path::new(&path)
+                .parent()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            Ok(PhpValue::string(dir))
+        }
+        "isFile" | "is_file" => {
+            let path = get_arg_str(args, 0, "File::isFile")?;
+            let is_f = std::path::Path::new(&path).is_file();
+            Ok(PhpValue::Bool(is_f))
+        }
+        "isDirectory" | "is_dir" => {
+            let path = get_arg_str(args, 0, "File::isDirectory")?;
+            let is_d = std::path::Path::new(&path).is_dir();
+            Ok(PhpValue::Bool(is_d))
+        }
+        "fromRequest" => {
+            let key = args.first().and_then(|a| match a {
+                PhpValue::Null => None,
+                _ => Some(a.to_php_string()),
+            });
+            match key {
+                Some(k) => REQUEST_FILES.with(|cell| {
+                    Ok(cell.borrow().get(&k).cloned().unwrap_or(PhpValue::Null))
+                }),
+                None => REQUEST_FILES.with(|cell| {
+                    Ok(PhpValue::dict_from_map(cell.borrow().clone()))
+                }),
+            }
+        }
+        "createUploadedFile" => {
+            let path = get_arg_str(args, 0, "File::createUploadedFile")?;
+            let client_name = args.get(1).map(|v| v.to_php_string());
+            let client_mime = args.get(2).map(|v| v.to_php_string());
+            let obj = create_uploaded_file_object(&path, client_name.as_deref(), client_mime.as_deref());
+            Ok(PhpValue::object(obj))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "File".to_string(),
@@ -1431,6 +1598,74 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
                 };
                 let _ = tx.send(res);
             });
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "mimeType" | "mime_type" => {
+            let path = get_arg_str(args, 0, "AFile::mimeType")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match detect_mime_type_for_path(std::path::Path::new(&path)) {
+                    Some(mime) => Ok(FrozenValue::String(mime.into())),
+                    None => Ok(FrozenValue::Bool(false)),
+                };
+                let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "guessExtension" | "guess_extension" => {
+            let target = get_arg_str(args, 0, "AFile::guessExtension")?;
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match guess_extension(&target) {
+                    Some(ext) => Ok(FrozenValue::String(ext.into())),
+                    None => Ok(FrozenValue::Null),
+                };
+                let _ = tx.send(res);
+            });
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "extension" => {
+            let path = get_arg_str(args, 0, "AFile::extension")?;
+            let ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx.send(Ok(FrozenValue::String(ext.into())));
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "type" => {
+            let path = get_arg_str(args, 0, "AFile::type")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match tokio::fs::symlink_metadata(&path).await {
+                    Ok(meta) => {
+                        let kind = if meta.file_type().is_symlink() {
+                            "link"
+                        } else if meta.is_dir() {
+                            "dir"
+                        } else {
+                            "file"
+                        };
+                        Ok(FrozenValue::String(kind.into()))
+                    }
+                    Err(err) => Err(format!("AFile::type failed: {}", err)),
+                };
+                let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
             Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
                 VmFuture::pending(rx),
             ))))
@@ -2428,9 +2663,27 @@ fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::dict_from_map(cell.borrow().clone()))
             })
         }
+        "file" => {
+            let key = get_arg_str(args, 0, "Request::file")?;
+            REQUEST_FILES.with(|cell| {
+                Ok(cell.borrow().get(&key).cloned().unwrap_or(PhpValue::Null))
+            })
+        }
+        "hasFile" => {
+            let key = get_arg_str(args, 0, "Request::hasFile")?;
+            REQUEST_FILES.with(|cell| {
+                Ok(PhpValue::Bool(cell.borrow().contains_key(&key)))
+            })
+        }
+        "files" | "allFiles" => {
+            REQUEST_FILES.with(|cell| {
+                Ok(PhpValue::dict_from_map(cell.borrow().clone()))
+            })
+        }
         "clear" => {
             REQUEST_PARAMS.with(|cell| cell.borrow_mut().clear());
             REQUEST_TYPE_FORMATS.with(|cell| cell.borrow_mut().clear());
+            REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
             Ok(PhpValue::Null)
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
@@ -3019,6 +3272,10 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             obj.set_property("items", items);
             Ok(PhpValue::object(obj))
         }
+        "mime_content_type" => dispatch_file("mimeType", args),
+        "filesize" => dispatch_file("size", args),
+        "is_file" => dispatch_file("isFile", args),
+        "is_dir" => dispatch_file("isDirectory", args),
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),
