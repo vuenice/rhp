@@ -154,6 +154,13 @@ const rawSearchIndex: SearchItem[] = [
     url: "/docs/reference/stdlib-api",
     keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
+  {
+    title: "Unsupported PHP",
+    section: "Reference",
+    description: "Detailed overview of unsupported PHP features (Reflection, Output Buffering, cURL), reasons for rejection, modern RHP replacements, and migration guide.",
+    url: "/docs/reference/unsupported-php",
+    keywords: ["unsupported", "php", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "migration", "replacements", "di codegen", "output::capture", "http facade"]
+  },
 
   // Tooling
   {

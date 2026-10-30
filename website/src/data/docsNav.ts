@@ -52,6 +52,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Keywords Reference", "reference/keywords"),
       item("Built-in Functions", "reference/builtins"),
       item("Standard Library API", "reference/stdlib-api"),
+      item("Unsupported PHP", "reference/unsupported-php"),
     ]
   },
   {
