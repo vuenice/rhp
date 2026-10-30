@@ -6,16 +6,35 @@
 
 pub mod ast;
 pub mod diagnostic;
+pub mod expand;
 pub mod ir;
 pub mod jit;
 pub mod lexer;
 pub mod lint;
 pub mod parser;
+pub mod metadata;
 pub mod pkg;
 pub use pkg as rpm;
 pub mod telemetry;
 pub mod type_system;
 pub mod vm;
+
+pub use expand::{
+    compile_template, discover_expanders, expand_program, expand_template, parse_and_expand,
+    parse_and_expand_with_file_id, AstBuilder, DatetimeExpander, ExpandCtx, Expander,
+    ExpanderRegistry, Expansion, ExpansionEngine, ExpansionSite, FillableExpander, ForExpander,
+    ForeachExpander, GuardedExpander, IfExpander, SpanChain, TableExpander, TemplateDirective,
+    TemplateElseBranch, TemplateLexer, TemplateNode, TemplateParser, TemplateToken,
+};
+
+pub use metadata::{
+    build_request_object, compile_metadata, detect_circular_dependencies, extract_metadata,
+    extract_url_param_names, generate_factories, AttributeArg, AttributeArgValue, AttributeRegistry,
+    ClassMetadata, CompiledAttribute, Container, DependencySpec, DiError, DiscoveredCommand,
+    DiscoveredListener, DiscoveredPolicy, DiscoveredRoute, DispatchError, FunctionMetadata,
+    GeneratedClassFactory, HandlerShim, MetadataExtractor, MethodMetadata, ParamMetadata,
+    ParamSource, ProgramMetadata, PropertyMetadata, ServiceBinding,
+};
 
 pub use diagnostic::{
     all_diagnostic_codes, check_file, check_path, check_source, format_code_explanation,

@@ -303,6 +303,19 @@ impl<'a> IrLowerer<'a> {
             main_builder.emit(OpCode::Return { value: None }, program.span);
         }
 
+        // Extract compile-time metadata table (reflection alternative)
+        let hierarchy = self.type_info.map(|ti| &ti.hierarchy);
+        let mut extracted_metadata = crate::metadata::extract_metadata(program, hierarchy);
+        if !self.module.metadata.classes.is_empty() {
+            for (k, v) in self.module.metadata.classes.drain() {
+                extracted_metadata.classes.entry(k).or_insert(v);
+            }
+            for (k, v) in self.module.metadata.functions.drain() {
+                extracted_metadata.functions.entry(k).or_insert(v);
+            }
+        }
+        self.module.metadata = extracted_metadata;
+
         self.module.main_chunk = main_builder.chunk;
         Ok(self.module)
     }

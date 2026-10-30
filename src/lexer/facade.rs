@@ -80,6 +80,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Static facade helper for float operations, formatting, and high-precision types (f64, toDecimal)",
     ),
     FacadeInfo::native(
+        "App",
+        "Static application IoC service container facade (bind, singleton, instance, swap, make, has, resolve)",
+    ),
+    FacadeInfo::native(
         "Arr",
         "Static collection factory (list, dict, set, hashMap) with fluent chaining and runtime macro support",
     ),

@@ -45,6 +45,31 @@ impl<'s> CombinatorStream<'s> {
             return self.parse_declaration_with_attributes(attributes, start_span);
         }
 
+        // 3b. Disallow template directives in RHP source code
+        if self.check(&Token::At) {
+            let at_span = self.current_span();
+            if let Some(tok) = self.peek_nth(1) {
+                if matches!(tok.token, Token::Ident(_) | Token::If | Token::For | Token::Foreach) {
+                    let dname = match tok.token {
+                        Token::Ident(s) => s,
+                        Token::If => "if",
+                        Token::For => "for",
+                        Token::Foreach => "foreach",
+                        _ => "directive",
+                    };
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: format!(
+                                "Template directives (`@{}`) are only valid inside template files (.rhp.html, .blade.rhp). In RHP source code, use `#[{}]` for attributes or standard PHP control flow instead.",
+                                dname, dname
+                            ),
+                        },
+                        at_span.merge(tok.span),
+                    ));
+                }
+            }
+        }
+
         // 4. Strongly-typed variable declaration: only prefix type syntax `int $x = 10;` is supported.
         // Colon syntax `$x: int = 10;` is explicitly rejected.
         if let Some(tok) = self.peek() {

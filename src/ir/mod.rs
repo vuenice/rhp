@@ -179,6 +179,8 @@ pub struct IrModule {
     pub interfaces: HashMap<String, CompiledInterface>,
     /// Compiled enums by name.
     pub enums: HashMap<String, CompiledEnum>,
+    /// Read-only static metadata table emitted by the compiler (Reflection alternative).
+    pub metadata: crate::metadata::ProgramMetadata,
 }
 
 impl IrModule {

@@ -153,6 +153,8 @@ pub struct VM {
     pub is_parent_process: bool,
     /// Request-scoped bump arena providing instantaneous O(1) bulk deallocation.
     pub arena: RequestArena,
+    /// IoC Dependency Injection container with compiler-generated factories.
+    pub container: crate::metadata::Container,
 }
 
 impl VM {
@@ -165,6 +167,8 @@ impl VM {
         } else {
             None
         };
+        let mut container = crate::metadata::Container::new();
+        let _ = container.auto_wire(&module.metadata);
         Self {
             module,
             jit_enabled,
@@ -182,6 +186,7 @@ impl VM {
             jit_engine,
             is_parent_process: false,
             arena: RequestArena::new(),
+            container,
         }
     }
 
@@ -237,6 +242,18 @@ impl VM {
     pub fn with_type_hierarchy(mut self, hierarchy: TypeHierarchy) -> Self {
         self.type_hierarchy = Some(hierarchy);
         self
+    }
+
+    /// Set or replace the DI container on this VM instance.
+    pub fn with_container(mut self, container: crate::metadata::Container) -> Self {
+        self.container = container;
+        self
+    }
+
+
+    /// Mutable reference to the underlying compiled [`IrModule`].
+    pub fn module_mut(&mut self) -> &mut IrModule {
+        &mut self.module
     }
 
     /// Returns whether JIT compilation is enabled for hot loops in this VM instance.
@@ -853,8 +870,13 @@ impl VM {
                     };
 
                     let actual_val = &self.registers[base_reg + reg.index()];
-                    if !actual_val.matches_type_contract(&expected_ty, self.type_hierarchy.as_ref())
-                    {
+                    let is_match = match (actual_val, &expected_ty) {
+                        (PhpValue::Object(obj), RhpType::Class(target_cls)) => {
+                            self.is_class_instance_of(&obj.borrow().class_name, target_cls)
+                        }
+                        _ => actual_val.matches_type_contract(&expected_ty, self.type_hierarchy.as_ref()),
+                    };
+                    if !is_match {
                         return Err(self.make_error(
                             RuntimeErrorKind::TypeContractViolation {
                                 expected: expected_ty,
@@ -1496,6 +1518,18 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
+
+                    if fn_name == "app" && !self.module.function_index.contains_key("app") {
+                        if let Some(arg) = staged.first() {
+                            let abs = arg.value.to_php_string();
+                            let mut container = std::mem::take(&mut self.container);
+                            let res = container.resolve(&abs, self);
+                            self.container = container;
+                            let val = res.map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e.to_string() }, span))?;
+                            self.registers[base_reg + dst.index()] = val;
+                            continue;
+                        }
+                    }
 
                     let target_id = self
                         .module
@@ -2522,6 +2556,73 @@ impl VM {
         self.invoke_compiled_function_sync(func_id, args, span)
     }
 
+
+    /// Invoke a static method on a class synchronously with zero reflection.
+    pub fn invoke_static_method_sync(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        let target_id = self
+            .resolve_method_id(clean, method)
+            .ok_or_else(|| {
+                self.make_error(
+                    RuntimeErrorKind::UndefinedMethod {
+                        class: clean.to_string(),
+                        method: method.to_string(),
+                    },
+                    span,
+                )
+            })?;
+
+        let staged: Vec<StagedArg> = args
+            .into_iter()
+            .map(|value| StagedArg {
+                value,
+                name: None,
+                is_unpack: false,
+                is_reference: false,
+                caller_reg: None,
+            })
+            .collect();
+
+        let depth_before = self.frames.len();
+        self.push_compiled_call_frame(target_id, None, &staged, &[], None, span)?;
+        self.dispatch_loop(depth_before)
+    }
+
+    /// Instantiate an object and invoke its `__construct` method if defined.
+    pub fn instantiate_and_construct(
+        &mut self,
+        class_name: &str,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        let instance = self.instantiate_class(clean, span)?;
+
+        if let Some(ctor_id) = self.resolve_method_id(clean, "__construct") {
+            let staged: Vec<StagedArg> = args
+                .into_iter()
+                .map(|value| StagedArg {
+                    value,
+                    name: None,
+                    is_unpack: false,
+                    is_reference: false,
+                    caller_reg: None,
+                })
+                .collect();
+            let depth_before = self.frames.len();
+            self.push_compiled_call_frame(ctor_id, Some(instance.clone()), &staged, &[], None, span)?;
+            self.dispatch_loop(depth_before)?;
+        }
+
+        Ok(instance)
+    }
+
     /// Invoke a [`VmClosure`] synchronously and return its evaluated `PhpValue`.
     pub fn invoke_closure_sync(
         &mut self,
@@ -3479,6 +3580,47 @@ impl VM {
                         None => return Ok(PhpValue::Bool(false)),
                     };
                     return Ok(PhpValue::Bool(self.is_function_exists(&fn_name)));
+                }
+                _ => {}
+            }
+        }
+
+        if facade == "App" {
+            match method {
+                "bind" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    self.container.bind(abs, conc);
+                    return Ok(PhpValue::Null);
+                }
+                "singleton" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    self.container.singleton(abs, conc);
+                    return Ok(PhpValue::Null);
+                }
+                "instance" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                    self.container.instance(abs, val);
+                    return Ok(PhpValue::Null);
+                }
+                "swap" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let fake = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                    self.container.swap(abs, fake);
+                    return Ok(PhpValue::Null);
+                }
+                "has" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    return Ok(PhpValue::Bool(self.container.has(&abs)));
+                }
+                "make" | "get" | "resolve" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let mut container = std::mem::take(&mut self.container);
+                    let res = container.resolve(&abs, self);
+                    self.container = container;
+                    return res.map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e.to_string() }, span));
                 }
                 _ => {}
             }

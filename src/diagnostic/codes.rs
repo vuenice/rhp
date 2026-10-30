@@ -395,6 +395,64 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         fix: Some("Rename the identifier according to convention (e.g. '$my_variable')."),
     },
 
+    // --- 0500 - 0599: Compiler Extension & Macro Expansion errors ---
+    DiagnosticCodeInfo {
+        code: "RHP0501",
+        title: "Unknown compiler extension",
+        summary: "An unrecognized attribute or template directive was encountered.",
+        explanation: "The attribute `#[name]` or directive `@name` is not registered in the expander registry. Check for typos or ensure the defining package is registered in rhp.toml.",
+        example: Some("#[unknown_attr]\nclass User {}"),
+        fix: Some("Register the expander handler or correct the attribute/directive name."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0502",
+        title: "Extension argument mismatch",
+        summary: "Invalid argument count or type passed to an attribute or directive.",
+        explanation: "The arguments provided to `#[attr(...)]` or `@directive(...)` do not match what the handler expects.",
+        example: Some("#[table()]\nclass User {}"),
+        fix: Some("Provide the expected arguments as documented by the extension."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0503",
+        title: "Unbalanced template directive",
+        summary: "A template directive block was opened but not properly closed or matched.",
+        explanation: "Block directives such as `@if`, `@for`, and `@foreach` must be terminated with matching `@endif`, `@endfor`, or `@endforeach` directives.",
+        example: Some("@if($user->isAdmin)\n  <p>Admin</p>\n<!-- missing @endif -->"),
+        fix: Some("Add the corresponding closing directive (e.g. `@endif`)."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0504",
+        title: "Conflicting macro expansion",
+        summary: "Two or more expanders conflict when modifying the same AST node or class member.",
+        explanation: "Multiple attribute handlers attempted to modify or generate the same class member or state with incompatible definitions.",
+        example: Some("#[fillable('email')]\n#[guarded('email')]\nclass User {}"),
+        fix: Some("Remove or reconcile the conflicting attributes."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0505",
+        title: "Extension handler execution failure",
+        summary: "An error or panic occurred while executing an extension expander handler.",
+        explanation: "The expander handler threw an error or panicked during AST transformation. The compiler caught the panic to preserve build integrity.",
+        example: None,
+        fix: Some("Inspect the handler implementation or report the issue to the package author."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0506",
+        title: "Invalid extension placement",
+        summary: "An attribute or directive was placed in an invalid context.",
+        explanation: "Attributes `#[...]` are valid only in RHP source code, while directives `@name` are valid only within template files.",
+        example: Some("@if($x) echo 1; // inside a pure .rhp file"),
+        fix: Some("Use standard RHP control flow in .rhp files and directives inside template files."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0507",
+        title: "Duplicate extension registration",
+        summary: "An attribute or directive handler with the same name was already registered.",
+        explanation: "Each attribute or directive name can only have one active handler registered in the compiler expansion registry.",
+        example: None,
+        fix: Some("Ensure unique handler names across packages and configuration."),
+    },
+
     // --- 9000+: Internal compiler errors ---
     DiagnosticCodeInfo {
         code: "RHP9999",

@@ -1200,6 +1200,39 @@ fn default_standard_interfaces() -> HashMap<String, InterfaceTypeInfo> {
         },
     );
 
+    // 6. RouteBindable
+    let mut route_bindable_methods = HashMap::new();
+    route_bindable_methods.insert(
+        "resolveRouteBinding".to_string(),
+        FunctionSignature {
+            name: "resolveRouteBinding".to_string(),
+            params: vec![ParamSignature {
+                name: "value".to_string(),
+                rhp_type: RhpType::String,
+                has_default: false,
+                is_variadic: false,
+                is_reference: false,
+                span: Span::default(),
+            }],
+            return_type: RhpType::Nullable(Box::new(RhpType::Mixed)),
+            is_async: false,
+            is_static: true,
+            is_abstract: true,
+            is_final: false,
+            visibility: Visibility::Public,
+            span: Span::default(),
+        },
+    );
+    interfaces.insert(
+        "RouteBindable".to_string(),
+        InterfaceTypeInfo {
+            name: "RouteBindable".to_string(),
+            extends: Vec::new(),
+            methods: route_bindable_methods,
+            span: Span::default(),
+        },
+    );
+
     interfaces
 }
 

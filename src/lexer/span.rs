@@ -4,7 +4,7 @@ use std::fmt;
 ///
 /// Complies with the specification requirement:
 /// `Span { file_id, start, end, line, col }`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Span {
     /// Identifier of the source file.
     pub file_id: usize,
