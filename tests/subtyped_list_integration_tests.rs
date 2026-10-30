@@ -53,7 +53,7 @@ fn test_list_iteration_cpu_cache_locality() {
 
     // Verify sequential foreach execution over contiguous memory
     let source = r#"
-        $numbers = Arr::range(1, 100);
+        $numbers = Arr::range(1, 101);
         $sum = 0;
         $count = 0;
         foreach ($numbers as $num) {
@@ -256,7 +256,6 @@ fn test_arr_static_factory_methods() {
                 PhpValue::Int(2),
                 PhpValue::Int(3),
                 PhpValue::Int(4),
-                PhpValue::Int(5),
             ]),
             PhpValue::list(vec![
                 PhpValue::Int(10),
@@ -269,7 +268,6 @@ fn test_arr_static_factory_methods() {
                 PhpValue::Int(4),
                 PhpValue::Int(3),
                 PhpValue::Int(2),
-                PhpValue::Int(1),
             ]),
             PhpValue::list(vec![PhpValue::Int(42)]),
             PhpValue::list(vec![]),

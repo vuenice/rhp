@@ -549,4 +549,119 @@ $call=myFunction($a,$b,$c);
     assert!(formatted.contains("$call = myFunction($a, $b, $c);"), "Got: {}", formatted);
 }
 
+#[test]
+fn test_formatter_wraps_if_and_for_conditions_with_round_brackets() {
+    // 1. `if $i <10` becomes `if ($i < 10)`
+    let code_if = r#"
+if $i <10 {
+    $x = $i;
+}
+"#;
+    let formatted_if = format_source(code_if);
+    assert!(
+        formatted_if.contains("if ($i < 10) {"),
+        "Expected `if ($i < 10) {{`, got:\n{}",
+        formatted_if
+    );
+
+    // 2. `for $item in $items` becomes `for ($item in $items)`
+    let code_for = r#"
+for $item in $items {
+    echo $item;
+}
+"#;
+    let formatted_for = format_source(code_for);
+    assert!(
+        formatted_for.contains("for ($item in $items) {"),
+        "Expected `for ($item in $items) {{`, got:\n{}",
+        formatted_for
+    );
+
+    // 3. `for $k => $v in $items` becomes `for ($k => $v in $items)`
+    let code_for_kv = r#"
+for $k => $v in $items {
+    echo $v;
+}
+"#;
+    let formatted_for_kv = format_source(code_for_kv);
+    assert!(
+        formatted_for_kv.contains("for ($k => $v in $items) {"),
+        "Expected `for ($k => $v in $items) {{`, got:\n{}",
+        formatted_for_kv
+    );
+
+    // 4. Already wrapped conditions must not be double wrapped
+    let code_already_wrapped = r#"
+if ($i < 10) {
+    $x = $i;
+}
+for ($item in $items) {
+    echo $item;
+}
+"#;
+    let formatted_already = format_source(code_already_wrapped);
+    assert!(!formatted_already.contains("(("));
+    assert!(formatted_already.contains("if ($i < 10) {"));
+    assert!(formatted_already.contains("for ($item in $items) {"));
+}
+
+#[test]
+fn test_formatter_moves_trailing_operators_to_next_line_and_indents_continuations() {
+    // Exact user requirement:
+    // Arr::list()->
+    // map()
+    // should become
+    // Arr::list()
+    //     ->map();
+    let chained_call = "Arr::list()->\nmap()\n";
+    let formatted_chained = format_source(chained_call);
+    assert!(
+        formatted_chained.contains("Arr::list()\n    ->map();"),
+        "Expected chained method call with -> on next line indented, got:\n{}",
+        formatted_chained
+    );
+
+    // Multiline boolean operator &&
+    let bool_expr = "$x = $a &&\n$b\n";
+    let formatted_bool = format_source(bool_expr);
+    assert!(
+        formatted_bool.contains("$x = $a\n    && $b;"),
+        "Expected && on next line indented, got:\n{}",
+        formatted_bool
+    );
+
+    // Multiline ternary ?:
+    let ternary_expr = "$res = $cond ?\n$yes :\n$no\n";
+    let formatted_ternary = format_source(ternary_expr);
+    assert!(
+        formatted_ternary.contains("$res = $cond\n    ? $yes\n    : $no;"),
+        "Expected ternary on continuation lines indented, got:\n{}",
+        formatted_ternary
+    );
+}
+
+#[test]
+fn test_formatter_inserts_missing_semicolons_relying_on_indentation_and_operators() {
+    // Semicolon insertion on simple statements
+    let code = r#"
+$x = 10
+$y = 20
+return $x + $y
+"#;
+    let formatted = format_source(code);
+    assert!(formatted.contains("$x = 10;"), "Got:\n{}", formatted);
+    assert!(formatted.contains("$y = 20;"), "Got:\n{}", formatted);
+    assert!(formatted.contains("return $x + $y;"), "Got:\n{}", formatted);
+
+    // Multiline continuation statement should NOT receive semicolon on intermediate line
+    let multiline_stmt = r#"
+$val = $obj
+    ->getName()
+"#;
+    let formatted_multi = format_source(multiline_stmt);
+    assert!(!formatted_multi.contains("$val = $obj;"), "Line 1 should not have semicolon: {}", formatted_multi);
+    assert!(formatted_multi.contains("->getName();"), "Line 2 should have semicolon: {}", formatted_multi);
+}
+
+
 

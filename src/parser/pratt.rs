@@ -28,6 +28,7 @@ pub mod binding_power {
     pub const WORD_XOR: u8 = 7;
     pub const WORD_AND: u8 = 9;
     pub const ASSIGNMENT: u8 = 20; // right-associative: (20, 19)
+    pub const RANGE: u8 = 22;      // left-associative range operator: `..`
     pub const TERNARY: u8 = 25;    // right-associative: (25, 24)
     pub const NULL_COALESCE: u8 = 30; // right-associative: (30, 29)
     pub const LOGICAL_OR: u8 = 35;
@@ -674,6 +675,43 @@ impl<'s> CombinatorStream<'s> {
                 )?;
                 let close_tok = self.expect(Token::CloseBracket)?;
                 let span = spanned.span.merge(close_tok.span);
+
+                if elements.len() == 1 && elements[0].key.is_none() && !elements[0].is_unpack {
+                    let elem_val = &elements[0].value;
+                    if let ExprKind::Binary { op: BinaryOp::Range, left, right } = &elem_val.kind {
+                        let (start_expr, stop_expr, step_expr) = if let ExprKind::Binary {
+                            op: BinaryOp::Range,
+                            left: inner_left,
+                            right: inner_right,
+                        } = &left.kind {
+                            (inner_left.as_ref().clone(), inner_right.as_ref().clone(), Some(right.as_ref().clone()))
+                        } else {
+                            (left.as_ref().clone(), right.as_ref().clone(), None)
+                        };
+
+                        let arr_target = Expr::new(
+                            ExprKind::Ident(Ident::new("Arr", span)),
+                            span,
+                        );
+                        let mut args = vec![
+                            Argument::new(start_expr.clone(), start_expr.span),
+                            Argument::new(stop_expr.clone(), stop_expr.span),
+                        ];
+                        if let Some(step) = step_expr {
+                            args.push(Argument::new(step.clone(), step.span));
+                        }
+
+                        return Ok(Expr::new(
+                            ExprKind::StaticCall {
+                                target: Box::new(arr_target),
+                                method: Ident::new("range", span),
+                                args,
+                            },
+                            span,
+                        ));
+                    }
+                }
+
                 Ok(Expr::new(ExprKind::Array(elements), span))
             }
 
@@ -1632,6 +1670,9 @@ fn infix_binding_power(token: &Token<'_>) -> Option<(u8, u8)> {
         // Null coalescing is right-associative
         Token::NullCoalesce => Some((binding_power::NULL_COALESCE + 1, binding_power::NULL_COALESCE)),
 
+        // Range operator `..`
+        Token::DotDot => Some((binding_power::RANGE, binding_power::RANGE + 1)),
+
         // Ternary & Elvis
         Token::Question | Token::Elvis => Some((binding_power::TERNARY + 1, binding_power::TERNARY)),
 
@@ -1690,6 +1731,7 @@ fn to_binary_op(token: &Token<'_>) -> Option<BinaryOp> {
         Token::Or => Some(BinaryOp::WordOr),
         Token::Xor => Some(BinaryOp::WordXor),
         Token::NullCoalesce => Some(BinaryOp::Coalesce),
+        Token::DotDot => Some(BinaryOp::Range),
         _ => None,
     }
 }

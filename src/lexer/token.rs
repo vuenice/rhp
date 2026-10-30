@@ -135,6 +135,12 @@ pub enum Token<'s> {
     #[token("as")]
     As,
 
+    #[token("in")]
+    In,
+
+    #[token("loop")]
+    Loop,
+
     #[token("break")]
     Break,
 
@@ -637,6 +643,8 @@ impl<'s> Token<'s> {
             Token::For => "for",
             Token::Foreach => "foreach",
             Token::As => "as",
+            Token::In => "in",
+            Token::Loop => "loop",
             Token::Break => "break",
             Token::Continue => "continue",
             Token::Switch => "switch",
@@ -798,6 +806,8 @@ impl<'s> Token<'s> {
                 | Token::For
                 | Token::Foreach
                 | Token::As
+                | Token::In
+                | Token::Loop
                 | Token::Break
                 | Token::Continue
                 | Token::Switch

@@ -86,9 +86,18 @@ pub fn walk_stmt<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, stmt: &Stmt<'s
             value_var,
             body,
             ..
+        }
+        | StmtKind::ForIn {
+            expr,
+            value_var,
+            body,
+            ..
         } => {
             visitor.visit_expr(expr);
             visitor.visit_expr(value_var);
+            visitor.visit_stmt(body);
+        }
+        StmtKind::Loop { body } => {
             visitor.visit_stmt(body);
         }
         StmtKind::Switch { condition, cases } => {

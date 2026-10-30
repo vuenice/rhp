@@ -336,8 +336,11 @@ impl TypeChecker {
                 }
                 self.collect_anon_classes_from_stmt(body)?;
             }
-            StmtKind::Foreach { expr, body, .. } => {
+            StmtKind::Foreach { expr, body, .. } | StmtKind::ForIn { expr, body, .. } => {
                 self.collect_anon_classes_from_expr(expr)?;
+                self.collect_anon_classes_from_stmt(body)?;
+            }
+            StmtKind::Loop { body } => {
                 self.collect_anon_classes_from_stmt(body)?;
             }
             StmtKind::Switch { condition, cases } => {
@@ -1795,6 +1798,12 @@ impl TypeChecker {
                 key_var,
                 value_var,
                 body,
+            }
+            | StmtKind::ForIn {
+                expr,
+                key_var,
+                value_var,
+                body,
             } => {
                 let iterable_ty = self.infer_expr(expr, env, ctx, None)?;
                 let (key_ty, val_ty) = match &iterable_ty {
@@ -1836,6 +1845,13 @@ impl TypeChecker {
                         Some(&self.result.hierarchy),
                     )?;
                 }
+                self.check_stmt(body, &mut loop_env, ctx)?;
+                env.merge_branch(&loop_env);
+                Ok(false)
+            }
+
+            StmtKind::Loop { body } => {
+                let mut loop_env = env.clone();
                 self.check_stmt(body, &mut loop_env, ctx)?;
                 env.merge_branch(&loop_env);
                 Ok(false)
@@ -3281,6 +3297,18 @@ impl TypeChecker {
                     Ok(left_ty.clone())
                 }
             }
+
+            // Range operator `..` produces a List collection
+            BinaryOp::Range => {
+                let elem_ty = if left_ty.is_numeric() && right_ty.is_numeric() {
+                    RhpType::Int
+                } else if matches!(left_ty, RhpType::String) && matches!(right_ty, RhpType::String) {
+                    RhpType::String
+                } else {
+                    RhpType::Dynamic
+                };
+                Ok(RhpType::Collection(CollectionSubtype::List(Box::new(elem_ty))))
+            }
         }
     }
 
@@ -3610,7 +3638,9 @@ impl TypeChecker {
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => Self::stmt_has_value_return(body),
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::ForIn { body, .. }
+            | StmtKind::Loop { body } => Self::stmt_has_value_return(body),
             StmtKind::Switch { cases, .. } => {
                 cases.iter().any(|c| Self::stmts_have_value_return(&c.body))
             }

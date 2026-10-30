@@ -178,7 +178,10 @@ fn collect_nested_declarations(
             StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => {
                 collect_nested_stmt(body, type_info, edits, source);
             }
-            StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
+            StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::ForIn { body, .. }
+            | StmtKind::Loop { body } => {
                 collect_nested_stmt(body, type_info, edits, source);
             }
             _ => {}

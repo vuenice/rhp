@@ -7313,6 +7313,9 @@ impl VM {
                     Ok(rhs.clone())
                 }
             }
+            BinaryOp::Range => {
+                dispatch_facade_call("Arr", "range", &[lhs.clone(), rhs.clone()], span)
+            }
         }
     }
 

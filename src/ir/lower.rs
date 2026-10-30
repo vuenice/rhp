@@ -601,6 +601,12 @@ impl<'a> IrLowerer<'a> {
                 key_var,
                 value_var,
                 body,
+            }
+            | StmtKind::ForIn {
+                expr,
+                key_var,
+                value_var,
+                body,
             } => {
                 let iterable_reg = self.lower_expr(b, expr, None)?;
                 let iter_reg = b.alloc_temp(RhpType::Dynamic, expr.span)?;
@@ -654,6 +660,31 @@ impl<'a> IrLowerer<'a> {
 
                 let loop_end = b.current_ip();
                 b.patch_jump(iter_next_idx, loop_end);
+
+                let frame = b.loop_stack.pop().unwrap();
+                for patch in frame.continue_patches {
+                    b.patch_jump(patch, loop_start);
+                }
+                for patch in frame.break_patches {
+                    b.patch_jump(patch, loop_end);
+                }
+                Ok(())
+            }
+
+            StmtKind::Loop { body } => {
+                let loop_start = b.current_ip();
+
+                b.loop_stack.push(LoopFrame {
+                    is_switch: false,
+                    continue_target: Some(loop_start),
+                    continue_patches: Vec::new(),
+                    break_patches: Vec::new(),
+                });
+
+                self.lower_stmt(b, body)?;
+                b.emit(OpCode::Jump { target: loop_start }, stmt.span);
+
+                let loop_end = b.current_ip();
 
                 let frame = b.loop_stack.pop().unwrap();
                 for patch in frame.continue_patches {
@@ -1756,7 +1787,7 @@ impl<'a> IrLowerer<'a> {
                     expr.span,
                 );
                 for elem in elements {
-                    if elem.is_unpack {
+                    if elem.is_unpack || (elem.key.is_none() && matches!(elem.value.kind, ExprKind::Binary { op: BinaryOp::Range, .. })) {
                         let src_arr = self.lower_expr(b, &elem.value, None)?;
                         b.emit(
                             OpCode::ArrayUnpack {

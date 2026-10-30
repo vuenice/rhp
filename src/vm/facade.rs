@@ -718,20 +718,100 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::list(items))
         }
         "range" => {
-            let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            let end = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
-            let step = args.get(2).and_then(|v| v.to_i64()).unwrap_or(1);
-            let step = if step == 0 { 1 } else { step };
+            if args.is_empty() {
+                return Err(RuntimeErrorKind::TooFewArguments {
+                    callable: "Arr::range".to_string(),
+                    passed: 0,
+                    expected: 1,
+                });
+            }
+
+            // Check if arguments are single characters (e.g. 'a', 'e')
+            let is_char_range = if args.len() >= 2 {
+                let s1 = args[0].to_php_string();
+                let s2 = args[1].to_php_string();
+                args[0].to_i64().is_none()
+                    && args[1].to_i64().is_none()
+                    && s1.chars().count() == 1
+                    && s2.chars().count() == 1
+            } else {
+                false
+            };
+
+            if is_char_range {
+                let s1 = args[0].to_php_string();
+                let s2 = args[1].to_php_string();
+                let c1 = s1.chars().next().unwrap() as u32;
+                let c2 = s2.chars().next().unwrap() as u32;
+                let step = if args.len() >= 3 {
+                    args[2].to_i64().unwrap_or(1)
+                } else {
+                    1i64
+                };
+                if step == 0 {
+                    return Err(RuntimeErrorKind::ValueError {
+                        message: "Arr::range() arg 3 must not be zero".to_string(),
+                    });
+                }
+                let mut list = Vec::new();
+                if step > 0 {
+                    let mut curr = c1;
+                    while curr < c2 {
+                        if let Some(ch) = char::from_u32(curr) {
+                            list.push(PhpValue::string(ch.to_string()));
+                        }
+                        curr += step as u32;
+                    }
+                } else {
+                    let step_abs = (-step) as u32;
+                    let mut curr = c1;
+                    while curr > c2 {
+                        if let Some(ch) = char::from_u32(curr) {
+                            list.push(PhpValue::string(ch.to_string()));
+                        }
+                        if curr < step_abs {
+                            break;
+                        }
+                        curr -= step_abs;
+                    }
+                }
+                return Ok(PhpValue::list(list));
+            }
+
+            let (start, end, step) = match args.len() {
+                1 => {
+                    let stop = args[0].to_i64().unwrap_or(0);
+                    (0i64, stop, 1i64)
+                }
+                2 => {
+                    let start = args[0].to_i64().unwrap_or(0);
+                    let stop = args[1].to_i64().unwrap_or(0);
+                    (start, stop, 1i64)
+                }
+                _ => {
+                    let start = args[0].to_i64().unwrap_or(0);
+                    let stop = args[1].to_i64().unwrap_or(0);
+                    let step = args[2].to_i64().unwrap_or(1);
+                    (start, stop, step)
+                }
+            };
+
+            if step == 0 {
+                return Err(RuntimeErrorKind::ValueError {
+                    message: "Arr::range() arg 3 must not be zero".to_string(),
+                });
+            }
+
             let mut list = Vec::new();
-            if start <= end && step > 0 {
+            if step > 0 {
                 let mut curr = start;
-                while curr <= end {
+                while curr < end {
                     list.push(PhpValue::Int(curr as i32));
                     curr += step;
                 }
-            } else if start >= end && step < 0 {
+            } else {
                 let mut curr = start;
-                while curr >= end {
+                while curr > end {
                     list.push(PhpValue::Int(curr as i32));
                     curr += step;
                 }

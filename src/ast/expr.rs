@@ -282,6 +282,8 @@ pub enum BinaryOp {
     WordXor,       // xor
     // Null Coalescing
     Coalesce,      // ??
+    // Range
+    Range,         // ..
 }
 
 impl fmt::Display for BinaryOp {
@@ -314,6 +316,7 @@ impl fmt::Display for BinaryOp {
             BinaryOp::WordOr => "or",
             BinaryOp::WordXor => "xor",
             BinaryOp::Coalesce => "??",
+            BinaryOp::Range => "..",
         };
         write!(f, "{}", op)
     }

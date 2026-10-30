@@ -70,6 +70,19 @@ pub enum StmtKind<'s> {
         body: Box<Stmt<'s>>,
     },
 
+    /// For-in loop (`for ($i in [0..10])` or `for ($k => $v in $items)`).
+    ForIn {
+        expr: Expr<'s>,
+        key_var: Option<Variable<'s>>,
+        value_var: Box<Expr<'s>>,
+        body: Box<Stmt<'s>>,
+    },
+
+    /// Infinite loop (`loop { ... }`).
+    Loop {
+        body: Box<Stmt<'s>>,
+    },
+
     /// Switch statement with cases and default.
     Switch {
         condition: Expr<'s>,

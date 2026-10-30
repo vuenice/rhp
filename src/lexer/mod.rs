@@ -55,6 +55,8 @@ pub struct Lexer<'s> {
     curr_offset: usize,
     curr_line: usize,
     curr_col: usize,
+    queue: std::collections::VecDeque<SpannedToken<'s>>,
+    base_offset: usize,
 }
 
 impl<'s> Lexer<'s> {
@@ -72,6 +74,8 @@ impl<'s> Lexer<'s> {
             curr_offset: 0,
             curr_line: 1,
             curr_col: 1,
+            queue: std::collections::VecDeque::new(),
+            base_offset: 0,
         }
     }
 
@@ -122,8 +126,52 @@ impl<'s> Iterator for Lexer<'s> {
     type Item = Result<SpannedToken<'s>, SpannedLexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(tok) = self.queue.pop_front() {
+            return Some(Ok(tok));
+        }
+
         let item = self.inner.next()?;
-        let range = self.inner.span();
+        let inner_range = self.inner.span();
+        let range = (inner_range.start + self.base_offset)..(inner_range.end + self.base_offset);
+
+        // Handle numeric literal directly followed by `..` (e.g. `0..10`), which Logos eagerly matches as `0.`
+        if let Err(LexError::InvalidNumericLiteral(_)) = item {
+            let matched = &self.source[range.start..range.end];
+            if matched.ends_with('.') && self.source[range.end..].starts_with('.') {
+                let num_str = &matched[..matched.len() - 1];
+                let num_start = range.start;
+                let num_end = range.start + num_str.len();
+                self.advance_position_to(num_start);
+                let num_line = self.curr_line;
+                let num_col = self.curr_col;
+                self.advance_position_to(num_end);
+                let num_span = Span::new(self.file_id, num_start, num_end, num_line, num_col);
+                let num_tok = SpannedToken::new(Token::IntLiteral(num_str), num_span);
+
+                let rem = &self.source[range.end..];
+                let (dot_tok, dot_len) = if rem.starts_with("..") {
+                    (Token::Ellipsis, 3)
+                } else {
+                    (Token::DotDot, 2)
+                };
+
+                let dot_start = num_end;
+                let dot_end = dot_start + dot_len;
+                self.advance_position_to(dot_start);
+                let dot_line = self.curr_line;
+                let dot_col = self.curr_col;
+                self.advance_position_to(dot_end);
+                let dot_span = Span::new(self.file_id, dot_start, dot_end, dot_line, dot_col);
+                let dot_spanned = SpannedToken::new(dot_tok, dot_span);
+
+                self.queue.push_back(dot_spanned);
+
+                self.base_offset = dot_end;
+                self.inner = Token::lexer(&self.source[dot_end..]);
+
+                return Some(Ok(num_tok));
+            }
+        }
 
         // Advance line/col through skipped whitespace/comments up to the token start
         self.advance_position_to(range.start);

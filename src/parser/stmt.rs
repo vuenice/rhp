@@ -152,26 +152,74 @@ impl<'s> CombinatorStream<'s> {
             ));
         }
 
-        // 8. Control Flow: For loop
+        // 8. Control Flow: For loop / For-in loop
         if self.matches(&Token::For) {
             self.expect(Token::OpenParen)?;
-            let init = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::SemiColon)?;
-            self.expect(Token::SemiColon)?;
-            let condition = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::SemiColon)?;
-            self.expect(Token::SemiColon)?;
-            let update = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::CloseParen)?;
-            self.expect(Token::CloseParen)?;
-            let body = self.parse_stmt()?;
-            let span = start_span.merge(body.span);
-            return Ok(Stmt::new(
-                StmtKind::For {
-                    init,
-                    condition,
-                    update,
-                    body: Box::new(body),
-                },
-                span,
-            ));
+
+            let is_for_in = if self.check(&Token::SemiColon) {
+                false
+            } else {
+                let mut is_in = false;
+                let mut i = 0;
+                while let Some(tok) = self.peek_nth(i) {
+                    if tok.token == Token::SemiColon || tok.token == Token::OpenBrace {
+                        break;
+                    }
+                    if tok.token == Token::In {
+                        is_in = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                is_in
+            };
+
+            if is_for_in {
+                let first_expr = self.parse_expr_lowest()?;
+                let (key_var, value_var) = if self.matches(&Token::DoubleArrow) {
+                    let second_expr = self.parse_expr_lowest()?;
+                    let k_var = match &first_expr.kind {
+                        crate::ast::expr::ExprKind::Variable(v) => Some(v.clone()),
+                        _ => None,
+                    };
+                    (k_var, Box::new(second_expr))
+                } else {
+                    (None, Box::new(first_expr))
+                };
+
+                self.expect(Token::In)?;
+                let expr = self.parse_expr_lowest()?;
+                self.expect(Token::CloseParen)?;
+                let body = self.parse_stmt()?;
+                let span = start_span.merge(body.span);
+                return Ok(Stmt::new(
+                    StmtKind::ForIn {
+                        expr,
+                        key_var,
+                        value_var,
+                        body: Box::new(body),
+                    },
+                    span,
+                ));
+            } else {
+                let init = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::SemiColon)?;
+                self.expect(Token::SemiColon)?;
+                let condition = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::SemiColon)?;
+                self.expect(Token::SemiColon)?;
+                let update = self.separated_by(|s| s.parse_expr_lowest(), Token::Comma, &Token::CloseParen)?;
+                self.expect(Token::CloseParen)?;
+                let body = self.parse_stmt()?;
+                let span = start_span.merge(body.span);
+                return Ok(Stmt::new(
+                    StmtKind::For {
+                        init,
+                        condition,
+                        update,
+                        body: Box::new(body),
+                    },
+                    span,
+                ));
+            }
         }
 
         // 9. Control Flow: Foreach loop
@@ -200,6 +248,18 @@ impl<'s> CombinatorStream<'s> {
                     expr,
                     key_var,
                     value_var,
+                    body: Box::new(body),
+                },
+                span,
+            ));
+        }
+
+        // 9b. Control Flow: Loop statement (`loop { ... }`)
+        if self.matches(&Token::Loop) {
+            let body = self.parse_stmt()?;
+            let span = start_span.merge(body.span);
+            return Ok(Stmt::new(
+                StmtKind::Loop {
                     body: Box::new(body),
                 },
                 span,
@@ -250,7 +310,10 @@ impl<'s> CombinatorStream<'s> {
 
         // 11. Break & Continue
         if self.matches(&Token::Break) {
-            let level = if !self.check(&Token::SemiColon) {
+            let level = if !self.check(&Token::SemiColon)
+                && !self.check(&Token::CloseBrace)
+                && self.peek().map(|t| t.span.line == start_span.line).unwrap_or(false)
+            {
                 Some(self.parse_expr_lowest()?)
             } else {
                 None
@@ -260,7 +323,10 @@ impl<'s> CombinatorStream<'s> {
             return Ok(Stmt::new(StmtKind::Break(level), span));
         }
         if self.matches(&Token::Continue) {
-            let level = if !self.check(&Token::SemiColon) {
+            let level = if !self.check(&Token::SemiColon)
+                && !self.check(&Token::CloseBrace)
+                && self.peek().map(|t| t.span.line == start_span.line).unwrap_or(false)
+            {
                 Some(self.parse_expr_lowest()?)
             } else {
                 None
@@ -272,7 +338,10 @@ impl<'s> CombinatorStream<'s> {
 
         // 12. Return & Throw
         if self.matches(&Token::Return) {
-            let value = if !self.check(&Token::SemiColon) {
+            let value = if !self.check(&Token::SemiColon)
+                && !self.check(&Token::CloseBrace)
+                && self.peek().map(|t| t.span.line == start_span.line).unwrap_or(false)
+            {
                 Some(self.parse_expr_lowest()?)
             } else {
                 None
@@ -1133,8 +1202,21 @@ impl<'s> CombinatorStream<'s> {
         ))
     }
 
-    /// Expect statement terminator (semicolon `;`).
+    /// Expect statement terminator (semicolon `;` or newline/closing brace/EOF).
     fn expect_statement_terminator(&mut self) -> Result<SpannedToken<'s>, ParseError> {
+        if self.matches(&Token::SemiColon) {
+            let span = self.previous_token().map(|t| t.span).unwrap_or_else(|| self.current_span());
+            return Ok(SpannedToken::new(Token::SemiColon, span));
+        }
+        let prev_span = self.previous_token().map(|t| t.span).unwrap_or_else(|| self.current_span());
+        // Allow automatic semicolon termination across newlines, before closing brace, or at EOF
+        if let Some(next) = self.peek() {
+            if next.token == Token::CloseBrace || next.span.line > prev_span.line {
+                return Ok(SpannedToken::new(Token::SemiColon, prev_span));
+            }
+        } else if self.is_eof() {
+            return Ok(SpannedToken::new(Token::SemiColon, prev_span));
+        }
         self.expect(Token::SemiColon)
     }
 }

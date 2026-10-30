@@ -536,12 +536,16 @@ impl<'a> CasingCollector<'a> {
                 }
                 self.visit_stmt(body);
             }
-            StmtKind::Foreach { expr, key_var, value_var, body } => {
+            StmtKind::Foreach { expr, key_var, value_var, body }
+            | StmtKind::ForIn { expr, key_var, value_var, body } => {
                 self.visit_expr(expr);
                 if let Some(k) = key_var {
                     self.visit_var(k);
                 }
                 self.visit_expr(value_var);
+                self.visit_stmt(body);
+            }
+            StmtKind::Loop { body } => {
                 self.visit_stmt(body);
             }
             StmtKind::Switch { condition, cases } => {
