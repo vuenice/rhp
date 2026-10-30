@@ -437,6 +437,176 @@ list $results = Future::wait([
 | **Async Concurrency** | Thread-blocking `curl_multi_select` polling | Tokio non-blocking event-driven I/O | Concurrently dispatch thousands of requests with near-zero memory |
 | **Architecture** | App $\rightarrow$ Guzzle $\rightarrow$ cURL ext $\rightarrow$ libcurl | App $\rightarrow$ Native Rust HTTP (`reqwest` + `rustls`) | Minimal overhead; zero C-extension segfault risks |
 | **Test Ergonomics** | Difficult mocking requiring C handle mocks | Native `Http::fake(['*' => ...])` | Fast, deterministic unit tests without network access |
+---
+
+## 4. Legacy Object Serialization & Deserialization
+
+**Not supported:** `serialize()`, `unserialize()`, `__sleep()`, `__wakeup()`, PHP text-encoded serialization strings (`O:4:"User":2:{...}`), and unvalidated arbitrary class instantiation from byte streams.
+
+### What Was Bad About It in PHP
+
+- **Remote Code Execution (RCE) via Gadget Chains:** PHP's `unserialize()` instantiates arbitrary classes by string name and populates internal state without invoking the constructor (`__construct()`). When magic methods like `__destruct()`, `__wakeup()`, `__toString()`, or `__call()` run on attacker-controlled property graphs, they trigger interconnected method calls known as "gadget chains". Attackers leverage classes present anywhere in the vendor autoloader (Monolog, Guzzle, Symfony, Laravel) to achieve file writes, SQL injection, or remote shell execution (`eval()`, `system()`). Framework gadget generators (such as PHPGGC) catalog dozens of automated exploits for virtually every major PHP library.
+- **Open-by-Default Insecurity:** For decades, `unserialize()` accepted any class in the autoloader. The `allowed_classes` option added in PHP 7 was an opt-in afterthought that is routinely omitted or misconfigured (for example, allowing polymorphic container classes that hold untrusted inner objects).
+- **Destructors on Half-Initialized Objects:** If deserialization throws an exception midway (due to malformed payloads, missing classes, or type mismatches), PHP's engine still invokes `__destruct()` on the partially initialized object during garbage collection. Attackers deliberately craft payloads that fail late in deserialization specifically to trigger destructor-based gadget execution.
+- **Bloated, Fragile Text Format with Null-Byte Mangling:** PHP's string format (`O:4:"User":2:{s:4:"name";s:5:"Alice";...}`) is slow to tokenize, parse, and allocate. For private and protected properties, PHP mangles visibility keys by injecting invisible null bytes (`\0*\0property` and `\0ClassName\0property`). This leads to silent string truncation bugs in MySQL/Postgres text columns, breaks when classes are renamed or moved across namespaces, and tightly couples data payloads to private variable identifiers.
+- **Fragile State Management (`__sleep` / `__wakeup`):** The legacy `__sleep()` hook returned an array of property names as strings. Renaming a property during a code deployment rendered all previously serialized queue jobs and cache entries in Redis corrupt or missing attributes.
+- **Subverting Invariants and JIT Optimizations:** Bypassing constructors allows objects to exist in invalid states that violate compile-time guarantees. In an optimizing JIT runtime, arbitrary property injection invalidates hidden class shapes, Cranelift unboxed slot layouts, and devirtualization assumptions.
+- **Resource and Closure Serialization Traps:** Serializing database connections (`PDO`), sockets, or file handles yields useless dummy integers (`resource id #5`) that silently resurrect as dead handles. Userland attempts to serialize closures (by tokenizing PHP source or dumping opcodes) created severe security holes and broke across JIT and opcache versions.
+- **Denial of Service (DoS):** Unbounded nesting depths, circular object bombs, and huge hash collisions trigger stack overflows and CPU/memory exhaustion with zero built-in limits.
+
+---
+
+### What Replaces It in RHP
+
+1. **Compact, Versioned Binary Wire Format (MsgPack-Style with Magic Header):**
+   RHP replaces PHP's text format with an efficient, tag-based binary format prefixed with a magic identifier and version byte (`[Magic 2B: "RH"][Format Version: 1B][Root Tag...]`). Scalars, UTF-8 strings, and collections (`list`, `dict`, `set`, `hashMap`) are encoded with 1-byte tags.
+2. **Clean Object Protocol (`__serialize()` & `__unserialize(dict)` + `#[Transient]`):**
+   RHP skips `__sleep()` and `__wakeup()` entirely. Classes explicitly implement:
+   - `public function __serialize(): dict`: returns an explicit key-value dictionary of exportable state.
+   - `public function __unserialize(dict $data): void`: receives the validated dictionary to rehydrate the instance.
+   When hooks are omitted, RHP automatically serializes non-transient properties. Properties annotated with `#[Transient]` are automatically omitted.
+3. **Deny-by-Default Security with Strict Allowlisting:**
+   `unserialize($bytes, allowed_classes: [...])` is **deny-by-default for objects**. If a binary payload references a class not present in `allowed_classes` (or registered in the application's serializable registry), deserialization halts immediately before allocating the object, preventing gadget instantiation.
+4. **Destructor Neutralization on Incomplete Restorations:**
+   If deserialization fails or throws an exception, half-built objects are immediately marked invalid and discarded without running `__destruct()`, neutralizing destructor gadget chains completely.
+5. **Graph-Preserving Memo Table for Cycles and Identity:**
+   Shared references and circular object graphs are automatically preserved using variable-length index back-references (`Ref(index)`), preventing infinite recursion and preserving object identity.
+6. **Built-in DoS Protections:**
+   Configurable recursion depth caps (default 64) and byte size limits protect the runtime against decompression bombs and stack overflows.
+7. **Safe Resources and Named Callables (No Closure Serialization):**
+   Resources (database connections, file handles) and `Future` handles throw a `SerializationException` by default. Rather than attempting to serialize fragile closure bytecode, RHP serializes named callables (`[ClassName::class, 'methodName']`) and parameter lists.
+8. **Laravel Rocket Queue & Model Integration (`SerializesModels`):**
+   Queue jobs store model identity (`class` and primary key) rather than raw database entity state, re-querying the database upon worker pickup.
+9. **Zero-Downtime Migration Reader (`unserialize_php`):**
+   For seamless migration during cutover, an optional read-only PHP format parser (`unserialize_php($payload)`) allows reading legacy Redis sessions and cache data without rewriting existing datastores on day one.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Object Serialization Protocol (`__sleep`/`__wakeup` vs `__serialize`/`#[Transient]`)
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Fragile property string lists, null-byte mangling, and constructor bypass
+class UserAccount {
+    private int $id;
+    private string $email;
+    private string $passwordHash; // Sensitive, should not be serialized
+    private ?PDO $db = null;     // Unserializable resource
+
+    public function __sleep(): array {
+        // String array breaks silently if properties are renamed or refactored
+        return ['id', 'email'];
+    }
+
+    public function __wakeup(): void {
+        // Executes automatically on untrusted object graph; vulnerable to gadget chains
+        $this->db = Database::connect();
+    }
+}
+
+$serialized = serialize($account); // Produces bulky text with null-byte mangled keys
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Explicit dictionary hooks or #[Transient] attribute
+class UserAccount {
+    public int $id;
+    public string $email;
+
+    #[Transient]
+    public string $passwordHash; // Automatically skipped during serialization
+
+    #[Transient]
+    public ?DatabaseConnection $db = null;
+
+    // Optional explicit hook for custom schema control
+    public function __serialize(): dict {
+        return [
+            'version' => 1,
+            'id' => $this->id,
+            'email' => $this->email,
+        ];
+    }
+
+    public function __unserialize(dict $data): void {
+        $this->id = $data['id'];
+        $this->email = $data['email'];
+        // Safe: invoked only on allowlisted classes; destructor never runs if this throws
+    }
+}
+
+// Compact binary wire format
+string $wire = serialize($account);
+```
+
+#### Example B: Safe Deserialization with Deny-by-Default Allowlist
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Open-by-default; instantiates ANY class in the autoloader
+// Vulnerable to RCE via gadget chains (Monolog, Guzzle, Symfony, etc.)
+$data = unserialize($untrustedPayload);
+
+// PHP 7 allowed_classes was opt-in, optional, and easily forgotten
+$data = unserialize($untrustedPayload, ['allowed_classes' => [UserAccount::class]]);
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Deny-by-default for objects. Objects require explicit allowlist.
+// Throws SecurityException if an unregistered class tag is encountered.
+$account = unserialize($wireBytes, allowed_classes: [UserAccount::class]);
+
+// Plain data (scalars, list, dict, set) deserializes safely without allowed_classes:
+dict $config = unserialize($plainPayload);
+```
+
+#### Example C: Queued Jobs & Avoiding Closure Serialization
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Serializing closures via Opis/Closure or laravel/serializable-closure
+// Extracts source code or opcodes via reflection and re-evals them; high security risk
+dispatch(function() use ($orderId) {
+    OrderProcessor::process($orderId);
+});
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Explicit named job classes or named callables with typed parameters
+class ProcessOrderJob {
+    use SerializesModels;
+
+    public function __construct(
+        public Order $order // Re-queried by ID upon worker pickup via SerializesModels
+    ) {}
+
+    public function handle(): void {
+        OrderProcessor::process($this->order);
+    }
+}
+
+Queue::push(new ProcessOrderJob($order));
+```
+
+---
+
+### Why RHP Is Better Than PHP
+
+| Feature Dimension | Legacy PHP `serialize()` / `unserialize()` | RHP Native Object Serialization | Why RHP Wins |
+| :--- | :--- | :--- | :--- |
+| **Security & Gadget Chains** | Open-by-default; executes arbitrary class magic methods | Deny-by-default; explicit `allowed_classes` or registry | **Zero gadget chain RCE surface**; untrusted classes never instantiated |
+| **Destructor Safety** | `__destruct()` runs even on failed/half-built objects | Destructor is suppressed if deserialization aborts | Eliminates destructor-based gadget chains and resource leaks |
+| **Format & Performance** | Verbose text format with null bytes (`\0*\0`) | Compact binary format (MessagePack-style tags) | **$3\times$ to $8\times$ smaller payloads**; instantaneous binary decoding |
+| **Format Versioning** | No built-in versioning; breaks across deployments | Embedded wire format version byte + schema versioning | Safe cross-deployment queue jobs and cache storage |
+| **Object Graph & Cycles** | Verbose back-reference strings (`r:`, `R:`) | Memo table with variable-length index tags | Safely restores cyclic and DAG object graphs without stack overflow |
+| **Type Integrity & JIT** | Injects unverified properties bypassing constructors | Enforces typed dictionary boundaries (`__unserialize(dict)`) | Preserves Cranelift hidden class shapes, unboxed slots, and devirtualization |
+| **DoS Protection** | Vulnerable to memory/depth decompression bombs | Enforced recursion depth (64) and size limits | Prevents stack overflows and memory exhaustion attacks |
+| **Closure Handling** | Unsafe runtime opcode/source eval (`eval()`) | Named callables (`[Class, 'method']`) + args | Zero code-eval vulnerability; deterministic compilation |
 
 ---
 
@@ -447,6 +617,7 @@ list $results = Future::wait([
 | **Reflection API** (`Reflection*`) | ❌ **Rejected** | Runtime overhead for compile-time tasks; prevents JIT inlining and dead-code stripping | Build-time DI codegen, static `ProgramMetadata`, `#[Route]` attributes | $10\times$ to $50\times$ faster controller dispatch; errors caught during `rhp run build` |
 | **Output Buffering** (`ob_*`) | ❌ **Rejected** | Process-global state leaks across persistent workers; unsafe in async fibers | `Output::capture(fn() => ...)`, direct `Writer` templates, `Response::stream` | Exception-safe scoped captures; impossible to corrupt subsequent requests |
 | **cURL Extension** (`curl_*`) | ❌ **Rejected** | Untypable integer constant API; missing safe timeouts; redundant wrapper layer | Fluent `Http` facade, async `AHTTP`, Rust `.rs` interop for exotic protocols | Strictly-typed builder; secure defaults; native Tokio asynchronous concurrency |
+| **Legacy Serialization** (`serialize()`, `unserialize()`, `__sleep()`, `__wakeup()`) | ❌ **Rejected** | Pervasive RCE gadget chains; open-by-default class loading; slow text format with null-byte mangling | Compact binary format, `__serialize()`/`__unserialize(dict)`, `#[Transient]`, deny-by-default `allowed_classes` | Immune to gadget chains; $3\times$ to $8\times$ smaller payloads; destructor suppressed on failure |
 
 ---
 
@@ -463,9 +634,13 @@ rhp migrate ./app --write
 - **Output Buffering:** Simple `ob_start(); ... $html = ob_get_clean();` blocks are automatically transformed into `Output::capture(function() { ... })`.
 - **cURL Calls:** Standard `curl_init()` and `curl_setopt()` chains configured with common options (`CURLOPT_RETURNTRANSFER`, `CURLOPT_HTTPHEADER`, `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT`, `CURLOPT_USERPWD`) are rewritten into expressive `Http::` facade chains.
 - **Dependency Injection:** Standard constructor injection and container bindings are formatted to leverage RHP's build-time DI generator.
+- **Serialization Hooks:** Legacy `__sleep()` returning property arrays is rewritten to automatic serialization with `#[Transient]` attributes placed on unlisted properties; simple `__wakeup()` logic is moved into `__unserialize(dict $data)`.
 
 ### What `rhp migrate` Flags for Manual Review
 
 - **Unbalanced Buffers:** Dynamic or unbalanced `ob_start()` calls without matching `ob_get_clean()` in the same lexical scope.
 - **Complex `curl_multi` Loops:** Custom non-blocking event loops built with `curl_multi_exec()` and `curl_multi_select()`. These should be refactored into `Http::pool()` or `Future::wait([AHTTP::get(...)])`.
 - **Private Member Reflection:** Instances of `ReflectionProperty::setAccessible(true)` or `ReflectionMethod::invokeArgs()`. These should be refactored to explicit interfaces, public testing helpers, or `App::swap()`.
+- **Insecure `unserialize()` Calls:** Any call to `unserialize()` lacking an explicit `allowed_classes` parameter is flagged as a high-severity security risk and must specify allowed classes or be migrated to typed JSON / binary serialization.
+- **Closure Serialization:** Usages of `Opis\Closure` or `Laravel\SerializableClosure` are flagged to be refactored into named job classes or named callables with typed parameters.
+- **Legacy PHP Format Data:** Calls consuming serialized PHP string data (`O:4:...`) are flagged to use the migration reader `unserialize_php($payload)` during transition or to migrate cache stores to the versioned RHP binary format.

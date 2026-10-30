@@ -157,9 +157,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Unsupported PHP",
     section: "Reference",
-    description: "Detailed overview of unsupported PHP features (Reflection, Output Buffering, cURL), reasons for rejection, modern RHP replacements, and migration guide.",
+    description: "Detailed overview of unsupported PHP features (Reflection, Output Buffering, cURL, Legacy Serialization), reasons for rejection, modern RHP replacements, and migration guide.",
     url: "/docs/reference/unsupported-php",
-    keywords: ["unsupported", "php", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "migration", "replacements", "di codegen", "output::capture", "http facade"]
+    keywords: ["unsupported", "php", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "serialize", "unserialize", "__sleep", "__wakeup", "gadget chains", "serialization", "migration", "replacements", "di codegen", "output::capture", "http facade"]
   },
 
   // Tooling
