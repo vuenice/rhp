@@ -12,6 +12,7 @@
 //!   (`Arr::list`, `Arr::dict`, `Arr::set`, `Arr::hashMap`), closures, objects, and futures.
 
 pub mod arena;
+pub mod carbon;
 pub mod crypto;
 pub mod encoding;
 pub mod engine;

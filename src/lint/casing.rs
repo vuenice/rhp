@@ -207,6 +207,7 @@ pub fn is_builtin_type_or_facade(name: &str) -> bool {
             | "Str"
             | "Crypt"
             | "Html"
+            | "Carbon"
             | "Url"
             | "URL"
             | "File"

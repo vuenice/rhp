@@ -1005,7 +1005,15 @@ impl PhpValue {
             Self::Dict(_) => "Arr::dict".to_string(),
             Self::Set(_) => "Arr::set".to_string(),
             Self::HashMap(_) => "Arr::hashMap".to_string(),
-            Self::Object(obj) => format!("class@{}", obj.borrow().class_name),
+            Self::Object(obj) => {
+                let b = obj.borrow();
+                if b.class_name == "Carbon" {
+                    if let Some(formatted) = b.get_property("formatted") {
+                        return formatted.to_php_string();
+                    }
+                }
+                format!("class@{}", b.class_name)
+            }
             Self::Closure(c) => format!("Closure({})", c.name),
             Self::Future(_) => "Future".to_string(),
             Self::Resource(_) => "Resource".to_string(),

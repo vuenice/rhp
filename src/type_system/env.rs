@@ -688,6 +688,28 @@ pub fn resolve_facade_static_call(
             }
             _ => Ok(RhpType::Mixed),
         },
+        "Carbon" => match method {
+            "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
+            | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
+            | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"
+            | "toDayDateTimeString" | "format" | "diffForHumans" => Ok(RhpType::String),
+            "getTimestamp" | "timestamp" | "getTimestampMs" | "timestampMs"
+            | "year" | "month" | "day" | "hour" | "minute" | "second" | "micro"
+            | "millisecond" | "dayOfWeek" | "dayOfWeekIso" | "dayOfYear"
+            | "weekOfYear" | "quarter" | "daysInMonth" | "age"
+            | "diffInSeconds" | "diffInMinutes" | "diffInHours" | "diffInDays"
+            | "diffInWeeks" | "diffInMonths" | "diffInQuarters" | "diffInYears" => Ok(RhpType::Int),
+            "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast"
+            | "isCurrentYear" | "isCurrentMonth" | "isWeekend" | "isWeekday"
+            | "isMonday" | "isTuesday" | "isWednesday" | "isThursday" | "isFriday"
+            | "isSaturday" | "isSunday" | "isLeapYear" | "isStartOfDay" | "isEndOfDay"
+            | "isSameDay" | "isSameMonth" | "isSameYear" | "isBirthday"
+            | "eq" | "equalTo" | "ne" | "notEqualTo" | "gt" | "greaterThan"
+            | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
+            | "lessThanOrEqualTo" | "between" | "hasTestNow" => Ok(RhpType::Bool),
+            "setTestNow" => Ok(RhpType::Void),
+            _ => Ok(RhpType::Class("Carbon".to_string())),
+        },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 if mapping.rhp_facade != "phpFun" {
@@ -924,6 +946,51 @@ pub fn resolve_builtin_fluent_method(
             "WeakReference" => match method {
                 "get" => Some(RhpType::Nullable(Box::new(RhpType::Mixed))),
                 "isValid" => Some(RhpType::Bool),
+                _ => Some(RhpType::Dynamic),
+            },
+            "Carbon" => match method {
+                "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
+                | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
+                | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"
+                | "toDayDateTimeString" | "format" | "diffForHumans" | "timezoneName"
+                | "getTimezone" | "getTimezoneName" => Some(RhpType::String),
+                "getTimestamp" | "timestamp" | "getTimestampMs" | "timestampMs"
+                | "year" | "month" | "day" | "hour" | "minute" | "second" | "micro"
+                | "millisecond" | "dayOfWeek" | "dayOfWeekIso" | "dayOfYear"
+                | "weekOfYear" | "quarter" | "daysInMonth" | "age"
+                | "diffInSeconds" | "diffInMinutes" | "diffInHours" | "diffInDays"
+                | "diffInWeeks" | "diffInMonths" | "diffInQuarters" | "diffInYears" => Some(RhpType::Int),
+                "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast"
+                | "isCurrentYear" | "isCurrentMonth" | "isWeekend" | "isWeekday"
+                | "isMonday" | "isTuesday" | "isWednesday" | "isThursday" | "isFriday"
+                | "isSaturday" | "isSunday" | "isLeapYear" | "isStartOfDay" | "isEndOfDay"
+                | "isSameDay" | "isSameMonth" | "isSameYear" | "isBirthday"
+                | "eq" | "equalTo" | "ne" | "notEqualTo" | "gt" | "greaterThan"
+                | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
+                | "lessThanOrEqualTo" | "between" => Some(RhpType::Bool),
+                "copy" | "clone" | "addDay" | "addDays" | "subDay" | "subDays"
+                | "addWeek" | "addWeeks" | "subWeek" | "subWeeks"
+                | "addMonth" | "addMonths" | "addMonthsNoOverflow"
+                | "subMonth" | "subMonths" | "subMonthsNoOverflow"
+                | "addQuarter" | "addQuarters" | "subQuarter" | "subQuarters"
+                | "addYear" | "addYears" | "addYearsNoOverflow"
+                | "subYear" | "subYears" | "subYearsNoOverflow"
+                | "addDecade" | "addDecades" | "subDecade" | "subDecades"
+                | "addCentury" | "addCenturies" | "subCentury" | "subCenturies"
+                | "addHour" | "addHours" | "subHour" | "subHours"
+                | "addMinute" | "addMinutes" | "subMinute" | "subMinutes"
+                | "addSecond" | "addSeconds" | "subSecond" | "subSeconds"
+                | "addMilliseconds" | "addMillisecond" | "subMilliseconds" | "subMillisecond"
+                | "addMicroseconds" | "addMicrosecond" | "subMicroseconds" | "subMicrosecond"
+                | "addUnit" | "subUnit" | "startOfDay" | "endOfDay"
+                | "startOfMonth" | "firstOfMonth" | "endOfMonth" | "lastOfMonth"
+                | "startOfYear" | "endOfYear" | "lastOfYear" | "startOfWeek" | "endOfWeek"
+                | "startOfQuarter" | "endOfQuarter" | "startOfHour" | "endOfHour"
+                | "startOfMinute" | "endOfMinute" | "setYear" | "setMonth" | "setDay"
+                | "setHour" | "setMinute" | "setSecond" | "setTime" | "setDate"
+                | "setTimezone" | "next" | "previous" | "min" | "max" => {
+                    Some(RhpType::Class("Carbon".to_string()))
+                }
                 _ => Some(RhpType::Dynamic),
             },
             _ => None,

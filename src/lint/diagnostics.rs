@@ -365,6 +365,14 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::String,
                     },
                     "Html" => RhpType::String,
+                    "Carbon" => match method.name {
+                        "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
+                        | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
+                        | "toFormattedDateString" | "toDayDateTimeString" | "format" | "diffForHumans" => RhpType::String,
+                        "getTimestamp" | "timestamp" | "year" | "month" | "day" | "hour" | "minute" | "second" => RhpType::Int,
+                        "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast" | "isWeekend" | "isWeekday" | "isLeapYear" => RhpType::Bool,
+                        _ => RhpType::Class("Carbon".to_string()),
+                    },
                     "Url" | "URL" => match method.name {
                         "parseUrl" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
                         _ => RhpType::String,

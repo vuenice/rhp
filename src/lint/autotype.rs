@@ -445,6 +445,14 @@ pub fn infer_expression_type_name(
                         _ => Some("string".to_string()),
                     },
                     "Html" => Some("string".to_string()),
+                    "Carbon" => match method.name {
+                        "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
+                        | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
+                        | "toFormattedDateString" | "toDayDateTimeString" | "format" | "diffForHumans" => Some("string".to_string()),
+                        "getTimestamp" | "timestamp" | "year" | "month" | "day" | "hour" | "minute" | "second" => Some("int".to_string()),
+                        "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast" | "isWeekend" | "isWeekday" | "isLeapYear" => Some("bool".to_string()),
+                        _ => Some("Carbon".to_string()),
+                    },
                     "Url" | "URL" => match method.name {
                         "parseUrl" => Some("dict".to_string()),
                         _ => Some("string".to_string()),

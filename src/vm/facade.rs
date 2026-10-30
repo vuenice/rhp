@@ -332,6 +332,7 @@ pub fn dispatch_facade_call(
         "Weak" => dispatch_weak(method, args),
         "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
         "Reflect" => dispatch_reflect(method, args),
+        "Carbon" => dispatch_carbon(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -3349,10 +3350,18 @@ fn dispatch_reflect(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 // =========================================================================
+// Carbon Facade
+// =========================================================================
+
+pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
+    crate::vm::carbon::dispatch_carbon(method, args)
+}
+
+// =========================================================================
 // Helpers
 // =========================================================================
 
-fn get_arg_str(args: &[PhpValue], index: usize, callable: &str) -> Result<String, RuntimeErrorKind> {
+pub(crate) fn get_arg_str(args: &[PhpValue], index: usize, callable: &str) -> Result<String, RuntimeErrorKind> {
     args.get(index)
         .map(|v| v.to_php_string())
         .ok_or_else(|| RuntimeErrorKind::TooFewArguments {
@@ -3758,6 +3767,12 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
         }
         PhpValue::Object(o) => {
             let obj = o.borrow();
+            if obj.class_name == "Carbon" {
+                if let Some(iso) = obj.get_property("iso") {
+                    let escaped = iso.to_php_string().replace('\\', "\\\\").replace('"', "\\\"");
+                    return format!("\"{}\"", escaped);
+                }
+            }
             let mut entries = Vec::new();
             for (k, v) in obj.properties.iter() {
                 let escaped_k = k.replace('\\', "\\\\").replace('"', "\\\"");

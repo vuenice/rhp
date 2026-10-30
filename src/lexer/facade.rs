@@ -195,6 +195,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Reflect",
         "Static reflection and inspection facade (classExists, functionExists)",
     ),
+    FacadeInfo::native(
+        "Carbon",
+        "Static date and time manipulation facade inspired by Laravel Carbon (now, parse, today, tomorrow, yesterday, create, toDateTimeString, toDateString, addDay, subDay, lastOfMonth, diffForHumans)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
@@ -812,6 +816,7 @@ impl FacadeRegistry {
             "crypt" => "Crypt",
             "html" => "Html",
             "url" => "Url",
+            "carbon" => "Carbon",
             _ => return false,
         };
         self.get_facade(normalized)

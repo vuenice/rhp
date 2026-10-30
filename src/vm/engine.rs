@@ -2173,6 +2173,18 @@ impl VM {
                     };
                     if c_name == "class" {
                         self.registers[base_reg + dst.index()] = PhpValue::string(cls_name);
+                    } else if cls_name == "Carbon" || cls_name == "\\Carbon" {
+                        if let Some(val) = crate::vm::carbon::get_carbon_constant(&c_name) {
+                            self.registers[base_reg + dst.index()] = val;
+                        } else {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedClassConstant {
+                                    class: cls_name,
+                                    constant: c_name,
+                                },
+                                span,
+                            ));
+                        }
                     } else if let Some(val) = self.class_constants.get(&(cls_name.clone(), c_name.clone())) {
                         self.registers[base_reg + dst.index()] = val.clone();
                     } else {
@@ -5798,7 +5810,17 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         if method == "toJson" {
+            if class_name == "Carbon" {
+                if let PhpValue::Object(rc) = receiver {
+                    if let Some(iso) = rc.borrow().get_property("iso") {
+                        return Ok(PhpValue::string(format!("\"{}\"", iso.to_php_string())));
+                    }
+                }
+            }
             return Ok(PhpValue::string(php_value_to_json(receiver)));
+        }
+        if class_name == "Carbon" {
+            return crate::vm::carbon::exec_carbon_instance_method(receiver, method, args, span);
         }
         match (class_name, method) {
             ("WeakReference", "get") => {
