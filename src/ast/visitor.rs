@@ -296,6 +296,31 @@ pub fn walk_expr<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, expr: &Expr<'s
                 visitor.visit_expr(&a.value);
             }
         }
+        ExprKind::AnonymousClass { class_decl, args } => {
+            for member in &class_decl.members {
+                match &member.kind {
+                    ClassMemberKind::Property(p) => {
+                        if let Some(e) = &p.default {
+                            visitor.visit_expr(e);
+                        }
+                    }
+                    ClassMemberKind::Method(m) => {
+                        if let Some(body) = &m.function.body {
+                            for s in body {
+                                visitor.visit_stmt(s);
+                            }
+                        }
+                    }
+                    ClassMemberKind::Constant(co) => {
+                        visitor.visit_expr(&co.value);
+                    }
+                    ClassMemberKind::TraitUse(_) => {}
+                }
+            }
+            for a in args {
+                visitor.visit_expr(&a.value);
+            }
+        }
         ExprKind::Clone(e) | ExprKind::Await(e) | ExprKind::Grouping(e) => {
             visitor.visit_expr(e);
         }

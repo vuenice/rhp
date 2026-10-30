@@ -268,6 +268,283 @@ impl TypeChecker {
                 _ => {}
             }
         }
+        self.collect_anonymous_classes(stmts)?;
+        Ok(())
+    }
+
+    fn collect_anonymous_classes(&mut self, stmts: &[Stmt<'_>]) -> Result<(), TypeError> {
+        for stmt in stmts {
+            self.collect_anon_classes_from_stmt(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn collect_anon_classes_from_stmt(&mut self, stmt: &Stmt<'_>) -> Result<(), TypeError> {
+        match &stmt.kind {
+            StmtKind::Expr(e) | StmtKind::Return(Some(e)) | StmtKind::Throw(e) => {
+                self.collect_anon_classes_from_expr(e)?;
+            }
+            StmtKind::Echo(exprs) => {
+                for e in exprs {
+                    self.collect_anon_classes_from_expr(e)?;
+                }
+            }
+            StmtKind::VarDecl { init, .. } => {
+                if let Some(e) = init {
+                    self.collect_anon_classes_from_expr(e)?;
+                }
+            }
+            StmtKind::Block(stmts) => {
+                for s in stmts {
+                    self.collect_anon_classes_from_stmt(s)?;
+                }
+            }
+            StmtKind::If {
+                condition,
+                then_branch,
+                elseif_branches,
+                else_branch,
+            } => {
+                self.collect_anon_classes_from_expr(condition)?;
+                self.collect_anon_classes_from_stmt(then_branch)?;
+                for branch in elseif_branches {
+                    self.collect_anon_classes_from_expr(&branch.condition)?;
+                    self.collect_anon_classes_from_stmt(&branch.body)?;
+                }
+                if let Some(eb) = else_branch {
+                    self.collect_anon_classes_from_stmt(eb)?;
+                }
+            }
+            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+                self.collect_anon_classes_from_expr(condition)?;
+                self.collect_anon_classes_from_stmt(body)?;
+            }
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                for e in init {
+                    self.collect_anon_classes_from_expr(e)?;
+                }
+                for e in condition {
+                    self.collect_anon_classes_from_expr(e)?;
+                }
+                for e in update {
+                    self.collect_anon_classes_from_expr(e)?;
+                }
+                self.collect_anon_classes_from_stmt(body)?;
+            }
+            StmtKind::Foreach { expr, body, .. } => {
+                self.collect_anon_classes_from_expr(expr)?;
+                self.collect_anon_classes_from_stmt(body)?;
+            }
+            StmtKind::Switch { condition, cases } => {
+                self.collect_anon_classes_from_expr(condition)?;
+                for c in cases {
+                    if let Some(v) = &c.value {
+                        self.collect_anon_classes_from_expr(v)?;
+                    }
+                    for s in &c.body {
+                        self.collect_anon_classes_from_stmt(s)?;
+                    }
+                }
+            }
+            StmtKind::TryCatch {
+                try_block,
+                catches,
+                finally_block,
+            } => {
+                for s in try_block {
+                    self.collect_anon_classes_from_stmt(s)?;
+                }
+                for c in catches {
+                    for s in &c.body {
+                        self.collect_anon_classes_from_stmt(s)?;
+                    }
+                }
+                if let Some(fb) = finally_block {
+                    for s in fb {
+                        self.collect_anon_classes_from_stmt(s)?;
+                    }
+                }
+            }
+            StmtKind::FunctionDecl(f) => {
+                if let Some(body) = &f.body {
+                    for s in body {
+                        self.collect_anon_classes_from_stmt(s)?;
+                    }
+                }
+            }
+            StmtKind::ClassDecl(cls) => {
+                for member in &cls.members {
+                    match &member.kind {
+                        ClassMemberKind::Property(p) => {
+                            if let Some(e) = &p.default {
+                                self.collect_anon_classes_from_expr(e)?;
+                            }
+                        }
+                        ClassMemberKind::Method(m) => {
+                            if let Some(body) = &m.function.body {
+                                for s in body {
+                                    self.collect_anon_classes_from_stmt(s)?;
+                                }
+                            }
+                        }
+                        ClassMemberKind::Constant(c) => {
+                            self.collect_anon_classes_from_expr(&c.value)?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            StmtKind::Namespace { body, .. } => {
+                if let Some(inner) = body {
+                    for s in inner {
+                        self.collect_anon_classes_from_stmt(s)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn collect_anon_classes_from_expr(&mut self, expr: &Expr<'_>) -> Result<(), TypeError> {
+        match &expr.kind {
+            ExprKind::AnonymousClass { class_decl, args } => {
+                let info = self.build_class_info(class_decl)?;
+                let class_name = class_decl.name.name.to_string();
+                self.result
+                    .hierarchy
+                    .classes
+                    .insert(class_name, info);
+                for member in &class_decl.members {
+                    match &member.kind {
+                        ClassMemberKind::Property(p) => {
+                            if let Some(e) = &p.default {
+                                self.collect_anon_classes_from_expr(e)?;
+                            }
+                        }
+                        ClassMemberKind::Method(m) => {
+                            if let Some(body) = &m.function.body {
+                                for s in body {
+                                    self.collect_anon_classes_from_stmt(s)?;
+                                }
+                            }
+                        }
+                        ClassMemberKind::Constant(c) => {
+                            self.collect_anon_classes_from_expr(&c.value)?;
+                        }
+                        _ => {}
+                    }
+                }
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
+            ExprKind::Unary { expr, .. }
+            | ExprKind::Clone(expr)
+            | ExprKind::Await(expr)
+            | ExprKind::Grouping(expr) => {
+                self.collect_anon_classes_from_expr(expr)?;
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Assign {
+                target: left,
+                value: right,
+                ..
+            } => {
+                self.collect_anon_classes_from_expr(left)?;
+                self.collect_anon_classes_from_expr(right)?;
+            }
+            ExprKind::Ternary {
+                condition,
+                if_true,
+                if_false,
+            } => {
+                self.collect_anon_classes_from_expr(condition)?;
+                if let Some(t) = if_true {
+                    self.collect_anon_classes_from_expr(t)?;
+                }
+                self.collect_anon_classes_from_expr(if_false)?;
+            }
+            ExprKind::Call { callee, args } => {
+                self.collect_anon_classes_from_expr(callee)?;
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.collect_anon_classes_from_expr(object)?;
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
+            ExprKind::StaticCall { target, args, .. } => {
+                self.collect_anon_classes_from_expr(target)?;
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
+            ExprKind::PropertyFetch { object, .. } => {
+                self.collect_anon_classes_from_expr(object)?;
+            }
+            ExprKind::Array(elements) => {
+                for el in elements {
+                    if let Some(k) = &el.key {
+                        self.collect_anon_classes_from_expr(k)?;
+                    }
+                    self.collect_anon_classes_from_expr(&el.value)?;
+                }
+            }
+            ExprKind::ArrayIndex { array, index } => {
+                self.collect_anon_classes_from_expr(array)?;
+                if let Some(i) = index {
+                    self.collect_anon_classes_from_expr(i)?;
+                }
+            }
+            ExprKind::ArrowFunction { body, .. } => {
+                self.collect_anon_classes_from_expr(body)?;
+            }
+            ExprKind::Closure { body, .. } => {
+                for s in body {
+                    self.collect_anon_classes_from_stmt(s)?;
+                }
+            }
+            ExprKind::Match { condition, arms } => {
+                self.collect_anon_classes_from_expr(condition)?;
+                for arm in arms {
+                    for pat in &arm.patterns {
+                        self.collect_anon_classes_from_expr(pat)?;
+                    }
+                    self.collect_anon_classes_from_expr(&arm.body)?;
+                }
+            }
+            ExprKind::New { class, args } => {
+                self.collect_anon_classes_from_expr(class)?;
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
+            ExprKind::Instanceof { expr, class } => {
+                self.collect_anon_classes_from_expr(expr)?;
+                self.collect_anon_classes_from_expr(class)?;
+            }
+            ExprKind::Cast { expr, .. } => {
+                self.collect_anon_classes_from_expr(expr)?;
+            }
+            ExprKind::Yield { key, value, .. } => {
+                if let Some(k) = key {
+                    self.collect_anon_classes_from_expr(k)?;
+                }
+                if let Some(v) = value {
+                    self.collect_anon_classes_from_expr(v)?;
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -2401,6 +2678,26 @@ impl TypeChecker {
                         }
                     }
                 }
+
+                let arg_types = self.infer_arguments(args, env, ctx, None)?;
+
+                if let Some(ctor_sig) = self
+                    .result
+                    .hierarchy
+                    .lookup_method(&class_name, "__construct")
+                    .cloned()
+                {
+                    let display = format!("{}::__construct", class_name);
+                    self.verify_call_arguments(&display, &ctor_sig, args, &arg_types, expr.span)?;
+                }
+
+                RhpType::Class(class_name)
+            }
+
+            ExprKind::AnonymousClass { class_decl, args } => {
+                let class_name = class_decl.name.name.to_string();
+
+                self.check_class_bodies(class_decl)?;
 
                 let arg_types = self.infer_arguments(args, env, ctx, None)?;
 

@@ -521,6 +521,16 @@ pub fn infer_expression_type_name(
             }
         }
 
+        ExprKind::AnonymousClass { class_decl, .. } => {
+            if let Some(ref ext) = class_decl.extends {
+                Some(ext.name.to_string())
+            } else if let Some(iface) = class_decl.implements.first() {
+                Some(iface.name.to_string())
+            } else {
+                Some("object".to_string())
+            }
+        }
+
         ExprKind::Variable(var) => known_vars.get(var.name).cloned(),
 
         ExprKind::Grouping(inner) => infer_expression_type_name(inner, type_info, known_vars),

@@ -1,5 +1,5 @@
 use crate::ast::{
-    stmt::{Param, Stmt},
+    stmt::{ClassDecl, Param, Stmt},
     types::{CastType, Ident, TypeHint, Variable},
 };
 use crate::lexer::span::Span;
@@ -178,6 +178,12 @@ pub enum ExprKind<'s> {
     /// Object instantiation (`new User($name)`).
     New {
         class: Box<Expr<'s>>,
+        args: Vec<Argument<'s>>,
+    },
+
+    /// Anonymous class expression (`new class($args) extends BaseClass implements Interface { ... }`).
+    AnonymousClass {
+        class_decl: Box<ClassDecl<'s>>,
         args: Vec<Argument<'s>>,
     },
 

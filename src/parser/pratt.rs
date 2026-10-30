@@ -3,8 +3,8 @@ use crate::ast::{
         Argument, ArrayElement, AssignOp, BinaryOp, ClosureUse, Expr, ExprKind, Literal, MatchArm,
         StringPart, UnaryOp,
     },
-    stmt::{Param, Stmt},
-    types::{CastType, Ident, Variable},
+    stmt::{ClassDecl, Param, Stmt},
+    types::{CastType, ClassModifiers, Ident, Variable},
 };
 use crate::lexer::{
     facade::{
@@ -862,9 +862,94 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            // New expression `new User($name)` or `new $className($name)`
+            // New expression `new User($name)` or `new $className($name)` or `new class ...`
             Token::New => {
                 let start_span = spanned.span;
+
+                let is_anon_class = match self.peek().map(|t| &t.token) {
+                    Some(Token::Class) => true,
+                    Some(Token::Readonly) => {
+                        matches!(self.peek_nth(1).map(|t| &t.token), Some(Token::Class))
+                    }
+                    _ => false,
+                };
+
+                if is_anon_class {
+                    let mut is_readonly = false;
+                    if self.matches(&Token::Readonly) {
+                        is_readonly = true;
+                    }
+                    let class_tok = self.expect(Token::Class)?;
+
+                    let mut args = Vec::new();
+                    if self.matches(&Token::OpenParen) {
+                        args = self.parse_call_arguments()?;
+                        self.expect(Token::CloseParen)?;
+                    }
+
+                    let extends = if self.matches(&Token::Extends) {
+                        let parent = self.expect_qualified_ident()?;
+                        let check_name = parent.name.strip_prefix('\\').unwrap_or(parent.name);
+                        if is_static_facade(check_name) || is_static_only(check_name) {
+                            return Err(ParseError::new(
+                                ParseErrorKind::StaticFacadeInheritanceForbidden {
+                                    class_name: parent.name.to_string(),
+                                },
+                                parent.span,
+                            ));
+                        }
+                        Some(parent)
+                    } else {
+                        None
+                    };
+
+                    let implements = if self.matches(&Token::Implements) {
+                        self.separated_by(|s| s.expect_qualified_ident(), Token::Comma, &Token::OpenBrace)?
+                    } else {
+                        Vec::new()
+                    };
+
+                    let anon_name = format!("class@anonymous${}_{}", start_span.file_id, start_span.start);
+                    let anon_str: &'s str = Box::leak(anon_name.into_boxed_str());
+                    let class_ident = Ident::new(anon_str, class_tok.span);
+
+                    self.expect(Token::OpenBrace)?;
+                    let members = self.with_class_scope(anon_str.to_string(), |stream| {
+                        let mut members = Vec::new();
+                        while !stream.check(&Token::CloseBrace) && !stream.is_eof() {
+                            stream.skip_doc_comments();
+                            if stream.check(&Token::CloseBrace) {
+                                break;
+                            }
+                            members.push(stream.parse_class_member()?);
+                        }
+                        Ok(members)
+                    })?;
+                    let close_brace = self.expect(Token::CloseBrace)?;
+                    let span = start_span.merge(close_brace.span);
+
+                    let class_decl = ClassDecl {
+                        span,
+                        attributes: Vec::new(),
+                        modifiers: ClassModifiers {
+                            is_readonly,
+                            ..Default::default()
+                        },
+                        name: class_ident,
+                        extends,
+                        implements,
+                        members,
+                    };
+
+                    return Ok(Expr::new(
+                        ExprKind::AnonymousClass {
+                            class_decl: Box::new(class_decl),
+                            args,
+                        },
+                        span,
+                    ));
+                }
+
                 let (class_expr, end_target_span) = if matches!(
                     self.peek().map(|t| &t.token),
                     Some(Token::Variable(_))

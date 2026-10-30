@@ -2027,6 +2027,28 @@ impl<'a> IrLowerer<'a> {
                 Ok(dst)
             }
 
+            ExprKind::AnonymousClass { class_decl, args } => {
+                let dst = match target_reg {
+                    Some(r) => r,
+                    None => b.alloc_temp(inferred_ty, expr.span)?,
+                };
+                let class_name = class_decl.name.name.to_string();
+                if !self.module.class_index.contains_key(&class_name) {
+                    self.compile_class_decl(class_decl)?;
+                }
+                let arg_count = self.evaluate_and_push_args(b, args)?;
+                let class_const = b.intern_string(&class_name);
+                b.emit(
+                    OpCode::NewObject {
+                        dst,
+                        class: class_const,
+                        arg_count,
+                    },
+                    expr.span,
+                );
+                Ok(dst)
+            }
+
             ExprKind::Clone(inner) => {
                 let src = self.lower_expr(b, inner, None)?;
                 let dst = match target_reg {
@@ -3954,6 +3976,11 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
         }
         ExprKind::New { class, args } => {
             collect_expr_variables(class, out);
+            for arg in args {
+                collect_expr_variables(&arg.value, out);
+            }
+        }
+        ExprKind::AnonymousClass { args, .. } => {
             for arg in args {
                 collect_expr_variables(&arg.value, out);
             }

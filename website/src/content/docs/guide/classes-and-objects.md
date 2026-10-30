@@ -91,6 +91,146 @@ class AuditLog implements Loggable {
 
 ---
 
+## Anonymous Classes
+
+RHP fully supports anonymous classes via the `new class` expression syntax. Anonymous classes are ideal for lightweight, one-off objects such as mock services in unit tests, local strategy objects, disposable observers, and custom implementations of interfaces or abstract classes without creating a separate named file.
+
+### Basic Syntax
+
+An anonymous class is defined and instantiated in a single expression:
+
+```php
+$greeter = new class {
+    public function greet(string $name): string {
+        return "Hello, " . $name . "!";
+    }
+};
+
+print($greeter->greet("World")); // "Hello, World!"
+```
+
+### Constructor Arguments & Properties
+
+Anonymous classes can accept constructor arguments directly inside parentheses following the `class` keyword:
+
+```php
+$user = new class("Alice", 30) {
+    public string $name;
+    public int $age;
+
+    public function __construct(string $name, int $age) {
+        $this->name = $name;
+        $this->age = $age;
+    }
+
+    public function describe(): string {
+        return $this->name . " is " . string($this->age);
+    }
+};
+
+print($user->describe()); // "Alice is 30"
+```
+
+### Inheritance (`extends`) and Interfaces (`implements`)
+
+Anonymous classes participate fully in RHP's nominal type system. They can extend parent classes, implement interfaces, and satisfy `instanceof` checks:
+
+```php
+interface LoggerInterface {
+    public function log(string $msg): void;
+}
+
+class BaseService {
+    public function status(): string {
+        return "online";
+    }
+}
+
+$mockService = new class extends BaseService implements LoggerInterface {
+    public function log(string $msg): void {
+        Log::info("[Mock] " . $msg);
+    }
+};
+
+$isBase = $mockService instanceof BaseService;       // true
+$isLogger = $mockService instanceof LoggerInterface; // true
+```
+
+### Parent Constructor Forwarding
+
+When extending a parent class, constructor arguments passed to `new class(...)` are forwarded to the parent constructor if the anonymous class does not declare its own `__construct`:
+
+```php
+class Vehicle {
+    public string $type;
+    public function __construct(string $type) {
+        $this->type = $type;
+    }
+}
+
+$car = new class("Sedan") extends Vehicle {
+    public function getType(): string {
+        return $this->type;
+    }
+};
+
+print($car->getType()); // "Sedan"
+```
+
+### Direct Chained Invocations
+
+You can instantiate and call an anonymous class method directly in an expression by wrapping it in parentheses:
+
+```php
+$result = (new class {
+    public function calculate(): int {
+        return 21 * 2;
+    }
+})->calculate(); // 42
+```
+
+### Composing Traits
+
+Anonymous classes can incorporate traits using standard `use` statements:
+
+```php
+trait Formatter {
+    public function formatText(string $raw): string {
+        return trim(strtoupper($raw));
+    }
+}
+
+$service = new class {
+    use Formatter;
+
+    public function run(string $input): string {
+        return $this->formatText($input);
+    }
+};
+```
+
+### Readonly Anonymous Classes
+
+RHP supports the `readonly` modifier on anonymous classes:
+
+```php
+$config = new readonly class("https://api.example.com", 30) {
+    public string $endpoint;
+    public int $timeout;
+
+    public function __construct(string $endpoint, int $timeout) {
+        $this->endpoint = $endpoint;
+        $this->timeout = $timeout;
+    }
+};
+```
+
+### Internal Class Naming & Determinism
+
+Under the hood, RHP synthesizes deterministic internal class names based on source file IDs and source byte offsets (e.g. `class@anonymous$0_142`). Calling `get_class($anon)` or using RHP's reflection returns this identifier. Because names are deterministically generated at compile time, anonymous class instances remain consistent across RHP's multi-process worker pool (`Arc<EngineState>`).
+
+---
+
 ## Invokable Objects (`__invoke`)
 
 Classes in RHP can implement the magic `__invoke()` method to allow instances of the class to be directly called as functions (`$obj(...)`). This pattern is ubiquitous in modern PHP frameworks such as Laravel for single-action controllers, action services, and invokable commands.

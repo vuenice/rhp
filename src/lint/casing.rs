@@ -675,6 +675,9 @@ impl<'a> CasingCollector<'a> {
 
     fn handle_class_decl(&mut self, cls: &ClassDecl<'_>) {
         let name = cls.name.name;
+        if name.starts_with("class@anonymous") {
+            return;
+        }
         let target = to_pascal_case(name);
         if name != target {
             self.edits.push((cls.name.span, target.clone()));
@@ -1099,6 +1102,12 @@ impl<'a> CasingCollector<'a> {
                 } else {
                     self.visit_expr(class);
                 }
+                for a in args {
+                    self.visit_expr(&a.value);
+                }
+            }
+            ExprKind::AnonymousClass { class_decl, args } => {
+                self.handle_class_decl(class_decl);
                 for a in args {
                     self.visit_expr(&a.value);
                 }

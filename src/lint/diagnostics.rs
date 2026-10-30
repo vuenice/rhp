@@ -434,6 +434,9 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                 RhpType::Object
             }
         }
+        ExprKind::AnonymousClass { class_decl, .. } => {
+            RhpType::Class(class_decl.name.name.to_string())
+        }
         ExprKind::Grouping(inner) => infer_expr_rhp_type(inner),
         _ => RhpType::Dynamic,
     }
