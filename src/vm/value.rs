@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 
-use crate::ir::opcode::FunctionId;
+use crate::ir::opcode::{ClassId, FunctionId};
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::parent_process::FrozenValue;
 
@@ -388,9 +388,12 @@ impl Default for Shape {
     }
 }
 
+use crate::vm::exception::Throwable;
+
 /// Runtime object representation with Shape-based slot indexing (Hidden Classes).
 #[derive(Debug, Clone)]
 pub struct VmObject {
+    pub class_id: Option<ClassId>,
     pub class_name: String,
     pub shape: Rc<RefCell<Shape>>,
     pub slots: Vec<PhpValue>,
@@ -398,30 +401,74 @@ pub struct VmObject {
     pub readonly_props: HashMap<String, bool>,
     /// Optional weak reference target for breaking circular reference cycles.
     pub weak_target: Option<std::rc::Weak<RefCell<VmObject>>>,
+    /// Optional backing Throwable structure for PHP exception hierarchy instances.
+    pub throwable: Option<Box<Throwable>>,
+    /// Class from which this receiver was forwarded via __forward(), for typo diagnostics.
+    pub forwarded_from: Option<String>,
 }
 
 impl VmObject {
     pub fn new(class_name: impl Into<String>) -> Self {
         Self {
+            class_id: None,
             class_name: class_name.into(),
             shape: Rc::new(RefCell::new(Shape::new())),
             slots: Vec::new(),
             properties: HashMap::new(),
             readonly_props: HashMap::new(),
             weak_target: None,
+            throwable: None,
+            forwarded_from: None,
+        }
+    }
+
+    pub fn with_class_id(class_id: ClassId, class_name: impl Into<String>) -> Self {
+        Self {
+            class_id: Some(class_id),
+            class_name: class_name.into(),
+            shape: Rc::new(RefCell::new(Shape::new())),
+            slots: Vec::new(),
+            properties: HashMap::new(),
+            readonly_props: HashMap::new(),
+            weak_target: None,
+            throwable: None,
+            forwarded_from: None,
         }
     }
 
     /// Construct a weak reference object wrapper (`Weak::to($parent)`).
     pub fn weak_reference(target: &Rc<RefCell<VmObject>>) -> Self {
         Self {
+            class_id: None,
             class_name: "WeakReference".to_string(),
             shape: Rc::new(RefCell::new(Shape::new())),
             slots: Vec::new(),
             properties: HashMap::new(),
             readonly_props: HashMap::new(),
             weak_target: Some(Rc::downgrade(target)),
+            throwable: None,
+            forwarded_from: None,
         }
+    }
+
+    #[inline]
+    pub fn is_throwable(&self) -> bool {
+        self.throwable.is_some()
+    }
+
+    #[inline]
+    pub fn as_throwable(&self) -> Option<&Throwable> {
+        self.throwable.as_deref()
+    }
+
+    #[inline]
+    pub fn as_throwable_mut(&mut self) -> Option<&mut Throwable> {
+        self.throwable.as_deref_mut()
+    }
+
+    #[inline]
+    pub fn set_throwable(&mut self, t: Throwable) {
+        self.throwable = Some(Box::new(t));
     }
 
     #[inline]
@@ -1007,6 +1054,9 @@ impl PhpValue {
             Self::HashMap(_) => "Arr::hashMap".to_string(),
             Self::Object(obj) => {
                 let b = obj.borrow();
+                if let Some(ref t) = b.throwable {
+                    return t.to_string_representation(&b.class_name);
+                }
                 if b.class_name == "Carbon" {
                     if let Some(formatted) = b.get_property("formatted") {
                         return formatted.to_php_string();

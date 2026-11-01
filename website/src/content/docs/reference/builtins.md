@@ -46,6 +46,7 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | :--- | :--- | :--- |
 | `array_merge($a, $b)` | `phpFun::array_merge($a, $b)` | `Arr::merge($a, $b)` |
 | `strlen($str)` | `phpFun::strlen($str)` | `Str::byteLength($str)` |
+| `strpos($h, $n, $off)` | `phpFun::strpos($h, $n, $off)` | `Str::find($h, $n, $off)` |
 | `implode($glue, $arr)` | `phpFun::implode($glue, $arr)` | `Arr::implode($glue, $arr)` |
 | `file_get_contents($path)` | `phpFun::file_get_contents($path)` | `File::read($path)` |
 | `file_put_contents($path, $data)` | `phpFun::file_put_contents($path, $data)` | `File::write($path, $data)` |

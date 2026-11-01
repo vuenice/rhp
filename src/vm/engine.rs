@@ -19,6 +19,9 @@ use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::arena::{RequestArena, RequestDropStats};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
+use crate::vm::exception::{
+    is_builtin_throwable, is_throwable_subtype, Frame, RawFrame, Throwable,
+};
 use crate::vm::facade::{
     arr_get_dot, arr_has_dot, dispatch_facade_call, extract_array_elements, extract_dict_elements,
     extract_dict_map, flatten_elements, get_runtime_closure_macro, php_value_to_json,
@@ -100,6 +103,8 @@ pub struct CallFrame {
     pub num_registers: usize,
     /// Destination register in the caller's frame where the return value should be stored.
     pub caller_dst: Option<usize>,
+    /// Late-static-bound calling class for static calls and static:: resolution.
+    pub called_class: Option<String>,
     /// Stack of active `try` handler IDs entered in this frame (`EnterTry` / `LeaveTry`).
     pub active_try_handlers: Vec<u16>,
     /// Per-frame iterator table keyed by `iter_reg.index()`.
@@ -155,6 +160,12 @@ pub struct VM {
     pub arena: RequestArena,
     /// IoC Dependency Injection container with compiler-generated factories.
     pub container: crate::metadata::Container,
+    /// Primary file path of the executing source script.
+    pub file_path: Option<String>,
+    /// Table of source file paths indexed by file_id for stack traces.
+    pub source_files: HashMap<usize, String>,
+    /// When true, function arguments are not captured into exception stack frames (zend.exception_ignore_args).
+    pub exception_ignore_args: bool,
 }
 
 impl VM {
@@ -169,6 +180,8 @@ impl VM {
         };
         let mut container = crate::metadata::Container::new();
         let _ = container.auto_wire(&module.metadata);
+        let file_path = module.file_path.clone();
+        let source_files = module.source_files.clone();
         Self {
             module,
             jit_enabled,
@@ -187,6 +200,246 @@ impl VM {
             is_parent_process: false,
             arena: RequestArena::new(),
             container,
+            file_path,
+            source_files,
+            exception_ignore_args: true,
+        }
+    }
+
+    /// Attach a source file path to this VM instance for stack trace and __FILE__ resolution.
+    pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
+        let p = path.into();
+        self.file_path = Some(p.clone());
+        self.source_files.insert(0, p);
+        self
+    }
+
+    /// Register a source file path by its file_id for multi-file stack trace resolution.
+    pub fn with_source_file(mut self, file_id: usize, path: impl Into<String>) -> Self {
+        self.source_files.insert(file_id, path.into());
+        self
+    }
+
+    /// Configure whether function arguments are ignored in exception stack traces (zend.exception_ignore_args).
+    pub fn with_exception_ignore_args(mut self, ignore: bool) -> Self {
+        self.exception_ignore_args = ignore;
+        self
+    }
+
+    /// Resolve a file name from file_id for stack trace frames.
+    pub fn resolve_source_file(&self, file_id: usize) -> String {
+        if let Some(path) = self.source_files.get(&file_id) {
+            return path.clone();
+        }
+        if let Some(ref path) = self.file_path {
+            return path.clone();
+        }
+        if let Some(ref path) = self.module.file_path {
+            return path.clone();
+        }
+        if file_id == 0 {
+            String::new()
+        } else {
+            format!("file_{}.rhp", file_id)
+        }
+    }
+
+    /// Capture cheap, unsymbolicated frame descriptors from the current VM call stack.
+    /// Stores instruction pointers and function handles without reading span tables or interned strings.
+    fn capture_raw_trace(&self) -> Vec<RawFrame> {
+        let n = self.frames.len();
+        if n <= 1 {
+            return Vec::new();
+        }
+        let mut raw = Vec::with_capacity(n - 1);
+        for i in (1..n).rev() {
+            let callee_frame = &self.frames[i];
+            let caller_frame = &self.frames[i - 1];
+            let callee_func_id = callee_frame.func_id;
+            let caller_func_id = caller_frame.func_id;
+            let caller_ip = caller_frame.ip.saturating_sub(1);
+            let caller_span = self
+                .chunk_for_func(caller_func_id)
+                .span_at(caller_ip)
+                .unwrap_or_default();
+
+            let (class_name, is_static) = if let Some(fid) = callee_func_id {
+                if let Some(f) = self.module.get_function(fid) {
+                    (f.enclosing_class.clone(), f.is_static)
+                } else {
+                    (None, false)
+                }
+            } else {
+                (None, false)
+            };
+
+            let args = if !self.exception_ignore_args {
+                if let Some(fid) = callee_func_id {
+                    if let Some(f) = self.module.get_function(fid) {
+                        f.params
+                            .iter()
+                            .filter_map(|p| {
+                                let idx = callee_frame.base_reg + p.reg.index();
+                                if idx < self.registers.len() {
+                                    Some(self.registers[idx].clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            raw.push(RawFrame {
+                callee_func_id,
+                function_name: callee_frame.function_name.clone(),
+                class_name,
+                is_static,
+                caller_func_id,
+                caller_ip,
+                caller_span,
+                args,
+            });
+        }
+        raw
+    }
+
+    /// Symbolicate a lazily-captured raw trace into fully resolved stack [`Frame`]s.
+    /// Called on-demand when `getTrace()` or `getTraceAsString()` is first invoked.
+    pub fn symbolicate_trace(&self, throwable: &mut Throwable) {
+        if throwable.is_symbolicated {
+            return;
+        }
+        let mut frames = Vec::with_capacity(throwable.raw_trace.len());
+        for raw in &throwable.raw_trace {
+            let caller_chunk = self.chunk_for_func(raw.caller_func_id);
+            let span = caller_chunk.span_at(raw.caller_ip).unwrap_or(raw.caller_span);
+            let file = self.resolve_source_file(span.file_id);
+            let line = if span.line > 0 { span.line } else { 1 };
+
+            let function = if let Some(pos) = raw.function_name.rfind("::") {
+                raw.function_name[pos + 2..].to_string()
+            } else {
+                raw.function_name.clone()
+            };
+
+            let frame_type = if raw.class_name.is_some() {
+                Some(if raw.is_static { "::".to_string() } else { "->".to_string() })
+            } else {
+                None
+            };
+
+            frames.push(Frame {
+                file,
+                line,
+                function,
+                class: raw.class_name.clone(),
+                frame_type,
+                args: raw.args.clone(),
+            });
+        }
+        throwable.trace = frames;
+        throwable.is_symbolicated = true;
+    }
+
+    /// Initialize a backing [`Throwable`] for a newly-instantiated Exception or Error object.
+    fn init_throwable_for_object(&self, obj: &mut VmObject, span: Span) {
+        let file = self.resolve_source_file(span.file_id);
+        let line = if span.line > 0 { span.line } else { 1 };
+        let raw_trace = self.capture_raw_trace();
+        let mut throwable = Throwable::new("", 0, file, line);
+        throwable.raw_trace = raw_trace;
+        obj.set_property("message", PhpValue::string(""));
+        obj.set_property("code", PhpValue::Int(0));
+        obj.set_property("file", PhpValue::string(&throwable.file));
+        obj.set_property("line", PhpValue::Int(throwable.line as i32));
+        obj.throwable = Some(Box::new(throwable));
+    }
+
+    fn apply_throwable_args_from_slice(
+        &self,
+        obj: &mut VmObject,
+        class_name: &str,
+        args: &[PhpValue],
+    ) {
+        let mut throwable = match obj.throwable.take() {
+            Some(t) => t,
+            None => return,
+        };
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        if is_throwable_subtype(clean, "ErrorException") {
+            if let Some(msg_arg) = args.first() {
+                throwable.message = msg_arg.to_php_string();
+                obj.set_property("message", PhpValue::string(&throwable.message));
+            }
+            if let Some(code_arg) = args.get(1) {
+                throwable.code = code_arg.to_i64().unwrap_or(0);
+                obj.set_property("code", PhpValue::Int(throwable.code as i32));
+            }
+            if let Some(sev_arg) = args.get(2) {
+                let sev = sev_arg.to_i64().unwrap_or(1) as i32;
+                throwable.severity = Some(sev);
+                obj.set_property("severity", PhpValue::Int(sev));
+            }
+            if let Some(file_arg) = args.get(3) {
+                if !matches!(file_arg, PhpValue::Null) {
+                    throwable.file = file_arg.to_php_string();
+                    obj.set_property("file", PhpValue::string(&throwable.file));
+                }
+            }
+            if let Some(line_arg) = args.get(4) {
+                if !matches!(line_arg, PhpValue::Null) {
+                    throwable.line = line_arg.to_i64().unwrap_or(0) as usize;
+                    obj.set_property("line", PhpValue::Int(throwable.line as i32));
+                }
+            }
+            if let Some(prev_arg) = args.get(5) {
+                if let PhpValue::Object(prev_rc) = prev_arg {
+                    if let Some(ref prev_t) = prev_rc.borrow().throwable {
+                        throwable.previous = Some(prev_t.clone());
+                    }
+                    throwable.previous_obj = Some(prev_arg.clone());
+                    obj.set_property("previous", prev_arg.clone());
+                }
+            }
+        } else {
+            if let Some(msg_arg) = args.first() {
+                throwable.message = msg_arg.to_php_string();
+                obj.set_property("message", PhpValue::string(&throwable.message));
+            }
+            if let Some(code_arg) = args.get(1) {
+                throwable.code = code_arg.to_i64().unwrap_or(0);
+                obj.set_property("code", PhpValue::Int(throwable.code as i32));
+            }
+            if let Some(prev_arg) = args.get(2) {
+                if let PhpValue::Object(prev_rc) = prev_arg {
+                    if let Some(ref prev_t) = prev_rc.borrow().throwable {
+                        throwable.previous = Some(prev_t.clone());
+                    }
+                    throwable.previous_obj = Some(prev_arg.clone());
+                    obj.set_property("previous", prev_arg.clone());
+                }
+            }
+        }
+        obj.throwable = Some(throwable);
+    }
+
+    fn apply_throwable_constructor_args(
+        &mut self,
+        instance: &PhpValue,
+        class_name: &str,
+        staged: &[StagedArg],
+    ) {
+        if let PhpValue::Object(o) = instance {
+            let flat: Vec<PhpValue> = staged.iter().map(|a| a.value.clone()).collect();
+            self.apply_throwable_args_from_slice(&mut o.borrow_mut(), class_name, &flat);
         }
     }
 
@@ -213,6 +466,18 @@ impl VM {
         self.frames.last().and_then(|frame| {
             frame.func_id.and_then(|fid| {
                 self.module.get_function(fid).and_then(|func| func.enclosing_class.clone())
+            })
+        })
+    }
+
+    /// Look up the late-static-bound called class (`static::class` or `get_called_class()`)
+    /// of the current active frame, falling back to enclosing method class.
+    pub fn current_called_class(&self) -> Option<String> {
+        self.frames.last().and_then(|frame| {
+            frame.called_class.clone().or_else(|| {
+                frame.func_id.and_then(|fid| {
+                    self.module.get_function(fid).and_then(|func| func.enclosing_class.clone())
+                })
             })
         })
     }
@@ -316,6 +581,7 @@ impl VM {
             || clean.eq_ignore_ascii_case("Exception")
             || clean.eq_ignore_ascii_case("Error")
             || clean.eq_ignore_ascii_case("Throwable")
+            || is_builtin_throwable(clean)
             || clean.eq_ignore_ascii_case("Closure")
             || clean.eq_ignore_ascii_case("Future")
             || clean.ends_with("Exception")
@@ -372,6 +638,8 @@ impl VM {
             || RESERVED_INTRINSICS
                 .iter()
                 .any(|&i| i.eq_ignore_ascii_case(clean))
+            || clean.eq_ignore_ascii_case("ini_get")
+            || clean.eq_ignore_ascii_case("ini_set")
         {
             return true;
         }
@@ -499,6 +767,7 @@ impl VM {
             base_reg: 0,
             num_registers: main_num_regs,
             caller_dst: None,
+            called_class: None,
             active_try_handlers: Vec::new(),
             iterators: HashMap::new(),
             ref_bindings: Vec::new(),
@@ -987,6 +1256,14 @@ impl VM {
                     let popped = self.frames.pop().unwrap();
                     if popped.base_reg > 0 {
                         self.registers.truncate(popped.base_reg);
+                    }
+
+                    if popped.function_name.ends_with("::__forward") {
+                        if let Some(ref origin) = popped.called_class {
+                            if let PhpValue::Object(ref rc) = ret_val {
+                                rc.borrow_mut().forwarded_from = Some(origin.clone());
+                            }
+                        }
                     }
 
                     if self.frames.len() <= stop_depth {
@@ -1528,6 +1805,42 @@ impl VM {
                             let val = res.map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e.to_string() }, span))?;
                             self.registers[base_reg + dst.index()] = val;
                             continue;
+                        } else {
+                            let app_obj = VmObject::new("Application");
+                            self.registers[base_reg + dst.index()] = PhpValue::object(app_obj);
+                            continue;
+                        }
+                    }
+
+                    let clean_fn = fn_name.strip_prefix('\\').unwrap_or(&fn_name);
+                    if (clean_fn.eq_ignore_ascii_case("ini_get") || clean_fn.eq_ignore_ascii_case("ini_set"))
+                        && !self.module.function_index.contains_key(&fn_name)
+                    {
+                        if clean_fn.eq_ignore_ascii_case("ini_get") {
+                            let key = staged.first().map(|a| a.value.to_php_string()).unwrap_or_default();
+                            let clean_key = key.trim_matches('"').trim_matches('\'');
+                            if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
+                                self.registers[base_reg + dst.index()] =
+                                    PhpValue::string(if self.exception_ignore_args { "1" } else { "0" });
+                            } else {
+                                self.registers[base_reg + dst.index()] = PhpValue::string("");
+                            }
+                            continue;
+                        } else if clean_fn.eq_ignore_ascii_case("ini_set") {
+                            let key = staged.first().map(|a| a.value.to_php_string()).unwrap_or_default();
+                            let val = staged.get(1).map(|a| a.value.to_php_string()).unwrap_or_default();
+                            let clean_key = key.trim_matches('"').trim_matches('\'');
+                            let clean_val = val.trim_matches('"').trim_matches('\'');
+                            if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
+                                let old = if self.exception_ignore_args { "1" } else { "0" };
+                                self.exception_ignore_args =
+                                    clean_val == "1" || clean_val.eq_ignore_ascii_case("true") || clean_val.eq_ignore_ascii_case("on")
+                                    || val == "1" || val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("on");
+                                self.registers[base_reg + dst.index()] = PhpValue::string(old);
+                            } else {
+                                self.registers[base_reg + dst.index()] = PhpValue::string("");
+                            }
+                            continue;
                         }
                     }
 
@@ -1551,6 +1864,7 @@ impl VM {
                         &staged,
                         &[],
                         Some(base_reg + dst.index()),
+                        None,
                         span,
                     )?;
                 }
@@ -1570,6 +1884,7 @@ impl VM {
                                 &staged,
                                 &closure.upvalues,
                                 Some(base_reg + dst.index()),
+                                None,
                                 span,
                             )?;
                         }
@@ -1609,6 +1924,7 @@ impl VM {
                                     &staged,
                                     &[],
                                     Some(base_reg + dst.index()),
+                                    Some(cls_name),
                                     span,
                                 )?;
                             } else {
@@ -1640,6 +1956,7 @@ impl VM {
                                 &staged,
                                 &[],
                                 Some(base_reg + dst.index()),
+                                None,
                                 span,
                             )?;
                         }
@@ -1686,7 +2003,7 @@ impl VM {
                     arg_count,
                 } => {
                     let staged = self.drain_staged_args(arg_count as usize);
-                    let (class_name, method_name) = {
+                    let (mut class_name, method_name) = {
                         let chunk = self.chunk_for_func(func_id);
                         let c = chunk
                             .get_string_constant(class)
@@ -1698,6 +2015,9 @@ impl VM {
                             .to_string();
                         (c, m)
                     };
+                    if class_name == "static" {
+                        class_name = self.current_called_class().unwrap_or(class_name);
+                    }
 
                     // Dynamic Macro registration: `ClassName::macro('name', fn(...) => ...)`
                     if method_name == "macro" {
@@ -1732,26 +2052,172 @@ impl VM {
                         EnumStaticCallResult::NotAnEnumMethod => {}
                     }
 
-                    let target_id = self
-                        .resolve_method_id(&class_name, &method_name)
-                        .ok_or_else(|| {
-                            self.make_error(
-                                RuntimeErrorKind::UndefinedMethod {
-                                    class: class_name.clone(),
-                                    method: method_name.clone(),
-                                },
-                                span,
-                            )
-                        })?;
+                    let is_parent_or_builtin_throwable = if method_name == "__construct" {
+                        if class_name == "parent" {
+                            let this_val = &self.registers[base_reg];
+                            if let PhpValue::Object(o) = this_val {
+                                o.borrow().throwable.is_some() || self.is_class_instance_of(&o.borrow().class_name, "Throwable")
+                            } else {
+                                false
+                            }
+                        } else {
+                            is_builtin_throwable(&class_name)
+                        }
+                    } else {
+                        false
+                    };
 
-                    self.push_compiled_call_frame(
-                        target_id,
-                        None,
-                        &staged,
-                        &[],
-                        Some(base_reg + dst.index()),
-                        span,
-                    )?;
+                    if is_parent_or_builtin_throwable {
+                        let this_val = self.registers[base_reg].clone();
+                        if let PhpValue::Object(_) = this_val {
+                            let _ = self.exec_builtin_object_method(
+                                &class_name,
+                                &this_val,
+                                "__construct",
+                                &flat_args,
+                                span,
+                            )?;
+                            self.registers[base_reg + dst.index()] = PhpValue::Null;
+                            continue;
+                        }
+                    }
+
+                    if let Some(target_id) = self.resolve_method_id(&class_name, &method_name) {
+                        self.push_compiled_call_frame(
+                            target_id,
+                            None,
+                            &staged,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(class_name.clone()),
+                            span,
+                        )?;
+                    } else {
+                        // Lookup order:
+                        // 1. (Checked: real static method was None)
+                        // 2. Instance method via parent:: or self:: if $this is compatible
+                        let mut instance_dispatched = false;
+                        if class_name == "parent" || class_name == "self" {
+                            let this_val = self.registers[base_reg].clone();
+                            if let PhpValue::Object(ref obj_rc) = this_val {
+                                let obj_class = obj_rc.borrow().class_name.clone();
+                                let target_cls = if class_name == "parent" {
+                                    self.module.get_class_by_name(&obj_class).and_then(|c| c.extends.clone())
+                                } else {
+                                    Some(obj_class)
+                                };
+                                if let Some(ref t_cls) = target_cls {
+                                    if let Some(mid) = self.resolve_method_id(t_cls, &method_name) {
+                                        self.push_compiled_call_frame(
+                                            mid,
+                                            Some(this_val),
+                                            &staged,
+                                            &[],
+                                            Some(base_reg + dst.index()),
+                                            Some(t_cls.clone()),
+                                            span,
+                                        )?;
+                                        instance_dispatched = true;
+                                    }
+                                }
+                            }
+                        }
+                        if instance_dispatched {
+                            continue;
+                        }
+
+                        // 3. __forward:
+                        let fwd_mid = self.module.get_class_info_by_name(&class_name)
+                            .and_then(|ci| ci.static_forward)
+                            .or_else(|| self.resolve_method_id(&class_name, "__forward"));
+
+                        if let Some(fwd_id) = fwd_mid {
+                            let recv = self.invoke_compiled_function_sync_with_called_class(
+                                fwd_id,
+                                vec![],
+                                Some(class_name.clone()),
+                                span,
+                            )?;
+                            if let PhpValue::Object(ref rc) = recv {
+                                rc.borrow_mut().forwarded_from = Some(class_name.clone());
+                                let recv_cls = rc.borrow().class_name.clone();
+                                if let Some(target_mid) = self.resolve_method_id(&recv_cls, &method_name) {
+                                    self.push_compiled_call_frame(
+                                        target_mid,
+                                        Some(recv),
+                                        &staged,
+                                        &[],
+                                        Some(base_reg + dst.index()),
+                                        Some(recv_cls),
+                                        span,
+                                    )?;
+                                    continue;
+                                } else {
+                                    match self.exec_builtin_object_method(
+                                        &recv_cls,
+                                        &recv,
+                                        &method_name,
+                                        &flat_args,
+                                        span,
+                                    ) {
+                                        Ok(res) => {
+                                            self.registers[base_reg + dst.index()] = res;
+                                            continue;
+                                        }
+                                        Err(_) => {
+                                            return Err(self.make_error(
+                                                RuntimeErrorKind::UndefinedForwardedMethod {
+                                                    class: recv_cls,
+                                                    method: method_name,
+                                                    origin_class: class_name,
+                                                },
+                                                span,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. __callStatic:
+                        if let Some(call_static_mid) = self.resolve_method_id(&class_name, "__callStatic") {
+                            let call_static_args = vec![
+                                StagedArg {
+                                    value: PhpValue::string(method_name.clone()),
+                                    name: None,
+                                    is_unpack: false,
+                                    is_reference: false,
+                                    caller_reg: None,
+                                },
+                                StagedArg {
+                                    value: PhpValue::list(flat_args),
+                                    name: None,
+                                    is_unpack: false,
+                                    is_reference: false,
+                                    caller_reg: None,
+                                },
+                            ];
+                            self.push_compiled_call_frame(
+                                call_static_mid,
+                                None,
+                                &call_static_args,
+                                &[],
+                                Some(base_reg + dst.index()),
+                                Some(class_name.clone()),
+                                span,
+                            )?;
+                            continue;
+                        }
+
+                        // 5. UndefinedMethod error
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedMethod {
+                                class: class_name.clone(),
+                                method: method_name.clone(),
+                            },
+                            span,
+                        ));
+                    }
                 }
 
                 OpCode::MethodCall {
@@ -1807,6 +2273,30 @@ impl VM {
                                     }
                                 }
                             }
+                            let is_throwable_final_method = match method_name.as_str() {
+                                "getFile" | "getLine" | "getTrace" | "getPrevious" | "source"
+                                | "rootCause" | "getRootCause" | "chain" | "getChain"
+                                | "getMessage" | "getCode" | "getTraceAsString" | "getSeverity" => {
+                                    if let PhpValue::Object(o) = &receiver {
+                                        o.borrow().throwable.is_some() || self.is_class_instance_of(&cls_name, "Throwable")
+                                    } else {
+                                        false
+                                    }
+                                }
+                                _ => false,
+                            };
+
+                            if is_throwable_final_method {
+                                let res = self.exec_builtin_object_method(
+                                    &cls_name,
+                                    &receiver,
+                                    &method_name,
+                                    &flat_args,
+                                    span,
+                                )?;
+                                self.registers[base_reg + dst.index()] = res;
+                                continue;
+                            }
 
                             if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name)
                             {
@@ -1816,9 +2306,44 @@ impl VM {
                                     &staged,
                                     &[],
                                     Some(base_reg + dst.index()),
+                                    Some(cls_name),
                                     span,
                                 )?;
                             } else {
+                                // Dynamic Magic Fallback: Check for instance __call
+                                let call_mid = self.module.get_class_info_by_name(&cls_name)
+                                    .and_then(|ci| ci.call_slot)
+                                    .or_else(|| self.resolve_method_id(&cls_name, "__call"));
+
+                                if let Some(call_mid) = call_mid {
+                                    let call_args = vec![
+                                        StagedArg {
+                                            value: PhpValue::string(method_name.clone()),
+                                            name: None,
+                                            is_unpack: false,
+                                            is_reference: false,
+                                            caller_reg: None,
+                                        },
+                                        StagedArg {
+                                            value: PhpValue::list(flat_args),
+                                            name: None,
+                                            is_unpack: false,
+                                            is_reference: false,
+                                            caller_reg: None,
+                                        },
+                                    ];
+                                    self.push_compiled_call_frame(
+                                        call_mid,
+                                        Some(receiver),
+                                        &call_args,
+                                        &[],
+                                        Some(base_reg + dst.index()),
+                                        Some(cls_name),
+                                        span,
+                                    )?;
+                                    continue;
+                                }
+
                                 match self.exec_enum_static_method(&cls_name, &method_name, &flat_args, stop_depth, span)? {
                                     EnumStaticCallResult::Handled(res) => {
                                         self.registers[base_reg + dst.index()] = res;
@@ -1841,7 +2366,8 @@ impl VM {
                         }
                         _ => {
                             if let PhpValue::String(ref cls_str) = receiver {
-                                match self.exec_enum_static_method(cls_str.as_str(), &method_name, &flat_args, stop_depth, span)? {
+                                let cls_name = cls_str.as_str();
+                                match self.exec_enum_static_method(cls_name, &method_name, &flat_args, stop_depth, span)? {
                                     EnumStaticCallResult::Handled(res) => {
                                         self.registers[base_reg + dst.index()] = res;
                                         continue;
@@ -1850,6 +2376,102 @@ impl VM {
                                         continue;
                                     }
                                     EnumStaticCallResult::NotAnEnumMethod => {}
+                                }
+
+                                if let Some(target_id) = self.resolve_method_id(cls_name, &method_name) {
+                                    self.push_compiled_call_frame(
+                                        target_id,
+                                        None,
+                                        &staged,
+                                        &[],
+                                        Some(base_reg + dst.index()),
+                                        Some(cls_name.to_string()),
+                                        span,
+                                    )?;
+                                    continue;
+                                }
+
+                                // Check __forward:
+                                let fwd_mid = self.module.get_class_info_by_name(cls_name)
+                                    .and_then(|ci| ci.static_forward)
+                                    .or_else(|| self.resolve_method_id(cls_name, "__forward"));
+
+                                if let Some(fwd_id) = fwd_mid {
+                                    let recv = self.invoke_compiled_function_sync_with_called_class(
+                                        fwd_id,
+                                        vec![],
+                                        Some(cls_name.to_string()),
+                                        span,
+                                    )?;
+                                    if let PhpValue::Object(ref rc) = recv {
+                                        rc.borrow_mut().forwarded_from = Some(cls_name.to_string());
+                                        let recv_cls = rc.borrow().class_name.clone();
+                                        if let Some(target_mid) = self.resolve_method_id(&recv_cls, &method_name) {
+                                            self.push_compiled_call_frame(
+                                                target_mid,
+                                                Some(recv),
+                                                &staged,
+                                                &[],
+                                                Some(base_reg + dst.index()),
+                                                Some(recv_cls),
+                                                span,
+                                            )?;
+                                            continue;
+                                        } else {
+                                            match self.exec_builtin_object_method(
+                                                &recv_cls,
+                                                &recv,
+                                                &method_name,
+                                                &flat_args,
+                                                span,
+                                            ) {
+                                                Ok(res) => {
+                                                    self.registers[base_reg + dst.index()] = res;
+                                                    continue;
+                                                }
+                                                Err(_) => {
+                                                    return Err(self.make_error(
+                                                        RuntimeErrorKind::UndefinedForwardedMethod {
+                                                            class: recv_cls,
+                                                            method: method_name,
+                                                            origin_class: cls_name.to_string(),
+                                                        },
+                                                        span,
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Check __callStatic:
+                                if let Some(call_static_mid) = self.resolve_method_id(cls_name, "__callStatic") {
+                                    let call_static_args = vec![
+                                        StagedArg {
+                                            value: PhpValue::string(method_name.clone()),
+                                            name: None,
+                                            is_unpack: false,
+                                            is_reference: false,
+                                            caller_reg: None,
+                                        },
+                                        StagedArg {
+                                            value: PhpValue::list(flat_args),
+                                            name: None,
+                                            is_unpack: false,
+                                            is_reference: false,
+                                            caller_reg: None,
+                                        },
+                                    ];
+                                    self.push_compiled_call_frame(
+                                        call_static_mid,
+                                        None,
+                                        &call_static_args,
+                                        &[],
+                                        Some(base_reg + dst.index()),
+                                        Some(cls_name.to_string()),
+                                        span,
+                                    )?;
+                                    continue;
                                 }
                             }
                             let res = self.exec_fluent_value_method(
@@ -1879,24 +2501,21 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
-                    let clean_name = class_name.strip_prefix('\\').unwrap_or(&class_name).to_string();
+                    let clean_name = if class_name == "static" {
+                        self.current_called_class().unwrap_or(class_name)
+                    } else {
+                        class_name.strip_prefix('\\').unwrap_or(&class_name).to_string()
+                    };
 
                     let instance = self.instantiate_class(&clean_name, span)?;
 
-                    // If constructor arguments were passed to built-in Exception/Error, initialize message/code
-                    if (clean_name.ends_with("Exception") || clean_name.ends_with("Error"))
-                        && !self.module.class_index.contains_key(&clean_name)
+                    // If constructor arguments were passed to built-in Exception/Error, initialize message/code/previous
+                    if (self.is_class_instance_of(&clean_name, "Throwable")
+                        || clean_name.ends_with("Exception")
+                        || clean_name.ends_with("Error"))
+                        && self.resolve_method_id(&clean_name, "__construct").is_none()
                     {
-                        if let Some(msg_val) = staged.first() {
-                            if let PhpValue::Object(ref o) = instance {
-                                o.borrow_mut().set_property("message", msg_val.value.clone());
-                            }
-                        }
-                        if let Some(code_val) = staged.get(1) {
-                            if let PhpValue::Object(ref o) = instance {
-                                o.borrow_mut().set_property("code", code_val.value.clone());
-                            }
-                        }
+                        self.apply_throwable_constructor_args(&instance, &clean_name, &staged);
                     } else if (clean_name == "ArrayIterator"
                         || clean_name == "Collection"
                         || clean_name == "Illuminate\\Support\\Collection")
@@ -1936,6 +2555,7 @@ impl VM {
                             &staged,
                             &[],
                             None, // constructor return is void; `dst` retains `instance`
+                            Some(clean_name.clone()),
                             span,
                         )?;
                     }
@@ -1948,23 +2568,20 @@ impl VM {
                 } => {
                     let staged = self.drain_staged_args(arg_count as usize);
                     let class_name = self.registers[base_reg + class_reg.index()].to_php_string();
-                    let clean_name = class_name.strip_prefix('\\').unwrap_or(&class_name).to_string();
+                    let clean_name = if class_name == "static" {
+                        self.current_called_class().unwrap_or(class_name)
+                    } else {
+                        class_name.strip_prefix('\\').unwrap_or(&class_name).to_string()
+                    };
 
                     let instance = self.instantiate_class(&clean_name, span)?;
 
-                    if (clean_name.ends_with("Exception") || clean_name.ends_with("Error"))
-                        && !self.module.class_index.contains_key(&clean_name)
+                    if (self.is_class_instance_of(&clean_name, "Throwable")
+                        || clean_name.ends_with("Exception")
+                        || clean_name.ends_with("Error"))
+                        && self.resolve_method_id(&clean_name, "__construct").is_none()
                     {
-                        if let Some(msg_val) = staged.first() {
-                            if let PhpValue::Object(ref o) = instance {
-                                o.borrow_mut().set_property("message", msg_val.value.clone());
-                            }
-                        }
-                        if let Some(code_val) = staged.get(1) {
-                            if let PhpValue::Object(ref o) = instance {
-                                o.borrow_mut().set_property("code", code_val.value.clone());
-                            }
-                        }
+                        self.apply_throwable_constructor_args(&instance, &clean_name, &staged);
                     } else if (clean_name == "ArrayIterator"
                         || clean_name == "Collection"
                         || clean_name == "Illuminate\\Support\\Collection")
@@ -2003,6 +2620,7 @@ impl VM {
                             &staged,
                             &[],
                             None,
+                            Some(clean_name.clone()),
                             span,
                         )?;
                     }
@@ -2127,9 +2745,14 @@ impl VM {
                                 .to_string(),
                         )
                     };
+                    let resolved_cls = if cls_name == "static" {
+                        self.current_called_class().unwrap_or(cls_name)
+                    } else {
+                        cls_name
+                    };
                     let val = self
                         .static_properties
-                        .get(&(cls_name, prop_name))
+                        .get(&(resolved_cls, prop_name))
                         .cloned()
                         .unwrap_or(PhpValue::Null);
                     self.registers[base_reg + dst.index()] = val;
@@ -2149,8 +2772,13 @@ impl VM {
                                 .to_string(),
                         )
                     };
+                    let resolved_cls = if cls_name == "static" {
+                        self.current_called_class().unwrap_or(cls_name)
+                    } else {
+                        cls_name
+                    };
                     let val = self.registers[base_reg + value.index()].clone();
-                    self.static_properties.insert((cls_name, prop_name), val);
+                    self.static_properties.insert((resolved_cls, prop_name), val);
                 }
 
                 OpCode::GetClassConst {
@@ -2171,26 +2799,31 @@ impl VM {
                                 .to_string(),
                         )
                     };
+                    let resolved_cls = if cls_name == "static" {
+                        self.current_called_class().unwrap_or(cls_name)
+                    } else {
+                        cls_name
+                    };
                     if c_name == "class" {
-                        self.registers[base_reg + dst.index()] = PhpValue::string(cls_name);
-                    } else if cls_name == "Carbon" || cls_name == "\\Carbon" {
+                        self.registers[base_reg + dst.index()] = PhpValue::string(resolved_cls);
+                    } else if resolved_cls == "Carbon" || resolved_cls == "\\Carbon" {
                         if let Some(val) = crate::vm::carbon::get_carbon_constant(&c_name) {
                             self.registers[base_reg + dst.index()] = val;
                         } else {
                             return Err(self.make_error(
                                 RuntimeErrorKind::UndefinedClassConstant {
-                                    class: cls_name,
+                                    class: resolved_cls,
                                     constant: c_name,
                                 },
                                 span,
                             ));
                         }
-                    } else if let Some(val) = self.class_constants.get(&(cls_name.clone(), c_name.clone())) {
+                    } else if let Some(val) = self.class_constants.get(&(resolved_cls.clone(), c_name.clone())) {
                         self.registers[base_reg + dst.index()] = val.clone();
                     } else {
                         return Err(self.make_error(
                             RuntimeErrorKind::UndefinedClassConstant {
-                                class: cls_name,
+                                class: resolved_cls,
                                 constant: c_name,
                             },
                             span,
@@ -2339,6 +2972,7 @@ impl VM {
         staged_args: &[StagedArg],
         upvalues: &[PhpValue],
         caller_dst: Option<usize>,
+        called_class: Option<String>,
         span: Span,
     ) -> Result<(), RuntimeError> {
         if self.frames.len() >= self.max_call_depth {
@@ -2519,6 +3153,7 @@ impl VM {
             base_reg: new_base,
             num_registers: num_regs,
             caller_dst,
+            called_class,
             active_try_handlers: Vec::new(),
             iterators: HashMap::new(),
             ref_bindings,
@@ -2527,12 +3162,12 @@ impl VM {
         Ok(())
     }
 
-    /// Invoke a compiled function/closure synchronously and return its evaluated `PhpValue`
-    /// (used by higher-order collection helpers `map`, `filter`, `reduce`, `Future::wait`, and `defer`).
-    pub fn invoke_compiled_function_sync(
+    /// Invoke a compiled function/closure synchronously with an explicit called_class.
+    pub fn invoke_compiled_function_sync_with_called_class(
         &mut self,
         func_id: FunctionId,
         args: Vec<PhpValue>,
+        called_class: Option<String>,
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         let staged: Vec<StagedArg> = args
@@ -2546,8 +3181,19 @@ impl VM {
             })
             .collect();
         let depth_before = self.frames.len();
-        self.push_compiled_call_frame(func_id, None, &staged, &[], None, span)?;
+        self.push_compiled_call_frame(func_id, None, &staged, &[], None, called_class, span)?;
         self.dispatch_loop(depth_before)
+    }
+
+    /// Invoke a compiled function/closure synchronously and return its evaluated `PhpValue`
+    /// (used by higher-order collection helpers `map`, `filter`, `reduce`, `Future::wait`, and `defer`).
+    pub fn invoke_compiled_function_sync(
+        &mut self,
+        func_id: FunctionId,
+        args: Vec<PhpValue>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        self.invoke_compiled_function_sync_with_called_class(func_id, args, None, span)
     }
 
     /// Invoke a compiled function or static method by name synchronously on this VM.
@@ -2578,32 +3224,87 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
-        let target_id = self
-            .resolve_method_id(clean, method)
-            .ok_or_else(|| {
-                self.make_error(
-                    RuntimeErrorKind::UndefinedMethod {
-                        class: clean.to_string(),
-                        method: method.to_string(),
-                    },
-                    span,
-                )
-            })?;
+        if let Some(target_id) = self.resolve_method_id(clean, method) {
+            let staged: Vec<StagedArg> = args
+                .into_iter()
+                .map(|value| StagedArg {
+                    value,
+                    name: None,
+                    is_unpack: false,
+                    is_reference: false,
+                    caller_reg: None,
+                })
+                .collect();
 
-        let staged: Vec<StagedArg> = args
-            .into_iter()
-            .map(|value| StagedArg {
-                value,
-                name: None,
-                is_unpack: false,
-                is_reference: false,
-                caller_reg: None,
-            })
-            .collect();
+            let depth_before = self.frames.len();
+            self.push_compiled_call_frame(target_id, None, &staged, &[], None, Some(clean.to_string()), span)?;
+            return self.dispatch_loop(depth_before);
+        }
 
-        let depth_before = self.frames.len();
-        self.push_compiled_call_frame(target_id, None, &staged, &[], None, span)?;
-        self.dispatch_loop(depth_before)
+        // Forwarder check:
+        let fwd_mid = self.module.get_class_info_by_name(clean)
+            .and_then(|ci| ci.static_forward)
+            .or_else(|| self.resolve_method_id(clean, "__forward"));
+
+        if let Some(fwd_id) = fwd_mid {
+            let recv = self.invoke_compiled_function_sync_with_called_class(fwd_id, vec![], Some(clean.to_string()), span)?;
+            if let PhpValue::Object(ref rc) = recv {
+                rc.borrow_mut().forwarded_from = Some(clean.to_string());
+                let recv_cls = rc.borrow().class_name.clone();
+                if let Some(target_mid) = self.resolve_method_id(&recv_cls, method) {
+                    let staged: Vec<StagedArg> = args.into_iter().map(|value| StagedArg {
+                        value,
+                        name: None,
+                        is_unpack: false,
+                        is_reference: false,
+                        caller_reg: None,
+                    }).collect();
+                    let depth_before = self.frames.len();
+                    self.push_compiled_call_frame(target_mid, Some(recv), &staged, &[], None, Some(recv_cls), span)?;
+                    return self.dispatch_loop(depth_before);
+                } else {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UndefinedForwardedMethod {
+                            class: recv_cls,
+                            method: method.to_string(),
+                            origin_class: clean.to_string(),
+                        },
+                        span,
+                    ));
+                }
+            }
+        }
+
+        // __callStatic check:
+        if let Some(call_static_mid) = self.resolve_method_id(clean, "__callStatic") {
+            let call_static_args = vec![
+                StagedArg {
+                    value: PhpValue::string(method.to_string()),
+                    name: None,
+                    is_unpack: false,
+                    is_reference: false,
+                    caller_reg: None,
+                },
+                StagedArg {
+                    value: PhpValue::list(args),
+                    name: None,
+                    is_unpack: false,
+                    is_reference: false,
+                    caller_reg: None,
+                },
+            ];
+            let depth_before = self.frames.len();
+            self.push_compiled_call_frame(call_static_mid, None, &call_static_args, &[], None, Some(clean.to_string()), span)?;
+            return self.dispatch_loop(depth_before);
+        }
+
+        Err(self.make_error(
+            RuntimeErrorKind::UndefinedMethod {
+                class: clean.to_string(),
+                method: method.to_string(),
+            },
+            span,
+        ))
     }
 
     /// Instantiate an object and invoke its `__construct` method if defined.
@@ -2628,7 +3329,7 @@ impl VM {
                 })
                 .collect();
             let depth_before = self.frames.len();
-            self.push_compiled_call_frame(ctor_id, Some(instance.clone()), &staged, &[], None, span)?;
+            self.push_compiled_call_frame(ctor_id, Some(instance.clone()), &staged, &[], None, Some(clean.to_string()), span)?;
             self.dispatch_loop(depth_before)?;
         }
 
@@ -2659,6 +3360,7 @@ impl VM {
             &staged,
             &closure.upvalues,
             None,
+            None,
             span,
         )?;
         self.dispatch_loop(depth_before)
@@ -2682,6 +3384,13 @@ impl VM {
                 caller_reg: None,
             })
             .collect();
+        let called_cls = this_val.as_ref().and_then(|t| {
+            if let PhpValue::Object(o) = t {
+                Some(o.borrow().class_name.clone())
+            } else {
+                None
+            }
+        });
         let depth_before = self.frames.len();
         self.push_compiled_call_frame(
             closure.func_id,
@@ -2689,6 +3398,7 @@ impl VM {
             &staged,
             &closure.upvalues,
             None,
+            called_cls,
             span,
         )?;
         self.dispatch_loop(depth_before)
@@ -2724,6 +3434,7 @@ impl VM {
                         &staged,
                         &[],
                         None,
+                        Some(cls_name),
                         span,
                     )?;
                     self.dispatch_loop(depth_before)
@@ -2761,7 +3472,7 @@ impl VM {
                         )
                     })?;
                 let depth_before = self.frames.len();
-                self.push_compiled_call_frame(target_id, None, &staged, &[], None, span)?;
+                self.push_compiled_call_frame(target_id, None, &staged, &[], None, None, span)?;
                 self.dispatch_loop(depth_before)
             }
             other => Err(self.make_error(
@@ -2805,6 +3516,7 @@ impl VM {
                         &staged,
                         &[],
                         None,
+                        Some(cls_name),
                         span,
                     )?;
                     self.dispatch_loop(depth_before)
@@ -3045,6 +3757,45 @@ impl VM {
                 },
                 span,
             ));
+        }
+
+        if facade == "Glob" && method == "customHelper" {
+            let helper_name = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+            let clean_helper = helper_name.strip_prefix('\\').unwrap_or(&helper_name);
+            if clean_helper == "app" {
+                if let Some(arg) = args.get(1) {
+                    let abs = arg.to_php_string();
+                    let mut container = std::mem::take(&mut self.container);
+                    let res = container.resolve(&abs, self);
+                    self.container = container;
+                    return res.map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e.to_string() }, span));
+                } else {
+                    let app_obj = VmObject::new("Application");
+                    return Ok(PhpValue::object(app_obj));
+                }
+            } else if clean_helper.eq_ignore_ascii_case("ini_get") {
+                let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                let clean_key = key.trim_matches('"').trim_matches('\'');
+                if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
+                    return Ok(PhpValue::string(if self.exception_ignore_args { "1" } else { "0" }));
+                } else {
+                    return Ok(PhpValue::string(""));
+                }
+            } else if clean_helper.eq_ignore_ascii_case("ini_set") {
+                let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                let val = args.get(2).map(|v| v.to_php_string()).unwrap_or_default();
+                let clean_key = key.trim_matches('"').trim_matches('\'');
+                let clean_val = val.trim_matches('"').trim_matches('\'');
+                if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
+                    let old = if self.exception_ignore_args { "1" } else { "0" };
+                    self.exception_ignore_args =
+                        clean_val == "1" || clean_val.eq_ignore_ascii_case("true") || clean_val.eq_ignore_ascii_case("on")
+                        || val == "1" || val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("on");
+                    return Ok(PhpValue::string(old));
+                } else {
+                    return Ok(PhpValue::string(""));
+                }
+            }
         }
 
         // 1. Dynamic Macro definition: `Facade::macro('name', fn(...) => ...)`
@@ -5644,7 +6395,7 @@ impl VM {
                     let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.to_str_lossy().ends_with(&suffix)))
                 }
-                "indexOf" | "index_of" => {
+                "find" | "indexOf" | "index_of" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
                     let str_val = s.to_str_lossy();
@@ -5668,7 +6419,7 @@ impl VM {
                         let char_idx = str_val[..actual_byte_pos].chars().count();
                         Ok(PhpValue::Int(char_idx as i32))
                     } else {
-                        Ok(PhpValue::Int(-1))
+                        Ok(PhpValue::Null)
                     }
                 }
                 "testRegex" | "regex" | "matchesPattern" => {
@@ -5822,6 +6573,45 @@ impl VM {
         if class_name == "Carbon" {
             return crate::vm::carbon::exec_carbon_instance_method(receiver, method, args, span);
         }
+
+        if class_name == "Application" || class_name == "Container"
+            || class_name == "Illuminate\\Foundation\\Application"
+            || class_name == "Illuminate\\Container\\Container"
+        {
+            match method {
+                "bind" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    self.container.bind(abs, conc);
+                    return Ok(PhpValue::Null);
+                }
+                "singleton" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    self.container.singleton(abs, conc);
+                    return Ok(PhpValue::Null);
+                }
+                "instance" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                    self.container.instance(abs, val);
+                    return Ok(PhpValue::Null);
+                }
+                "make" | "get" | "resolve" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let mut container = std::mem::take(&mut self.container);
+                    let res = container.resolve(&abs, self);
+                    self.container = container;
+                    return res.map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e.to_string() }, span));
+                }
+                "has" => {
+                    let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    return Ok(PhpValue::Bool(self.container.has(&abs)));
+                }
+                _ => {}
+            }
+        }
+
         match (class_name, method) {
             ("WeakReference", "get") => {
                 if let PhpValue::Object(rc) = receiver {
@@ -6509,33 +7299,190 @@ impl VM {
             }
             ("Image", "resize" | "crop") => Ok(receiver.clone()),
             ("Image", "save") => Ok(PhpValue::Bool(true)),
+            (_, "__construct") if is_builtin_throwable(class_name) || class_name == "parent" => {
+                if let PhpValue::Object(o) = receiver {
+                    self.apply_throwable_args_from_slice(&mut o.borrow_mut(), class_name, args);
+                }
+                Ok(PhpValue::Null)
+            }
+            (_, "getFile") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        return Ok(PhpValue::string(&t.file));
+                    }
+                    if let Some(f) = b.get_property("file") {
+                        return Ok(f.clone());
+                    }
+                }
+                Ok(PhpValue::string(""))
+            }
+            (_, "getLine") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        return Ok(PhpValue::Int(t.line as i32));
+                    }
+                    if let Some(l) = b.get_property("line") {
+                        return Ok(l.clone());
+                    }
+                }
+                Ok(PhpValue::Int(0))
+            }
+            (_, "getTrace") => {
+                if let PhpValue::Object(o) = receiver {
+                    let mut b = o.borrow_mut();
+                    if let Some(ref mut t) = b.throwable {
+                        if !t.is_symbolicated {
+                            self.symbolicate_trace(t);
+                        }
+                        return Ok(t.to_trace_php_value(self.exception_ignore_args));
+                    }
+                }
+                Ok(PhpValue::list(vec![]))
+            }
+            (_, "getTraceAsString") => {
+                if let PhpValue::Object(o) = receiver {
+                    let mut b = o.borrow_mut();
+                    if let Some(ref mut t) = b.throwable {
+                        if !t.is_symbolicated {
+                            self.symbolicate_trace(t);
+                        }
+                        return Ok(PhpValue::string(t.get_trace_as_string()));
+                    }
+                }
+                Ok(PhpValue::string("#0 {main}"))
+            }
+            (_, "source") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        if let Some(ref prev_obj) = t.previous_obj {
+                            return Ok(prev_obj.clone());
+                        }
+                        if let Some(prev) = t.source() {
+                            let mut prev_o = VmObject::new("Exception");
+                            prev_o.set_property("message", PhpValue::string(&prev.message));
+                            prev_o.set_property("code", PhpValue::Int(prev.code as i32));
+                            prev_o.set_property("file", PhpValue::string(&prev.file));
+                            prev_o.set_property("line", PhpValue::Int(prev.line as i32));
+                            prev_o.throwable = Some(Box::new(prev.clone()));
+                            return Ok(PhpValue::object(prev_o));
+                        }
+                    }
+                    if let Some(prev) = b.get_property("previous") {
+                        return Ok(prev.clone());
+                    }
+                }
+                Ok(PhpValue::Null)
+            }
+            (_, "getPrevious") => {
+                // PHP/Laravel compatibility alias delegating to primary source()
+                self.exec_builtin_object_method(class_name, receiver, "source", args, span)
+            }
+            (_, "rootCause") => {
+                // Primary method returning the deepest cause in the chain
+                let mut current = receiver.clone();
+                loop {
+                    let next = self.exec_builtin_object_method(class_name, &current, "source", &[], span)?;
+                    if next.is_null() {
+                        break;
+                    }
+                    current = next;
+                }
+                Ok(current)
+            }
+            (_, "getRootCause") => {
+                // Alias delegating to primary rootCause()
+                self.exec_builtin_object_method(class_name, receiver, "rootCause", args, span)
+            }
+            (_, "chain") => {
+                // Primary method returning a list of all chained exceptions from receiver down to rootCause
+                let mut list = Vec::new();
+                let mut current = receiver.clone();
+                while !current.is_null() {
+                    list.push(current.clone());
+                    current = self.exec_builtin_object_method(class_name, &current, "source", &[], span)?;
+                }
+                Ok(PhpValue::list(list))
+            }
+            (_, "getChain") => {
+                // Alias delegating to primary chain()
+                self.exec_builtin_object_method(class_name, receiver, "chain", args, span)
+            }
             (_, "getMessage") => {
                 if let PhpValue::Object(o) = receiver {
-                    Ok(o.borrow()
-                        .get_property("message")
-                        .cloned()
-                        .unwrap_or_else(|| PhpValue::string("")))
-                } else {
-                    Ok(PhpValue::string(""))
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        return Ok(PhpValue::string(&t.message));
+                    }
+                    if let Some(m) = b.get_property("message") {
+                        return Ok(m.clone());
+                    }
                 }
+                Ok(PhpValue::string(""))
             }
             (_, "getCode") => {
                 if let PhpValue::Object(o) = receiver {
-                    Ok(o.borrow()
-                        .get_property("code")
-                        .cloned()
-                        .unwrap_or(PhpValue::Int(0)))
-                } else {
-                    Ok(PhpValue::Int(0))
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        return Ok(PhpValue::Int(t.code as i32));
+                    }
+                    if let Some(c) = b.get_property("code") {
+                        return Ok(c.clone());
+                    }
                 }
+                Ok(PhpValue::Int(0))
             }
-            _ => Err(self.make_error(
-                RuntimeErrorKind::UndefinedMethod {
-                    class: class_name.to_string(),
-                    method: method.to_string(),
-                },
-                span,
-            )),
+            (_, "getSeverity") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    if let Some(ref t) = b.throwable {
+                        if let Some(sev) = t.severity {
+                            return Ok(PhpValue::Int(sev));
+                        }
+                    }
+                    if let Some(s) = b.get_property("severity") {
+                        return Ok(s.clone());
+                    }
+                }
+                Ok(PhpValue::Int(1))
+            }
+            (_, "__toString") => {
+                if let PhpValue::Object(o) = receiver {
+                    let mut b = o.borrow_mut();
+                    let cls = b.class_name.clone();
+                    if let Some(ref mut t) = b.throwable {
+                        if !t.is_symbolicated {
+                            self.symbolicate_trace(t);
+                        }
+                        return Ok(PhpValue::string(t.to_string_representation(&cls)));
+                    }
+                    return Ok(PhpValue::string(format!("{}: in unknown:0", cls)));
+                }
+                Ok(PhpValue::string(""))
+            }
+            _ => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(ref origin) = o.borrow().forwarded_from {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedForwardedMethod {
+                                class: class_name.to_string(),
+                                method: method.to_string(),
+                                origin_class: origin.clone(),
+                            },
+                            span,
+                        ));
+                    }
+                }
+                Err(self.make_error(
+                    RuntimeErrorKind::UndefinedMethod {
+                        class: class_name.to_string(),
+                        method: method.to_string(),
+                    },
+                    span,
+                ))
+            }
         }
     }
 
@@ -6590,12 +7537,18 @@ impl VM {
         }
 
         let mut obj = VmObject::new(clean_name);
+        if let Some(ci) = self.module.get_class_info_by_name(clean_name) {
+            obj.class_id = Some(ci.id);
+        }
 
-        // Built-in Exception / RuntimeException classes
-        if clean_name.ends_with("Exception") || clean_name.ends_with("Error") || clean_name == "stdClass" {
+        // Built-in Exception / RuntimeException / Throwable classes
+        if self.is_class_instance_of(clean_name, "Throwable") {
+            self.init_throwable_for_object(&mut obj, span);
             if !self.module.class_index.contains_key(clean_name) {
-                obj.set_property("message", PhpValue::string(""));
-                obj.set_property("code", PhpValue::Int(0));
+                return Ok(PhpValue::object(obj));
+            }
+        } else if clean_name == "stdClass" {
+            if !self.module.class_index.contains_key(clean_name) {
                 return Ok(PhpValue::object(obj));
             }
         }
@@ -6881,6 +7834,12 @@ impl VM {
 
     fn resolve_method_id(&self, class_name: &str, method_name: &str) -> Option<FunctionId> {
         let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        // Fast Tier 2 path: O(1) lookup from the linked runtime class table flat vtable
+        if let Some(ci) = self.module.get_class_info_by_name(clean) {
+            if let Some(&mid) = ci.vtable.get(method_name) {
+                return Some(mid);
+            }
+        }
         let mut cursor = Some(clean);
         while let Some(cls_name) = cursor {
             if let Some(cls) = self.module.get_class_by_name(cls_name) {
@@ -6919,6 +7878,9 @@ impl VM {
         let mut cursor = Some(actual_clean);
         while let Some(cls_name) = cursor {
             if cls_name == target_clean {
+                return true;
+            }
+            if is_throwable_subtype(cls_name, target_clean) {
                 return true;
             }
             if let Some(cls) = self.module.get_class_by_name(cls_name) {
@@ -6980,17 +7942,7 @@ impl VM {
             }
         }
 
-        // Built-in Exception and Error subtyping
-        if (actual_clean.ends_with("Exception")
-            || actual_cls.ends_with("Exception")
-            || actual_clean.ends_with("Error")
-            || actual_cls.ends_with("Error"))
-            && (target_clean == "Exception"
-                || target_clean == "Throwable"
-                || target_clean == "Error"
-                || target_clean == actual_clean
-                || target_cls == actual_cls)
-        {
+        if is_throwable_subtype(actual_clean, target_clean) {
             return true;
         }
         false
@@ -7049,9 +8001,7 @@ impl VM {
                     for catch in &handler.catches {
                         let matches = catch.catch_types.is_empty()
                             || catch.catch_types.iter().any(|ct| {
-                                ct == "Throwable"
-                                    || ct == "Exception"
-                                    || self.is_class_instance_of(&exc_class, ct)
+                                self.is_class_instance_of(&exc_class, ct)
                             });
                         if matches {
                             self.registers[base_reg + catch.exception_reg.index()] = exc_val;

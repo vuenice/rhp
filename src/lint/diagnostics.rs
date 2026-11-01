@@ -353,7 +353,8 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                     },
                     "Str" => match method.name {
                         "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
-                        "length" | "indexOf" => RhpType::Int,
+                        "length" => RhpType::Int,
+                        "find" | "indexOf" => RhpType::Nullable(Box::new(RhpType::Int)),
                         _ => RhpType::String,
                     },
                     "Regex" => match method.name {
@@ -478,6 +479,12 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "non-singleton-extends-singleton-forbidden",
         TypeErrorKind::TraitMethodCollision { .. } => "trait-method-collision",
         TypeErrorKind::TraitAdaptationError { .. } => "trait-adaptation-error",
+        TypeErrorKind::CannotInstantiateAbstractClass { .. } => "cannot-instantiate-abstract-class",
+        TypeErrorKind::CannotInstantiateInterface { .. } => "cannot-instantiate-interface",
+        TypeErrorKind::CannotInstantiateTrait { .. } => "cannot-instantiate-trait",
+        TypeErrorKind::AbstractMethodCannotBePrivate { .. } => "abstract-method-cannot-be-private",
+        TypeErrorKind::UnimplementedAbstractMethod { .. } => "unimplemented-abstract-method",
+        TypeErrorKind::TraitAbstractMethodUnimplemented { .. } => "trait-abstract-method-unimplemented",
     }
 }
 

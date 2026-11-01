@@ -17,6 +17,7 @@ pub mod crypto;
 pub mod encoding;
 pub mod engine;
 pub mod error;
+pub mod exception;
 pub mod facade;
 pub mod fiber;
 pub mod format;
@@ -45,6 +46,10 @@ pub use arena::{
 };
 pub use engine::{CallFrame, DEFAULT_MAX_CALL_DEPTH, VM};
 pub use error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
+pub use exception::{
+    chain, is_builtin_error, is_builtin_exception, is_builtin_throwable, is_throwable_subtype,
+    root_cause, Frame, RawFrame, Throwable, BUILTIN_THROWABLE_PARENTS,
+};
 pub use facade::{
     append_log, clear_log_history, clear_request_context, clear_runtime_closure_macros, clear_tier2_plugins,
     dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,

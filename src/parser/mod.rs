@@ -74,8 +74,9 @@ impl<'s> Parser<'s> {
             .map(|s| s.span)
             .unwrap_or(start_span);
         let span = start_span.merge(end_span);
-
-        Ok(Program::new(statements, span))
+        let mut prog = Program::new(statements, span);
+        prog.file_path = self.stream.file_path.clone();
+        Ok(prog)
     }
 
     /// Parse a single expression from the token stream.

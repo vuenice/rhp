@@ -383,9 +383,9 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let suffix = get_arg_str(args, 1, "Str::endsWith")?;
             Ok(PhpValue::Bool(s.ends_with(&suffix)))
         }
-        "indexOf" | "pos" => {
-            let arg0 = get_arg_str(args, 0, "Str::indexOf")?;
-            let arg1 = get_arg_str(args, 1, "Str::indexOf")?;
+        "find" | "indexOf" | "pos" => {
+            let arg0 = get_arg_str(args, 0, "Str::find")?;
+            let arg1 = get_arg_str(args, 1, "Str::find")?;
             let offset = args.get(2).and_then(|v| v.to_i64()).unwrap_or(0);
             let (haystack, needle) = if arg0.contains(&arg1) || !arg1.contains(&arg0) {
                 (&arg0, &arg1)
@@ -412,7 +412,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 let char_idx = haystack[..actual_byte_pos].chars().count();
                 Ok(PhpValue::Int(char_idx as i32))
             } else {
-                Ok(PhpValue::Int(-1))
+                Ok(PhpValue::Null)
             }
         }
         "testRegex" | "regex" => {
@@ -1077,13 +1077,18 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(arr_get_dot(&target, &key, default))
         }
         "has" | "hasKey" => {
-            let target = match args.first() {
-                Some(t) => t,
-                None => return Ok(PhpValue::Bool(false)),
-            };
-            let key = match args.get(1) {
-                Some(k) => k,
-                None => return Ok(PhpValue::Bool(false)),
+            let (target, key) = if args.len() >= 2 {
+                if !matches!(args[0], PhpValue::Dict(_) | PhpValue::HashMap(_) | PhpValue::Array(_) | PhpValue::List(_) | PhpValue::Set(_))
+                    && matches!(args[1], PhpValue::Dict(_) | PhpValue::HashMap(_) | PhpValue::Array(_) | PhpValue::List(_) | PhpValue::Set(_))
+                {
+                    (&args[1], &args[0])
+                } else {
+                    (&args[0], &args[1])
+                }
+            } else if let Some(t) = args.first() {
+                (t, &PhpValue::Null)
+            } else {
+                return Ok(PhpValue::Bool(false));
             };
             let exists = match target {
                 PhpValue::Dict(d) => {
@@ -3316,8 +3321,20 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "count" => dispatch_arr("count", args),
         "array_keys" => dispatch_arr("keys", args),
         "array_values" => dispatch_arr("values", args),
-        "array_key_exists" => dispatch_arr("hasKey", args),
-        "in_array" => dispatch_arr("hasValue", args),
+        "array_key_exists" => {
+            if args.len() >= 2 {
+                dispatch_arr("hasKey", &[args[1].clone(), args[0].clone()])
+            } else {
+                dispatch_arr("hasKey", args)
+            }
+        }
+        "in_array" => {
+            if args.len() >= 2 {
+                dispatch_arr("hasValue", &[args[1].clone(), args[0].clone()])
+            } else {
+                dispatch_arr("hasValue", args)
+            }
+        }
         "strlen" => dispatch_str("length", args),
         "str_contains" => dispatch_str("contains", args),
         "implode" => dispatch_str("join", args),
@@ -3328,6 +3345,7 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "strtolower" => dispatch_str("lower", args),
         "strtoupper" => dispatch_str("upper", args),
         "str_replace" => dispatch_str("replace", args),
+        "strpos" => dispatch_str("find", args),
         "preg_match" => dispatch_regex("testString", args),
         "preg_replace" => dispatch_regex("replace", args),
         "preg_quote" => dispatch_regex("quote", args),

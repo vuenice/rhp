@@ -480,6 +480,12 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::NonStaticSingletonMethodCallForbidden { .. } => "RHP0114",
         TypeErrorKind::SingletonInstantiationForbidden { .. } => "RHP0113",
         TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "RHP0115",
+        TypeErrorKind::CannotInstantiateAbstractClass { .. } => "RHP0306",
+        TypeErrorKind::CannotInstantiateInterface { .. } => "RHP0307",
+        TypeErrorKind::CannotInstantiateTrait { .. } => "RHP0308",
+        TypeErrorKind::AbstractMethodCannotBePrivate { .. } => "RHP0309",
+        TypeErrorKind::UnimplementedAbstractMethod { .. } => "RHP0310",
+        TypeErrorKind::TraitAbstractMethodUnimplemented { .. } => "RHP0311",
     };
 
     (code.to_string(), kind.to_string())

@@ -25,12 +25,23 @@ use crate::lexer::span::Span;
 pub struct Program<'s> {
     pub span: Span,
     pub statements: Vec<Stmt<'s>>,
+    pub file_path: Option<String>,
 }
 
 impl<'s> Program<'s> {
     #[inline]
     pub fn new(statements: Vec<Stmt<'s>>, span: Span) -> Self {
-        Self { span, statements }
+        Self {
+            span,
+            statements,
+            file_path: None,
+        }
+    }
+
+    #[inline]
+    pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
+        self.file_path = Some(path.into());
+        self
     }
 }
 

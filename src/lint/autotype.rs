@@ -436,7 +436,8 @@ pub fn infer_expression_type_name(
                     },
                     "Str" => match method.name {
                         "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => Some("bool".to_string()),
-                        "length" | "indexOf" => Some("int".to_string()),
+                        "length" => Some("int".to_string()),
+                        "find" | "indexOf" => Some("?int".to_string()),
                         _ => Some("string".to_string()),
                     },
                     "Regex" => match method.name {

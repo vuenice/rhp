@@ -383,7 +383,7 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Int)
             }
             "split" => Ok(RhpType::Array(Box::new(RhpType::String))),
-            "pos" | "indexOf" => Ok(RhpType::Int),
+            "find" | "pos" | "indexOf" => Ok(RhpType::Nullable(Box::new(RhpType::Int))),
             _ => Ok(RhpType::String),
         },
 
@@ -854,7 +854,8 @@ pub fn resolve_builtin_fluent_method(
         RhpType::String => match method {
             "trim" | "ltrim" | "rtrim" | "upper" | "toUpper" | "lower" | "toLower" | "slug"
             | "replace" | "substr" | "reverse" | "repeat" | "utf8" => Some(RhpType::String),
-            "length" | "byteLength" | "bytesCount" | "indexOf" => Some(RhpType::Int),
+            "length" | "byteLength" | "bytesCount" => Some(RhpType::Int),
+            "find" | "indexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
             "check" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
             "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),

@@ -56,6 +56,13 @@ pub enum RuntimeErrorKind {
     #[error("Error: Call to undefined method '{class}::{method}()'")]
     UndefinedMethod { class: String, method: String },
 
+    #[error("Error: Call to undefined method '{method}' on '{class}', reached via '{origin_class}::__forward()'")]
+    UndefinedForwardedMethod {
+        class: String,
+        method: String,
+        origin_class: String,
+    },
+
     #[error("Error: Call to undefined facade method '{facade}::{method}()'")]
     UndefinedFacadeMethod { facade: String, method: String },
 
@@ -160,6 +167,25 @@ pub enum RuntimeErrorKind {
     NonSingletonExtendsSingletonForbidden {
         class_name: String,
         parent_name: String,
+    },
+
+    #[error("Fatal Error: Cannot instantiate abstract class '{class}'")]
+    CannotInstantiateAbstractClass { class: String },
+
+    #[error("Fatal Error: Cannot instantiate interface '{interface}'")]
+    CannotInstantiateInterface { interface: String },
+
+    #[error("Fatal Error: Cannot instantiate trait '{trait_name}'")]
+    CannotInstantiateTrait { trait_name: String },
+
+    #[error("Fatal Error: Cannot call abstract method '{class}::{method}()'")]
+    CannotCallAbstractMethod { class: String, method: String },
+
+    #[error("Fatal Error: Call to {visibility} method '{class}::{method}()' from invalid context")]
+    VisibilityAccessForbidden {
+        class: String,
+        method: String,
+        visibility: String,
     },
 
     #[error("RuntimeError: {message}")]

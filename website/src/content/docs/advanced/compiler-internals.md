@@ -331,3 +331,31 @@ pub fn execute(mode: RunMode, ast: &ASTNode, env: &mut Environment) -> Result<Va
 | **Execution Speed** | Optimized for rapid developer iteration | Optimized for peak operations/sec & CPU cache |
 | **Developer Tools** | Exact source maps, DAP server, LCOV coverage | Low-overhead telemetry, zero-cost exception tables |
 
+---
+
+## 7. Class Table, Flattened VTables & Method Resolution (`src/ir/class_table.rs`)
+
+The compiler maintains a link-time global `ClassTable` holding descriptors (`ClassInfo`) for all declared and imported classes, abstract classes, interfaces, and traits.
+
+### 7.1 Single Inheritance & Trait Precedence Linker
+At link time, classes are resolved in topological order (`compute_topological_order()`). RHP enforces strict PHP-compliant method resolution order:
+$$\text{Class's Own Methods} > \text{Trait Methods} > \text{Parent Methods}$$
+
+1. **Ancestor Set Computation:** Each class computes a transitive `ancestors: HashSet<ClassId>` set representing its complete inheritance chain, implemented interfaces, and nested traits.
+2. **Dense Slot Table Generation:** Rather than relying on slow string lookups at runtime, methods in flattened vtables are indexed into dense slot arrays (`method_slots: Vec<MethodId>` and `method_indices: HashMap<Arc<str>, usize>`).
+3. **Magic Slot Caching:** Dedicated slots are cached directly on `ClassInfo`:
+   * `call_slot: Option<MethodId>` for dynamic instance method invocation (`__call`).
+   * `call_static_slot: Option<MethodId>` for dynamic static method invocation (`__callStatic`).
+   * `constructor_slot: Option<MethodId>` for fast zero-overhead instantiation (`__construct`).
+
+### 7.2 Whole-Program Class Hierarchy Analysis (CHA)
+During bytecode lowering, RHP performs whole-program Class Hierarchy Analysis via `ClassTable::is_method_overridden()`:
+* If a class declares a method and no derived subclass overrides it, calls targeting that method are automatically **devirtualized** into direct specialized function calls (`OpCode::CallFunction`).
+* If multiple subclasses provide distinct implementations, the call dispatches through the dense slot vtable with $O(1)$ array indexing.
+
+### 7.3 Escape Analysis for `::class` and DI Containers
+When `ClassName::class` is referenced in user code:
+* The compiler lowers it as a compile-time string literal constant (`OpCode::LoadConst`) with zero runtime reflection overhead.
+* The referenced class is flagged as **escaped** (`is_escaped = true`), instructing Dead Code Elimination (DCE) to preserve its public methods and constructor descriptors for runtime IoC dependency injection (`app()`).
+
+

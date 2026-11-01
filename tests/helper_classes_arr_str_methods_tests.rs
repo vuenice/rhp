@@ -423,14 +423,23 @@ fn test_string_non_static_helpers_and_regex_class() {
         $ew_dog = $text->endsWith("dog");
         $ew_cat = $text->endsWith("cat");
 
-        // 4. ->indexOf(substring)
-        $idx_quick = $text->indexOf("quick"); // pos 4
-        $idx_fox = $text->indexOf("fox");     // pos 16
-        $idx_none = $text->indexOf("unicorn"); // -1
+        // 4. ->find(substring)
+        $idx_quick = $text->find("quick"); // pos 4
+        $idx_fox = $text->find("fox");     // pos 16
+        $idx_none = $text->find("unicorn"); // null
 
-        // Multi-byte character indexOf test
+        // Multi-byte character find test
         $utf8_text = "Hello 🌍 World!";
-        $idx_world = $utf8_text->indexOf("World"); // char position 8
+        $idx_world = $utf8_text->find("World"); // char position 8
+
+        // Static Str::find
+        $s_find_fox = Str::find($text, "fox"); // pos 16
+        $s_find_none = Str::find($text, "unicorn"); // null
+
+        // Helper function strpos
+        $sp_quick = strpos($text, "quick"); // pos 4
+        $sp_none = strpos($text, "unicorn"); // null
+        $sp_offset = strpos($text, "the", 20); // pos 31
 
         // 5. ->testRegex(regex)
         $rx_match1 = $text->testRegex("/^The quick/i");
@@ -454,6 +463,8 @@ fn test_string_non_static_helpers_and_regex_class() {
             $sw_the, $sw_quick,
             $ew_dog, $ew_cat,
             $idx_quick, $idx_fox, $idx_none, $idx_world,
+            $s_find_fox, $s_find_none,
+            $sp_quick, $sp_none, $sp_offset,
             $rx_match1, $rx_match2, $rx_match3, $rx_match4, $rx_match5,
             $v1, $v2, $v3,
             $t1, $t2, $t3,
@@ -475,28 +486,37 @@ fn test_string_non_static_helpers_and_regex_class() {
         assert_eq!(b[4], PhpValue::Bool(true));
         assert_eq!(b[5], PhpValue::Bool(false));
 
-        // indexOf
+        // find (returns null if not found)
         assert_eq!(b[6], PhpValue::Int(4));
         assert_eq!(b[7], PhpValue::Int(16));
-        assert_eq!(b[8], PhpValue::Int(-1));
+        assert_eq!(b[8], PhpValue::Null);
         assert_eq!(b[9], PhpValue::Int(8));
 
+        // Str::find static
+        assert_eq!(b[10], PhpValue::Int(16));
+        assert_eq!(b[11], PhpValue::Null);
+
+        // Helper function strpos
+        assert_eq!(b[12], PhpValue::Int(4));
+        assert_eq!(b[13], PhpValue::Null);
+        assert_eq!(b[14], PhpValue::Int(31));
+
         // testRegex
-        assert_eq!(b[10], PhpValue::Bool(true));
-        assert_eq!(b[11], PhpValue::Bool(false));
-        assert_eq!(b[12], PhpValue::Bool(true));
-        assert_eq!(b[13], PhpValue::Bool(true));
-        assert_eq!(b[14], PhpValue::Bool(false));
-
-        // Regex::isValid
         assert_eq!(b[15], PhpValue::Bool(true));
-        assert_eq!(b[16], PhpValue::Bool(true));
-        assert_eq!(b[17], PhpValue::Bool(false));
-
-        // Regex::testString
+        assert_eq!(b[16], PhpValue::Bool(false));
+        assert_eq!(b[17], PhpValue::Bool(true));
         assert_eq!(b[18], PhpValue::Bool(true));
         assert_eq!(b[19], PhpValue::Bool(false));
+
+        // Regex::isValid
         assert_eq!(b[20], PhpValue::Bool(true));
+        assert_eq!(b[21], PhpValue::Bool(true));
+        assert_eq!(b[22], PhpValue::Bool(false));
+
+        // Regex::testString
+        assert_eq!(b[23], PhpValue::Bool(true));
+        assert_eq!(b[24], PhpValue::Bool(false));
+        assert_eq!(b[25], PhpValue::Bool(true));
     } else {
         panic!("expected array/list result");
     }

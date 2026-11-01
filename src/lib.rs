@@ -113,7 +113,8 @@ pub use vm::{
     gc_runs, get_memory_stats, is_gc_free, live_objects, peak_usage, record_alloc,
     record_cow_detachment, record_dealloc, record_live_object, release_live_object,
     reset_memory_tracker, reset_peak, MemoryScope, MemoryStats, OwnershipEnforcer,
-    DEFAULT_MAX_CALL_DEPTH, VM,
+    DEFAULT_MAX_CALL_DEPTH, VM, Throwable, Frame, RawFrame, is_builtin_error, is_builtin_exception,
+    is_builtin_throwable, is_throwable_subtype, chain, root_cause,
 };
 pub use lint::{
     add_variable_types, apply_casing, check_casing, format_source, lint_file, lint_path,

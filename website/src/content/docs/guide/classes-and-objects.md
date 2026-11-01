@@ -547,3 +547,100 @@ $csv = Arr::list([1, 2, 3])->toCsv();
 * **Maintains Familiarity:** Matches the exact developer ergonomics of Laravel (`Macroable`), making migration painless for teams upgrading performance-critical applications.
 * **Thread-Safe Registration:** Macros can be registered once during application bootstrap (`index.rhp` boot phase) in the parent process, making them safely accessible across all concurrent worker processes with zero mutex contention on request paths.
 
+---
+
+## Method Dispatch & Dynamic Features (The 4-Tier Pipeline)
+
+RHP bridges the gap between compiled native performance (Rust / Cranelift JIT) and expressive PHP/Laravel ergonomics through a **4-tier method dispatch pipeline**. This architecture ensures that 95%+ of typical business logic runs at direct CPU speed, while dynamic features (such as Eloquent scopes, `::class` dependency injection, and magic forwarding) remain fully supported.
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                      THE 4-TIER DISPATCH PIPELINE                      │
+├────────┬──────────────────────────────────┬────────────────────────────┤
+│ Tier 0 │ Direct Specialized Calls         │ User::create(), $this->x() │
+│ Tier 1 │ Devirtualized Direct Calls (CHA) │ Single-implementation call │
+│ Tier 2 │ Dense Slot-Indexed VTables       │ $animal->speak()           │
+│ Tier 3 │ Escaped Classes & Magic Fallback │ Foo::class, __call, DI     │
+└────────┴──────────────────────────────────┴────────────────────────────┘
+```
+
+### Tier 0: Direct Specialized Calls
+When a static method or instance call target is 100% known at compile time (such as `User::create(...)` or private method calls on `$this`), RHP compiles it directly to machine code (`OpCode::CallFunction` or direct Cranelift call). There is zero hash map lookup, zero runtime resolution loop, and the function call is eligible for native LLVM/Cranelift inlining.
+
+### Tier 1: Devirtualization via Class Hierarchy Analysis (CHA)
+In traditional dynamic languages, calling `$model->save()` forces the runtime to dynamically resolve the method name via hash tables. In RHP:
+1. During link time, RHP performs **Whole-Program Class Hierarchy Analysis (CHA)**.
+2. If `BaseEntity::save()` is declared on a base class and no subclass overrides it, RHP detects that only a single implementation exists across the entire project.
+3. The call is automatically **devirtualized** into a direct function call with zero vtable overhead.
+
+### Tier 2: Polymorphic Calls via Slot-Indexed VTables
+When an abstract method or interface method has multiple overriding subclasses:
+```php
+abstract class Animal {
+    public abstract function speak(): string;
+}
+
+class Dog extends Animal {
+    public function speak(): string { return "Woof"; }
+}
+
+class Cat extends Animal {
+    public function speak(): string { return "Meow"; }
+}
+
+function makeItSpeak(Animal $a): string {
+    return $a->speak();
+}
+```
+1. At compile/link time, `Animal::speak` is assigned a deterministic integer slot index in the class table (e.g. `Slot #2`).
+2. Both `Dog` and `Cat` populate `vtable[2]` with their respective compiled function pointers.
+3. At runtime, calling `$a->speak()` executes an $O(1)$ array index lookup (`obj.vtable[2]`), matching the speed of C++ virtual method calls and Rust `dyn Trait` vtables.
+
+### Tier 3: Escaped Classes (`Foo::class`) & Dependency Injection
+
+Laravel relies extensively on passing class names as values for routing, events, and dependency injection:
+
+```php
+// Route registration with class reference
+Route::get('/users', [UserController::class, 'index']);
+
+// Direct resolution from the application container
+$repo = app(UserRepository::class);
+
+// Dynamic make via container instance
+$app = app();
+$service = $app->make(PaymentService::class);
+```
+
+In RHP:
+1. **Compile-Time Constant Resolution:** When the compiler encounters `UserRepository::class`, it resolves the class name at compile time and emits a raw string constant (`OpCode::LoadConst`). There is zero runtime reflection or opcode overhead for `::class` expressions.
+2. **Escape Analysis:** The compiler marks classes whose `::class` is taken as **escaped**. This guarantees that Dead Code Elimination (DCE) preserves their public constructors and methods.
+3. **Zero-Reflection Container Resolution:** The built-in IoC container (`app()`) uses pre-compiled class descriptors to instantiate services instantly with constructor dependency resolution.
+
+### Magic Methods & Dynamic Scopes (`__call` and `__callStatic`)
+
+For expressive patterns like Eloquent dynamic scopes or query builder forwarding, RHP provides dedicated fast-fallback slots:
+
+```php
+class EloquentModel {
+    public function __call(string $name, array $args): mixed {
+        // Automatically invoked when calling undefined instance methods
+        return "dynamic_call:" . $name . ":" . implode(",", $args);
+    }
+
+    public static function __callStatic(string $name, array $args): mixed {
+        // Automatically invoked when calling undefined static methods
+        return "static_call:" . $name;
+    }
+}
+
+$model = new EloquentModel();
+
+// Calls EloquentModel::__call("scopeActive", ["admin", "verified"])
+$result = $model->scopeActive("admin", "verified");
+```
+
+* **Slot Caching:** `__call` and `__callStatic` are cached in dedicated slots on the class table (`call_slot` and `call_static_slot`).
+* **Fast-Path Fallback:** When a method name is not present in the class vtable, the VM immediately invokes `__call` without traversing deep class hierarchies, giving Eloquent models and Macroable classes high-throughput performance.
+
+

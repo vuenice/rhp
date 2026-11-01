@@ -415,8 +415,8 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     LegacyPhpFunctionMapping {
         php_name: "strpos",
         rhp_facade: "Str",
-        rhp_method: "pos",
-        rhp_signature: "Str::pos(string $haystack, string $needle, int $offset = 0): int|bool",
+        rhp_method: "find",
+        rhp_signature: "Str::find(string $haystack, string $needle, int $offset = 0): ?int",
     },
     LegacyPhpFunctionMapping {
         php_name: "sprintf",

@@ -51,6 +51,57 @@ pub enum IrErrorKind {
         "IR Error: Virtual register limit (65,535 registers) exceeded while compiling '{scope_name}'."
     )]
     RegisterOverflow { scope_name: String },
+
+    #[error("Fatal Error: Class '{class_name}' cannot extend itself or form an inheritance cycle.")]
+    InheritanceCycle { class_name: String },
+
+    #[error("Fatal Error: Class '{class_name}' contains abstract method '{declaring_class}::{method_name}()' and must therefore be declared abstract or implement it.")]
+    UnimplementedAbstractMethod {
+        class_name: String,
+        method_name: String,
+        declaring_class: String,
+    },
+
+    #[error("Fatal Error: Class '{class_name}' must implement abstract method '{trait_name}::{method_name}()'.")]
+    TraitAbstractMethodUnimplemented {
+        class_name: String,
+        trait_name: String,
+        method_name: String,
+    },
+
+    #[error("Fatal Error: Method '{class_name}::{method_name}()' cannot override final method '{parent_name}::{method_name}()'.")]
+    CannotOverrideFinalMethod {
+        class_name: String,
+        parent_name: String,
+        method_name: String,
+    },
+
+    #[error("Fatal Error: Access level to '{class_name}::{method_name}()' must be {parent_visibility} (as in class '{parent_name}') or weaker.")]
+    NarrowedVisibility {
+        class_name: String,
+        parent_name: String,
+        method_name: String,
+        parent_visibility: String,
+    },
+
+    #[error("Fatal Error: Class '{class_name}' cannot extend final class '{parent_name}'.")]
+    CannotExtendFinalClass {
+        class_name: String,
+        parent_name: String,
+    },
+
+    #[error("Fatal Error: Class '{class_name}' must implement interface method '{interface_name}::{method_name}()'.")]
+    InterfaceNotImplemented {
+        class_name: String,
+        interface_name: String,
+        method_name: String,
+    },
+
+    #[error("Fatal Error: Abstract method '{class_name}::{method_name}()' cannot be declared private.")]
+    AbstractMethodPrivate {
+        class_name: String,
+        method_name: String,
+    },
 }
 
 /// Unified end-to-end compilation error encompassing Lexing/Parsing, Type Checking, and IR Lowering.

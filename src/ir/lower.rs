@@ -251,6 +251,7 @@ pub struct IrLowerer<'a> {
     current_namespace: Option<String>,
     use_aliases: HashMap<String, String>,
     synthetic_counter: u32,
+    escaped_classes: HashSet<String>,
 }
 
 impl<'a> IrLowerer<'a> {
@@ -261,6 +262,7 @@ impl<'a> IrLowerer<'a> {
             current_namespace: None,
             use_aliases: HashMap::new(),
             synthetic_counter: 0,
+            escaped_classes: HashSet::new(),
         }
     }
 
@@ -272,6 +274,7 @@ impl<'a> IrLowerer<'a> {
             current_namespace: None,
             use_aliases: HashMap::new(),
             synthetic_counter: 0,
+            escaped_classes: HashSet::new(),
         }
     }
 
@@ -284,12 +287,29 @@ impl<'a> IrLowerer<'a> {
 
         let mut main_builder = ChunkBuilder::new("<main>", None, None, top_inferences);
 
+        // Hoist declarations ahead of script statements so class hierarchy and static forwarders are known
+        self.hoist_declarations(&program.statements)?;
+        self.compose_traits();
+        self.module.build_and_link_class_table()?;
+
+        // Reset namespace and use aliases for top-level statement pass
+        self.current_namespace = None;
+        self.use_aliases.clear();
+
         for stmt in &program.statements {
             self.lower_stmt(&mut main_builder, stmt)?;
         }
 
         // Compose traits into module classes and traits
         self.compose_traits();
+
+        // Build and link runtime class table (flat vtables, prop layouts, ancestors)
+        self.module.build_and_link_class_table()?;
+
+        // Mark escaped classes in class_table (escaped via Foo::class, DI, etc.)
+        for esc in &self.escaped_classes {
+            self.module.class_table.mark_escaped(esc);
+        }
 
         // Ensure the top-level script chunk ends with an explicit Return instruction
         let needs_terminal_return = main_builder
@@ -315,6 +335,10 @@ impl<'a> IrLowerer<'a> {
             }
         }
         self.module.metadata = extracted_metadata;
+        self.module.file_path = program.file_path.clone();
+        if let Some(ref path) = program.file_path {
+            self.module.source_files.insert(program.span.file_id, path.clone());
+        }
 
         self.module.main_chunk = main_builder.chunk;
         Ok(self.module)
@@ -335,8 +359,93 @@ impl<'a> IrLowerer<'a> {
     }
 
     // =========================================================================
-    // Statement Lowering
+    // Statement Lowering & Declaration Hoisting
     // =========================================================================
+
+    fn hoist_declarations(&mut self, stmts: &[Stmt<'_>]) -> Result<(), IrError> {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::Use(imports) => {
+                    for imp in imports {
+                        let target = imp.name.name.strip_prefix('\\').unwrap_or(imp.name.name);
+                        let alias = imp
+                            .alias
+                            .as_ref()
+                            .map(|a| a.name.to_string())
+                            .unwrap_or_else(|| {
+                                target
+                                    .rsplit('\\')
+                                    .next()
+                                    .unwrap_or(target)
+                                    .to_string()
+                            });
+                        self.use_aliases.insert(alias, target.to_string());
+                    }
+                }
+                StmtKind::Namespace { name, body } => {
+                    let prev_ns = self.current_namespace.clone();
+                    let prev_aliases = self.use_aliases.clone();
+                    if body.is_none() && prev_ns.is_some() {
+                        self.use_aliases.clear();
+                    }
+                    self.current_namespace = name.as_ref().map(|id| {
+                        let n = id.name.strip_prefix('\\').unwrap_or(id.name);
+                        n.to_string()
+                    });
+                    if let Some(inner) = body {
+                        self.hoist_declarations(inner)?;
+                        self.current_namespace = prev_ns;
+                        self.use_aliases = prev_aliases;
+                    }
+                }
+                StmtKind::Block(inner) => {
+                    self.hoist_declarations(inner)?;
+                }
+                StmtKind::InterfaceDecl(iface) => {
+                    let name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, iface.name.name)
+                    } else {
+                        iface.name.name.to_string()
+                    };
+                    if !self.module.class_index.contains_key(&name) {
+                        self.compile_interface_decl(iface)?;
+                    }
+                }
+                StmtKind::TraitDecl(tr) => {
+                    let name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, tr.name.name)
+                    } else {
+                        tr.name.name.to_string()
+                    };
+                    if !self.module.class_index.contains_key(&name) {
+                        self.compile_trait_decl(tr)?;
+                    }
+                }
+                StmtKind::ClassDecl(cls) => {
+                    let name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, cls.name.name)
+                    } else {
+                        cls.name.name.to_string()
+                    };
+                    if !self.module.class_index.contains_key(&name) {
+                        self.compile_class_decl(cls)?;
+                    }
+                }
+                StmtKind::EnumDecl(enm) => {
+                    let name = if let Some(ref ns) = self.current_namespace {
+                        format!("{}\\{}", ns, enm.name.name)
+                    } else {
+                        enm.name.name.to_string()
+                    };
+                    if !self.module.class_index.contains_key(&name) {
+                        self.compile_enum_decl(enm)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 
     fn lower_stmt(&mut self, b: &mut ChunkBuilder, stmt: &Stmt<'_>) -> Result<(), IrError> {
         match &stmt.kind {
@@ -906,21 +1015,53 @@ impl<'a> IrLowerer<'a> {
             }
 
             StmtKind::ClassDecl(cls) => {
+                let class_name = if let Some(ref ns) = self.current_namespace {
+                    format!("{}\\{}", ns, cls.name.name)
+                } else {
+                    cls.name.name.to_string()
+                };
+                if self.module.class_index.contains_key(&class_name) {
+                    return Ok(());
+                }
                 self.compile_class_decl(cls)?;
                 Ok(())
             }
 
             StmtKind::InterfaceDecl(iface) => {
+                let name = if let Some(ref ns) = self.current_namespace {
+                    format!("{}\\{}", ns, iface.name.name)
+                } else {
+                    iface.name.name.to_string()
+                };
+                if self.module.class_index.contains_key(&name) {
+                    return Ok(());
+                }
                 self.compile_interface_decl(iface)?;
                 Ok(())
             }
 
             StmtKind::TraitDecl(tr) => {
+                let name = if let Some(ref ns) = self.current_namespace {
+                    format!("{}\\{}", ns, tr.name.name)
+                } else {
+                    tr.name.name.to_string()
+                };
+                if self.module.class_index.contains_key(&name) {
+                    return Ok(());
+                }
                 self.compile_trait_decl(tr)?;
                 Ok(())
             }
 
             StmtKind::EnumDecl(enm) => {
+                let name = if let Some(ref ns) = self.current_namespace {
+                    format!("{}\\{}", ns, enm.name.name)
+                } else {
+                    enm.name.name.to_string()
+                };
+                if self.module.class_index.contains_key(&name) {
+                    return Ok(());
+                }
                 self.compile_enum_decl(enm)?;
                 Ok(())
             }
@@ -1044,6 +1185,7 @@ impl<'a> IrLowerer<'a> {
                     is_closure: true,
                     visibility: Visibility::Public,
                     enclosing_class: b.enclosing_class.clone(),
+                    declaring_class_id: None,
                     chunk: defer_builder.chunk,
                     span: stmt.span,
                 });
@@ -1617,6 +1759,41 @@ impl<'a> IrLowerer<'a> {
 
                     // 6. Standard User Class Static Call (`User::create(...)`, `self::helper(...)`)
                     let resolved_class = self.resolve_class_name(target_name, b.enclosing_class.as_deref());
+
+                    if target_name != "parent"
+                        && target_name != "self"
+                        && resolved_class != "static"
+                        && resolved_class != "parent"
+                        && !self.class_has_static_method(&resolved_class, method_name)
+                        && self.class_has_forwarder(&resolved_class)
+                    {
+                        let recv_reg = b.alloc_temp(RhpType::Object, expr.span)?;
+                        let class_const = b.intern_string(&resolved_class);
+                        let forward_const = b.intern_string("__forward");
+                        b.emit(
+                            OpCode::StaticCall {
+                                dst: recv_reg,
+                                class: class_const,
+                                method: forward_const,
+                                arg_count: 0,
+                            },
+                            expr.span,
+                        );
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let method_const = b.intern_string(method_name);
+                        b.emit(
+                            OpCode::MethodCall {
+                                dst,
+                                object: recv_reg,
+                                method: method_const,
+                                arg_count,
+                                is_nullsafe: false,
+                            },
+                            expr.span,
+                        );
+                        return Ok(dst);
+                    }
+
                     let arg_count = self.evaluate_and_push_args(b, args)?;
                     let class_const = b.intern_string(&resolved_class);
                     let method_const = b.intern_string(method_name);
@@ -1761,6 +1938,17 @@ impl<'a> IrLowerer<'a> {
                 };
                 let resolved_class =
                     self.resolve_class_name(class.name, b.enclosing_class.as_deref());
+
+                if const_name.name == "class" {
+                    self.escaped_classes.insert(resolved_class.clone());
+                    // Fast Tier-2 compile-time constant for known class name:
+                    if resolved_class != "static" {
+                        let class_const = b.intern_string(&resolved_class);
+                        b.emit(OpCode::LoadConst { dst, const_id: class_const }, expr.span);
+                        return Ok(dst);
+                    }
+                }
+
                 let class_const = b.intern_string(&resolved_class);
                 let name_const = b.intern_string(const_name.name);
                 b.emit(
@@ -2964,6 +3152,7 @@ impl<'a> IrLowerer<'a> {
             is_closure: false,
             visibility,
             enclosing_class,
+            declaring_class_id: None,
             chunk: fb.chunk,
             span: func.span,
         });
@@ -3104,6 +3293,7 @@ impl<'a> IrLowerer<'a> {
             is_closure: true,
             visibility: Visibility::Public,
             enclosing_class: parent.enclosing_class.clone(),
+            declaring_class_id: None,
             chunk: fb.chunk,
             span,
         });
@@ -3236,6 +3426,7 @@ impl<'a> IrLowerer<'a> {
             } else {
                 parent.enclosing_class.clone()
             },
+            declaring_class_id: None,
             chunk: fb.chunk,
             span,
         });
@@ -3390,6 +3581,7 @@ impl<'a> IrLowerer<'a> {
             properties,
             constants,
             methods,
+            static_forward: None,
             span: cls.span,
         });
         self.module.class_index.insert(class_name.clone(), class_id);
@@ -3519,6 +3711,7 @@ impl<'a> IrLowerer<'a> {
             properties,
             constants,
             methods,
+            static_forward: None,
             span: tr.span,
         });
         self.module.class_index.insert(trait_name.clone(), class_id);
@@ -3806,7 +3999,8 @@ impl<'a> IrLowerer<'a> {
 
     fn resolve_class_name(&self, raw_name: &str, enclosing_class: Option<&str>) -> String {
         match raw_name {
-            "self" | "static" => enclosing_class.unwrap_or(raw_name).to_string(),
+            "self" => enclosing_class.unwrap_or(raw_name).to_string(),
+            "static" => "static".to_string(),
             "parent" => {
                 if let Some(cls) = enclosing_class {
                     if let Some(ti) = self.type_info {
@@ -3867,6 +4061,92 @@ impl<'a> IrLowerer<'a> {
             self.resolve_class_name(raw, current_class)
         })
         .ok()
+    }
+
+    fn class_has_static_method(&self, class_name: &str, method_name: &str) -> bool {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        if let Some(&cid) = self.module.class_index.get(clean) {
+            let ct = &self.module.class_table;
+            if cid.index() < ct.classes.len() {
+                let ci = &ct.classes[cid.index()];
+                if let Some(&mid) = ci.vtable.get(method_name) {
+                    if (mid.0 as usize) < self.module.functions.len() {
+                        return self.module.functions[mid.0 as usize].is_static;
+                    }
+                }
+            }
+            let mut curr = Some(cid);
+            while let Some(c) = curr {
+                if c.index() < self.module.classes.len() {
+                    let cls = &self.module.classes[c.index()];
+                    if let Some(&fid) = cls.methods.get(method_name) {
+                        if fid.index() < self.module.functions.len() {
+                            return self.module.functions[fid.index()].is_static;
+                        }
+                    }
+                    curr = cls.extends.as_ref().and_then(|ext| self.module.class_index.get(ext.as_str()).copied());
+                } else {
+                    break;
+                }
+            }
+        }
+        if let Some(ti) = self.type_info {
+            let mut curr_name = Some(clean.to_string());
+            while let Some(cname) = curr_name {
+                if let Some(cinfo) = ti.hierarchy.classes.get(&cname) {
+                    if let Some(sig) = cinfo.methods.get(method_name) {
+                        return sig.is_static;
+                    }
+                    curr_name = cinfo.extends.clone();
+                } else {
+                    break;
+                }
+            }
+        }
+        false
+    }
+
+    fn class_has_forwarder(&self, class_name: &str) -> bool {
+        let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+        if let Some(&cid) = self.module.class_index.get(clean) {
+            let ct = &self.module.class_table;
+            if cid.index() < ct.classes.len() {
+                if ct.classes[cid.index()].static_forward.is_some() {
+                    return true;
+                }
+            }
+            if cid.index() < self.module.classes.len() {
+                if self.module.classes[cid.index()].static_forward.is_some() {
+                    return true;
+                }
+            }
+            let mut curr = Some(cid);
+            while let Some(c) = curr {
+                if c.index() < self.module.classes.len() {
+                    let cls = &self.module.classes[c.index()];
+                    if cls.methods.contains_key("__forward") {
+                        return true;
+                    }
+                    curr = cls.extends.as_ref().and_then(|ext| self.module.class_index.get(ext.as_str()).copied());
+                } else {
+                    break;
+                }
+            }
+        }
+        if let Some(ti) = self.type_info {
+            let mut curr_name = Some(clean.to_string());
+            while let Some(cname) = curr_name {
+                if let Some(cinfo) = ti.hierarchy.classes.get(&cname) {
+                    if cinfo.methods.contains_key("__forward") {
+                        return true;
+                    }
+                    curr_name = cinfo.extends.clone();
+                } else {
+                    break;
+                }
+            }
+        }
+        false
     }
 }
 

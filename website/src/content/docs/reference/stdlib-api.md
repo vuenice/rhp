@@ -353,6 +353,7 @@ Str::random(int $length = 16): string;
 Str::join(string $glue, array $pieces): string;
 Str::split(string $delimiter, string $string): list;
 Str::replace(string $search, string $replace, string $subject): string;
+Str::find(string $haystack, string $needle, int $offset = 0): ?int;
 
 // Multi-Byte Encodings & Binary Constructors
 Str::fromEncoding(string|array $bytes, string $encoding): string; // Decodes Shift-JIS, EUC-JP, ISO-2022-JP, UTF-8
@@ -375,6 +376,7 @@ $str->slug(): string;
 $str->contains(string $needle): bool;
 $str->startsWith(string $prefix): bool;
 $str->endsWith(string $suffix): bool;
+$str->find(string $needle, int $offset = 0): ?int;
 $str->length(): int;
 $str->byteLength(): int;
 $str->split(string $delimiter): list;

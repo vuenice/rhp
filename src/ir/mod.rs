@@ -12,6 +12,7 @@
 //!   and `Arr::hashMap` directly into `NewCollection` opcodes, native Rust numeric wrappers
 //!   into `WrapRustInt` / `WrapRustFloat`, and `phpFun::*` legacy calls into canonical RHP facades.
 
+pub mod class_table;
 pub mod error;
 pub mod lower;
 pub mod opcode;
@@ -29,6 +30,7 @@ use crate::type_system::{
     parse_and_check, parse_and_check_with_file_id, types::RhpType, TypeCheckResult, TypedProgram,
 };
 
+pub use class_table::{ClassInfo, ClassTable, MethodId, PropSlot};
 pub use error::{CompilationError, IrError, IrErrorKind};
 pub use lower::IrLowerer;
 pub use opcode::{
@@ -65,6 +67,7 @@ pub struct CompiledFunction {
     pub is_closure: bool,
     pub visibility: Visibility,
     pub enclosing_class: Option<String>,
+    pub declaring_class_id: Option<ClassId>,
     pub chunk: BytecodeChunk,
     pub span: Span,
 }
@@ -105,6 +108,7 @@ pub struct CompiledClass {
     pub properties: Vec<CompiledProperty>,
     pub constants: Vec<CompiledClassConst>,
     pub methods: HashMap<String, FunctionId>,
+    pub static_forward: Option<FunctionId>,
     pub span: Span,
 }
 
@@ -179,8 +183,14 @@ pub struct IrModule {
     pub interfaces: HashMap<String, CompiledInterface>,
     /// Compiled enums by name.
     pub enums: HashMap<String, CompiledEnum>,
+    /// Global runtime class table with flattened vtables and prop layouts.
+    pub class_table: ClassTable,
     /// Read-only static metadata table emitted by the compiler (Reflection alternative).
     pub metadata: crate::metadata::ProgramMetadata,
+    /// Optional primary file path of the compiled source code.
+    pub file_path: Option<String>,
+    /// Table of source file paths indexed by file_id for multi-file stack trace resolution.
+    pub source_files: HashMap<usize, String>,
 }
 
 impl IrModule {
@@ -210,6 +220,71 @@ impl IrModule {
             return self.classes.get(id.index());
         }
         None
+    }
+
+    /// Look up linked [`ClassInfo`] from the class table by [`ClassId`].
+    #[inline]
+    pub fn get_class_info(&self, id: ClassId) -> Option<&ClassInfo> {
+        self.class_table.get(id)
+    }
+
+    /// Look up linked [`ClassInfo`] from the class table by name.
+    #[inline]
+    pub fn get_class_info_by_name(&self, name: &str) -> Option<&ClassInfo> {
+        self.class_table.get_by_name(name)
+    }
+
+    /// Build and link the runtime [`ClassTable`] from compiled classes and interfaces.
+    pub fn build_and_link_class_table(&mut self) -> Result<(), IrError> {
+        let mut table = ClassTable::new();
+
+        // 1. Populate classes and traits
+        for cls in &self.classes {
+            let mut info = ClassInfo::new(cls.id, cls.name.as_str(), cls.span);
+            info.parent_name = cls.extends.clone();
+            info.interface_names = cls.implements.clone();
+            info.trait_names = cls.traits.clone();
+            info.is_abstract = cls.modifiers.is_abstract;
+            info.is_final = cls.modifiers.is_final;
+            info.is_readonly = cls.modifiers.is_readonly;
+            info.is_singleton = cls.modifiers.is_singleton;
+            info.is_static_only = cls.modifiers.is_static_only;
+            info.is_trait = cls.is_trait;
+            info.is_interface = false;
+            info.own_props = cls.properties.clone();
+            for (m_name, &fn_id) in &cls.methods {
+                info.own_methods.insert(m_name.as_str().into(), fn_id);
+            }
+            table.add_class(info);
+        }
+
+        // 2. Populate interfaces
+        for (iface_name, iface) in &self.interfaces {
+            let mut info = ClassInfo::new(ClassId(table.classes.len() as u32), iface_name.as_str(), iface.span);
+            info.interface_names = iface.extends.clone();
+            info.is_abstract = true;
+            info.is_interface = true;
+            for (m_name, &fn_id) in &iface.methods {
+                info.own_methods.insert(m_name.as_str().into(), fn_id);
+            }
+            table.add_class(info);
+        }
+
+        // 3. Link the class table
+        table.link(&mut self.functions, &mut self.function_index)?;
+
+        // 4. Update CompiledClass methods and traits with final linked vtables
+        for cls in &mut self.classes {
+            if let Some(ci) = table.get(cls.id) {
+                for (m_name, &mid) in &ci.vtable {
+                    cls.methods.insert(m_name.to_string(), mid);
+                }
+                cls.static_forward = ci.static_forward;
+            }
+        }
+
+        self.class_table = table;
+        Ok(())
     }
 
     /// Disassemble the entire compiled module (top-level script and all functions/methods).

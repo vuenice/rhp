@@ -1432,6 +1432,53 @@ impl TypeChecker {
                 for iface_name in &class_info.implements {
                     self.verify_interface_implementation(class_name, class_info, iface_name)?;
                 }
+
+                // 3. Validate abstract methods from parents
+                let mut cursor = class_info.extends.clone();
+                while let Some(parent_cls) = cursor {
+                    if let Some(parent_info) = hierarchy.classes.get(&parent_cls) {
+                        for (m_name, p_sig) in &parent_info.methods {
+                            if p_sig.is_abstract {
+                                let impl_sig = hierarchy.lookup_method(class_name, m_name);
+                                if impl_sig.map(|s| s.is_abstract).unwrap_or(true) {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::UnimplementedAbstractMethod {
+                                            class_name: class_name.clone(),
+                                            method_name: m_name.clone(),
+                                            declaring_class: parent_cls.clone(),
+                                        },
+                                        class_info.span,
+                                    ));
+                                }
+                            }
+                        }
+                        cursor = parent_info.extends.clone();
+                    } else {
+                        break;
+                    }
+                }
+
+                // 4. Validate abstract methods from used traits
+                for tr_name in &class_info.traits {
+                    let clean_tr = tr_name.strip_prefix('\\').unwrap_or(tr_name);
+                    if let Some(tr_info) = hierarchy.traits.get(clean_tr).or_else(|| hierarchy.traits.get(tr_name)) {
+                        for (m_name, tr_sig) in &tr_info.methods {
+                            if tr_sig.is_abstract {
+                                let impl_sig = hierarchy.lookup_method(class_name, m_name);
+                                if impl_sig.map(|s| s.is_abstract).unwrap_or(true) {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::TraitAbstractMethodUnimplemented {
+                                            class_name: class_name.clone(),
+                                            trait_name: tr_name.clone(),
+                                            method_name: m_name.clone(),
+                                        },
+                                        class_info.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2184,7 +2231,16 @@ impl TypeChecker {
                         }
                     }
                 }
-                ClassMemberKind::Method(MethodDecl { function, .. }) => {
+                ClassMemberKind::Method(MethodDecl { function, is_abstract, visibility, .. }) => {
+                    if *is_abstract && *visibility == Visibility::Private {
+                        return Err(TypeError::new(
+                            TypeErrorKind::AbstractMethodCannotBePrivate {
+                                class_name: class_name.to_string(),
+                                method_name: function.name.name.to_string(),
+                            },
+                            function.span,
+                        ));
+                    }
                     let sig = class_info
                         .methods
                         .get(function.name.name)
@@ -2222,7 +2278,16 @@ impl TypeChecker {
             .expect("Trait collected in Pass 1");
 
         for member in &tr.members {
-            if let ClassMemberKind::Method(MethodDecl { function, .. }) = &member.kind {
+            if let ClassMemberKind::Method(MethodDecl { function, is_abstract, visibility, .. }) = &member.kind {
+                if *is_abstract && *visibility == Visibility::Private {
+                    return Err(TypeError::new(
+                        TypeErrorKind::AbstractMethodCannotBePrivate {
+                            class_name: trait_name.to_string(),
+                            method_name: function.name.name.to_string(),
+                        },
+                        function.span,
+                    ));
+                }
                 let sig = trait_info
                     .methods
                     .get(function.name.name)
@@ -2662,6 +2727,15 @@ impl TypeChecker {
                 }
 
                 if let Some(ci) = self.result.hierarchy.classes.get(&class_name) {
+                    if ci.is_abstract {
+                        return Err(TypeError::new(
+                            TypeErrorKind::CannotInstantiateAbstractClass {
+                                class_name: class_name.clone(),
+                            },
+                            expr.span,
+                        ));
+                    }
+
                     if ci.is_static_only {
                         return Err(TypeError::new(
                             TypeErrorKind::StaticFacadeInstantiationForbidden {
@@ -2693,6 +2767,24 @@ impl TypeChecker {
                             }
                         }
                     }
+                }
+
+                if self.result.hierarchy.interfaces.contains_key(&class_name) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::CannotInstantiateInterface {
+                            interface_name: class_name.clone(),
+                        },
+                        expr.span,
+                    ));
+                }
+
+                if self.result.hierarchy.traits.contains_key(&class_name) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::CannotInstantiateTrait {
+                            trait_name: class_name.clone(),
+                        },
+                        expr.span,
+                    ));
                 }
 
                 let arg_types = self.infer_arguments(args, env, ctx, None)?;

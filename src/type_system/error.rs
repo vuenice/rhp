@@ -331,4 +331,33 @@ pub enum TypeErrorKind {
         class_name: String,
         reason: String,
     },
+
+    #[error("Fatal Error: Cannot instantiate abstract class '{class_name}'")]
+    CannotInstantiateAbstractClass { class_name: String },
+
+    #[error("Fatal Error: Cannot instantiate interface '{interface_name}'")]
+    CannotInstantiateInterface { interface_name: String },
+
+    #[error("Fatal Error: Cannot instantiate trait '{trait_name}'")]
+    CannotInstantiateTrait { trait_name: String },
+
+    #[error("Fatal Error: Abstract method '{class_name}::{method_name}()' cannot be declared private")]
+    AbstractMethodCannotBePrivate {
+        class_name: String,
+        method_name: String,
+    },
+
+    #[error("Fatal Error: Class '{class_name}' contains abstract method '{declaring_class}::{method_name}()' and must therefore be declared abstract or implement it")]
+    UnimplementedAbstractMethod {
+        class_name: String,
+        method_name: String,
+        declaring_class: String,
+    },
+
+    #[error("Fatal Error: Class '{class_name}' must implement abstract method '{trait_name}::{method_name}()'")]
+    TraitAbstractMethodUnimplemented {
+        class_name: String,
+        trait_name: String,
+        method_name: String,
+    },
 }
