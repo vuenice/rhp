@@ -160,3 +160,149 @@ fn test_polymorphic_method_dispatch_runtime() {
     assert_eq!(vm.get_main_variable("$dog_sound"), Some(&PhpValue::string("Woof")));
     assert_eq!(vm.get_main_variable("$cat_sound"), Some(&PhpValue::string("Meow")));
 }
+
+#[test]
+fn test_dynamic_method_and_property_with_curly_braces() {
+    let source = r#"
+        class ServiceHandler {
+            public string $status = 'initial';
+            public int $count = 10;
+
+            public function calculate(int $a, int $b): int {
+                return $a * $b;
+            }
+
+            public function getSecret(): string {
+                return "secret_value";
+            }
+
+            public function __call(string $name, array $args): string {
+                return "fallback:" . $name . ":" . implode("-", $args);
+            }
+        }
+
+        $svc = new ServiceHandler();
+
+        // 1. Dynamic method call with variable in braces: $obj->{$method}(...)
+        $method1 = 'calculate';
+        $res1 = $svc->{$method1}(6, 7);
+
+        // 2. Dynamic method call with expression inside braces: $obj->{'get' . 'Secret'}()
+        $res2 = $svc->{'get' . 'Secret'}();
+
+        // 3. Dynamic method call forwarding to __call
+        $unknown = 'whereUser';
+        $res3 = $svc->{$unknown}('active', 'verified');
+
+        // 4. Dynamic property read: $obj->{$prop}
+        $prop_name = 'status';
+        $prop_val = $svc->{$prop_name};
+
+        // 5. Dynamic property write: $obj->{$prop} = 42
+        $count_prop = 'count';
+        $svc->{$count_prop} = 42;
+        $new_count = $svc->count;
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Execution must succeed");
+
+    assert_eq!(vm.get_main_variable("$res1"), Some(&PhpValue::Int(42)));
+    assert_eq!(
+        vm.get_main_variable("$res2"),
+        Some(&PhpValue::string("secret_value"))
+    );
+    assert_eq!(
+        vm.get_main_variable("$res3"),
+        Some(&PhpValue::string("fallback:whereUser:active-verified"))
+    );
+    assert_eq!(
+        vm.get_main_variable("$prop_val"),
+        Some(&PhpValue::string("initial"))
+    );
+    assert_eq!(vm.get_main_variable("$new_count"), Some(&PhpValue::Int(42)));
+}
+
+#[test]
+fn test_final_method_non_overriding_and_devirtualization() {
+    // 1. Attempting to override a final method must fail compilation
+    let invalid_override_source = r#"
+        class ParentClass {
+            final public function saveRecord(): string {
+                return "saved";
+            }
+        }
+
+        class ChildClass extends ParentClass {
+            public function saveRecord(): string {
+                return "hacked";
+            }
+        }
+    "#;
+
+    let err = compile_source(invalid_override_source);
+    assert!(
+        err.is_err(),
+        "Compilation must fail when a child class tries to override a final method"
+    );
+
+    // 2. Final methods and methods in final classes are safely devirtualized and callable directly
+    let valid_final_source = r#"
+        class Model {
+            final public function save(): string {
+                return "model_saved";
+            }
+
+            final public function update(string $status): string {
+                return "updated_to_" . $status;
+            }
+        }
+
+        class UserModel extends Model {
+            public function profile(): string {
+                // Call final method on $this
+                return $this->save();
+            }
+        }
+
+        final class FinalService {
+            public function execute(): int {
+                return 12345;
+            }
+        }
+
+        $user = new UserModel();
+        $saved = $user->profile();
+        $updated = $user->update("active");
+
+        $fin = new FinalService();
+        $val = $fin->execute();
+    "#;
+
+    let (vm, _module) = run_source_with_vm(valid_final_source).expect("Execution must succeed");
+
+    assert_eq!(
+        vm.get_main_variable("$saved"),
+        Some(&PhpValue::string("model_saved"))
+    );
+    assert_eq!(
+        vm.get_main_variable("$updated"),
+        Some(&PhpValue::string("updated_to_active"))
+    );
+    assert_eq!(vm.get_main_variable("$val"), Some(&PhpValue::Int(12345)));
+
+    // Verify CHA analysis confirms final methods are not overridden
+    assert!(!vm.module().class_table.is_method_overridden("Model", "save"));
+    assert!(!vm.module().class_table.is_method_overridden("Model", "update"));
+    assert!(!vm.module().class_table.is_method_overridden("FinalService", "execute"));
+
+    // Verify final_methods set on Model
+    let model_info = vm.module().class_table.get_by_name("Model").unwrap();
+    assert!(model_info.final_methods.contains("save"));
+    assert!(model_info.final_methods.contains("update"));
+
+    // Verify UserModel inherited final_methods from Model
+    let user_model_info = vm.module().class_table.get_by_name("UserModel").unwrap();
+    assert!(user_model_info.final_methods.contains("save"));
+    assert!(user_model_info.final_methods.contains("update"));
+}
+

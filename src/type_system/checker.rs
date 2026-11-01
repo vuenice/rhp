@@ -485,6 +485,13 @@ impl TypeChecker {
                     self.collect_anon_classes_from_expr(&a.value)?;
                 }
             }
+            ExprKind::DynamicMethodCall { object, method, args, .. } => {
+                self.collect_anon_classes_from_expr(object)?;
+                self.collect_anon_classes_from_expr(method)?;
+                for a in args {
+                    self.collect_anon_classes_from_expr(&a.value)?;
+                }
+            }
             ExprKind::StaticCall { target, args, .. } => {
                 self.collect_anon_classes_from_expr(target)?;
                 for a in args {
@@ -493,6 +500,10 @@ impl TypeChecker {
             }
             ExprKind::PropertyFetch { object, .. } => {
                 self.collect_anon_classes_from_expr(object)?;
+            }
+            ExprKind::DynamicPropertyFetch { object, property, .. } => {
+                self.collect_anon_classes_from_expr(object)?;
+                self.collect_anon_classes_from_expr(property)?;
             }
             ExprKind::Array(elements) => {
                 for el in elements {
@@ -2887,6 +2898,20 @@ impl TypeChecker {
                 }
             }
 
+            ExprKind::DynamicPropertyFetch {
+                object,
+                property,
+                is_nullsafe,
+            } => {
+                let obj_ty = self.infer_expr(object, env, ctx, None)?;
+                let _ = self.infer_expr(property, env, ctx, None)?;
+                if *is_nullsafe || obj_ty.accepts_null() {
+                    RhpType::Dynamic.into_nullable()
+                } else {
+                    RhpType::Dynamic
+                }
+            }
+
             ExprKind::StaticPropertyFetch { class, property } => {
                 let resolved_cls =
                     self.resolve_class_name(class.name, ctx.and_then(|c| c.enclosing_class.as_deref()));
@@ -3156,6 +3181,22 @@ impl TypeChecker {
                     return Ok(self.record_expr_type(expr.span, final_ty));
                 }
 
+                if *is_nullsafe {
+                    RhpType::Dynamic.into_nullable()
+                } else {
+                    RhpType::Dynamic
+                }
+            }
+
+            ExprKind::DynamicMethodCall {
+                object,
+                method,
+                args,
+                is_nullsafe,
+            } => {
+                let _ = self.infer_expr(object, env, ctx, None)?;
+                let _ = self.infer_expr(method, env, ctx, None)?;
+                let _ = self.infer_arguments(args, env, ctx, None)?;
                 if *is_nullsafe {
                     RhpType::Dynamic.into_nullable()
                 } else {
@@ -3535,6 +3576,12 @@ impl TypeChecker {
                         }
                     }
                 }
+                Ok(effective_rhs_ty)
+            }
+
+            ExprKind::DynamicPropertyFetch { object, property, .. } => {
+                let _ = self.infer_expr(object, env, ctx, None)?;
+                let _ = self.infer_expr(property, env, ctx, None)?;
                 Ok(effective_rhs_ty)
             }
 

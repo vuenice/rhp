@@ -357,6 +357,24 @@ pub enum OpCode {
         is_nullsafe: bool,
     },
 
+    /// Invoke an instance method via direct compile-time resolved function ID (devirtualized/final).
+    MethodCallDirect {
+        dst: Reg,
+        object: Reg,
+        method_id: FunctionId,
+        arg_count: u16,
+        is_nullsafe: bool,
+    },
+
+    /// Invoke an instance method dynamically (`$obj->{$expr}(args...)`).
+    MethodCallDynamic {
+        dst: Reg,
+        object: Reg,
+        method_reg: Reg,
+        arg_count: u16,
+        is_nullsafe: bool,
+    },
+
     /// Concatenate `part_count` staged `PushArg` values into a single UTF-8 string in `dst`.
     Interpolate { dst: Reg, part_count: u16 },
 
@@ -398,6 +416,20 @@ pub enum OpCode {
     SetProp {
         object: Reg,
         prop: ConstantId,
+        value: Reg,
+    },
+
+    /// Read instance property dynamically (`dst = object->{$prop}`).
+    GetPropDynamic {
+        dst: Reg,
+        object: Reg,
+        prop_reg: Reg,
+    },
+
+    /// Write instance property dynamically (`object->{$prop} = value`).
+    SetPropDynamic {
+        object: Reg,
+        prop_reg: Reg,
         value: Reg,
     },
 
@@ -627,6 +659,34 @@ impl fmt::Display for OpCode {
                     dst, object, arrow, method, arg_count
                 )
             }
+            OpCode::MethodCallDirect {
+                dst,
+                object,
+                method_id,
+                arg_count,
+                is_nullsafe,
+            } => {
+                let arrow = if *is_nullsafe { "?->" } else { "->" };
+                write!(
+                    f,
+                    "METHOD_CALL_DIR {}, {}{}{}, args={}",
+                    dst, object, arrow, method_id, arg_count
+                )
+            }
+            OpCode::MethodCallDynamic {
+                dst,
+                object,
+                method_reg,
+                arg_count,
+                is_nullsafe,
+            } => {
+                let arrow = if *is_nullsafe { "?->{" } else { "->{" };
+                write!(
+                    f,
+                    "METHOD_CALL_DYN {}, {}{}{}}}, args={}",
+                    dst, object, arrow, method_reg, arg_count
+                )
+            }
             OpCode::Interpolate { dst, part_count } => {
                 write!(f, "INTERPOLATE     {}, parts={}", dst, part_count)
             }
@@ -655,11 +715,19 @@ impl fmt::Display for OpCode {
             OpCode::GetProp { dst, object, prop } => {
                 write!(f, "GET_PROP        {}, {}->{}", dst, object, prop)
             }
+            OpCode::GetPropDynamic { dst, object, prop_reg } => {
+                write!(f, "GET_PROP_DYN    {}, {}->{{{}}}", dst, object, prop_reg)
+            }
             OpCode::SetProp {
                 object,
                 prop,
                 value,
             } => write!(f, "SET_PROP        {}->{} = {}", object, prop, value),
+            OpCode::SetPropDynamic {
+                object,
+                prop_reg,
+                value,
+            } => write!(f, "SET_PROP_DYN    {}->{{{}}} = {}", object, prop_reg, value),
             OpCode::GetStaticProp { dst, class, prop } => {
                 write!(f, "GET_STATIC_PROP {}, {}::{}", dst, class, prop)
             }

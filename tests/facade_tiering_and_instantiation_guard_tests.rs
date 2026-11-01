@@ -302,6 +302,11 @@ fn test_instantiation_guard_dynamic_runtime() {
     let dynamic_cases = ["Int", "Arr", "Str", "DB", "Log", "Future", "Memory", "CustomCrypto", "MathUtil"];
 
     for name in dynamic_cases {
+        if name == "CustomCrypto" && !is_static_facade("CustomCrypto") {
+            register_tier2_plugin(CustomCryptoPlugin);
+        } else if name == "MathUtil" && !is_static_facade("MathUtil") {
+            let _ = run_source(setup_script);
+        }
         let code = format!(
             r#"
             $cls = "{}";
@@ -336,6 +341,11 @@ fn test_inheritance_guard_across_all_tiers() {
     let static_classes = ["Int", "Str", "Arr", "DB", "Log", "Memory", "CustomCrypto", "MathUtil"];
 
     for name in static_classes {
+        if name == "CustomCrypto" && !is_static_facade("CustomCrypto") {
+            register_tier2_plugin(CustomCryptoPlugin);
+        } else if name == "MathUtil" && !is_static_facade("MathUtil") {
+            let _ = parse(def_script);
+        }
         let code = format!("class SubClass extends {} {{}}", name);
         let result = parse(&code);
         assert!(result.is_err(), "Expected parse error extending static facade '{}'", name);

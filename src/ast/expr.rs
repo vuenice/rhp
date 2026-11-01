@@ -115,6 +115,14 @@ pub enum ExprKind<'s> {
         is_nullsafe: bool,
     },
 
+    /// Dynamic object instance method call (`$user->{$methodName}()` or nullsafe `$user?->{$methodName}()`).
+    DynamicMethodCall {
+        object: Box<Expr<'s>>,
+        method: Box<Expr<'s>>,
+        args: Vec<Argument<'s>>,
+        is_nullsafe: bool,
+    },
+
     /// Static method invocation on class or facade (`Arr::list(...)`, `Int::i64(...)`).
     StaticCall {
         target: Box<Expr<'s>>,
@@ -126,6 +134,13 @@ pub enum ExprKind<'s> {
     PropertyFetch {
         object: Box<Expr<'s>>,
         property: Ident<'s>,
+        is_nullsafe: bool,
+    },
+
+    /// Dynamic object property fetch (`$user->{$propertyName}` or nullsafe `$user?->{$propertyName}`).
+    DynamicPropertyFetch {
+        object: Box<Expr<'s>>,
+        property: Box<Expr<'s>>,
         is_nullsafe: bool,
     },
 

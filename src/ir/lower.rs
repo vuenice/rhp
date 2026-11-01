@@ -1837,17 +1837,120 @@ impl<'a> IrLowerer<'a> {
                 };
                 let obj_reg = self.lower_expr(b, object, None)?;
 
+                // Devirtualization analysis:
+                // If receiver has known static class ($this or inferred concrete class),
+                // and target method or class is final (or CHA confirms method is not overridden):
+                let devirtualized_target: Option<FunctionId> = (|| {
+                    let known_class = if let ExprKind::Variable(ref v) = object.kind {
+                        if v.name == "this" || v.name == "$this" {
+                            b.enclosing_class.clone()
+                        } else {
+                            match b.inferred_var_types.get(v.name) {
+                                Some(RhpType::Class(name)) => Some(name.clone()),
+                                _ => None,
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref cls) = known_class {
+                        if let Some(ci) = self.module.class_table.get_by_name(cls) {
+                            if ci.is_final
+                                || ci.final_methods.contains(method.name)
+                                || !self.module.class_table.is_method_overridden(cls, method.name)
+                            {
+                                return ci.vtable.get(method.name).copied();
+                            }
+                        }
+                    }
+                    None
+                })();
+
                 if *is_nullsafe {
                     b.emit(OpCode::LoadNull { dst }, expr.span);
                     let null_jump =
                         b.emit(OpCode::JumpIfNull { cond: obj_reg, target: 0 }, expr.span);
                     let arg_count = self.evaluate_and_push_args(b, args)?;
-                    let method_const = b.intern_string(method.name);
+                    if let Some(mid) = devirtualized_target {
+                        b.emit(
+                            OpCode::MethodCallDirect {
+                                dst,
+                                object: obj_reg,
+                                method_id: mid,
+                                arg_count,
+                                is_nullsafe: true,
+                            },
+                            expr.span,
+                        );
+                    } else {
+                        let method_const = b.intern_string(method.name);
+                        b.emit(
+                            OpCode::MethodCall {
+                                dst,
+                                object: obj_reg,
+                                method: method_const,
+                                arg_count,
+                                is_nullsafe: true,
+                            },
+                            expr.span,
+                        );
+                    }
+                    let end_ip = b.current_ip();
+                    b.patch_jump(null_jump, end_ip);
+                } else {
+                    let arg_count = self.evaluate_and_push_args(b, args)?;
+                    if let Some(mid) = devirtualized_target {
+                        b.emit(
+                            OpCode::MethodCallDirect {
+                                dst,
+                                object: obj_reg,
+                                method_id: mid,
+                                arg_count,
+                                is_nullsafe: false,
+                            },
+                            expr.span,
+                        );
+                    } else {
+                        let method_const = b.intern_string(method.name);
+                        b.emit(
+                            OpCode::MethodCall {
+                                dst,
+                                object: obj_reg,
+                                method: method_const,
+                                arg_count,
+                                is_nullsafe: false,
+                            },
+                            expr.span,
+                        );
+                    }
+                }
+                Ok(dst)
+            }
+
+            ExprKind::DynamicMethodCall {
+                object,
+                method,
+                args,
+                is_nullsafe,
+            } => {
+                let dst = match target_reg {
+                    Some(r) => r,
+                    None => b.alloc_temp(inferred_ty, expr.span)?,
+                };
+                let obj_reg = self.lower_expr(b, object, None)?;
+                let method_reg = self.lower_expr(b, method, None)?;
+
+                if *is_nullsafe {
+                    b.emit(OpCode::LoadNull { dst }, expr.span);
+                    let null_jump =
+                        b.emit(OpCode::JumpIfNull { cond: obj_reg, target: 0 }, expr.span);
+                    let arg_count = self.evaluate_and_push_args(b, args)?;
                     b.emit(
-                        OpCode::MethodCall {
+                        OpCode::MethodCallDynamic {
                             dst,
                             object: obj_reg,
-                            method: method_const,
+                            method_reg,
                             arg_count,
                             is_nullsafe: true,
                         },
@@ -1857,12 +1960,11 @@ impl<'a> IrLowerer<'a> {
                     b.patch_jump(null_jump, end_ip);
                 } else {
                     let arg_count = self.evaluate_and_push_args(b, args)?;
-                    let method_const = b.intern_string(method.name);
                     b.emit(
-                        OpCode::MethodCall {
+                        OpCode::MethodCallDynamic {
                             dst,
                             object: obj_reg,
-                            method: method_const,
+                            method_reg,
                             arg_count,
                             is_nullsafe: false,
                         },
@@ -1904,6 +2006,45 @@ impl<'a> IrLowerer<'a> {
                             dst,
                             object: obj_reg,
                             prop: prop_const,
+                        },
+                        expr.span,
+                    );
+                }
+                Ok(dst)
+            }
+
+            ExprKind::DynamicPropertyFetch {
+                object,
+                property,
+                is_nullsafe,
+            } => {
+                let dst = match target_reg {
+                    Some(r) => r,
+                    None => b.alloc_temp(inferred_ty, expr.span)?,
+                };
+                let obj_reg = self.lower_expr(b, object, None)?;
+                let prop_reg = self.lower_expr(b, property, None)?;
+
+                if *is_nullsafe {
+                    b.emit(OpCode::LoadNull { dst }, expr.span);
+                    let null_jump =
+                        b.emit(OpCode::JumpIfNull { cond: obj_reg, target: 0 }, expr.span);
+                    b.emit(
+                        OpCode::GetPropDynamic {
+                            dst,
+                            object: obj_reg,
+                            prop_reg,
+                        },
+                        expr.span,
+                    );
+                    let end_ip = b.current_ip();
+                    b.patch_jump(null_jump, end_ip);
+                } else {
+                    b.emit(
+                        OpCode::GetPropDynamic {
+                            dst,
+                            object: obj_reg,
+                            prop_reg,
                         },
                         expr.span,
                     );
@@ -2782,6 +2923,95 @@ impl<'a> IrLowerer<'a> {
                     OpCode::SetProp {
                         object: obj_reg,
                         prop: prop_const,
+                        value: final_val_reg,
+                    },
+                    span,
+                );
+                if let Some(dst) = target_reg {
+                    if dst != final_val_reg {
+                        b.emit(
+                            OpCode::Move {
+                                dst,
+                                src: final_val_reg,
+                            },
+                            span,
+                        );
+                    }
+                    Ok(dst)
+                } else {
+                    Ok(final_val_reg)
+                }
+            }
+
+            ExprKind::DynamicPropertyFetch {
+                object,
+                property,
+                ..
+            } => {
+                let obj_reg = self.lower_expr(b, object, None)?;
+                let prop_reg = self.lower_expr(b, property, None)?;
+
+                let final_val_reg = match op {
+                    AssignOp::Assign => self.lower_expr(b, value, None)?,
+                    AssignOp::CoalesceAssign => {
+                        let cur_reg = b.alloc_temp(RhpType::Dynamic, span)?;
+                        b.emit(
+                            OpCode::GetPropDynamic {
+                                dst: cur_reg,
+                                object: obj_reg,
+                                prop_reg,
+                            },
+                            span,
+                        );
+                        let skip_jmp = b.emit(
+                            OpCode::JumpIfNotNull {
+                                cond: cur_reg,
+                                target: 0,
+                            },
+                            span,
+                        );
+                        self.lower_expr(b, value, Some(cur_reg))?;
+                        b.emit(
+                            OpCode::SetPropDynamic {
+                                object: obj_reg,
+                                prop_reg,
+                                value: cur_reg,
+                            },
+                            span,
+                        );
+                        let end_ip = b.current_ip();
+                        b.patch_jump(skip_jmp, end_ip);
+                        return Ok(cur_reg);
+                    }
+                    compound => {
+                        let bin_op = assign_op_to_binary_op(compound);
+                        let cur_reg = b.alloc_temp(RhpType::Dynamic, span)?;
+                        b.emit(
+                            OpCode::GetPropDynamic {
+                                dst: cur_reg,
+                                object: obj_reg,
+                                prop_reg,
+                            },
+                            span,
+                        );
+                        let rhs_reg = self.lower_expr(b, value, None)?;
+                        b.emit(
+                            OpCode::Binary {
+                                dst: cur_reg,
+                                op: bin_op,
+                                lhs: cur_reg,
+                                rhs: rhs_reg,
+                            },
+                            span,
+                        );
+                        cur_reg
+                    }
+                };
+
+                b.emit(
+                    OpCode::SetPropDynamic {
+                        object: obj_reg,
+                        prop_reg,
                         value: final_val_reg,
                     },
                     span,
@@ -4234,6 +4464,13 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
                 collect_expr_variables(&arg.value, out);
             }
         }
+        ExprKind::DynamicMethodCall { object, method, args, .. } => {
+            collect_expr_variables(object, out);
+            collect_expr_variables(method, out);
+            for arg in args {
+                collect_expr_variables(&arg.value, out);
+            }
+        }
         ExprKind::StaticCall { target, args, .. } => {
             collect_expr_variables(target, out);
             for arg in args {
@@ -4242,6 +4479,10 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
         }
         ExprKind::PropertyFetch { object, .. } => {
             collect_expr_variables(object, out);
+        }
+        ExprKind::DynamicPropertyFetch { object, property, .. } => {
+            collect_expr_variables(object, out);
+            collect_expr_variables(property, out);
         }
         ExprKind::Array(elems) => {
             for elem in elems {

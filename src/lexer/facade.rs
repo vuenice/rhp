@@ -839,14 +839,24 @@ impl FacadeRegistry {
         }
     }
 
-    /// Clear dynamically registered Tier 2 and Tier 3 facades (used for test isolation).
-    pub fn clear_dynamic(&self) {
+    /// Clear dynamically registered Tier 2 facades.
+    pub fn clear_tier2(&self) {
         if let Ok(mut g) = self.tier2.write() {
             g.clear();
         }
+    }
+
+    /// Clear dynamically registered Tier 3 facades.
+    pub fn clear_tier3(&self) {
         if let Ok(mut g) = self.tier3.write() {
             g.clear();
         }
+    }
+
+    /// Clear dynamically registered Tier 2 and Tier 3 facades (used for test isolation).
+    pub fn clear_dynamic(&self) {
+        self.clear_tier2();
+        self.clear_tier3();
     }
 }
 

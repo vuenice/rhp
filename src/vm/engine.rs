@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use crate::ast::expr::BinaryOp;
 use crate::ast::types::CastType;
 use crate::ir::opcode::{
-    BytecodeChunk, Constant, FunctionId, IrCollectionKind, IrUnaryOp, OpCode,
+    BytecodeChunk, Constant, FunctionId, IrCollectionKind, IrUnaryOp, OpCode, Reg,
 };
 use crate::ir::IrModule;
 use crate::jit::{JitConfig, JitEngine};
@@ -2242,246 +2242,82 @@ impl VM {
                             .to_string()
                     };
 
-                    let flat_args = Self::flatten_positional_args(&staged);
+                    if self.dispatch_instance_method(
+                        receiver,
+                        method_name,
+                        staged,
+                        base_reg,
+                        dst,
+                        stop_depth,
+                        span,
+                    )? {
+                        continue;
+                    }
+                }
 
-                    match &receiver {
-                        PhpValue::Object(obj_rc) => {
-                            let cls_name = obj_rc.borrow().class_name.clone();
+                OpCode::MethodCallDirect {
+                    dst,
+                    object,
+                    method_id,
+                    arg_count,
+                    is_nullsafe,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let receiver = self.registers[base_reg + object.index()].clone();
+                    if is_nullsafe && receiver.is_null() {
+                        self.registers[base_reg + dst.index()] = PhpValue::Null;
+                        continue;
+                    }
 
-                            // Check Singleton Invocation Invariant:
-                            // "one can use both static and non-static methods of singleton class within other singleton class
-                            //  but can only use static methods of singleton class inside non-singleton class."
-                            if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
-                                if target_cls.modifiers.is_singleton {
-                                    if let Some(caller_class) = self.current_caller_class() {
-                                        let caller_is_singleton = self
-                                            .module
-                                            .get_class_by_name(&caller_class)
-                                            .map(|c| c.modifiers.is_singleton)
-                                            .unwrap_or(false);
+                    let cls_name = match &receiver {
+                        PhpValue::Object(obj_rc) => obj_rc.borrow().class_name.clone(),
+                        _ => self
+                            .module
+                            .functions
+                            .get(method_id.index())
+                            .and_then(|f| f.enclosing_class.clone())
+                            .unwrap_or_default(),
+                    };
 
-                                        if !caller_is_singleton {
-                                            return Err(self.make_error(
-                                                RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
-                                                    singleton_class: cls_name,
-                                                    method: method_name,
-                                                    caller_class,
-                                                },
-                                                span,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            let is_throwable_final_method = match method_name.as_str() {
-                                "getFile" | "getLine" | "getTrace" | "getPrevious" | "source"
-                                | "rootCause" | "getRootCause" | "chain" | "getChain"
-                                | "getMessage" | "getCode" | "getTraceAsString" | "getSeverity" => {
-                                    if let PhpValue::Object(o) = &receiver {
-                                        o.borrow().throwable.is_some() || self.is_class_instance_of(&cls_name, "Throwable")
-                                    } else {
-                                        false
-                                    }
-                                }
-                                _ => false,
-                            };
+                    self.push_compiled_call_frame(
+                        method_id,
+                        Some(receiver),
+                        &staged,
+                        &[],
+                        Some(base_reg + dst.index()),
+                        Some(cls_name),
+                        span,
+                    )?;
+                    continue;
+                }
 
-                            if is_throwable_final_method {
-                                let res = self.exec_builtin_object_method(
-                                    &cls_name,
-                                    &receiver,
-                                    &method_name,
-                                    &flat_args,
-                                    span,
-                                )?;
-                                self.registers[base_reg + dst.index()] = res;
-                                continue;
-                            }
+                OpCode::MethodCallDynamic {
+                    dst,
+                    object,
+                    method_reg,
+                    arg_count,
+                    is_nullsafe,
+                } => {
+                    let staged = self.drain_staged_args(arg_count as usize);
+                    let receiver = self.registers[base_reg + object.index()].clone();
+                    if is_nullsafe && receiver.is_null() {
+                        self.registers[base_reg + dst.index()] = PhpValue::Null;
+                        continue;
+                    }
 
-                            if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name)
-                            {
-                                self.push_compiled_call_frame(
-                                    target_id,
-                                    Some(receiver),
-                                    &staged,
-                                    &[],
-                                    Some(base_reg + dst.index()),
-                                    Some(cls_name),
-                                    span,
-                                )?;
-                            } else {
-                                // Dynamic Magic Fallback: Check for instance __call
-                                let call_mid = self.module.get_class_info_by_name(&cls_name)
-                                    .and_then(|ci| ci.call_slot)
-                                    .or_else(|| self.resolve_method_id(&cls_name, "__call"));
+                    let method_name =
+                        self.registers[base_reg + method_reg.index()].to_php_string();
 
-                                if let Some(call_mid) = call_mid {
-                                    let call_args = vec![
-                                        StagedArg {
-                                            value: PhpValue::string(method_name.clone()),
-                                            name: None,
-                                            is_unpack: false,
-                                            is_reference: false,
-                                            caller_reg: None,
-                                        },
-                                        StagedArg {
-                                            value: PhpValue::list(flat_args),
-                                            name: None,
-                                            is_unpack: false,
-                                            is_reference: false,
-                                            caller_reg: None,
-                                        },
-                                    ];
-                                    self.push_compiled_call_frame(
-                                        call_mid,
-                                        Some(receiver),
-                                        &call_args,
-                                        &[],
-                                        Some(base_reg + dst.index()),
-                                        Some(cls_name),
-                                        span,
-                                    )?;
-                                    continue;
-                                }
-
-                                match self.exec_enum_static_method(&cls_name, &method_name, &flat_args, stop_depth, span)? {
-                                    EnumStaticCallResult::Handled(res) => {
-                                        self.registers[base_reg + dst.index()] = res;
-                                        continue;
-                                    }
-                                    EnumStaticCallResult::DispatchedToCatch => {
-                                        continue;
-                                    }
-                                    EnumStaticCallResult::NotAnEnumMethod => {}
-                                }
-                                let res = self.exec_builtin_object_method(
-                                    &cls_name,
-                                    &receiver,
-                                    &method_name,
-                                    &flat_args,
-                                    span,
-                                )?;
-                                self.registers[base_reg + dst.index()] = res;
-                            }
-                        }
-                        _ => {
-                            if let PhpValue::String(ref cls_str) = receiver {
-                                let cls_name = cls_str.as_str();
-                                match self.exec_enum_static_method(cls_name, &method_name, &flat_args, stop_depth, span)? {
-                                    EnumStaticCallResult::Handled(res) => {
-                                        self.registers[base_reg + dst.index()] = res;
-                                        continue;
-                                    }
-                                    EnumStaticCallResult::DispatchedToCatch => {
-                                        continue;
-                                    }
-                                    EnumStaticCallResult::NotAnEnumMethod => {}
-                                }
-
-                                if let Some(target_id) = self.resolve_method_id(cls_name, &method_name) {
-                                    self.push_compiled_call_frame(
-                                        target_id,
-                                        None,
-                                        &staged,
-                                        &[],
-                                        Some(base_reg + dst.index()),
-                                        Some(cls_name.to_string()),
-                                        span,
-                                    )?;
-                                    continue;
-                                }
-
-                                // Check __forward:
-                                let fwd_mid = self.module.get_class_info_by_name(cls_name)
-                                    .and_then(|ci| ci.static_forward)
-                                    .or_else(|| self.resolve_method_id(cls_name, "__forward"));
-
-                                if let Some(fwd_id) = fwd_mid {
-                                    let recv = self.invoke_compiled_function_sync_with_called_class(
-                                        fwd_id,
-                                        vec![],
-                                        Some(cls_name.to_string()),
-                                        span,
-                                    )?;
-                                    if let PhpValue::Object(ref rc) = recv {
-                                        rc.borrow_mut().forwarded_from = Some(cls_name.to_string());
-                                        let recv_cls = rc.borrow().class_name.clone();
-                                        if let Some(target_mid) = self.resolve_method_id(&recv_cls, &method_name) {
-                                            self.push_compiled_call_frame(
-                                                target_mid,
-                                                Some(recv),
-                                                &staged,
-                                                &[],
-                                                Some(base_reg + dst.index()),
-                                                Some(recv_cls),
-                                                span,
-                                            )?;
-                                            continue;
-                                        } else {
-                                            match self.exec_builtin_object_method(
-                                                &recv_cls,
-                                                &recv,
-                                                &method_name,
-                                                &flat_args,
-                                                span,
-                                            ) {
-                                                Ok(res) => {
-                                                    self.registers[base_reg + dst.index()] = res;
-                                                    continue;
-                                                }
-                                                Err(_) => {
-                                                    return Err(self.make_error(
-                                                        RuntimeErrorKind::UndefinedForwardedMethod {
-                                                            class: recv_cls,
-                                                            method: method_name,
-                                                            origin_class: cls_name.to_string(),
-                                                        },
-                                                        span,
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Check __callStatic:
-                                if let Some(call_static_mid) = self.resolve_method_id(cls_name, "__callStatic") {
-                                    let call_static_args = vec![
-                                        StagedArg {
-                                            value: PhpValue::string(method_name.clone()),
-                                            name: None,
-                                            is_unpack: false,
-                                            is_reference: false,
-                                            caller_reg: None,
-                                        },
-                                        StagedArg {
-                                            value: PhpValue::list(flat_args),
-                                            name: None,
-                                            is_unpack: false,
-                                            is_reference: false,
-                                            caller_reg: None,
-                                        },
-                                    ];
-                                    self.push_compiled_call_frame(
-                                        call_static_mid,
-                                        None,
-                                        &call_static_args,
-                                        &[],
-                                        Some(base_reg + dst.index()),
-                                        Some(cls_name.to_string()),
-                                        span,
-                                    )?;
-                                    continue;
-                                }
-                            }
-                            let res = self.exec_fluent_value_method(
-                                &receiver,
-                                &method_name,
-                                &flat_args,
-                                span,
-                            )?;
-                            self.registers[base_reg + dst.index()] = res;
-                        }
+                    if self.dispatch_instance_method(
+                        receiver,
+                        method_name,
+                        staged,
+                        base_reg,
+                        dst,
+                        stop_depth,
+                        span,
+                    )? {
+                        continue;
                     }
                 }
 
@@ -2685,6 +2521,59 @@ impl VM {
                     self.registers[base_reg + dst.index()] = val;
                 }
 
+                OpCode::GetPropDynamic { dst, object, prop_reg } => {
+                    let prop_name = self.registers[base_reg + prop_reg.index()].to_php_string();
+                    let obj_val = &self.registers[base_reg + object.index()];
+                    let val = match obj_val {
+                        PhpValue::Object(obj_rc) => obj_rc
+                            .borrow()
+                            .get_property(&prop_name)
+                            .cloned()
+                            .unwrap_or(PhpValue::Null),
+                        PhpValue::Future(f_rc) => {
+                            let mut fut = f_rc.borrow_mut();
+                            match prop_name.as_str() {
+                                "state" | "status" => PhpValue::string(fut.state().as_str()),
+                                "is_completed" | "isCompleted" | "is_ready" | "isReady" => {
+                                    PhpValue::Bool(fut.poll_completion())
+                                }
+                                "is_pending" | "isPending" => PhpValue::Bool(!fut.poll_completion()),
+                                "value" => {
+                                    fut.poll_completion();
+                                    fut.value.clone().unwrap_or(PhpValue::Null)
+                                }
+                                "error" => {
+                                    fut.poll_completion();
+                                    fut.error
+                                        .as_ref()
+                                        .map(|e| PhpValue::string(e.clone()))
+                                        .unwrap_or(PhpValue::Null)
+                                }
+                                _ => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::UndefinedProperty {
+                                            class: "Future".to_string(),
+                                            property: prop_name,
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                        }
+                        PhpValue::Null => PhpValue::Null,
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedProperty {
+                                    class: other.type_name().to_string(),
+                                    property: prop_name,
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    self.registers[base_reg + dst.index()] = val;
+                }
+
                 OpCode::SetProp {
                     object,
                     prop,
@@ -2697,6 +2586,46 @@ impl VM {
                             .unwrap_or_default()
                             .to_string()
                     };
+                    let val = self.registers[base_reg + value.index()].clone();
+                    let is_in_constructor = self.frames[frame_idx]
+                        .function_name
+                        .ends_with("::__construct");
+
+                    match &self.registers[base_reg + object.index()] {
+                        PhpValue::Object(obj_rc) => {
+                            let mut obj = obj_rc.borrow_mut();
+                            if let Some(&is_ro) = obj.readonly_props.get(&prop_name) {
+                                if is_ro && !is_in_constructor && obj.properties.contains_key(&prop_name)
+                                {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ReadonlyPropertyModification {
+                                            class: obj.class_name.clone(),
+                                            property: prop_name,
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                            obj.set_property(prop_name, val);
+                        }
+                        other => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedProperty {
+                                    class: other.type_name().to_string(),
+                                    property: prop_name,
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                }
+
+                OpCode::SetPropDynamic {
+                    object,
+                    prop_reg,
+                    value,
+                } => {
+                    let prop_name = self.registers[base_reg + prop_reg.index()].to_php_string();
                     let val = self.registers[base_reg + value.index()].clone();
                     let is_in_constructor = self.frames[frame_idx]
                         .function_name
@@ -7829,6 +7758,275 @@ impl VM {
                 ))
             }
             _ => Ok(EnumStaticCallResult::NotAnEnumMethod),
+        }
+    }
+
+    fn dispatch_instance_method(
+        &mut self,
+        receiver: PhpValue,
+        method_name: String,
+        staged: Vec<StagedArg>,
+        base_reg: usize,
+        dst: Reg,
+        stop_depth: usize,
+        span: Span,
+    ) -> Result<bool, RuntimeError> {
+        let flat_args = Self::flatten_positional_args(&staged);
+
+        match &receiver {
+            PhpValue::Object(obj_rc) => {
+                let cls_name = obj_rc.borrow().class_name.clone();
+
+                // Check Singleton Invocation Invariant:
+                if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
+                    if target_cls.modifiers.is_singleton {
+                        if let Some(caller_class) = self.current_caller_class() {
+                            let caller_is_singleton = self
+                                .module
+                                .get_class_by_name(&caller_class)
+                                .map(|c| c.modifiers.is_singleton)
+                                .unwrap_or(false);
+
+                            if !caller_is_singleton {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
+                                        singleton_class: cls_name,
+                                        method: method_name,
+                                        caller_class,
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                }
+                let is_throwable_final_method = match method_name.as_str() {
+                    "getFile" | "getLine" | "getTrace" | "getPrevious" | "source"
+                    | "rootCause" | "getRootCause" | "chain" | "getChain"
+                    | "getMessage" | "getCode" | "getTraceAsString" | "getSeverity" => {
+                        if let PhpValue::Object(o) = &receiver {
+                            o.borrow().throwable.is_some() || self.is_class_instance_of(&cls_name, "Throwable")
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                };
+
+                if is_throwable_final_method {
+                    let res = self.exec_builtin_object_method(
+                        &cls_name,
+                        &receiver,
+                        &method_name,
+                        &flat_args,
+                        span,
+                    )?;
+                    self.registers[base_reg + dst.index()] = res;
+                    return Ok(false);
+                }
+
+                if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(receiver),
+                        &staged,
+                        &[],
+                        Some(base_reg + dst.index()),
+                        Some(cls_name),
+                        span,
+                    )?;
+                    return Ok(true);
+                } else {
+                    // Dynamic Magic Fallback: Check for instance __call
+                    let call_mid = self
+                        .module
+                        .get_class_info_by_name(&cls_name)
+                        .and_then(|ci| ci.call_slot)
+                        .or_else(|| self.resolve_method_id(&cls_name, "__call"));
+
+                    if let Some(call_mid) = call_mid {
+                        let call_args = vec![
+                            StagedArg {
+                                value: PhpValue::string(method_name.clone()),
+                                name: None,
+                                is_unpack: false,
+                                is_reference: false,
+                                caller_reg: None,
+                            },
+                            StagedArg {
+                                value: PhpValue::list(flat_args),
+                                name: None,
+                                is_unpack: false,
+                                is_reference: false,
+                                caller_reg: None,
+                            },
+                        ];
+                        self.push_compiled_call_frame(
+                            call_mid,
+                            Some(receiver),
+                            &call_args,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+
+                    match self.exec_enum_static_method(
+                        &cls_name,
+                        &method_name,
+                        &flat_args,
+                        stop_depth,
+                        span,
+                    )? {
+                        EnumStaticCallResult::Handled(res) => {
+                            self.registers[base_reg + dst.index()] = res;
+                            return Ok(false);
+                        }
+                        EnumStaticCallResult::DispatchedToCatch => {
+                            return Ok(true);
+                        }
+                        EnumStaticCallResult::NotAnEnumMethod => {}
+                    }
+                    let res = self.exec_builtin_object_method(
+                        &cls_name,
+                        &receiver,
+                        &method_name,
+                        &flat_args,
+                        span,
+                    )?;
+                    self.registers[base_reg + dst.index()] = res;
+                    return Ok(false);
+                }
+            }
+            _ => {
+                if let PhpValue::String(ref cls_str) = receiver {
+                    let cls_name = cls_str.as_str();
+                    match self.exec_enum_static_method(
+                        cls_name,
+                        &method_name,
+                        &flat_args,
+                        stop_depth,
+                        span,
+                    )? {
+                        EnumStaticCallResult::Handled(res) => {
+                            self.registers[base_reg + dst.index()] = res;
+                            return Ok(false);
+                        }
+                        EnumStaticCallResult::DispatchedToCatch => {
+                            return Ok(true);
+                        }
+                        EnumStaticCallResult::NotAnEnumMethod => {}
+                    }
+
+                    if let Some(target_id) = self.resolve_method_id(cls_name, &method_name) {
+                        self.push_compiled_call_frame(
+                            target_id,
+                            None,
+                            &staged,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name.to_string()),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+
+                    // Check __forward:
+                    let fwd_mid = self
+                        .module
+                        .get_class_info_by_name(cls_name)
+                        .and_then(|ci| ci.static_forward)
+                        .or_else(|| self.resolve_method_id(cls_name, "__forward"));
+
+                    if let Some(fwd_id) = fwd_mid {
+                        let recv = self.invoke_compiled_function_sync_with_called_class(
+                            fwd_id,
+                            vec![],
+                            Some(cls_name.to_string()),
+                            span,
+                        )?;
+                        if let PhpValue::Object(ref rc) = recv {
+                            rc.borrow_mut().forwarded_from = Some(cls_name.to_string());
+                            let recv_cls = rc.borrow().class_name.clone();
+                            if let Some(target_mid) = self.resolve_method_id(&recv_cls, &method_name) {
+                                self.push_compiled_call_frame(
+                                    target_mid,
+                                    Some(recv),
+                                    &staged,
+                                    &[],
+                                    Some(base_reg + dst.index()),
+                                    Some(recv_cls),
+                                    span,
+                                )?;
+                                return Ok(true);
+                            } else {
+                                match self.exec_builtin_object_method(
+                                    &recv_cls,
+                                    &recv,
+                                    &method_name,
+                                    &flat_args,
+                                    span,
+                                ) {
+                                    Ok(res) => {
+                                        self.registers[base_reg + dst.index()] = res;
+                                        return Ok(false);
+                                    }
+                                    Err(_) => {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::UndefinedForwardedMethod {
+                                                class: recv_cls,
+                                                method: method_name,
+                                                origin_class: cls_name.to_string(),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check __callStatic:
+                    if let Some(call_static_mid) = self.resolve_method_id(cls_name, "__callStatic") {
+                        let call_static_args = vec![
+                            StagedArg {
+                                value: PhpValue::string(method_name.clone()),
+                                name: None,
+                                is_unpack: false,
+                                is_reference: false,
+                                caller_reg: None,
+                            },
+                            StagedArg {
+                                value: PhpValue::list(flat_args),
+                                name: None,
+                                is_unpack: false,
+                                is_reference: false,
+                                caller_reg: None,
+                            },
+                        ];
+                        self.push_compiled_call_frame(
+                            call_static_mid,
+                            None,
+                            &call_static_args,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name.to_string()),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+                }
+                let res = self.exec_fluent_value_method(
+                    &receiver,
+                    &method_name,
+                    &flat_args,
+                    span,
+                )?;
+                self.registers[base_reg + dst.index()] = res;
+                Ok(false)
+            }
         }
     }
 

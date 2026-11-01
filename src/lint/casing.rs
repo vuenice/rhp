@@ -994,6 +994,13 @@ impl<'a> CasingCollector<'a> {
                     self.visit_expr(&a.value);
                 }
             }
+            ExprKind::DynamicMethodCall { object, method, args, .. } => {
+                self.visit_expr(object);
+                self.visit_expr(method);
+                for a in args {
+                    self.visit_expr(&a.value);
+                }
+            }
             ExprKind::StaticCall { target, method, args } => {
                 if let ExprKind::Ident(target_id) = &target.kind {
                     if !is_builtin_type_or_facade(target_id.name) {
@@ -1021,6 +1028,10 @@ impl<'a> CasingCollector<'a> {
                         self.edits.push((property.span, renamed.clone()));
                     }
                 }
+            }
+            ExprKind::DynamicPropertyFetch { object, property, .. } => {
+                self.visit_expr(object);
+                self.visit_expr(property);
             }
             ExprKind::StaticPropertyFetch { class, property } => {
                 if !is_builtin_type_or_facade(class.name) {

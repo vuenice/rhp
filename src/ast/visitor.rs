@@ -250,6 +250,13 @@ pub fn walk_expr<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, expr: &Expr<'s
                 visitor.visit_expr(&a.value);
             }
         }
+        ExprKind::DynamicMethodCall { object, method, args, .. } => {
+            visitor.visit_expr(object);
+            visitor.visit_expr(method);
+            for a in args {
+                visitor.visit_expr(&a.value);
+            }
+        }
         ExprKind::StaticCall { target, args, .. } => {
             visitor.visit_expr(target);
             for a in args {
@@ -258,6 +265,10 @@ pub fn walk_expr<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, expr: &Expr<'s
         }
         ExprKind::PropertyFetch { object, .. } => {
             visitor.visit_expr(object);
+        }
+        ExprKind::DynamicPropertyFetch { object, property, .. } => {
+            visitor.visit_expr(object);
+            visitor.visit_expr(property);
         }
         ExprKind::StaticPropertyFetch { .. } | ExprKind::ClassConstFetch { .. } => {}
         ExprKind::Array(elements) => {

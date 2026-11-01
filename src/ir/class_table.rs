@@ -61,6 +61,7 @@ pub struct ClassInfo {
     pub is_escaped: bool,                       // marked true when class escapes compile-time known direct calls (e.g. ::class)
     pub method_slots: Vec<MethodId>,            // dense slot-indexed vtable for O(1) array dispatch
     pub method_indices: HashMap<Arc<str>, usize>, // method name to vtable slot index
+    pub final_methods: HashSet<Arc<str>>,       // methods declared or inherited as final (cannot be overridden)
     pub prop_layout: Vec<PropSlot>,            // parent props first, then own
     pub prop_indices: HashMap<Arc<str>, usize>,
     pub ancestors: HashSet<ClassId>,           // self + parents + interfaces + traits
@@ -97,6 +98,7 @@ impl ClassInfo {
             is_escaped: false,
             method_slots: Vec::new(),
             method_indices: HashMap::new(),
+            final_methods: HashSet::new(),
             prop_layout: Vec::new(),
             prop_indices: HashMap::new(),
             ancestors: HashSet::new(),
@@ -376,6 +378,7 @@ impl ClassTable {
 
         let mut vtable = HashMap::new();
         let mut static_forward = None;
+        let mut final_methods = HashSet::new();
         let mut prop_layout = Vec::new();
         let mut prop_indices = HashMap::new();
         let mut ancestors = HashSet::new();
@@ -402,6 +405,7 @@ impl ClassTable {
 
                 vtable = self.classes[p_idx].vtable.clone();
                 static_forward = self.classes[p_idx].static_forward;
+                final_methods = self.classes[p_idx].final_methods.clone();
                 prop_layout = self.classes[p_idx].prop_layout.clone();
                 prop_indices = self.classes[p_idx].prop_indices.clone();
 
@@ -478,33 +482,39 @@ impl ClassTable {
         let own_methods = self.classes[idx].own_methods.clone();
         for (m_name, mid) in own_methods {
             if let Some(&parent_mid) = vtable.get(&m_name) {
-                // Verify override compatibility
-                let parent_func = &functions[parent_mid.index()];
-                let child_func = &functions[mid.index()];
+                if mid != parent_mid {
+                    // Verify override compatibility
+                    let parent_func = &functions[parent_mid.index()];
+                    let child_func = &functions[mid.index()];
 
-                if parent_func.is_final {
-                    return Err(IrError::new(
-                        IrErrorKind::CannotOverrideFinalMethod {
-                            class_name: class_name.to_string(),
-                            parent_name: parent_func.enclosing_class.clone().unwrap_or_default(),
-                            method_name: m_name.to_string(),
-                        },
-                        span,
-                    ));
-                }
+                    if parent_func.is_final {
+                        return Err(IrError::new(
+                            IrErrorKind::CannotOverrideFinalMethod {
+                                class_name: class_name.to_string(),
+                                parent_name: parent_func.enclosing_class.clone().unwrap_or_default(),
+                                method_name: m_name.to_string(),
+                            },
+                            span,
+                        ));
+                    }
 
-                // Visibility narrowing check
-                if !Self::is_visibility_compatible(child_func.visibility, parent_func.visibility) {
-                    return Err(IrError::new(
-                        IrErrorKind::NarrowedVisibility {
-                            class_name: class_name.to_string(),
-                            parent_name: parent_func.enclosing_class.clone().unwrap_or_default(),
-                            method_name: m_name.to_string(),
-                            parent_visibility: format!("{:?}", parent_func.visibility).to_lowercase(),
-                        },
-                        span,
-                    ));
+                    // Visibility narrowing check
+                    if !Self::is_visibility_compatible(child_func.visibility, parent_func.visibility) {
+                        return Err(IrError::new(
+                            IrErrorKind::NarrowedVisibility {
+                                class_name: class_name.to_string(),
+                                parent_name: parent_func.enclosing_class.clone().unwrap_or_default(),
+                                method_name: m_name.to_string(),
+                                parent_visibility: format!("{:?}", parent_func.visibility).to_lowercase(),
+                            },
+                            span,
+                        ));
+                    }
                 }
+            }
+
+            if functions[mid.index()].is_final {
+                final_methods.insert(m_name.clone());
             }
 
             functions[mid.index()].declaring_class_id = Some(id);
@@ -662,6 +672,7 @@ impl ClassTable {
             method_slots.push(mid);
             method_indices.insert(m_name.clone(), slot);
         }
+        self.classes[idx].final_methods = final_methods;
         self.classes[idx].method_slots = method_slots;
         self.classes[idx].method_indices = method_indices;
         self.classes[idx].vtable = vtable;
@@ -699,7 +710,7 @@ impl ClassTable {
             None => return true, // conservative fallback if class is unknown
         };
 
-        if self.classes[base_id.index()].is_final {
+        if self.classes[base_id.index()].is_final || self.classes[base_id.index()].final_methods.contains(method_name) {
             return false;
         }
 

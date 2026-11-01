@@ -108,7 +108,7 @@ pub fn clear_tier2_plugins() {
     if let Ok(mut g) = get_tier2_plugins().write() {
         g.clear();
     }
-    FacadeRegistry::global().clear_dynamic();
+    FacadeRegistry::global().clear_tier2();
 }
 
 /// Structured log record captured by the centralized `Log` facade.

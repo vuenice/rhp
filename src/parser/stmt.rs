@@ -1032,20 +1032,32 @@ impl<'s> CombinatorStream<'s> {
             });
         }
 
-        // Modifiers: visibility, static, abstract, final, readonly
+        // Modifiers: visibility, static, abstract, final, readonly in any order
         let mut visibility = Visibility::Public;
-        if self.matches(&Token::Public) {
-            visibility = Visibility::Public;
-        } else if self.matches(&Token::Protected) {
-            visibility = Visibility::Protected;
-        } else if self.matches(&Token::Private) {
-            visibility = Visibility::Private;
-        }
+        let mut is_static = false;
+        let mut is_abstract = false;
+        let mut is_final = false;
+        let mut is_readonly = false;
 
-        let is_static = self.matches(&Token::Static);
-        let is_abstract = self.matches(&Token::Abstract);
-        let is_final = self.matches(&Token::Final);
-        let is_readonly = self.matches(&Token::Readonly);
+        loop {
+            if self.matches(&Token::Public) {
+                visibility = Visibility::Public;
+            } else if self.matches(&Token::Protected) {
+                visibility = Visibility::Protected;
+            } else if self.matches(&Token::Private) {
+                visibility = Visibility::Private;
+            } else if self.matches(&Token::Static) {
+                is_static = true;
+            } else if self.matches(&Token::Abstract) {
+                is_abstract = true;
+            } else if self.matches(&Token::Final) {
+                is_final = true;
+            } else if self.matches(&Token::Readonly) {
+                is_readonly = true;
+            } else {
+                break;
+            }
+        }
 
         // Constant member `const NAME = value;`
         if self.matches(&Token::Const) {

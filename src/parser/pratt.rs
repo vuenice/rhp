@@ -1191,35 +1191,68 @@ impl<'s> CombinatorStream<'s> {
                 }
             }
 
-            // Member access `left->member` or nullsafe `left?->member`
+            // Member access `left->member`, dynamic `left->{expr}`, or nullsafe `left?->...`
             Token::Arrow | Token::NullsafeArrow => {
                 let is_nullsafe = matches!(op_tok.token, Token::NullsafeArrow);
-                let member_name = self.expect_ident()?;
 
-                // If followed by `(`, this is a method call `$obj->method(...)`
-                if self.matches(&Token::OpenParen) {
-                    let args = self.parse_call_arguments()?;
-                    let close_paren = self.expect(Token::CloseParen)?;
-                    let span = left.span.merge(close_paren.span);
-                    Ok(Expr::new(
-                        ExprKind::MethodCall {
-                            object: Box::new(left),
-                            method: member_name,
-                            args,
-                            is_nullsafe,
-                        },
-                        span,
-                    ))
+                if self.check(&Token::OpenBrace) {
+                    self.advance(); // consume '{'
+                    let dyn_expr = self.parse_expr_lowest()?;
+                    let close_brace = self.expect(Token::CloseBrace)?;
+
+                    // If followed by `(`, this is a dynamic method call `$obj->{$method}(...)`
+                    if self.matches(&Token::OpenParen) {
+                        let args = self.parse_call_arguments()?;
+                        let close_paren = self.expect(Token::CloseParen)?;
+                        let span = left.span.merge(close_paren.span);
+                        Ok(Expr::new(
+                            ExprKind::DynamicMethodCall {
+                                object: Box::new(left),
+                                method: Box::new(dyn_expr),
+                                args,
+                                is_nullsafe,
+                            },
+                            span,
+                        ))
+                    } else {
+                        let span = left.span.merge(close_brace.span);
+                        Ok(Expr::new(
+                            ExprKind::DynamicPropertyFetch {
+                                object: Box::new(left),
+                                property: Box::new(dyn_expr),
+                                is_nullsafe,
+                            },
+                            span,
+                        ))
+                    }
                 } else {
-                    let span = left.span.merge(member_name.span);
-                    Ok(Expr::new(
-                        ExprKind::PropertyFetch {
-                            object: Box::new(left),
-                            property: member_name,
-                            is_nullsafe,
-                        },
-                        span,
-                    ))
+                    let member_name = self.expect_ident()?;
+
+                    // If followed by `(`, this is a method call `$obj->method(...)`
+                    if self.matches(&Token::OpenParen) {
+                        let args = self.parse_call_arguments()?;
+                        let close_paren = self.expect(Token::CloseParen)?;
+                        let span = left.span.merge(close_paren.span);
+                        Ok(Expr::new(
+                            ExprKind::MethodCall {
+                                object: Box::new(left),
+                                method: member_name,
+                                args,
+                                is_nullsafe,
+                            },
+                            span,
+                        ))
+                    } else {
+                        let span = left.span.merge(member_name.span);
+                        Ok(Expr::new(
+                            ExprKind::PropertyFetch {
+                                object: Box::new(left),
+                                property: member_name,
+                                is_nullsafe,
+                            },
+                            span,
+                        ))
+                    }
                 }
             }
 
