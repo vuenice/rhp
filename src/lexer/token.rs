@@ -315,6 +315,9 @@ pub enum Token<'s> {
     #[token("string")]
     TypeString,
 
+    #[token("bytes")]
+    TypeBytes,
+
     #[token("int")]
     TypeInt,
 
@@ -412,8 +415,20 @@ pub enum Token<'s> {
     InvalidNumeric,
 
     // -------------------------------------------------------------------------
-    // String Literals (Zero-Copy Slicing)
+    // String & Bytes Literals (Zero-Copy Slicing)
     // -------------------------------------------------------------------------
+    #[regex(r#"(?s:b"([^"\\]|\\.)*")"#, |lex| lex.slice())]
+    DoubleQuotedBytes(&'s str),
+
+    #[token("b\"", err_unterminated_double_quote)]
+    UnterminatedDoubleQuotedBytes,
+
+    #[regex(r#"(?s:b'([^'\\]|\\.)*')"#, |lex| lex.slice())]
+    SingleQuotedBytes(&'s str),
+
+    #[token("b'", err_unterminated_single_quote)]
+    UnterminatedSingleQuotedBytes,
+
     #[regex(r#"(?s:'([^'\\]|\\.)*')"#, |lex| lex.slice())]
     SingleQuotedString(&'s str),
 
@@ -646,6 +661,8 @@ impl<'s> Token<'s> {
             Token::Ident(s) => s,
             Token::IntLiteral(s) => s,
             Token::FloatLiteral(s) => s,
+            Token::SingleQuotedBytes(s) => s,
+            Token::DoubleQuotedBytes(s) => s,
             Token::SingleQuotedString(s) => s,
             Token::DoubleQuotedString(s) => s,
             Token::BacktickString(s) => s,
@@ -715,6 +732,7 @@ impl<'s> Token<'s> {
             Token::False => "false",
             Token::Null => "null",
             Token::TypeString => "string",
+            Token::TypeBytes => "bytes",
             Token::TypeInt => "int",
             Token::TypeFloat => "float",
             Token::TypeBool => "bool",
@@ -805,6 +823,8 @@ impl<'s> Token<'s> {
             Token::PhpShortOpen => "<?",
             Token::PhpClose => "?>",
             Token::BlockComment => "/* ... */",
+            Token::UnterminatedSingleQuotedBytes => "b'",
+            Token::UnterminatedDoubleQuotedBytes => "b\"",
             Token::UnterminatedSingleQuote => "'",
             Token::UnterminatedDoubleQuote => "\"",
             Token::UnterminatedBacktick => "`",
@@ -887,6 +907,7 @@ impl<'s> Token<'s> {
         matches!(
             self,
             Token::TypeString
+                | Token::TypeBytes
                 | Token::TypeInt
                 | Token::TypeFloat
                 | Token::TypeBool
@@ -925,6 +946,8 @@ impl<'s> Token<'s> {
             self,
             Token::IntLiteral(_)
                 | Token::FloatLiteral(_)
+                | Token::SingleQuotedBytes(_)
+                | Token::DoubleQuotedBytes(_)
                 | Token::SingleQuotedString(_)
                 | Token::DoubleQuotedString(_)
                 | Token::BacktickString(_)
@@ -964,12 +987,19 @@ impl<'s> Token<'s> {
         }
     }
 
-    /// Extracts the raw inner slice of a string literal, removing surrounding quotes.
+    /// Extracts the raw inner slice of a string or bytes literal, removing surrounding quotes.
     pub fn raw_string_content(&self) -> Option<&'s str> {
         match self {
             Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) | Token::BacktickString(s) => {
                 if s.len() >= 2 {
                     Some(&s[1..s.len() - 1])
+                } else {
+                    Some("")
+                }
+            }
+            Token::SingleQuotedBytes(s) | Token::DoubleQuotedBytes(s) => {
+                if s.len() >= 3 {
+                    Some(&s[2..s.len() - 1])
                 } else {
                     Some("")
                 }
@@ -986,9 +1016,12 @@ impl<'s> Token<'s> {
         }
     }
 
-    /// Unescapes common escape characters within a string literal.
-    pub fn unescape_string(&self) -> Option<String> {
-        let content = self.raw_string_content()?;
+    /// Unescapes a UTF-8 string literal (`"..."` or `'...'`).
+    ///
+    /// An invalid UTF-8 escape such as `\xFF` causes a compile error.
+    /// Unicode escapes `\u{...}` are supported.
+    pub fn unescape_utf8_string(&self) -> Result<String, String> {
+        let content = self.raw_string_content().ok_or_else(|| "Not a string literal".to_string())?;
         let mut result = String::with_capacity(content.len());
         let mut chars = content.chars().peekable();
 
@@ -1004,6 +1037,38 @@ impl<'s> Token<'s> {
                     Some('`') => result.push('`'),
                     Some('$') => result.push('$'),
                     Some('0') => result.push('\0'),
+                    Some('u') => {
+                        // Unicode escape: \u{HEX}
+                        if chars.peek() == Some(&'{') {
+                            chars.next(); // consume '{'
+                            let mut hex = String::new();
+                            let mut closed = false;
+                            while let Some(&hc) = chars.peek() {
+                                if hc == '}' {
+                                    chars.next();
+                                    closed = true;
+                                    break;
+                                }
+                                if hc.is_ascii_hexdigit() {
+                                    hex.push(hc);
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if !closed || hex.is_empty() {
+                                return Err("Invalid Unicode escape sequence: expected \\u{...}".to_string());
+                            }
+                            let codepoint = u32::from_str_radix(&hex, 16)
+                                .map_err(|_| format!("Invalid Unicode escape '\\u{{{}}}'", hex))?;
+                            let ch = char::from_u32(codepoint)
+                                .ok_or_else(|| format!("Invalid Unicode scalar value U+{:X}", codepoint))?;
+                            result.push(ch);
+                        } else {
+                            result.push('\\');
+                            result.push('u');
+                        }
+                    }
                     Some('x') | Some('X') => {
                         let mut hex_str = String::new();
                         if let Some(&c1) = chars.peek() {
@@ -1019,6 +1084,12 @@ impl<'s> Token<'s> {
                             }
                         }
                         if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                            if byte > 0x7F {
+                                return Err(format!(
+                                    "Invalid UTF-8 escape '\\x{}' in string literal. Use a bytes literal b\"...\" instead.",
+                                    hex_str
+                                ));
+                            }
                             result.push(byte as char);
                         } else {
                             result.push('\\');
@@ -1036,7 +1107,72 @@ impl<'s> Token<'s> {
             }
         }
 
-        Some(result)
+        Ok(result)
+    }
+
+    /// Unescapes a Bytes literal (`b"..."` or `b'...'`).
+    ///
+    /// Accepts arbitrary bytes via `\xNN`. Unicode escapes `\u{...}` are rejected.
+    pub fn unescape_bytes(&self) -> Result<Vec<u8>, String> {
+        let content = self.raw_string_content().ok_or_else(|| "Not a bytes literal".to_string())?;
+        let mut result = Vec::with_capacity(content.len());
+        let mut chars = content.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => result.push(b'\n'),
+                    Some('r') => result.push(b'\r'),
+                    Some('t') => result.push(b'\t'),
+                    Some('\\') => result.push(b'\\'),
+                    Some('\'') => result.push(b'\''),
+                    Some('"') => result.push(b'"'),
+                    Some('`') => result.push(b'`'),
+                    Some('$') => result.push(b'$'),
+                    Some('0') => result.push(0),
+                    Some('u') => {
+                        return Err("Unicode escapes (\\u{...}) are not allowed in bytes literals (b\"...\").".to_string());
+                    }
+                    Some('x') | Some('X') => {
+                        let mut hex_str = String::new();
+                        if let Some(&c1) = chars.peek() {
+                            if c1.is_ascii_hexdigit() {
+                                hex_str.push(c1);
+                                chars.next();
+                                if let Some(&c2) = chars.peek() {
+                                    if c2.is_ascii_hexdigit() {
+                                        hex_str.push(c2);
+                                        chars.next();
+                                    }
+                                }
+                            }
+                        }
+                        if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                            result.push(byte);
+                        } else {
+                            result.push(b'\\');
+                            result.push(b'x');
+                        }
+                    }
+                    Some(other) => {
+                        result.push(b'\\');
+                        let mut buf = [0u8; 4];
+                        result.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                    }
+                    None => result.push(b'\\'),
+                }
+            } else {
+                let mut buf = [0u8; 4];
+                result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Unescapes common escape characters within a string literal.
+    pub fn unescape_string(&self) -> Option<String> {
+        self.unescape_utf8_string().ok()
     }
 }
 

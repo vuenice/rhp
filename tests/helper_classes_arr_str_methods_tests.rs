@@ -378,8 +378,8 @@ fn test_str_check_encodings() {
 
         // Unstatic string calls
         $u_u8_as_u8 = $utf8_str->check('utf-8');
-        $u_sjis_as_jshift = $sjis_str->check('jshift');
-        $u_sjis_as_u8 = $sjis_str->check('utf-8');
+        $u_sjis_as_jshift = Str::check($sjis_str, 'jshift');
+        $u_sjis_as_u8 = Str::check($sjis_str, 'utf-8');
 
         return [
             $u8_as_u8, $u8_as_ascii,

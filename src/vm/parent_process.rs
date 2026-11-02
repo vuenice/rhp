@@ -38,6 +38,7 @@ pub enum FrozenValue {
     RustInt { kind: RustIntKind, value: i128 },
     RustFloat { kind: RustFloatKind, value: f64 },
     String(String),
+    Bytes(Vec<u8>),
     List(Vec<FrozenValue>),
     Dict(Vec<(String, FrozenValue)>),
     Set(Vec<FrozenValue>),
@@ -64,7 +65,10 @@ impl FrozenValue {
                 kind: *kind,
                 value: *value,
             },
-            PhpValue::String(s) => FrozenValue::String(s.as_str().to_string()),
+            PhpValue::String(s) => match s {
+                crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
+                crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
+            },
             PhpValue::Array(items) | PhpValue::List(items) => {
                 let vec = items.borrow().iter().map(Self::from_php_value).collect();
                 FrozenValue::List(vec)
@@ -131,6 +135,7 @@ impl FrozenValue {
                 value: *value,
             },
             FrozenValue::String(s) => PhpValue::string(s.clone()),
+            FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
             FrozenValue::List(items) => {
                 PhpValue::list(items.iter().map(Self::to_php_value).collect())
             }
@@ -214,6 +219,18 @@ impl From<String> for FrozenValue {
 impl From<&str> for FrozenValue {
     fn from(s: &str) -> Self {
         FrozenValue::String(s.to_string())
+    }
+}
+
+impl From<Vec<u8>> for FrozenValue {
+    fn from(b: Vec<u8>) -> Self {
+        FrozenValue::Bytes(b)
+    }
+}
+
+impl From<&[u8]> for FrozenValue {
+    fn from(b: &[u8]) -> Self {
+        FrozenValue::Bytes(b.to_vec())
     }
 }
 

@@ -494,13 +494,14 @@ fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
     assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i32)));
     assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f32)));
 
-    // 2. Verify Small-String-Optimization (SSO) on RhpString
+    // 2. Verify RhpString Utf8 behavior
     let short_s = RhpString::new("small_string");
-    assert!(matches!(short_s, RhpString::Inline { len: 12, .. }));
+    assert!(short_s.is_utf8());
+    assert!(short_s.is_ascii());
     assert_eq!(short_s.as_str(), "small_string");
 
     let long_s = RhpString::new("this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
-    assert!(matches!(long_s, RhpString::Heap(_)));
+    assert!(long_s.is_utf8());
     assert_eq!(long_s.as_str(), "this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
 
     // 3. Verify Shape-based slot indexing on VmObject
@@ -643,12 +644,12 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
 
     // 6. String COW and In-place Mutation
     let mut s = RhpString::new("hello");
-    assert!(s.is_inline());
+    assert!(s.is_utf8());
     assert_eq!(s.ref_count(), 1);
 
-    // In-place COW push_str without heap allocation
+    // In-place COW push_str
     s.push_str(" world");
-    assert!(s.is_inline());
+    assert!(s.is_utf8());
     assert_eq!(s.as_str(), "hello world");
 
     // Exceeding SSO capacity promotes to Heap with COW

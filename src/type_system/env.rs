@@ -323,6 +323,12 @@ pub fn resolve_facade_static_call(
 
         "Str" => match method {
             "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Ok(RhpType::Bool),
+            "utf8" => Ok(RhpType::String),
+            "bytes" => Ok(RhpType::Bytes),
+            "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" => Ok(RhpType::Int),
+            "mbSubstr" | "mb_substr" => Ok(RhpType::String),
+            "convertEncoding" => Ok(RhpType::Bytes),
+            "detectEncoding" => Ok(RhpType::Nullable(Box::new(RhpType::String))),
             "slug" => {
                 check_arg_type(
                     "Str::slug",
@@ -421,6 +427,18 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::String)
             }
+            "readBytes" => {
+                check_arg_type(
+                    "File::readBytes",
+                    "$path",
+                    1,
+                    arg_types.first(),
+                    &RhpType::String,
+                    call_span,
+                    hierarchy,
+                )?;
+                Ok(RhpType::Bytes)
+            }
             "write" => {
                 check_arg_type(
                     "File::write",
@@ -431,16 +449,7 @@ pub fn resolve_facade_static_call(
                     call_span,
                     hierarchy,
                 )?;
-                check_arg_type(
-                    "File::write",
-                    "$contents",
-                    2,
-                    arg_types.get(1),
-                    &RhpType::String,
-                    call_span,
-                    hierarchy,
-                )?;
-                Ok(RhpType::Bool)
+                Ok(RhpType::Int)
             }
             "exists" | "delete" | "remove" | "copy" | "rename" | "move" | "chown" | "touch" => {
                 check_arg_type(
@@ -460,6 +469,7 @@ pub fn resolve_facade_static_call(
 
         "AFile" => match method {
             "read" => Ok(RhpType::Future(Box::new(RhpType::String))),
+            "readBytes" => Ok(RhpType::Future(Box::new(RhpType::Bytes))),
             "write" | "exists" | "delete" | "remove" | "append" | "copy" | "rename" | "move" => {
                 Ok(RhpType::Future(Box::new(RhpType::Bool)))
             }
@@ -787,7 +797,12 @@ pub fn resolve_builtin_fluent_method(
                 Some(RhpType::Collection(sub.with_element_type(mapped_elem)))
             }
             "filter" | "reject" | "unique" | "reverse" | "slice" | "sort" | "sortBy"
-            | "sortKeys" | "sortKeysDesc" => Some(RhpType::Collection(sub.clone())),
+            | "sortKeys" | "sortKeysDesc" | "sortKeysBy" | "usort" | "uasort" | "uksort"
+            | "ksort" | "asort" | "diff" | "diffKey" | "diffKeys" | "intersect"
+            | "intersectKey" | "intersectKeys" | "array_diff" | "array_diff_key"
+            | "array_intersect" | "array_intersect_key" | "chunk" | "array_chunk"
+            | "flip" | "array_flip" => Some(RhpType::Collection(sub.clone())),
+            "column" | "array_column" | "combine" | "array_combine" => Some(RhpType::Dynamic),
             "reduce" => {
                 let reduced = arg_types
                     .first()
@@ -834,7 +849,12 @@ pub fn resolve_builtin_fluent_method(
                 Some(RhpType::Array(Box::new(mapped_elem)))
             }
             "filter" | "reject" | "unique" | "reverse" | "slice" | "sort" | "sortBy"
-            | "sortKeys" | "sortKeysDesc" => Some(RhpType::Array(inner.clone())),
+            | "sortKeys" | "sortKeysDesc" | "sortKeysBy" | "usort" | "uasort" | "uksort"
+            | "ksort" | "asort" | "diff" | "diffKey" | "diffKeys" | "intersect"
+            | "intersectKey" | "intersectKeys" | "array_diff" | "array_diff_key"
+            | "array_intersect" | "array_intersect_key" | "chunk" | "array_chunk"
+            | "flip" | "array_flip" => Some(RhpType::Array(inner.clone())),
+            "column" | "array_column" | "combine" | "array_combine" => Some(RhpType::Dynamic),
             "reduce" => {
                 let reduced = arg_types
                     .first()
@@ -868,8 +888,8 @@ pub fn resolve_builtin_fluent_method(
         // Fluent string helper methods (`$str->trim()`, `$str->lower()`, `$str->upper()`, etc.)
         RhpType::String => match method {
             "trim" | "ltrim" | "rtrim" | "upper" | "toUpper" | "lower" | "toLower" | "slug"
-            | "replace" | "substr" | "reverse" | "repeat" | "utf8" => Some(RhpType::String),
-            "length" | "byteLength" | "bytesCount" => Some(RhpType::Int),
+            | "replace" | "substr" | "reverse" | "repeat" | "utf8" | "mbSubstr" | "mb_substr" => Some(RhpType::String),
+            "length" | "byteLength" | "bytesCount" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" => Some(RhpType::Int),
             "find" | "indexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
             "check" | "compare" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
@@ -881,6 +901,15 @@ pub fn resolve_builtin_fluent_method(
                     Some(RhpType::Dynamic)
                 }
             }
+        },
+
+        // Fluent bytes helper methods (`$bytes->len()`, `$bytes->slice()`, `$bytes->decode()`, `$bytes->convert()`)
+        RhpType::Bytes => match method {
+            "len" | "length" => Some(RhpType::Int),
+            "slice" => Some(RhpType::Bytes),
+            "decode" => Some(RhpType::String),
+            "convert" => Some(RhpType::Bytes),
+            _ => None,
         },
 
         // Future handle (`$future->wait()`, `$future->then(...)`, etc.)
@@ -920,6 +949,7 @@ pub fn resolve_builtin_fluent_method(
                 }
                 "json" => Some(RhpType::Array(Box::new(RhpType::Mixed))),
                 "body" => Some(RhpType::String),
+                "bytes" => Some(RhpType::Bytes),
                 "status" => Some(RhpType::Int),
                 "ok" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),

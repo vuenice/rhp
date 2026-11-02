@@ -17,11 +17,14 @@ pub static BUILTIN_THROWABLE_PARENTS: &[(&str, &str)] = &[
     ("ParseError", "CompileError"),
     ("TypeError", "Error"),
     ("ArgumentCountError", "TypeError"),
+    ("ArgumentError", "Error"),
     ("ValueError", "Error"),
     ("UnhandledMatchError", "Error"),
 
     // Exception hierarchy (SPL family & standard)
     ("ErrorException", "Exception"),
+    ("InvalidEncodingException", "Exception"),
+    ("UnknownEncodingException", "Exception"),
     ("LogicException", "Exception"),
     ("BadFunctionCallException", "LogicException"),
     ("BadMethodCallException", "BadFunctionCallException"),

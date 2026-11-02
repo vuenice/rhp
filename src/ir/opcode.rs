@@ -161,6 +161,8 @@ pub enum Constant {
     RustFloat { kind: RustFloatKind, value: f64 },
     /// Interned UTF-8 string literal, identifier, or symbol name.
     String(String),
+    /// Interned raw bytes literal.
+    Bytes(Vec<u8>),
     /// Semantic RHP type contract used by runtime boundary assertions (`AssertType`).
     Type(RhpType),
 }
@@ -175,6 +177,7 @@ impl fmt::Display for Constant {
             Self::RustInt { kind, value } => write!(f, "{}_{}", value, kind),
             Self::RustFloat { kind, value } => write!(f, "{:?}_{}", value, kind),
             Self::String(s) => write!(f, "{:?}", s),
+            Self::Bytes(b) => write!(f, "b{:?}", b),
             Self::Type(ty) => write!(f, "<type:{}>", ty),
         }
     }

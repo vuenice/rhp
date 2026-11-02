@@ -546,7 +546,7 @@ pub fn encode_from_utf8(s: &str, encoding: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Detects the probable encoding of a raw byte buffer.
-pub fn detect_encoding(bytes: &[u8]) -> &'static str {
+pub fn detect_encoding_heuristic(bytes: &[u8]) -> &'static str {
     // 1. Check if entirely ASCII
     if bytes.iter().all(|&b| b < 0x80) {
         if bytes.windows(3).any(|w| w == b"\x1B$B" || w == b"\x1B$@") {
@@ -665,7 +665,407 @@ pub fn is_valid_encoding(bytes: &[u8], encoding_name: &str) -> bool {
         }
         Some(Encoding::Ascii) => bytes.iter().all(|&b| b < 0x80),
         Some(Encoding::Iso8859_1 | Encoding::Binary) => true,
-        None => false,
+        None => {
+            if let Some(res) = resolve_encoding(encoding_name) {
+                match res {
+                    ResolvedEncoding::Utf32Le | ResolvedEncoding::Utf32Be | ResolvedEncoding::Utf16Le | ResolvedEncoding::Utf16Be => {
+                        decode_bytes(bytes, encoding_name, "strict").is_ok()
+                    }
+                    ResolvedEncoding::EncodingRs(enc) => {
+                        decode_bytes(bytes, enc.name(), "strict").is_ok()
+                    }
+                }
+            } else {
+                false
+            }
+        }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedEncoding {
+    EncodingRs(&'static encoding_rs::Encoding),
+    Utf32Le,
+    Utf32Be,
+    Utf16Le,
+    Utf16Be,
+}
+
+pub fn resolve_encoding(name: &str) -> Option<ResolvedEncoding> {
+    let clean = name.trim().to_uppercase().replace(['-', '_', ' '], "");
+    match clean.as_str() {
+        "UTF32LE" | "UTF32" => Some(ResolvedEncoding::Utf32Le),
+        "UTF32BE" => Some(ResolvedEncoding::Utf32Be),
+        "UTF16LE" | "UTF16" => Some(ResolvedEncoding::Utf16Le),
+        "UTF16BE" => Some(ResolvedEncoding::Utf16Be),
+        "UTF8" => Some(ResolvedEncoding::EncodingRs(encoding_rs::UTF_8)),
+        _ => {
+            if let Some(enc) = encoding_rs::Encoding::for_label_no_replacement(name.as_bytes()) {
+                Some(ResolvedEncoding::EncodingRs(enc))
+            } else if let Some(enc) = encoding_rs::Encoding::for_label(name.as_bytes()) {
+                Some(ResolvedEncoding::EncodingRs(enc))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn detect_bom(bytes: &[u8]) -> Option<(&'static str, usize)> {
+    if bytes.len() >= 4 && &bytes[0..4] == [0xFF, 0xFE, 0x00, 0x00] {
+        return Some(("UTF-32LE", 4));
+    }
+    if bytes.len() >= 4 && &bytes[0..4] == [0x00, 0x00, 0xFE, 0xFF] {
+        return Some(("UTF-32BE", 4));
+    }
+    if bytes.len() >= 2 && &bytes[0..2] == [0xFF, 0xFE] {
+        return Some(("UTF-16LE", 2));
+    }
+    if bytes.len() >= 2 && &bytes[0..2] == [0xFE, 0xFF] {
+        return Some(("UTF-16BE", 2));
+    }
+    if bytes.len() >= 3 && &bytes[0..3] == [0xEF, 0xBB, 0xBF] {
+        return Some(("UTF-8", 3));
+    }
+    None
+}
+
+pub fn detect_encoding(bytes: &[u8], candidates: Option<&[String]>) -> Option<String> {
+    if let Some((enc, _)) = detect_bom(bytes) {
+        return Some(enc.to_string());
+    }
+
+    if std::str::from_utf8(bytes).is_ok() {
+        return Some("UTF-8".to_string());
+    }
+
+    if let Some(cand_list) = candidates {
+        for cand in cand_list {
+            if decode_bytes(bytes, cand, "strict").is_ok() {
+                return Some(cand.clone());
+            }
+        }
+        return None;
+    }
+
+    let mut detector = chardetng::EncodingDetector::new();
+    detector.feed(bytes, true);
+    let guessed = detector.guess(None, true);
+    Some(guessed.name().to_string())
+}
+
+pub fn decode_bytes(bytes: &[u8], encoding_name: &str, invalid: &str) -> Result<String, (String, usize)> {
+    let resolved = resolve_encoding(encoding_name)
+        .ok_or_else(|| (format!("Unknown encoding '{}'", encoding_name), 0))?;
+
+    let is_strict = !invalid.eq_ignore_ascii_case("lossy");
+
+    match resolved {
+        ResolvedEncoding::Utf32Le => {
+            let slice = if bytes.len() >= 4 && &bytes[0..4] == [0xFF, 0xFE, 0x00, 0x00] {
+                &bytes[4..]
+            } else {
+                bytes
+            };
+            if slice.len() % 4 != 0 && is_strict {
+                return Err((
+                    format!("Invalid UTF-32LE byte sequence (length {} not a multiple of 4)", slice.len()),
+                    slice.len() - (slice.len() % 4),
+                ));
+            }
+            let mut out = String::new();
+            for (idx, chunk) in slice.chunks_exact(4).enumerate() {
+                let cp = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                if let Some(ch) = char::from_u32(cp) {
+                    out.push(ch);
+                } else if is_strict {
+                    return Err((
+                        format!("Invalid Unicode codepoint 0x{:08X} at byte offset {}", cp, idx * 4),
+                        idx * 4,
+                    ));
+                } else {
+                    out.push('\u{FFFD}');
+                }
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::Utf32Be => {
+            let slice = if bytes.len() >= 4 && &bytes[0..4] == [0x00, 0x00, 0xFE, 0xFF] {
+                &bytes[4..]
+            } else {
+                bytes
+            };
+            if slice.len() % 4 != 0 && is_strict {
+                return Err((
+                    format!("Invalid UTF-32BE byte sequence (length {} not a multiple of 4)", slice.len()),
+                    slice.len() - (slice.len() % 4),
+                ));
+            }
+            let mut out = String::new();
+            for (idx, chunk) in slice.chunks_exact(4).enumerate() {
+                let cp = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                if let Some(ch) = char::from_u32(cp) {
+                    out.push(ch);
+                } else if is_strict {
+                    return Err((
+                        format!("Invalid Unicode codepoint 0x{:08X} at byte offset {}", cp, idx * 4),
+                        idx * 4,
+                    ));
+                } else {
+                    out.push('\u{FFFD}');
+                }
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::Utf16Le => {
+            let slice = if bytes.len() >= 2 && &bytes[0..2] == [0xFF, 0xFE] {
+                &bytes[2..]
+            } else {
+                bytes
+            };
+            if slice.len() % 2 != 0 && is_strict {
+                return Err((
+                    format!("Invalid UTF-16LE byte sequence (length {} not a multiple of 2)", slice.len()),
+                    slice.len() - (slice.len() % 2),
+                ));
+            }
+            let u16s: Vec<u16> = slice.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            if is_strict {
+                match char::decode_utf16(u16s.iter().copied()).collect::<Result<String, _>>() {
+                    Ok(s) => Ok(s),
+                    Err(_) => Err((
+                        "Invalid UTF-16LE sequence: unpaired surrogate".to_string(),
+                        0,
+                    )),
+                }
+            } else {
+                Ok(char::decode_utf16(u16s.iter().copied())
+                    .map(|r| r.unwrap_or('\u{FFFD}'))
+                    .collect())
+            }
+        }
+        ResolvedEncoding::Utf16Be => {
+            let slice = if bytes.len() >= 2 && &bytes[0..2] == [0xFE, 0xFF] {
+                &bytes[2..]
+            } else {
+                bytes
+            };
+            if slice.len() % 2 != 0 && is_strict {
+                return Err((
+                    format!("Invalid UTF-16BE byte sequence (length {} not a multiple of 2)", slice.len()),
+                    slice.len() - (slice.len() % 2),
+                ));
+            }
+            let u16s: Vec<u16> = slice.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+            if is_strict {
+                match char::decode_utf16(u16s.iter().copied()).collect::<Result<String, _>>() {
+                    Ok(s) => Ok(s),
+                    Err(_) => Err((
+                        "Invalid UTF-16BE sequence: unpaired surrogate".to_string(),
+                        0,
+                    )),
+                }
+            } else {
+                Ok(char::decode_utf16(u16s.iter().copied())
+                    .map(|r| r.unwrap_or('\u{FFFD}'))
+                    .collect())
+            }
+        }
+        ResolvedEncoding::EncodingRs(enc) => {
+            if enc == encoding_rs::UTF_8 {
+                let slice = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                    &bytes[3..]
+                } else {
+                    bytes
+                };
+                if is_strict {
+                    match std::str::from_utf8(slice) {
+                        Ok(s) => Ok(s.to_string()),
+                        Err(e) => Err((
+                            format!("Invalid UTF-8 sequence at byte offset {}", e.valid_up_to()),
+                            e.valid_up_to(),
+                        )),
+                    }
+                } else {
+                    Ok(String::from_utf8_lossy(slice).into_owned())
+                }
+            } else if is_strict {
+                let mut decoder = enc.new_decoder_without_bom_handling();
+                let mut dst = String::with_capacity(bytes.len() * 2);
+                let (_res, _read, had_errors) = decoder.decode_to_string(bytes, &mut dst, true);
+                if had_errors {
+                    let mut detector = enc.new_decoder_without_bom_handling();
+                    let mut temp = String::new();
+                    let mut offset = 0;
+                    for i in 0..bytes.len() {
+                        temp.clear();
+                        let (_, _, err) = detector.decode_to_string(&bytes[..=i], &mut temp, i == bytes.len() - 1);
+                        if err {
+                            offset = i;
+                            break;
+                        }
+                    }
+                    return Err((
+                        format!("Invalid byte sequence at byte offset {} for encoding '{}'", offset, encoding_name),
+                        offset,
+                    ));
+                }
+                Ok(dst)
+            } else {
+                let (cow, _, _) = enc.decode(bytes);
+                Ok(cow.into_owned())
+            }
+        }
+    }
+}
+
+pub fn convert_encoding(
+    bytes: &[u8],
+    to_encoding: &str,
+    from_encoding: Option<&str>,
+    on_unmappable: &str,
+) -> Result<Vec<u8>, (String, String)> {
+    let resolved_to = resolve_encoding(to_encoding)
+        .ok_or_else(|| ("UnknownEncodingException".to_string(), format!("Unknown encoding '{}'", to_encoding)))?;
+
+    let from_enc_name = match from_encoding {
+        Some(f) => f.to_string(),
+        None => detect_encoding(bytes, None)
+            .ok_or_else(|| ("InvalidEncodingException".to_string(), "Could not detect character encoding of input".to_string()))?,
+    };
+
+    let decoded_text = decode_bytes(bytes, &from_enc_name, "strict")
+        .map_err(|(msg, _)| ("InvalidEncodingException".to_string(), msg))?;
+
+    match resolved_to {
+        ResolvedEncoding::Utf32Le => {
+            let mut out = Vec::with_capacity(decoded_text.len() * 4);
+            for ch in decoded_text.chars() {
+                out.extend_from_slice(&(ch as u32).to_le_bytes());
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::Utf32Be => {
+            let mut out = Vec::with_capacity(decoded_text.len() * 4);
+            for ch in decoded_text.chars() {
+                out.extend_from_slice(&(ch as u32).to_be_bytes());
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::Utf16Le => {
+            let mut out = Vec::with_capacity(decoded_text.len() * 2);
+            for u in decoded_text.encode_utf16() {
+                out.extend_from_slice(&u.to_le_bytes());
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::Utf16Be => {
+            let mut out = Vec::with_capacity(decoded_text.len() * 2);
+            for u in decoded_text.encode_utf16() {
+                out.extend_from_slice(&u.to_be_bytes());
+            }
+            Ok(out)
+        }
+        ResolvedEncoding::EncodingRs(enc) => {
+            if enc == encoding_rs::UTF_8 {
+                Ok(decoded_text.into_bytes())
+            } else {
+                let is_throw = on_unmappable.eq_ignore_ascii_case("throw");
+                let is_skip = on_unmappable.eq_ignore_ascii_case("skip");
+
+                if is_throw {
+                    let mut check_buf = [0u8; 16];
+                    for ch in decoded_text.chars() {
+                        let mut ch_enc = enc.new_encoder();
+                        let mut ch_buf = [0u8; 4];
+                        let ch_utf8 = ch.encode_utf8(&mut ch_buf);
+                        let (_, _, _, has_unmappable) = ch_enc.encode_from_utf8(ch_utf8, &mut check_buf, true);
+                        if has_unmappable {
+                            return Err((
+                                "InvalidEncodingException".to_string(),
+                                format!("Character '{}' (U+{:04X}) cannot be encoded in '{}'", ch, ch as u32, to_encoding),
+                            ));
+                        }
+                    }
+                    let (res, _, _) = enc.encode(&decoded_text);
+                    Ok(res.into_owned())
+                } else if is_skip {
+                    let mut filtered = String::with_capacity(decoded_text.len());
+                    let mut check_buf = [0u8; 16];
+                    for ch in decoded_text.chars() {
+                        let mut ch_enc = enc.new_encoder();
+                        let mut ch_buf = [0u8; 4];
+                        let ch_utf8 = ch.encode_utf8(&mut ch_buf);
+                        let (_, _, _, has_unmappable) = ch_enc.encode_from_utf8(ch_utf8, &mut check_buf, true);
+                        if !has_unmappable {
+                            filtered.push(ch);
+                        }
+                    }
+                    let (res, _, _) = enc.encode(&filtered);
+                    Ok(res.into_owned())
+                } else {
+                    let (res, _, _) = enc.encode(&decoded_text);
+                    Ok(res.into_owned())
+                }
+            }
+        }
+    }
+}
+
+pub fn mb_strlen_encoding(bytes: &[u8], encoding_name: &str) -> Result<usize, (String, String)> {
+    let decoded = decode_bytes(bytes, encoding_name, "strict")
+        .map_err(|(msg, _)| ("InvalidEncodingException".to_string(), msg))?;
+    Ok(decoded.chars().count())
+}
+
+pub fn calc_mb_slice(n: i64, start: i64, len: Option<i64>) -> (usize, usize) {
+    if n <= 0 {
+        return (0, 0);
+    }
+    let actual_start = if start < 0 {
+        (n + start).max(0)
+    } else {
+        start.min(n)
+    };
+    let actual_end = match len {
+        None => n,
+        Some(l) if l >= 0 => (actual_start + l).min(n),
+        Some(l) => (n + l).max(actual_start),
+    };
+    (actual_start as usize, actual_end as usize)
+}
+
+pub fn mb_substr(
+    s: &str,
+    is_ascii: bool,
+    start: i64,
+    len: Option<i64>,
+    encoding: Option<&str>,
+) -> Result<String, (String, String)> {
+    let is_utf8_encoding = encoding
+        .map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8"))
+        .unwrap_or(true);
+
+    if is_utf8_encoding {
+        if is_ascii {
+            let (st, en) = calc_mb_slice(s.len() as i64, start, len);
+            return Ok(s[st..en].to_string());
+        }
+        let chars: Vec<char> = s.chars().collect();
+        let (st, en) = calc_mb_slice(chars.len() as i64, start, len);
+        return Ok(chars[st..en].iter().collect());
+    }
+
+    let enc_name = encoding.unwrap();
+    let decoded = decode_bytes(s.as_bytes(), enc_name, "strict")
+        .map_err(|(msg, _)| ("InvalidEncodingException".to_string(), msg))?;
+    let chars: Vec<char> = decoded.chars().collect();
+    let (st, en) = calc_mb_slice(chars.len() as i64, start, len);
+    Ok(chars[st..en].iter().collect())
+}
+
+pub fn grapheme_len(s: &str) -> usize {
+    unicode_segmentation::UnicodeSegmentation::graphemes(s, true).count()
+}
+
 

@@ -2416,6 +2416,7 @@ impl TypeChecker {
                 Literal::Int { .. } => RhpType::Int,
                 Literal::Float { .. } => RhpType::Float,
                 Literal::String { .. } => RhpType::String,
+                Literal::Bytes { .. } => RhpType::Bytes,
                 Literal::InterpolatedString { parts, .. } => {
                     for part in parts {
                         if let crate::ast::expr::StringPart::Expr(inner_expr) = part {
@@ -3215,6 +3216,18 @@ impl TypeChecker {
                     return Ok(self.record_expr_type(expr.span, final_ty));
                 }
 
+                if base_obj_ty == RhpType::Bytes {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: format!(
+                                "Method {}() is not supported on bytes. Call ->decode() first to get a string.",
+                                method.name
+                            ),
+                        },
+                        expr.span,
+                    ));
+                }
+
                 if *is_nullsafe {
                     RhpType::Dynamic.into_nullable()
                 } else {
@@ -3469,7 +3482,25 @@ impl TypeChecker {
             }
 
             // String concatenation `.`
-            BinaryOp::Concat => Ok(RhpType::String),
+            BinaryOp::Concat => {
+                if left_ty == &RhpType::Bytes && right_ty == &RhpType::Bytes {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if left_ty == &RhpType::Bytes || right_ty == &RhpType::Bytes {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                Ok(RhpType::String)
+            }
 
             // Bitwise operations
             BinaryOp::BitAnd

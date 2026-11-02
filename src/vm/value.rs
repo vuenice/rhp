@@ -13,71 +13,90 @@ use crate::ir::opcode::{ClassId, FunctionId};
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::parent_process::FrozenValue;
 
-/// Maximum byte length for an inlined Small String (SSO).
-pub const SSO_CAPACITY: usize = 23;
-
-/// Small-String-Optimized (SSO) binary-safe string representation.
+/// String value representation in RHP supporting Utf8 and Bytes subtypes.
 ///
-/// Under the hood, RHP strings are raw byte buffers with a known length:
-/// - Strings with length <= 23 bytes are stored inline on the stack with zero heap allocations (`Inline`).
-/// - Larger strings are reference-counted byte buffers (`Rc<Vec<u8>>`) with Copy-on-Write semantics.
-/// - 100% binary-safe: naturally accommodates arbitrary binary payloads (images, streams) and
-///   legacy multi-byte character sets (Shift-JIS, EUC-JP, ISO-2022-JP) without triggering Rust UTF-8 panics.
-#[derive(Clone)]
-pub enum RhpString {
-    Inline { len: u8, buf: [u8; SSO_CAPACITY] },
-    Heap(Rc<Vec<u8>>),
+/// Under the hood:
+/// - `Utf8` is the default subtype. Invariant: always valid UTF-8, enforced at construction.
+///   `ascii` is cached at construction for O(1) fast paths.
+/// - `Bytes` is raw binary data with no encoding claim, backed by `Arc<[u8]>`.
+#[derive(Clone, Debug)]
+pub enum StrValue {
+    Utf8 { s: Arc<str>, ascii: bool },
+    Bytes(Arc<[u8]>),
 }
 
-impl RhpString {
+pub type RhpString = StrValue;
+
+impl StrValue {
     #[inline]
-    pub fn new(s: &str) -> Self {
-        Self::from_bytes(s.as_bytes())
+    pub fn new_utf8(s: impl AsRef<str>) -> Self {
+        let s_ref = s.as_ref();
+        let ascii = s_ref.is_ascii();
+        Self::Utf8 {
+            s: Arc::from(s_ref),
+            ascii,
+        }
+    }
+
+    #[inline]
+    pub fn from_utf8_arc(s: Arc<str>) -> Self {
+        let ascii = s.is_ascii();
+        Self::Utf8 { s, ascii }
+    }
+
+    #[inline]
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, std::str::Utf8Error> {
+        let valid_str = std::str::from_utf8(bytes)?;
+        let ascii = bytes.is_ascii();
+        Ok(Self::Utf8 {
+            s: Arc::from(valid_str),
+            ascii,
+        })
+    }
+
+    #[inline]
+    pub fn new_bytes(bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self::Bytes(bytes.into())
     }
 
     #[inline]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let len = bytes.len();
-        if len <= SSO_CAPACITY {
-            let mut buf = [0u8; SSO_CAPACITY];
-            buf[..len].copy_from_slice(bytes);
-            Self::Inline {
-                len: len as u8,
-                buf,
-            }
-        } else {
-            Self::Heap(Rc::new(bytes.to_vec()))
-        }
+        Self::Bytes(Arc::from(bytes))
     }
 
     #[inline]
     pub fn from_vec(bytes: Vec<u8>) -> Self {
-        let len = bytes.len();
-        if len <= SSO_CAPACITY {
-            let mut buf = [0u8; SSO_CAPACITY];
-            buf[..len].copy_from_slice(&bytes);
-            Self::Inline {
-                len: len as u8,
-                buf,
-            }
-        } else {
-            Self::Heap(Rc::new(bytes))
-        }
+        Self::Bytes(Arc::from(bytes))
     }
 
     #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn new(s: &str) -> Self {
+        Self::new_utf8(s)
+    }
+
+    #[inline]
+    pub fn is_utf8(&self) -> bool {
+        matches!(self, Self::Utf8 { .. })
+    }
+
+    #[inline]
+    pub fn is_bytes(&self) -> bool {
+        matches!(self, Self::Bytes(_))
+    }
+
+    #[inline]
+    pub fn is_ascii(&self) -> bool {
         match self {
-            Self::Inline { len, buf } => &buf[..*len as usize],
-            Self::Heap(rc) => rc.as_slice(),
+            Self::Utf8 { ascii, .. } => *ascii,
+            Self::Bytes(b) => b.is_ascii(),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
         match self {
-            Self::Inline { len, .. } => *len as usize,
-            Self::Heap(rc) => rc.len(),
+            Self::Utf8 { s, .. } => s.len(),
+            Self::Bytes(b) => b.len(),
         }
     }
 
@@ -87,136 +106,129 @@ impl RhpString {
     }
 
     #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Utf8 { s, .. } => s.as_bytes(),
+            Self::Bytes(b) => b.as_ref(),
+        }
+    }
+
+    #[inline]
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Inline { len, buf } => {
-                std::str::from_utf8(&buf[..*len as usize]).unwrap_or("")
-            }
-            Self::Heap(rc) => {
-                std::str::from_utf8(rc.as_slice()).unwrap_or("")
-            }
+            Self::Utf8 { s, .. } => s.as_ref(),
+            Self::Bytes(_) => "",
+        }
+    }
+
+    #[inline]
+    pub fn as_utf8_str(&self) -> Option<&str> {
+        match self {
+            Self::Utf8 { s, .. } => Some(s.as_ref()),
+            Self::Bytes(_) => None,
         }
     }
 
     #[inline]
     pub fn to_str_lossy(&self) -> std::borrow::Cow<'_, str> {
-        String::from_utf8_lossy(self.as_bytes())
-    }
-
-    #[inline]
-    pub fn is_utf8(&self) -> bool {
-        std::str::from_utf8(self.as_bytes()).is_ok()
-    }
-
-    #[inline]
-    pub fn is_inline(&self) -> bool {
-        matches!(self, Self::Inline { .. })
-    }
-
-    #[inline]
-    pub fn is_heap(&self) -> bool {
-        matches!(self, Self::Heap(_))
+        match self {
+            Self::Utf8 { s, .. } => std::borrow::Cow::Borrowed(s.as_ref()),
+            Self::Bytes(b) => String::from_utf8_lossy(b.as_ref()),
+        }
     }
 
     #[inline]
     pub fn ref_count(&self) -> usize {
         match self {
-            Self::Inline { .. } => 1,
-            Self::Heap(rc) => Rc::strong_count(rc),
+            Self::Utf8 { s, .. } => Arc::strong_count(s),
+            Self::Bytes(b) => Arc::strong_count(b),
         }
     }
 
     #[inline]
     pub fn is_shared(&self) -> bool {
-        match self {
-            Self::Inline { .. } => false,
-            Self::Heap(rc) => Rc::strong_count(rc) > 1,
-        }
+        self.ref_count() > 1
     }
 
-    /// Mutably access or promote string buffer using Copy-On-Write semantics.
-    pub fn make_mut(&mut self) -> &mut Vec<u8> {
-        match self {
-            Self::Inline { len, buf } => {
-                let v = buf[..*len as usize].to_vec();
-                *self = Self::Heap(Rc::new(v));
-                match self {
-                    Self::Heap(rc) => Rc::make_mut(rc),
-                    _ => unreachable!(),
-                }
-            }
-            Self::Heap(rc) => Rc::make_mut(rc),
-        }
+    #[inline]
+    pub fn is_inline(&self) -> bool {
+        false
     }
 
-    /// Append a byte slice utilizing SSO when possible or Copy-On-Write heap mutation.
-    pub fn push_bytes(&mut self, b: &[u8]) {
+    #[inline]
+    pub fn is_heap(&self) -> bool {
+        true
+    }
+
+    pub fn push_str(&mut self, other: &str) {
         match self {
-            Self::Inline { len, buf } => {
-                let current_len = *len as usize;
-                let add_len = b.len();
-                if current_len + add_len <= SSO_CAPACITY {
-                    buf[current_len..current_len + add_len].copy_from_slice(b);
-                    *len = (current_len + add_len) as u8;
-                } else {
-                    let mut owned = Vec::with_capacity(current_len + add_len);
-                    owned.extend_from_slice(&buf[..current_len]);
-                    owned.extend_from_slice(b);
-                    *self = Self::Heap(Rc::new(owned));
-                }
+            Self::Utf8 { s, ascii } => {
+                let mut new_s = String::with_capacity(s.len() + other.len());
+                new_s.push_str(s);
+                new_s.push_str(other);
+                *ascii = *ascii && other.is_ascii();
+                *s = Arc::from(new_s);
             }
-            Self::Heap(rc) => {
-                Rc::make_mut(rc).extend_from_slice(b);
+            Self::Bytes(b) => {
+                let mut vec = Vec::with_capacity(b.len() + other.len());
+                vec.extend_from_slice(b);
+                vec.extend_from_slice(other.as_bytes());
+                *b = Arc::from(vec);
             }
         }
     }
 
-    /// Append a string slice utilizing SSO when possible or Copy-On-Write heap mutation.
-    pub fn push_str(&mut self, s: &str) {
-        self.push_bytes(s.as_bytes());
-    }
-
-    /// Append a single character with COW semantics.
-    pub fn push(&mut self, ch: char) {
-        let mut buf = [0u8; 4];
-        let encoded = ch.encode_utf8(&mut buf);
-        self.push_str(encoded);
-    }
-
-    /// Append a single raw byte.
-    pub fn push_byte(&mut self, b: u8) {
-        self.push_bytes(&[b]);
-    }
-
-    /// Mutate a byte at index using COW semantics.
-    pub fn set_byte(&mut self, index: usize, b: u8) {
-        if index < self.len() {
-            self.make_mut()[index] = b;
-        }
-    }
-
-    /// Mutate a character at a byte/char index using COW semantics.
+    /// Mutate a character at char index using COW semantics.
     pub fn set_char(&mut self, index: usize, ch: char) {
-        if index < self.len() {
-            if self.is_utf8() {
-                let mut chars: Vec<char> = self.as_str().chars().collect();
+        match self {
+            Self::Utf8 { s, ascii } => {
+                let mut chars: Vec<char> = s.chars().collect();
                 if index < chars.len() {
                     chars[index] = ch;
                     let new_str: String = chars.into_iter().collect();
-                    *self = Self::new(&new_str);
+                    *ascii = new_str.is_ascii();
+                    *s = Arc::from(new_str);
                 }
-            } else {
-                let mut buf = [0u8; 4];
-                let enc = ch.encode_utf8(&mut buf).as_bytes();
-                if !enc.is_empty() {
-                    self.set_byte(index, enc[0]);
+            }
+            Self::Bytes(b) => {
+                if index < b.len() {
+                    let mut vec = b.to_vec();
+                    let mut buf = [0u8; 4];
+                    let enc = ch.encode_utf8(&mut buf).as_bytes();
+                    if !enc.is_empty() {
+                        vec[index] = enc[0];
+                        *b = Arc::from(vec);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Mutate a byte at byte index using COW semantics.
+    pub fn set_byte(&mut self, index: usize, byte: u8) {
+        match self {
+            Self::Bytes(b) => {
+                if index < b.len() {
+                    let mut vec = b.to_vec();
+                    vec[index] = byte;
+                    *b = Arc::from(vec);
+                }
+            }
+            Self::Utf8 { s, ascii } => {
+                let mut bytes = s.as_bytes().to_vec();
+                if index < bytes.len() {
+                    bytes[index] = byte;
+                    if let Ok(valid) = std::str::from_utf8(&bytes) {
+                        *ascii = valid.is_ascii();
+                        *s = Arc::from(valid);
+                    }
                 }
             }
         }
     }
 }
 
-impl Deref for RhpString {
+impl Deref for StrValue {
     type Target = str;
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -224,140 +236,146 @@ impl Deref for RhpString {
     }
 }
 
-impl AsRef<str> for RhpString {
+impl AsRef<str> for StrValue {
     #[inline]
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
 
-impl AsRef<[u8]> for RhpString {
+impl AsRef<[u8]> for StrValue {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
 
-impl fmt::Display for RhpString {
+impl fmt::Display for StrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_str_lossy())
     }
 }
 
-impl fmt::Debug for RhpString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.to_str_lossy())
-    }
-}
-
-impl PartialEq for RhpString {
+impl PartialEq for StrValue {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes()
+        match (self, other) {
+            (Self::Utf8 { s: s1, .. }, Self::Utf8 { s: s2, .. }) => s1 == s2,
+            (Self::Bytes(b1), Self::Bytes(b2)) => b1 == b2,
+            _ => false,
+        }
     }
 }
 
-impl PartialEq<str> for RhpString {
+impl PartialEq<str> for StrValue {
     #[inline]
     fn eq(&self, other: &str) -> bool {
-        self.as_bytes() == other.as_bytes()
+        match self {
+            Self::Utf8 { s, .. } => s.as_ref() == other,
+            Self::Bytes(_) => false,
+        }
     }
 }
 
-impl PartialEq<&str> for RhpString {
+impl PartialEq<&str> for StrValue {
     #[inline]
     fn eq(&self, other: &&str) -> bool {
-        self.as_bytes() == other.as_bytes()
+        match self {
+            Self::Utf8 { s, .. } => s.as_ref() == *other,
+            Self::Bytes(_) => false,
+        }
     }
 }
 
-impl PartialEq<[u8]> for RhpString {
+impl PartialEq<[u8]> for StrValue {
     #[inline]
     fn eq(&self, other: &[u8]) -> bool {
         self.as_bytes() == other
     }
 }
 
-impl PartialEq<&[u8]> for RhpString {
+impl PartialEq<&[u8]> for StrValue {
     #[inline]
     fn eq(&self, other: &&[u8]) -> bool {
         self.as_bytes() == *other
     }
 }
 
-impl Eq for RhpString {}
+impl Eq for StrValue {}
 
-impl PartialOrd for RhpString {
+impl PartialOrd for StrValue {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        match (self, other) {
+            (Self::Utf8 { s: s1, .. }, Self::Utf8 { s: s2, .. }) => s1.partial_cmp(s2),
+            (Self::Bytes(b1), Self::Bytes(b2)) => b1.partial_cmp(b2),
+            _ => None,
+        }
     }
 }
 
-impl Ord for RhpString {
-    #[inline]
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.as_bytes().cmp(other.as_bytes())
-    }
-}
-
-impl Hash for RhpString {
+impl Hash for StrValue {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_bytes().hash(state);
+        match self {
+            Self::Utf8 { s, .. } => {
+                0u8.hash(state);
+                s.hash(state);
+            }
+            Self::Bytes(b) => {
+                1u8.hash(state);
+                b.hash(state);
+            }
+        }
     }
 }
 
-impl From<&str> for RhpString {
+impl From<&str> for StrValue {
     #[inline]
     fn from(s: &str) -> Self {
-        Self::new(s)
+        Self::new_utf8(s)
     }
 }
 
-impl From<String> for RhpString {
+impl From<String> for StrValue {
     #[inline]
     fn from(s: String) -> Self {
-        Self::from_vec(s.into_bytes())
+        Self::new_utf8(s)
     }
 }
 
-impl From<&String> for RhpString {
+impl From<&String> for StrValue {
     #[inline]
     fn from(s: &String) -> Self {
-        Self::from_bytes(s.as_bytes())
+        Self::new_utf8(s)
     }
 }
 
-impl From<&[u8]> for RhpString {
+impl From<Arc<str>> for StrValue {
+    #[inline]
+    fn from(s: Arc<str>) -> Self {
+        Self::from_utf8_arc(s)
+    }
+}
+
+impl From<Arc<[u8]>> for StrValue {
+    #[inline]
+    fn from(bytes: Arc<[u8]>) -> Self {
+        Self::new_bytes(bytes)
+    }
+}
+
+impl From<&[u8]> for StrValue {
     #[inline]
     fn from(bytes: &[u8]) -> Self {
         Self::from_bytes(bytes)
     }
 }
 
-impl From<Vec<u8>> for RhpString {
+impl From<Vec<u8>> for StrValue {
     #[inline]
     fn from(bytes: Vec<u8>) -> Self {
         Self::from_vec(bytes)
-    }
-}
-
-impl From<Rc<Vec<u8>>> for RhpString {
-    #[inline]
-    fn from(rc: Rc<Vec<u8>>) -> Self {
-        if rc.len() <= SSO_CAPACITY {
-            Self::from_bytes(&rc)
-        } else {
-            Self::Heap(rc)
-        }
-    }
-}
-
-impl From<Rc<String>> for RhpString {
-    #[inline]
-    fn from(rc: Rc<String>) -> Self {
-        Self::from_bytes(rc.as_bytes())
     }
 }
 
@@ -849,17 +867,13 @@ impl PhpValue {
     // =========================================================================
 
     #[inline]
-    pub fn string(s: impl Into<RhpString>) -> Self {
-        let rs = s.into();
-        if rs.is_heap() {
-            crate::vm::memory::record_alloc(rs.len() + 24);
-        }
-        Self::String(rs)
+    pub fn string(s: impl Into<StrValue>) -> Self {
+        Self::String(s.into())
     }
 
     #[inline]
-    pub fn bytes(b: impl Into<Vec<u8>>) -> Self {
-        Self::string(b.into())
+    pub fn bytes(b: impl Into<Arc<[u8]>>) -> Self {
+        Self::String(StrValue::new_bytes(b))
     }
 
     #[inline]
@@ -961,7 +975,10 @@ impl PhpValue {
             Self::Float(_) => "float",
             Self::RustInt { kind, .. } => kind.as_str(),
             Self::RustFloat { kind, .. } => kind.as_str(),
-            Self::String(_) => "string",
+            Self::String(s) => match s {
+                StrValue::Utf8 { .. } => "string",
+                StrValue::Bytes(_) => "bytes",
+            },
             Self::Array(_) => "array",
             Self::List(_) => "Arr::list",
             Self::Dict(_) => "Arr::dict",
@@ -972,6 +989,18 @@ impl PhpValue {
             Self::Future(_) => "Future",
             Self::Resource(_) => "resource",
         }
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String(StrValue::Utf8 { .. }))
+    }
+
+    pub fn is_utf8(&self) -> bool {
+        matches!(self, Self::String(StrValue::Utf8 { .. }))
+    }
+
+    pub fn is_bytes(&self) -> bool {
+        matches!(self, Self::String(StrValue::Bytes(_)))
     }
 
     pub fn is_null(&self) -> bool {
@@ -986,7 +1015,10 @@ impl PhpValue {
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
             Self::RustInt { value, .. } => *value != 0,
             Self::RustFloat { value, .. } => *value != 0.0 && !value.is_nan(),
-            Self::String(s) => !s.is_empty() && s.as_str() != "0",
+            Self::String(s) => match s {
+                StrValue::Utf8 { s, .. } => !s.is_empty() && &**s != "0",
+                StrValue::Bytes(b) => !b.is_empty() && &**b != b"0",
+            },
             Self::Array(arr) => !arr.borrow().is_empty(),
             Self::List(list) => !list.borrow().is_empty(),
             Self::Dict(dict) => !dict.borrow().is_empty(),
@@ -1388,7 +1420,8 @@ impl PhpValue {
                 Self::Float(_) | Self::Int(_) => true,
                 _ => false,
             },
-            RhpType::String => matches!(self, Self::String(_)),
+            RhpType::String => matches!(self, Self::String(StrValue::Utf8 { .. })),
+            RhpType::Bytes => matches!(self, Self::String(StrValue::Bytes(_))),
             RhpType::Array(inner) => {
                 if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
                     matches!(

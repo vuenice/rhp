@@ -24,7 +24,7 @@ use crate::vm::exception::{
 };
 use crate::vm::facade::{
     arr_get_dot, arr_has_dot, dispatch_facade_call, extract_array_elements, extract_dict_elements,
-    extract_dict_map, flatten_elements, get_runtime_closure_macro, php_value_to_json,
+    extract_dict_map, flatten_elements, get_item_column, get_runtime_closure_macro, php_value_to_json,
     register_runtime_closure_macro,
 };
 use crate::vm::parent_process::FrozenValue;
@@ -4182,7 +4182,7 @@ impl VM {
             }
         }
 
-        if facade == "Arr" {
+        if facade == "Arr" || facade == "phpFun" {
             match method {
                 "macro" => {
                     if let (Some(name_val), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {
@@ -4191,7 +4191,7 @@ impl VM {
                         return Ok(PhpValue::Bool(true));
                     }
                 }
-                "map" => {
+                "map" | "array_map" => {
                     let (cb_opt, arr_opt) = match (args.first(), args.get(1)) {
                         (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(cb), Some(arr)),
                         (Some(arr), Some(PhpValue::Closure(cb))) => (Some(cb), Some(arr)),
@@ -4210,7 +4210,7 @@ impl VM {
                         return Ok(PhpValue::list(mapped));
                     }
                 }
-                "filter" => {
+                "filter" | "array_filter" => {
                     let (arr_opt, cb_opt) = match (args.first(), args.get(1)) {
                         (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(arr), Some(cb)),
                         (Some(arr), Some(PhpValue::Closure(cb))) => (Some(arr), Some(cb)),
@@ -4237,7 +4237,7 @@ impl VM {
                         return Ok(PhpValue::list(filtered));
                     }
                 }
-                "reduce" => {
+                "reduce" | "array_reduce" => {
                     if let (Some(arr), Some(PhpValue::Closure(cb))) = (args.first(), args.get(1)) {
                         let items = Self::extract_items(arr);
                         let mut acc = args.get(2).cloned().unwrap_or(PhpValue::Null);
@@ -4245,6 +4245,80 @@ impl VM {
                             acc = self.invoke_closure_sync(cb, vec![acc, item], span)?;
                         }
                         return Ok(acc);
+                    }
+                }
+                "usort" | "uasort" => {
+                    let (arr_opt, cb_opt) = match (args.first(), args.get(1)) {
+                        (Some(arr), Some(PhpValue::Closure(cb))) => (Some(arr), Some(cb)),
+                        (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(arr), Some(cb)),
+                        (Some(arr), _) => (Some(arr), None),
+                        _ => (None, None),
+                    };
+                    if let Some(arr) = arr_opt {
+                        let cb_args = cb_opt.map(|cb| vec![PhpValue::Closure(cb.clone())]).unwrap_or_default();
+                        return self.exec_fluent_value_method(arr, method, &cb_args, span);
+                    }
+                }
+                "uksort" => {
+                    let (arr_opt, cb_opt) = match (args.first(), args.get(1)) {
+                        (Some(arr), Some(PhpValue::Closure(cb))) => (Some(arr), Some(cb)),
+                        (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(arr), Some(cb)),
+                        (Some(arr), _) => (Some(arr), None),
+                        _ => (None, None),
+                    };
+                    if let Some(arr) = arr_opt {
+                        let cb_args = cb_opt.map(|cb| vec![PhpValue::Closure(cb.clone())]).unwrap_or_default();
+                        return self.exec_fluent_value_method(arr, "uksort", &cb_args, span);
+                    }
+                }
+                "asort" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "asort", &[], span);
+                    }
+                }
+                "ksort" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "ksort", &[], span);
+                    }
+                }
+                "diff" | "array_diff" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "diff", &args[1..], span);
+                    }
+                }
+                "diffKey" | "diffKeys" | "array_diff_key" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "diffKey", &args[1..], span);
+                    }
+                }
+                "intersect" | "array_intersect" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "intersect", &args[1..], span);
+                    }
+                }
+                "intersectKey" | "intersectKeys" | "array_intersect_key" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "intersectKey", &args[1..], span);
+                    }
+                }
+                "column" | "array_column" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "column", &args[1..], span);
+                    }
+                }
+                "chunk" | "array_chunk" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "chunk", &args[1..], span);
+                    }
+                }
+                "flip" | "array_flip" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "flip", &[], span);
+                    }
+                }
+                "combine" | "array_combine" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "combine", &args[1..], span);
                     }
                 }
                 _ => {
@@ -4597,10 +4671,15 @@ impl VM {
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
-                    "flip" => {
+                    "flip" | "array_flip" => {
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
-                            out.insert(v.to_php_string(), PhpValue::string(k.clone()));
+                            let orig_val = if let Ok(n) = k.parse::<i32>() {
+                                PhpValue::Int(n)
+                            } else {
+                                PhpValue::string(k.clone())
+                            };
+                            out.insert(v.to_php_string(), orig_val);
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -4613,17 +4692,46 @@ impl VM {
                         }
                         Ok(PhpValue::dict_from_map(merged))
                     }
-                    "sortKeys" => {
+                    "sortKeys" | "ksort" => {
                         let mut sorted = dict.borrow().clone();
                         sorted.sort_keys();
                         Ok(PhpValue::dict_from_map(sorted))
+                    }
+                    "sortKeysBy" | "uksort" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = entries.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let cmp_res = self.invoke_closure_sync(
+                                        cb,
+                                        vec![PhpValue::string(entries[i].0.clone()), PhpValue::string(entries[j].0.clone())],
+                                        span,
+                                    )?;
+                                    if cmp_res.to_i64().unwrap_or(0) > 0 {
+                                        entries.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else {
+                            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
                     }
                     "sortKeysDesc" => {
                         let mut sorted = dict.borrow().clone();
                         sorted.sort_by(|k1, _, k2, _| k2.cmp(k1));
                         Ok(PhpValue::dict_from_map(sorted))
                     }
-                    "sort" => {
+                    "sort" | "asort" | "uasort" | "usort" => {
                         let mut entries: Vec<(String, PhpValue)> = dict
                             .borrow()
                             .iter()
@@ -4666,12 +4774,12 @@ impl VM {
                                 for j in (i + 1)..len {
                                     let ki = self.invoke_closure_sync(
                                         cb,
-                                        vec![entries[i].1.clone(), PhpValue::string(entries[i].0.clone())],
+                                        vec![entries[i].1.clone()],
                                         span,
                                     )?;
                                     let kj = self.invoke_closure_sync(
                                         cb,
-                                        vec![entries[j].1.clone(), PhpValue::string(entries[j].0.clone())],
+                                        vec![entries[j].1.clone()],
                                         span,
                                     )?;
                                     if ki.partial_cmp(&kj) == Some(std::cmp::Ordering::Greater) {
@@ -4797,49 +4905,108 @@ impl VM {
                             Ok(PhpValue::list(plucked))
                         }
                     }
-                    "diff" => {
-                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
-                        let other_values: Vec<PhpValue> = other_dict.values().cloned().collect();
+                    "column" | "array_column" => {
+                        let col_opt = args.first();
+                        let is_col_null = col_opt.map_or(true, |v| matches!(v, PhpValue::Null));
+                        let col_name = col_opt.map(|v| v.to_php_string()).unwrap_or_default();
+                        let index_key_opt = args.get(1);
+
+                        let mut map = IndexMap::new();
+                        for (orig_k, v) in dict.borrow().iter() {
+                            let k = if let Some(idx_key_val) = index_key_opt {
+                                if !matches!(idx_key_val, PhpValue::Null) {
+                                    let idx_name = idx_key_val.to_php_string();
+                                    get_item_column(v, &idx_name).map(|val| val.to_php_string()).unwrap_or_default()
+                                } else {
+                                    orig_k.clone()
+                                }
+                            } else {
+                                orig_k.clone()
+                            };
+                            let plucked_val = if is_col_null {
+                                v.clone()
+                            } else {
+                                get_item_column(v, &col_name).unwrap_or(PhpValue::Null)
+                            };
+                            map.insert(k, plucked_val);
+                        }
+                        Ok(PhpValue::dict_from_map(map))
+                    }
+                    "combine" | "array_combine" => {
+                        let vals_arg = args.first().unwrap_or(&PhpValue::Null);
+                        let vals = Self::extract_items(vals_arg);
+                        let dict_vals: Vec<PhpValue> = dict.borrow().values().cloned().collect();
+                        if dict_vals.len() != vals.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        let mut map = IndexMap::new();
+                        for (k, v) in dict_vals.into_iter().zip(vals) {
+                            map.insert(k.to_php_string(), v);
+                        }
+                        Ok(PhpValue::dict_from_map(map))
+                    }
+                    "diff" | "array_diff" => {
+                        let mut exclude = HashSet::new();
+                        for arg in args {
+                            for (_, v) in extract_dict_elements(arg) {
+                                exclude.insert(v);
+                            }
+                        }
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
-                            if !other_values.contains(v) {
+                            if !exclude.contains(v) {
                                 out.insert(k.clone(), v.clone());
                             }
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
-                    "diffKeys" => {
-                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                    "diffKeys" | "diffKey" | "array_diff_key" => {
+                        let mut exclude_keys = HashSet::new();
+                        for arg in args {
+                            for (k, _) in extract_dict_elements(arg) {
+                                exclude_keys.insert(k);
+                            }
+                        }
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
-                            if !other_dict.contains_key(k) {
+                            if !exclude_keys.contains(k) {
                                 out.insert(k.clone(), v.clone());
                             }
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
-                    "intersect" => {
-                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
-                        let other_values: Vec<PhpValue> = other_dict.values().cloned().collect();
+                    "intersect" | "array_intersect" => {
+                        let other_val_sets: Vec<HashSet<PhpValue>> = args
+                            .iter()
+                            .map(|arg| extract_dict_elements(arg).into_iter().map(|(_, v)| v).collect())
+                            .collect();
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
-                            if other_values.contains(v) {
+                            if other_val_sets.iter().all(|set| set.contains(v)) {
                                 out.insert(k.clone(), v.clone());
                             }
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
-                    "intersectKeys" => {
-                        let other_dict = args.first().map(extract_dict_map).unwrap_or_default();
+                    "intersectKeys" | "intersectKey" | "array_intersect_key" => {
+                        let other_key_sets: Vec<HashSet<String>> = args
+                            .iter()
+                            .map(|arg| extract_dict_elements(arg).into_iter().map(|(k, _)| k).collect())
+                            .collect();
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
-                            if other_dict.contains_key(k) {
+                            if other_key_sets.iter().all(|set| set.contains(k)) {
                                 out.insert(k.clone(), v.clone());
                             }
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
-                    "chunk" => {
+                    "chunk" | "array_chunk" => {
                         let size = args.first().and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
                         let entries: Vec<(String, PhpValue)> = dict
                             .borrow()
@@ -5108,33 +5275,127 @@ impl VM {
                             Ok(PhpValue::Null)
                         }
                     }
-                    "diff" => {
-                        let other_set: HashSet<PhpValue> = match args.first() {
-                            Some(PhpValue::Set(s)) => s.borrow().clone(),
-                            Some(other) => Self::extract_items(other).into_iter().collect(),
-                            None => HashSet::new(),
-                        };
+                    "sort" | "asort" | "usort" | "uasort" => {
+                        let mut items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if let Some(PhpValue::Closure(cb)) = args.first() {
+                            let len = items.len();
+                            for i in 0..len {
+                                for j in (i + 1)..len {
+                                    let cmp_res = self.invoke_closure_sync(
+                                        cb,
+                                        vec![items[i].clone(), items[j].clone()],
+                                        span,
+                                    )?;
+                                    if cmp_res.to_i64().unwrap_or(0) > 0 {
+                                        items.swap(i, j);
+                                    }
+                                }
+                            }
+                        } else {
+                            items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        }
+                        let mut out = HashSet::new();
+                        for it in items {
+                            out.insert(it);
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "diff" | "array_diff" => {
+                        let mut exclude = HashSet::new();
+                        for arg in args {
+                            match arg {
+                                PhpValue::Set(s) => {
+                                    for it in s.borrow().iter() {
+                                        exclude.insert(it.clone());
+                                    }
+                                }
+                                other => {
+                                    for it in Self::extract_items(other) {
+                                        exclude.insert(it);
+                                    }
+                                }
+                            }
+                        }
                         let mut out = HashSet::new();
                         for item in set.borrow().iter() {
-                            if !other_set.contains(item) {
+                            if !exclude.contains(item) {
                                 out.insert(item.clone());
                             }
                         }
                         Ok(PhpValue::set_from_hash_set(out))
                     }
-                    "intersect" => {
-                        let other_set: HashSet<PhpValue> = match args.first() {
-                            Some(PhpValue::Set(s)) => s.borrow().clone(),
-                            Some(other) => Self::extract_items(other).into_iter().collect(),
-                            None => HashSet::new(),
-                        };
+                    "diffKey" | "array_diff_key" => {
+                        Ok(PhpValue::set_from_hash_set(set.borrow().clone()))
+                    }
+                    "intersect" | "array_intersect" => {
+                        let other_sets: Vec<HashSet<PhpValue>> = args
+                            .iter()
+                            .map(|arg| match arg {
+                                PhpValue::Set(s) => s.borrow().clone(),
+                                other => Self::extract_items(other).into_iter().collect(),
+                            })
+                            .collect();
                         let mut out = HashSet::new();
                         for item in set.borrow().iter() {
-                            if other_set.contains(item) {
+                            if other_sets.iter().all(|s| s.contains(item)) {
                                 out.insert(item.clone());
                             }
                         }
                         Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "intersectKey" | "array_intersect_key" => {
+                        Ok(PhpValue::set_from_hash_set(set.borrow().clone()))
+                    }
+                    "column" | "array_column" => {
+                        let col_opt = args.first();
+                        let is_col_null = col_opt.map_or(true, |v| matches!(v, PhpValue::Null));
+                        let col_name = col_opt.map(|v| v.to_php_string()).unwrap_or_default();
+                        let mut out = HashSet::new();
+                        for item in set.borrow().iter() {
+                            let v = if is_col_null {
+                                item.clone()
+                            } else {
+                                get_item_column(item, &col_name).unwrap_or(PhpValue::Null)
+                            };
+                            out.insert(v);
+                        }
+                        Ok(PhpValue::set_from_hash_set(out))
+                    }
+                    "chunk" | "array_chunk" => {
+                        let size = args.first().and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        let chunks: Vec<PhpValue> = items
+                            .chunks(size)
+                            .map(|c| {
+                                let mut hs = HashSet::new();
+                                for it in c {
+                                    hs.insert(it.clone());
+                                }
+                                PhpValue::set_from_hash_set(hs)
+                            })
+                            .collect();
+                        Ok(PhpValue::list(chunks))
+                    }
+                    "flip" | "array_flip" => {
+                        Ok(PhpValue::set_from_hash_set(set.borrow().clone()))
+                    }
+                    "combine" | "array_combine" => {
+                        let vals_arg = args.first().unwrap_or(&PhpValue::Null);
+                        let vals = Self::extract_items(vals_arg);
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if items.len() != vals.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        let mut map = IndexMap::new();
+                        for (k, v) in items.into_iter().zip(vals) {
+                            map.insert(k.to_php_string(), v);
+                        }
+                        Ok(PhpValue::dict_from_map(map))
                     }
                     "union" => {
                         let mut out = set.borrow().clone();
@@ -5698,13 +5959,100 @@ impl VM {
                         let count = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
                         Ok(PhpValue::list(items.into_iter().skip(count).collect()))
                     }
-                    "chunk" => {
+                    "chunk" | "array_chunk" => {
                         let size = args.first().and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
                         let chunks: Vec<PhpValue> = items
                             .chunks(size)
                             .map(|c| PhpValue::list(c.to_vec()))
                             .collect();
                         Ok(PhpValue::list(chunks))
+                    }
+                    "diff" | "array_diff" => {
+                        let mut exclude = HashSet::new();
+                        for arg in args {
+                            for item in Self::extract_items(arg) {
+                                exclude.insert(item);
+                            }
+                        }
+                        let diffed: Vec<PhpValue> = items
+                            .into_iter()
+                            .filter(|it| !exclude.contains(it))
+                            .collect();
+                        Ok(PhpValue::list(diffed))
+                    }
+                    "diffKey" | "diffKeys" | "array_diff_key" => {
+                        let mut exclude_keys = HashSet::new();
+                        for arg in args {
+                            match arg {
+                                PhpValue::Dict(d) => {
+                                    for k in d.borrow().keys() {
+                                        exclude_keys.insert(k.clone());
+                                    }
+                                }
+                                PhpValue::List(l) | PhpValue::Array(l) => {
+                                    for i in 0..l.borrow().len() {
+                                        exclude_keys.insert(i.to_string());
+                                    }
+                                }
+                                PhpValue::HashMap(m) => {
+                                    for k in m.borrow().keys() {
+                                        exclude_keys.insert(k.to_php_string());
+                                    }
+                                }
+                                PhpValue::Set(s) => {
+                                    for k in s.borrow().iter() {
+                                        exclude_keys.insert(k.to_php_string());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let diffed: Vec<PhpValue> = items
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(idx, _)| !exclude_keys.contains(&idx.to_string()))
+                            .map(|(_, it)| it)
+                            .collect();
+                        Ok(PhpValue::list(diffed))
+                    }
+                    "intersect" | "array_intersect" => {
+                        let other_sets: Vec<HashSet<PhpValue>> = args
+                            .iter()
+                            .map(|arg| Self::extract_items(arg).into_iter().collect())
+                            .collect();
+                        let intersected: Vec<PhpValue> = items
+                            .into_iter()
+                            .filter(|it| other_sets.iter().all(|set| set.contains(it)))
+                            .collect();
+                        Ok(PhpValue::list(intersected))
+                    }
+                    "intersectKey" | "intersectKeys" | "array_intersect_key" => {
+                        let other_key_sets: Vec<HashSet<String>> = args
+                            .iter()
+                            .map(|arg| match arg {
+                                PhpValue::Dict(d) => d.borrow().keys().cloned().collect(),
+                                PhpValue::List(l) | PhpValue::Array(l) => {
+                                    (0..l.borrow().len()).map(|i| i.to_string()).collect()
+                                }
+                                PhpValue::HashMap(m) => {
+                                    m.borrow().keys().map(|k| k.to_php_string()).collect()
+                                }
+                                PhpValue::Set(s) => {
+                                    s.borrow().iter().map(|k| k.to_php_string()).collect()
+                                }
+                                _ => HashSet::new(),
+                            })
+                            .collect();
+                        let intersected: Vec<PhpValue> = items
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(idx, _)| {
+                                let idx_str = idx.to_string();
+                                other_key_sets.iter().all(|set| set.contains(&idx_str))
+                            })
+                            .map(|(_, it)| it)
+                            .collect();
+                        Ok(PhpValue::list(intersected))
                     }
                     "flatten" => {
                         let mut out = Vec::new();
@@ -5806,7 +6154,7 @@ impl VM {
                         }
                         Ok(PhpValue::list(unique_items))
                     }
-                    "sort" => {
+                    "sort" | "asort" | "usort" | "uasort" => {
                         let mut sorted = items;
                         if let Some(PhpValue::Closure(cb)) = args.first() {
                             let len = sorted.len();
@@ -5903,6 +6251,66 @@ impl VM {
                             }
                         }
                         Ok(PhpValue::list(plucked))
+                    }
+                    "column" | "array_column" => {
+                        let col_opt = args.first();
+                        let is_col_null = col_opt.map_or(true, |v| matches!(v, PhpValue::Null));
+                        let col_name = col_opt.map(|v| v.to_php_string()).unwrap_or_default();
+                        let index_key_opt = args.get(1);
+
+                        if let Some(idx_key_val) = index_key_opt {
+                            if !matches!(idx_key_val, PhpValue::Null) {
+                                let idx_name = idx_key_val.to_php_string();
+                                let mut map = IndexMap::new();
+                                for item in items {
+                                    let k = get_item_column(&item, &idx_name)
+                                        .map(|v| v.to_php_string())
+                                        .unwrap_or_default();
+                                    let v = if is_col_null {
+                                        item
+                                    } else {
+                                        get_item_column(&item, &col_name).unwrap_or(PhpValue::Null)
+                                    };
+                                    map.insert(k, v);
+                                }
+                                return Ok(PhpValue::dict_from_map(map));
+                            }
+                        }
+
+                        let mut plucked = Vec::with_capacity(items.len());
+                        for item in items {
+                            let v = if is_col_null {
+                                item
+                            } else {
+                                get_item_column(&item, &col_name).unwrap_or(PhpValue::Null)
+                            };
+                            plucked.push(v);
+                        }
+                        Ok(PhpValue::list(plucked))
+                    }
+                    "flip" | "array_flip" => {
+                        let mut out = IndexMap::new();
+                        for (idx, val) in items.into_iter().enumerate() {
+                            out.insert(val.to_php_string(), PhpValue::Int(idx as i32));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "combine" | "array_combine" => {
+                        let vals_arg = args.first().unwrap_or(&PhpValue::Null);
+                        let vals = Self::extract_items(vals_arg);
+                        if items.len() != vals.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        let mut map = IndexMap::new();
+                        for (k, v) in items.into_iter().zip(vals) {
+                            map.insert(k.to_php_string(), v);
+                        }
+                        Ok(PhpValue::dict_from_map(map))
                     }
                     "partition" => {
                         let mut matching = Vec::new();
@@ -6256,7 +6664,78 @@ impl VM {
 
             // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
             // String helper methods are immutable by default, returning a new instance.
+            PhpValue::String(s) if s.is_bytes() => match method {
+                "len" | "length" => Ok(PhpValue::Int(s.len() as i32)),
+                "slice" => {
+                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let length = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                    let b = s.as_bytes();
+                    let (st, en) = crate::vm::encoding::calc_mb_slice(b.len() as i64, start, length);
+                    Ok(PhpValue::bytes(&b[st..en]))
+                }
+                "decode" => {
+                    let encoding = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) }).unwrap_or_else(|| "UTF-8".to_string());
+                    let invalid = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) }).unwrap_or_else(|| "strict".to_string());
+                    let decoded = crate::vm::encoding::decode_bytes(s.as_bytes(), &encoding, &invalid)
+                        .map_err(|(msg, _)| self.make_error(RuntimeErrorKind::UncaughtException {
+                            class: "InvalidEncodingException".to_string(),
+                            message: msg,
+                        }, span))?;
+                    Ok(PhpValue::string(decoded))
+                }
+                "convert" => {
+                    let to = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Bytes::convert".to_string(),
+                        passed: args.len(),
+                        expected: 2,
+                    }, span))?.to_php_string();
+                    let from = args.get(1).ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Bytes::convert".to_string(),
+                        passed: args.len(),
+                        expected: 2,
+                    }, span))?.to_php_string();
+                    let converted = crate::vm::encoding::convert_encoding(s.as_bytes(), &to, Some(&from), "throw")
+                        .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
+                    Ok(PhpValue::bytes(converted))
+                }
+                _ => Err(self.make_error(
+                    RuntimeErrorKind::TypeError {
+                        message: format!("Method {}() is not supported on bytes. Call ->decode() first to get a string.", method),
+                    },
+                    span,
+                )),
+            },
+
             PhpValue::String(s) => match method {
+                "mbStrlen" | "mb_strlen" => {
+                    let enc = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+                    if enc.as_deref().map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8")).unwrap_or(true) {
+                        if s.is_ascii() {
+                            Ok(PhpValue::Int(s.len() as i32))
+                        } else {
+                            Ok(PhpValue::Int(s.as_str().chars().count() as i32))
+                        }
+                    } else {
+                        let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
+                            .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
+                        Ok(PhpValue::Int(count as i32))
+                    }
+                }
+                "graphemeLen" | "grapheme_len" => {
+                    let count = crate::vm::encoding::grapheme_len(s.as_str());
+                    Ok(PhpValue::Int(count as i32))
+                }
+                "mbSubstr" | "mb_substr" => {
+                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let len = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                    let enc = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+                    let sub = crate::vm::encoding::mb_substr(s.as_str(), s.is_ascii(), start, len, enc.as_deref())
+                        .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
+                    Ok(PhpValue::string(sub))
+                }
+                "len" | "byteLength" | "bytesCount" => {
+                    Ok(PhpValue::Int(s.len() as i32))
+                }
                 "check" => {
                     if let Some(enc_val) = args.first() {
                         let enc_str = enc_val.to_php_string();
@@ -6406,9 +6885,6 @@ impl VM {
                 }
                 "length" => {
                     Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i32))
-                }
-                "byteLength" | "bytesCount" => {
-                    Ok(PhpValue::Int(s.len() as i32))
                 }
                 "split" => {
                     let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
@@ -6723,12 +7199,57 @@ impl VM {
             }
             ("HTTPResponse", "body") => {
                 if let PhpValue::Object(o) = receiver {
-                    Ok(o.borrow()
-                        .get_property("body")
-                        .cloned()
-                        .unwrap_or_else(|| PhpValue::string("")))
+                    let b = o.borrow();
+                    if let Some(raw_prop) = b.get_property("raw_bytes") {
+                        let bytes: &[u8] = match &raw_prop {
+                            PhpValue::String(s) => s.as_bytes(),
+                            _ => b"",
+                        };
+                        let charset = b.get_property("headers").and_then(|h| {
+                            if let PhpValue::Dict(d) = h {
+                                for (k, v) in d.borrow().iter() {
+                                    if k.eq_ignore_ascii_case("content-type") {
+                                        let val = v.to_php_string();
+                                        if let Some(idx) = val.to_ascii_lowercase().find("charset=") {
+                                            let sub = &val[idx + 8..];
+                                            let clean = sub.split(';').next().unwrap_or("").trim().trim_matches('"');
+                                            return Some(clean.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            None
+                        });
+                        let enc = charset.as_deref().unwrap_or("UTF-8");
+                        let decoded = crate::vm::encoding::decode_bytes(bytes, enc, "strict")
+                            .map(|s| s)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
+                        Ok(PhpValue::string(decoded))
+                    } else if let Some(body_prop) = b.get_property("body") {
+                        Ok(body_prop.clone())
+                    } else {
+                        Ok(PhpValue::string(""))
+                    }
                 } else {
                     Ok(PhpValue::string(""))
+                }
+            }
+            ("HTTPResponse", "bytes") => {
+                if let PhpValue::Object(o) = receiver {
+                    let b = o.borrow();
+                    if let Some(raw_prop) = b.get_property("raw_bytes") {
+                        Ok(raw_prop.clone())
+                    } else if let Some(body_prop) = b.get_property("body") {
+                        let bytes: &[u8] = match &body_prop {
+                            PhpValue::String(s) => s.as_bytes(),
+                            _ => b"",
+                        };
+                        Ok(PhpValue::bytes(bytes))
+                    } else {
+                        Ok(PhpValue::bytes(Vec::new()))
+                    }
+                } else {
+                    Ok(PhpValue::bytes(Vec::new()))
                 }
             }
             ("HTTPResponse", "status") => Ok(PhpValue::Int(200)),
@@ -8335,6 +8856,22 @@ impl VM {
     ) -> Result<PhpValue, RuntimeError> {
         match op {
             BinaryOp::Concat => {
+                if lhs.is_bytes() && rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if lhs.is_bytes() || rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
                 let mut s = lhs.to_php_string();
                 s.push_str(&rhs.to_php_string());
                 Ok(PhpValue::string(s))
@@ -8548,6 +9085,7 @@ impl VM {
                 value: *value,
             },
             Constant::String(s) => PhpValue::string(s.clone()),
+            Constant::Bytes(b) => PhpValue::bytes(b.clone()),
             Constant::Type(ty) => PhpValue::string(ty.to_string()),
         }
     }

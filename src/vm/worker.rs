@@ -1630,6 +1630,12 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
                 write_frozen(buf, v);
             }
         }
+        FrozenValue::Bytes(b) => {
+            buf.push(12);
+            let len = b.len() as u32;
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(b);
+        }
     }
 }
 
@@ -1724,6 +1730,17 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
                 class_name,
                 properties: props,
             })
+        }
+        12 => {
+            let len = read_u32(data, cursor)? as usize;
+            if *cursor + len > data.len() {
+                return Err(WorkerError::SerializationError(
+                    "Unexpected EOF reading bytes".to_string(),
+                ));
+            }
+            let slice = &data[*cursor..*cursor + len];
+            *cursor += len;
+            Ok(FrozenValue::Bytes(slice.to_vec()))
         }
         other => Err(WorkerError::SerializationError(format!(
             "Unknown FrozenValue tag: {}",

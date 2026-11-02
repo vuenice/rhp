@@ -85,7 +85,7 @@ class TodoStore {
             "todos" => $serializedList,
             "updatedAt" => "Just now"
         ]);
-        return File::write($this->filePath, $payload->toJson());
+        return File::write($this->filePath, $payload->toJson()) > 0;
     }
 
     public function seedDefaults(): void {

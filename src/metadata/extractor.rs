@@ -358,6 +358,9 @@ impl<'a> MetadataExtractor<'a> {
                     }
                     AttributeArgValue::String(s)
                 }
+                Literal::Bytes { value, .. } => {
+                    AttributeArgValue::String(String::from_utf8_lossy(value).to_string())
+                }
             },
             ExprKind::Array(elements) => {
                 let has_keys = elements.iter().any(|e| e.key.is_some());

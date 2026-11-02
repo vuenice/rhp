@@ -283,7 +283,7 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
             if s.is_inline() {
                 std::mem::size_of::<PhpValue>()
             } else {
-                std::mem::size_of::<PhpValue>() + s.as_str().len() + 16
+                std::mem::size_of::<PhpValue>() + s.len() + 16
             }
         }
         PhpValue::Array(items) | PhpValue::List(items) => {

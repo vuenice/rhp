@@ -256,6 +256,10 @@ pub enum Literal<'s> {
         raw: &'s str,
         parts: Vec<StringPart<'s>>,
     },
+    Bytes {
+        raw: &'s str,
+        value: Vec<u8>,
+    },
     Bool(bool),
     Null,
 }

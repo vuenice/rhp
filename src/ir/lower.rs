@@ -205,6 +205,13 @@ impl ChunkBuilder {
         id
     }
 
+    /// Intern a raw byte array into the chunk's constant pool.
+    fn intern_bytes(&mut self, value: &[u8]) -> ConstantId {
+        let id = ConstantId(self.chunk.constants.len() as u32);
+        self.chunk.constants.push(Constant::Bytes(value.to_vec()));
+        id
+    }
+
     /// Intern a 64-bit integer into the chunk's constant pool.
     fn intern_int(&mut self, value: i64) -> ConstantId {
         if let Some(&id) = self.int_pool.get(&value) {
@@ -1419,6 +1426,10 @@ impl<'a> IrLowerer<'a> {
                             },
                             expr.span,
                         );
+                    }
+                    Literal::Bytes { value, .. } => {
+                        let const_id = b.intern_bytes(value);
+                        b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
                     }
                 }
                 Ok(dst)

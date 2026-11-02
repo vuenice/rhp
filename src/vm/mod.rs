@@ -228,6 +228,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                 }
                 Ok(PhpValue::string(out))
             }
+            Literal::Bytes { value, .. } => Ok(PhpValue::bytes(value.clone())),
         },
         ExprKind::Variable(var) => Ok(env.get(var.name).cloned().unwrap_or(PhpValue::Null)),
         ExprKind::Unary { op, expr: inner, .. } => {
@@ -264,11 +265,29 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                         Ok(PhpValue::Float((lhs.to_i32().unwrap_or(0) as f32) / (b as f32)))
                     }
                 }
-                BinaryOp::Concat => Ok(PhpValue::string(format!(
-                    "{}{}",
-                    lhs.to_php_string(),
-                    rhs.to_php_string()
-                ))),
+                BinaryOp::Concat => {
+                    if lhs.is_bytes() && rhs.is_bytes() {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::Custom {
+                                message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                            },
+                            node.span,
+                        ));
+                    }
+                    if lhs.is_bytes() || rhs.is_bytes() {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::Custom {
+                                message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                            },
+                            node.span,
+                        ));
+                    }
+                    Ok(PhpValue::string(format!(
+                        "{}{}",
+                        lhs.to_php_string(),
+                        rhs.to_php_string()
+                    )))
+                }
                 BinaryOp::Eq => Ok(PhpValue::Bool(lhs.strict_eq(&rhs))),
                 BinaryOp::NotEq => Ok(PhpValue::Bool(!lhs.strict_eq(&rhs))),
                 BinaryOp::Identical => Ok(PhpValue::Bool(lhs.strict_eq(&rhs))),

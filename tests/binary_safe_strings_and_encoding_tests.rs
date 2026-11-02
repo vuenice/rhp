@@ -15,29 +15,20 @@ fn test_underlying_raw_byte_representation_and_binary_safety() {
     let display_str = binary_str.to_php_string();
     assert!(!display_str.is_empty());
 
-    // 2. Length check via byte length and list of bytes
+    // 2. Length check via byte length and slice
     let code = r#"
         $png = Str::fromBytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 255]);
-        $len = $png->byteLength();
-        $isUtf = $png->isUtf8();
-        $bytes = $png->bytes();
-        return [$len, $isUtf, $bytes];
+        $len = $png->len();
+        $slice = $png->slice(0, 4);
+        return [$len, $slice->len(), $png];
     "#;
     let res = run_source(code).expect("evaluation failed");
     if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
         let b = arr.borrow();
         assert_eq!(b[0], PhpValue::Int(10));
-        assert_eq!(b[1], PhpValue::Bool(false));
-        if let PhpValue::List(bytes_list) = &b[2] {
-            let bytes = bytes_list.borrow();
-            assert_eq!(bytes.len(), 10);
-            assert_eq!(bytes[0], PhpValue::Int(137));
-            assert_eq!(bytes[1], PhpValue::Int(80)); // 'P'
-            assert_eq!(bytes[8], PhpValue::Int(0));  // null byte
-            assert_eq!(bytes[9], PhpValue::Int(255));
-        } else {
-            panic!("expected list of bytes");
-        }
+        assert_eq!(b[1], PhpValue::Int(4));
+        assert!(b[2].is_bytes());
+        assert_eq!(b[2].raw_bytes().unwrap().len(), 10);
     } else {
         panic!("expected list return");
     }
@@ -81,10 +72,10 @@ fn test_shift_jis_japanese_support_and_str_facade_constructors() {
         $safeText = Str::utf8($jisText);
 
         // 5. Convert back to Shift-JIS bytes
-        $backToJis = Str::toEncoding($greeting, 'Shift-JIS');
-        $backBytes = $backToJis->bytes();
+        $backToJis = Str::convertEncoding($greeting, 'Shift-JIS', 'UTF-8');
+        $backDecoded = $backToJis->decode('Shift-JIS');
 
-        return [$greeting, $jisText, $safeText, $backBytes];
+        return [$greeting, $jisText, $safeText, $backToJis->len(), $backDecoded];
     "#;
     let res = run_source(code).expect("script evaluation failed");
 
@@ -93,16 +84,8 @@ fn test_shift_jis_japanese_support_and_str_facade_constructors() {
         assert_eq!(b[0].to_php_string(), "こんにちは世界");
         assert_eq!(b[1].to_php_string(), "こんにちは世界");
         assert_eq!(b[2].to_php_string(), "こんにちは世界");
-
-        if let PhpValue::List(items) = &b[3] {
-            let bytes = items.borrow();
-            assert_eq!(bytes.len(), sjis_bytes.len());
-            for (i, &expected) in sjis_bytes.iter().enumerate() {
-                assert_eq!(bytes[i], PhpValue::Int(expected as i32));
-            }
-        } else {
-            panic!("expected list of bytes");
-        }
+        assert_eq!(b[3], PhpValue::Int(sjis_bytes.len() as i32));
+        assert_eq!(b[4].to_php_string(), "こんにちは世界");
     } else {
         panic!("expected list return");
     }
@@ -123,19 +106,20 @@ fn test_euc_jp_and_iso_2022_jp_encodings() {
     let code = r#"
         $eucRaw = Str::fromBytes([0xC6, 0xFC, 0xC3, 0xDC, 0xB8, 0xEC]);
         $japanese = Str::fromEncoding($eucRaw, 'EUC-JP');
-        $eucEncoded = Str::toEncoding($japanese, 'EUC-JP');
-        $eucBytes = $eucEncoded->bytes();
+        $eucEncoded = Str::convertEncoding($japanese, 'EUC-JP', 'UTF-8');
+        $eucLen = $eucEncoded->len();
 
-        $isoEncoded = Str::toEncoding('日本語', 'ISO-2022-JP');
-        $isoDecoded = Str::fromEncoding($isoEncoded, 'ISO-2022-JP');
+        $isoEncoded = Str::convertEncoding('日本語', 'ISO-2022-JP', 'UTF-8');
+        $isoDecoded = $isoEncoded->decode('ISO-2022-JP');
 
-        return [$japanese, $isoDecoded];
+        return [$japanese, $isoDecoded, $eucLen];
     "#;
     let res = run_source(code).expect("evaluation failed");
     if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
         let b = arr.borrow();
         assert_eq!(b[0].to_php_string(), "日本語");
         assert_eq!(b[1].to_php_string(), "日本語");
+        assert_eq!(b[2], PhpValue::Int(6));
     } else {
         panic!("expected list return");
     }

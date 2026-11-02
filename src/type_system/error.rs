@@ -375,4 +375,9 @@ pub enum TypeErrorKind {
     BareVariableIssetForbidden {
         var_name: String,
     },
+
+    #[error("TypeError: {message}")]
+    Custom {
+        message: String,
+    },
 }

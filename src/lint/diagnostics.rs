@@ -321,6 +321,7 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
             Literal::Int { .. } => RhpType::Int,
             Literal::Float { .. } => RhpType::Float,
             Literal::String { .. } | Literal::InterpolatedString { .. } => RhpType::String,
+            Literal::Bytes { .. } => RhpType::Bytes,
             Literal::Bool(_) => RhpType::Bool,
             Literal::Null => RhpType::Null,
         },
@@ -492,6 +493,7 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::RedundantIssetCheck { .. } => "redundant-isset-check",
         TypeErrorKind::CannotUnsetObject { .. } => "cannot-unset-object",
         TypeErrorKind::BareVariableIssetForbidden { .. } => "bare-variable-isset-forbidden",
+        TypeErrorKind::Custom { .. } => "type-error",
     }
 }
 

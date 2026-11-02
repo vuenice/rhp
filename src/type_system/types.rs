@@ -212,8 +212,10 @@ pub enum RhpType {
     RustInt(RustIntKind),
     /// Explicit native Rust float type (`f32`, `f64`).
     RustFloat(RustFloatKind),
-    /// UTF-8 string primitive (`string`, Copy-On-Write semantics).
+    /// UTF-8 string primitive (`string`, Utf8 subtype).
     String,
+    /// Raw binary data subtype (`bytes`).
+    Bytes,
     /// Boolean primitive (`bool`).
     Bool,
     /// Null value (`null`).
@@ -281,6 +283,7 @@ impl RhpType {
                     "int" | "Int" => Ok(RhpType::Int),
                     "float" | "Float" => Ok(RhpType::Float),
                     "string" => Ok(RhpType::String),
+                    "bytes" | "Bytes" => Ok(RhpType::Bytes),
                     "bool" | "Bool" | "true" | "false" => Ok(RhpType::Bool),
                     "void" => Ok(RhpType::Void),
                     "never" => Ok(RhpType::Never),
@@ -942,6 +945,7 @@ impl fmt::Display for RhpType {
             RhpType::RustInt(k) => write!(f, "{}", k),
             RhpType::RustFloat(k) => write!(f, "{}", k),
             RhpType::String => write!(f, "string"),
+            RhpType::Bytes => write!(f, "bytes"),
             RhpType::Bool => write!(f, "bool"),
             RhpType::Null => write!(f, "null"),
             RhpType::Void => write!(f, "void"),

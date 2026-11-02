@@ -188,6 +188,9 @@ pub enum RuntimeErrorKind {
         visibility: String,
     },
 
+    #[error("TypeError: {message}")]
+    TypeError { message: String },
+
     #[error("RuntimeError: {message}")]
     Custom { message: String },
 }

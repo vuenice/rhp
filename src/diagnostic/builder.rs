@@ -522,6 +522,7 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::RedundantIssetCheck { .. } => "RHP0227",
         TypeErrorKind::CannotUnsetObject { .. } => "RHP0118",
         TypeErrorKind::BareVariableIssetForbidden { .. } => "RHP0117",
+        TypeErrorKind::Custom { .. } => "RHP0100",
     };
 
     (code.to_string(), kind.to_string())

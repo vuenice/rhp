@@ -415,6 +415,7 @@ pub fn infer_expression_type_name(
     match &expr.kind {
         ExprKind::Literal(lit) => match lit {
             Literal::String { .. } | Literal::InterpolatedString { .. } => Some("string".to_string()),
+            Literal::Bytes { .. } => Some("bytes".to_string()),
             Literal::Int { .. } => Some("int".to_string()),
             Literal::Float { .. } => Some("float".to_string()),
             Literal::Bool(_) => Some("bool".to_string()),

@@ -298,8 +298,8 @@ impl<'s> CombinatorStream<'s> {
             Token::SingleQuotedString(_) | Token::BacktickString(_) => {
                 let value = spanned
                     .token
-                    .unescape_string()
-                    .unwrap_or_default();
+                    .unescape_utf8_string()
+                    .map_err(|e| ParseError::new(ParseErrorKind::Custom { message: e }, spanned.span))?;
                 Ok(Expr::new(
                     ExprKind::Literal(Literal::String {
                         raw: spanned.token.as_str(),
@@ -318,13 +318,26 @@ impl<'s> CombinatorStream<'s> {
                 } else {
                     let value = spanned
                         .token
-                        .unescape_string()
-                        .unwrap_or_default();
+                        .unescape_utf8_string()
+                        .map_err(|e| ParseError::new(ParseErrorKind::Custom { message: e }, spanned.span))?;
                     Ok(Expr::new(
                         ExprKind::Literal(Literal::String { raw, value }),
                         spanned.span,
                     ))
                 }
+            }
+            Token::SingleQuotedBytes(_) | Token::DoubleQuotedBytes(_) => {
+                let value = spanned
+                    .token
+                    .unescape_bytes()
+                    .map_err(|e| ParseError::new(ParseErrorKind::Custom { message: e }, spanned.span))?;
+                Ok(Expr::new(
+                    ExprKind::Literal(Literal::Bytes {
+                        raw: spanned.token.as_str(),
+                        value,
+                    }),
+                    spanned.span,
+                ))
             }
             Token::True => Ok(Expr::new(
                 ExprKind::Literal(Literal::Bool(true)),
@@ -763,6 +776,7 @@ impl<'s> CombinatorStream<'s> {
                         Token::TypeInt
                         | Token::TypeFloat
                         | Token::TypeString
+                        | Token::TypeBytes
                         | Token::TypeBool
                         | Token::TypeArray
                         | Token::TypeObject
@@ -2121,18 +2135,76 @@ fn parse_string_interpolation<'s>(
             continue;
         } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
             match bytes[i + 1] {
-                b'n' => current_lit.push('\n'),
-                b'r' => current_lit.push('\r'),
-                b't' => current_lit.push('\t'),
-                b'\\' => current_lit.push('\\'),
-                b'"' => current_lit.push('"'),
-                b'$' => current_lit.push('$'),
+                b'n' => { current_lit.push('\n'); i += 2; }
+                b'r' => { current_lit.push('\r'); i += 2; }
+                b't' => { current_lit.push('\t'); i += 2; }
+                b'\\' => { current_lit.push('\\'); i += 2; }
+                b'"' => { current_lit.push('"'); i += 2; }
+                b'$' => { current_lit.push('$'); i += 2; }
+                b'0' => { current_lit.push('\0'); i += 2; }
+                b'u' => {
+                    if i + 2 < bytes.len() && bytes[i + 2] == b'{' {
+                        let mut k = i + 3;
+                        let mut hex = String::new();
+                        while k < bytes.len() && bytes[k] != b'}' && (bytes[k] as char).is_ascii_hexdigit() {
+                            hex.push(bytes[k] as char);
+                            k += 1;
+                        }
+                        if k < bytes.len() && bytes[k] == b'}' && !hex.is_empty() {
+                            if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                                if let Some(ch) = char::from_u32(cp) {
+                                    current_lit.push(ch);
+                                    i = k + 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        return Err(ParseError::new(
+                            ParseErrorKind::Custom {
+                                message: "Invalid Unicode escape sequence in string literal".to_string(),
+                            },
+                            span,
+                        ));
+                    } else {
+                        current_lit.push('\\');
+                        current_lit.push('u');
+                        i += 2;
+                    }
+                }
+                b'x' | b'X' => {
+                    let mut hex = String::new();
+                    let mut k = i + 2;
+                    while k < bytes.len() && k < i + 4 && (bytes[k] as char).is_ascii_hexdigit() {
+                        hex.push(bytes[k] as char);
+                        k += 1;
+                    }
+                    if let Ok(b) = u8::from_str_radix(&hex, 16) {
+                        if b > 0x7F {
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: format!(
+                                        "Invalid UTF-8 escape '\\x{}' in string literal. Use a bytes literal b\"...\" instead.",
+                                        hex
+                                    ),
+                                },
+                                span,
+                            ));
+                        }
+                        current_lit.push(b as char);
+                        i = k;
+                        continue;
+                    } else {
+                        current_lit.push('\\');
+                        current_lit.push('x');
+                        i += 2;
+                    }
+                }
                 other => {
                     current_lit.push('\\');
                     current_lit.push(other as char);
+                    i += 2;
                 }
             }
-            i += 2;
             continue;
         } else {
             current_lit.push(bytes[i] as char);

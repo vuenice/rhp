@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -389,6 +389,183 @@ fn dispatch_bool(method: &str, args: &[PhpValue]) -> FacadeResult {
 
 fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "utf8" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::utf8".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::String(s) => match s {
+                    crate::vm::value::StrValue::Utf8 { .. } => Ok(val.clone()),
+                    crate::vm::value::StrValue::Bytes(b) => match std::str::from_utf8(b) {
+                        Ok(valid) => Ok(PhpValue::string(valid)),
+                        Err(e) => Err(RuntimeErrorKind::UncaughtException {
+                            class: "InvalidEncodingException".to_string(),
+                            message: format!("Invalid UTF-8 sequence at byte offset {}", e.valid_up_to()),
+                        }),
+                    },
+                },
+                PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) | PhpValue::RustInt { .. } | PhpValue::RustFloat { .. } => {
+                    Ok(PhpValue::string(val.to_php_string()))
+                }
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::utf8() expects string or bytes, got {}", other.type_name()),
+                }),
+            }
+        }
+        "bytes" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::bytes".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::String(s) => match s {
+                    crate::vm::value::StrValue::Bytes(_) => Ok(val.clone()),
+                    crate::vm::value::StrValue::Utf8 { .. } => Ok(PhpValue::bytes(s.as_bytes())),
+                },
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::bytes() expects string or bytes, got {}", other.type_name()),
+                }),
+            }
+        }
+        "len" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::len".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::String(s) => Ok(PhpValue::Int(s.len() as i32)),
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::len() expects string or bytes, got {}", other.type_name()),
+                }),
+            }
+        }
+        "mbStrlen" | "mb_strlen" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::mbStrlen".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let enc = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            match val {
+                PhpValue::String(s) => {
+                    if s.is_bytes() {
+                        return Err(RuntimeErrorKind::TypeError {
+                            message: "Method mbStrlen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                        });
+                    }
+                    if enc.as_deref().map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8")).unwrap_or(true) {
+                        if s.is_ascii() {
+                            Ok(PhpValue::Int(s.len() as i32))
+                        } else {
+                            Ok(PhpValue::Int(s.as_str().chars().count() as i32))
+                        }
+                    } else {
+                        let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
+                            .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?;
+                        Ok(PhpValue::Int(count as i32))
+                    }
+                }
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::mbStrlen() expects string, got {}", other.type_name()),
+                }),
+            }
+        }
+        "graphemeLen" | "grapheme_len" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::graphemeLen".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::String(s) => {
+                    if s.is_bytes() {
+                        return Err(RuntimeErrorKind::TypeError {
+                            message: "Method graphemeLen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                        });
+                    }
+                    let count = crate::vm::encoding::grapheme_len(s.as_str());
+                    Ok(PhpValue::Int(count as i32))
+                }
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::graphemeLen() expects string, got {}", other.type_name()),
+                }),
+            }
+        }
+        "mbSubstr" | "mb_substr" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::mbSubstr".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let start = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let len = args.get(2).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+            let enc = args.get(3).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            match val {
+                PhpValue::String(s) => {
+                    if s.is_bytes() {
+                        return Err(RuntimeErrorKind::TypeError {
+                            message: "Method mbSubstr() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                        });
+                    }
+                    let res = crate::vm::encoding::mb_substr(s.as_str(), s.is_ascii(), start, len, enc.as_deref())
+                        .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?;
+                    Ok(PhpValue::string(res))
+                }
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::mbSubstr() expects string, got {}", other.type_name()),
+                }),
+            }
+        }
+        "convertEncoding" | "convert_encoding" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::convertEncoding".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let to = args.get(1).map(|v| v.to_php_string()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::convertEncoding".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let from = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let on_unmappable = args.get(3).map(|v| v.to_php_string()).unwrap_or_else(|| "throw".to_string());
+            let bytes = match val {
+                PhpValue::String(s) => s.as_bytes(),
+                other => return Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::convertEncoding() expects string or bytes, got {}", other.type_name()),
+                }),
+            };
+            let converted = crate::vm::encoding::convert_encoding(bytes, &to, from.as_deref(), &on_unmappable)
+                .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?;
+            Ok(PhpValue::bytes(converted))
+        }
+        "detectEncoding" | "detect_encoding" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::detectEncoding".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let candidates: Option<Vec<String>> = match args.get(1) {
+                Some(PhpValue::Array(items)) | Some(PhpValue::List(items)) => {
+                    Some(items.borrow().iter().map(|v| v.to_php_string()).collect())
+                }
+                _ => None,
+            };
+            let bytes = match val {
+                PhpValue::String(s) => s.as_bytes(),
+                other => return Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::detectEncoding() expects string or bytes, got {}", other.type_name()),
+                }),
+            };
+            match crate::vm::encoding::detect_encoding(bytes, candidates.as_deref()) {
+                Some(enc) => Ok(PhpValue::string(enc)),
+                None => Ok(PhpValue::Null),
+            }
+        }
         "compare" => {
             let a = args.get(0).unwrap_or(&PhpValue::Null);
             let b = args.get(1).unwrap_or(&PhpValue::Null);
@@ -641,16 +818,6 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 .map_err(|msg| RuntimeErrorKind::Custom { message: msg })?;
             Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(encoded_bytes)))
         }
-        "utf8" => {
-            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
-                callable: "Str::utf8".to_string(),
-                passed: args.len(),
-                expected: 1,
-            })?;
-            let raw_bytes = extract_raw_byte_payload(target);
-            let clean = String::from_utf8_lossy(&raw_bytes).into_owned();
-            Ok(PhpValue::string(clean))
-        }
         "isUtf8" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Str::isUtf8".to_string(),
@@ -678,18 +845,6 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(bytes)))
         }
-        "bytes" => {
-            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
-                callable: "Str::bytes".to_string(),
-                passed: args.len(),
-                expected: 1,
-            })?;
-            let bytes_vec: Vec<PhpValue> = match target {
-                PhpValue::String(s) => s.as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect(),
-                _ => target.to_php_string().as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect(),
-            };
-            Ok(PhpValue::list(bytes_vec))
-        }
         "byteLength" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Str::byteLength".to_string(),
@@ -702,14 +857,14 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::Int(len as i32))
         }
-        "encoding" | "detectEncoding" => {
+        "encoding" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Str::encoding".to_string(),
                 passed: args.len(),
                 expected: 1,
             })?;
             let raw_bytes = extract_raw_byte_payload(target);
-            let detected = crate::vm::encoding::detect_encoding(&raw_bytes);
+            let detected = crate::vm::encoding::detect_encoding(&raw_bytes, None).unwrap_or_else(|| "UTF-8".to_string());
             Ok(PhpValue::string(detected))
         }
         "ltrim" => {
@@ -1011,56 +1166,309 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
             Ok(PhpValue::list(out))
         }
-        "chunk" => {
-            let items = args.first().map(extract_array_elements).unwrap_or_default();
+        "chunk" | "array_chunk" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
             let size = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
-            let chunks: Vec<PhpValue> = items
-                .chunks(size)
-                .map(|chunk| PhpValue::list(chunk.to_vec()))
-                .collect();
-            Ok(PhpValue::list(chunks))
+            match target {
+                PhpValue::Dict(d) => {
+                    let entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let chunks: Vec<PhpValue> = entries
+                        .chunks(size)
+                        .map(|c| {
+                            let mut m = IndexMap::new();
+                            for (k, v) in c {
+                                m.insert(k.clone(), v.clone());
+                            }
+                            PhpValue::dict_from_map(m)
+                        })
+                        .collect();
+                    Ok(PhpValue::list(chunks))
+                }
+                PhpValue::Set(s) => {
+                    let items: Vec<PhpValue> = s.borrow().iter().cloned().collect();
+                    let chunks: Vec<PhpValue> = items
+                        .chunks(size)
+                        .map(|c| {
+                            let mut hs = HashSet::new();
+                            for it in c {
+                                hs.insert(it.clone());
+                            }
+                            PhpValue::set_from_hash_set(hs)
+                        })
+                        .collect();
+                    Ok(PhpValue::list(chunks))
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    let chunks: Vec<PhpValue> = items
+                        .chunks(size)
+                        .map(|chunk| PhpValue::list(chunk.to_vec()))
+                        .collect();
+                    Ok(PhpValue::list(chunks))
+                }
+            }
         }
-        "pluck" => {
-            let items = args.first().map(extract_array_elements).unwrap_or_default();
+        "pluck" | "column" | "array_column" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
             let key = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
             let key_by = args.get(2).map(|v| v.to_php_string());
-            if let Some(kb) = key_by {
-                let mut map = IndexMap::new();
-                for item in items {
-                    let k = match &item {
-                        PhpValue::Object(obj) => obj.borrow().get_property(&kb).map(|v| v.to_php_string()),
-                        PhpValue::Dict(d) => d.borrow().get(&kb).map(|v| v.to_php_string()),
-                        _ => None,
-                    }.unwrap_or_default();
-                    let v = match &item {
-                        PhpValue::Object(obj) => obj.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null),
-                        PhpValue::Dict(d) => d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null),
-                        _ => PhpValue::Null,
-                    };
-                    map.insert(k, v);
-                }
-                return Ok(PhpValue::dict_from_map(map));
-            }
-            let mut plucked = Vec::with_capacity(items.len());
-            for item in items {
-                match item {
-                    PhpValue::Object(obj) => {
-                        let val = obj.borrow().get_property(&key).cloned().unwrap_or(PhpValue::Null);
-                        plucked.push(val);
+            let is_key_null = args.get(1).map_or(true, |v| matches!(v, PhpValue::Null));
+
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut map = IndexMap::new();
+                    for (orig_k, item) in d.borrow().iter() {
+                        let k = if let Some(ref kb) = key_by {
+                            get_item_column(item, kb).map(|v| v.to_php_string()).unwrap_or_default()
+                        } else {
+                            orig_k.clone()
+                        };
+                        let v = if is_key_null {
+                            item.clone()
+                        } else {
+                            get_item_column(item, &key).unwrap_or(PhpValue::Null)
+                        };
+                        map.insert(k, v);
                     }
-                    PhpValue::Dict(d) => {
-                        let val = d.borrow().get(&key).cloned().unwrap_or(PhpValue::Null);
-                        plucked.push(val);
+                    Ok(PhpValue::dict_from_map(map))
+                }
+                PhpValue::Set(s) => {
+                    let mut out = HashSet::new();
+                    for item in s.borrow().iter() {
+                        let v = if is_key_null {
+                            item.clone()
+                        } else {
+                            get_item_column(item, &key).unwrap_or(PhpValue::Null)
+                        };
+                        out.insert(v);
                     }
-                    _ => plucked.push(PhpValue::Null),
+                    Ok(PhpValue::set_from_hash_set(out))
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    if let Some(ref kb) = key_by {
+                        let mut map = IndexMap::new();
+                        for item in items {
+                            let k = get_item_column(&item, kb).map(|v| v.to_php_string()).unwrap_or_default();
+                            let v = if is_key_null {
+                                item
+                            } else {
+                                get_item_column(&item, &key).unwrap_or(PhpValue::Null)
+                            };
+                            map.insert(k, v);
+                        }
+                        return Ok(PhpValue::dict_from_map(map));
+                    }
+                    let mut plucked = Vec::with_capacity(items.len());
+                    for item in items {
+                        let v = if is_key_null {
+                            item
+                        } else {
+                            get_item_column(&item, &key).unwrap_or(PhpValue::Null)
+                        };
+                        plucked.push(v);
+                    }
+                    Ok(PhpValue::list(plucked))
                 }
             }
-            Ok(PhpValue::list(plucked))
         }
-        "sort" => {
-            let mut items = args.first().map(extract_array_elements).unwrap_or_default();
-            items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            Ok(PhpValue::list(items))
+        "sort" | "asort" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    entries.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut out = IndexMap::new();
+                    for (k, v) in entries {
+                        out.insert(k, v);
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let mut items = extract_array_elements(target);
+                    items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    Ok(PhpValue::list(items))
+                }
+            }
+        }
+        "flip" | "array_flip" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut out = IndexMap::new();
+                    for (k, v) in d.borrow().iter() {
+                        let orig_val = if let Ok(n) = k.parse::<i32>() {
+                            PhpValue::Int(n)
+                        } else {
+                            PhpValue::string(k.clone())
+                        };
+                        out.insert(v.to_php_string(), orig_val);
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let items = extract_array_elements(target);
+                    let mut out = IndexMap::new();
+                    for (idx, v) in items.into_iter().enumerate() {
+                        out.insert(v.to_php_string(), PhpValue::Int(idx as i32));
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+            }
+        }
+        "combine" | "array_combine" => {
+            let keys_arg = args.first().unwrap_or(&PhpValue::Null);
+            let vals_arg = args.get(1).unwrap_or(&PhpValue::Null);
+            let keys = extract_array_elements(keys_arg);
+            let vals = extract_array_elements(vals_arg);
+            if keys.len() != vals.len() {
+                return Err(RuntimeErrorKind::ValueError {
+                    message: "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements".to_string(),
+                });
+            }
+            let mut map = IndexMap::new();
+            for (k, v) in keys.into_iter().zip(vals) {
+                map.insert(k.to_php_string(), v);
+            }
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "diff" | "array_diff" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let other_args = if args.len() > 1 { &args[1..] } else { &[] };
+            let mut exclude = HashSet::new();
+            for other in other_args {
+                for item in extract_array_elements(other) {
+                    exclude.insert(item);
+                }
+            }
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut out = IndexMap::new();
+                    for (k, v) in d.borrow().iter() {
+                        if !exclude.contains(v) {
+                            out.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => {
+                    let mut out = HashSet::new();
+                    for it in s.borrow().iter() {
+                        if !exclude.contains(it) {
+                            out.insert(it.clone());
+                        }
+                    }
+                    Ok(PhpValue::set_from_hash_set(out))
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    let out: Vec<PhpValue> = items.into_iter().filter(|it| !exclude.contains(it)).collect();
+                    Ok(PhpValue::list(out))
+                }
+            }
+        }
+        "diffKey" | "diffKeys" | "array_diff_key" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let other_args = if args.len() > 1 { &args[1..] } else { &[] };
+            let mut exclude_keys = HashSet::new();
+            for other in other_args {
+                for (k, _) in extract_dict_elements(other) {
+                    exclude_keys.insert(k);
+                }
+            }
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut out = IndexMap::new();
+                    for (k, v) in d.borrow().iter() {
+                        if !exclude_keys.contains(k) {
+                            out.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let items = extract_array_elements(target);
+                    let out: Vec<PhpValue> = items
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(idx, _)| !exclude_keys.contains(&idx.to_string()))
+                        .map(|(_, it)| it)
+                        .collect();
+                    Ok(PhpValue::list(out))
+                }
+            }
+        }
+        "intersect" | "array_intersect" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let other_args = if args.len() > 1 { &args[1..] } else { &[] };
+            let other_sets: Vec<HashSet<PhpValue>> = other_args
+                .iter()
+                .map(|other| extract_array_elements(other).into_iter().collect())
+                .collect();
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut out = IndexMap::new();
+                    for (k, v) in d.borrow().iter() {
+                        if other_sets.iter().all(|s| s.contains(v)) {
+                            out.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => {
+                    let mut out = HashSet::new();
+                    for it in s.borrow().iter() {
+                        if other_sets.iter().all(|s| s.contains(it)) {
+                            out.insert(it.clone());
+                        }
+                    }
+                    Ok(PhpValue::set_from_hash_set(out))
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    let out: Vec<PhpValue> = items
+                        .into_iter()
+                        .filter(|it| other_sets.iter().all(|s| s.contains(it)))
+                        .collect();
+                    Ok(PhpValue::list(out))
+                }
+            }
+        }
+        "intersectKey" | "intersectKeys" | "array_intersect_key" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let other_args = if args.len() > 1 { &args[1..] } else { &[] };
+            let other_key_sets: Vec<HashSet<String>> = other_args
+                .iter()
+                .map(|other| extract_dict_elements(other).into_iter().map(|(k, _)| k).collect())
+                .collect();
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut out = IndexMap::new();
+                    for (k, v) in d.borrow().iter() {
+                        if other_key_sets.iter().all(|s| s.contains(k)) {
+                            out.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let items = extract_array_elements(target);
+                    let out: Vec<PhpValue> = items
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(idx, _)| {
+                            let idx_str = idx.to_string();
+                            other_key_sets.iter().all(|s| s.contains(&idx_str))
+                        })
+                        .map(|(_, it)| it)
+                        .collect();
+                    Ok(PhpValue::list(out))
+                }
+            }
         }
         "macro" => {
             if let Some(PhpValue::String(name)) = args.first() {
@@ -1402,7 +1810,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::Bool(is_list))
         }
-        "sortKeys" => {
+        "sortKeys" | "ksort" => {
             let target = args.first().cloned().unwrap_or(PhpValue::Null);
             let mut map = extract_dict_map(&target);
             map.sort_keys();
@@ -1645,25 +2053,82 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "read" => {
             let path = get_arg_str(args, 0, "File::read")?;
+            let enc = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let invalid = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| "strict".to_string());
             record_fiber_io_start(IoKind::FileRead { path: path.clone() });
-            let res = match std::fs::read_to_string(&path) {
-                Ok(content) => Ok(PhpValue::string(content)),
-                Err(err) => Err(RuntimeErrorKind::Custom {
-                    message: format!("File::read failed: {}", err),
-                }),
+            let raw = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(err) => {
+                    record_fiber_io_finish();
+                    return Err(RuntimeErrorKind::Custom {
+                        message: format!("File::read failed: {}", err),
+                    });
+                }
             };
             record_fiber_io_finish();
-            res
+            let encoding = enc.as_deref().unwrap_or("UTF-8");
+            match crate::vm::encoding::decode_bytes(&raw, encoding, &invalid) {
+                Ok(content) => Ok(PhpValue::string(content)),
+                Err((msg, _)) => Err(RuntimeErrorKind::UncaughtException {
+                    class: "InvalidEncodingException".to_string(),
+                    message: msg,
+                }),
+            }
+        }
+        "readBytes" | "read_bytes" => {
+            let path = get_arg_str(args, 0, "File::readBytes")?;
+            record_fiber_io_start(IoKind::FileRead { path: path.clone() });
+            let raw = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(err) => {
+                    record_fiber_io_finish();
+                    return Err(RuntimeErrorKind::Custom {
+                        message: format!("File::readBytes failed: {}", err),
+                    });
+                }
+            };
+            record_fiber_io_finish();
+            Ok(PhpValue::bytes(raw))
         }
         "write" => {
             let path = get_arg_str(args, 0, "File::write")?;
-            let content = get_arg_str(args, 1, "File::write")?;
+            let data_val = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::write".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let enc = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let bytes_to_write: Vec<u8> = match data_val {
+                PhpValue::String(s) => {
+                    if let Some(target_enc) = enc {
+                        if s.is_bytes() {
+                            crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, None, "throw")
+                                .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
+                        } else {
+                            crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, Some("UTF-8"), "throw")
+                                .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
+                        }
+                    } else {
+                        s.as_bytes().to_vec()
+                    }
+                }
+                other => {
+                    let s = other.to_php_string();
+                    if let Some(target_enc) = enc {
+                        crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, Some("UTF-8"), "throw")
+                            .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
+                    } else {
+                        s.into_bytes()
+                    }
+                }
+            };
             record_fiber_io_start(IoKind::FileWrite {
                 path: path.clone(),
-                bytes: content.len(),
+                bytes: bytes_to_write.len(),
             });
-            let res = match std::fs::write(&path, content) {
-                Ok(_) => Ok(PhpValue::Bool(true)),
+            let written_len = bytes_to_write.len();
+            let res = match std::fs::write(&path, bytes_to_write) {
+                Ok(_) => Ok(PhpValue::Int(written_len as i32)),
                 Err(err) => Err(RuntimeErrorKind::Custom {
                     message: format!("File::write failed: {}", err),
                 }),
@@ -2027,12 +2492,36 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "read" => {
             let path = get_arg_str(args, 0, "AFile::read")?;
+            let enc = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let invalid = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| "strict".to_string());
             record_fiber_io_start(IoKind::FileRead { path: path.clone() });
             let (tx, rx) = std::sync::mpsc::channel();
             rt.spawn(async move {
-                let res = match tokio::fs::read_to_string(&path).await {
-                    Ok(content) => Ok(FrozenValue::String(content.into())),
+                let res = match tokio::fs::read(&path).await {
+                    Ok(raw) => {
+                        let encoding = enc.as_deref().unwrap_or("UTF-8");
+                        match crate::vm::encoding::decode_bytes(&raw, encoding, &invalid) {
+                            Ok(content) => Ok(FrozenValue::String(content)),
+                            Err((msg, _)) => Err(format!("AFile::read failed: {}", msg)),
+                        }
+                    }
                     Err(err) => Err(format!("AFile::read failed: {}", err)),
+                };
+                let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "readBytes" | "read_bytes" => {
+            let path = get_arg_str(args, 0, "AFile::readBytes")?;
+            record_fiber_io_start(IoKind::FileRead { path: path.clone() });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match tokio::fs::read(&path).await {
+                    Ok(raw) => Ok(FrozenValue::Bytes(raw)),
+                    Err(err) => Err(format!("AFile::readBytes failed: {}", err)),
                 };
                 let _ = tx.send(res);
             });
@@ -2282,6 +2771,7 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
             obj.set_property("url", PhpValue::string(url));
             obj.set_property("status", PhpValue::Int(200));
             obj.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
+            obj.set_property("raw_bytes", PhpValue::bytes(b"{\"status\":\"ok\"}".to_vec()));
 
             let mut headers_dict = IndexMap::new();
             for (hk, hv) in outbound_headers {
@@ -2328,7 +2818,8 @@ fn dispatch_ahttp(method: &str, args: &[PhpValue]) -> FacadeResult {
                 } else {
                     "{\"status\":\"ok\"}".to_string()
                 };
-                resp.set_property("body", PhpValue::string(body_str));
+                resp.set_property("body", PhpValue::string(&body_str));
+                resp.set_property("raw_bytes", PhpValue::bytes(body_str.as_bytes().to_vec()));
                 let mut headers = IndexMap::new();
                 headers.insert("Content-Type".to_string(), PhpValue::string("application/json"));
                 headers.insert("X-Async-Engine".to_string(), PhpValue::string("tokio"));
@@ -2429,6 +2920,20 @@ fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
     );
 
     let res = match method {
+        "connection" | "connect" => {
+            let mut dsn = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+            if !dsn.to_ascii_lowercase().contains("charset=") {
+                if dsn.is_empty() {
+                    dsn = "charset=utf8mb4".to_string();
+                } else {
+                    dsn.push_str(";charset=utf8mb4");
+                }
+            }
+            let mut obj = VmObject::new("DBConnection");
+            obj.set_property("dsn", PhpValue::string(dsn));
+            obj.set_property("charset", PhpValue::string("utf8mb4"));
+            Ok(PhpValue::object(obj))
+        }
         "table" => {
             let tbl = get_arg_str(args, 0, "DB::table")?;
             crate::telemetry::set_active_span_attribute(
@@ -3870,6 +4375,19 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "count" => dispatch_arr("count", args),
         "array_keys" => dispatch_arr("keys", args),
         "array_values" => dispatch_arr("values", args),
+        "array_diff" => dispatch_arr("diff", args),
+        "array_diff_key" => dispatch_arr("diffKey", args),
+        "array_intersect" => dispatch_arr("intersect", args),
+        "array_intersect_key" => dispatch_arr("intersectKey", args),
+        "array_column" => dispatch_arr("column", args),
+        "array_chunk" => dispatch_arr("chunk", args),
+        "array_flip" => dispatch_arr("flip", args),
+        "array_combine" => dispatch_arr("combine", args),
+        "ksort" => dispatch_arr("ksort", args),
+        "asort" => dispatch_arr("asort", args),
+        "usort" => dispatch_arr("usort", args),
+        "uasort" => dispatch_arr("uasort", args),
+        "uksort" => dispatch_arr("uksort", args),
         "array_key_exists" => {
             if args.len() >= 2 {
                 dispatch_arr("hasKey", &[args[1].clone(), args[0].clone()])
@@ -4082,6 +4600,12 @@ pub fn extract_dict_elements(val: &PhpValue) -> Vec<(String, PhpValue)> {
             .iter()
             .map(|(k, v)| (k.to_php_string(), v.clone()))
             .collect(),
+        PhpValue::Set(s) => s
+            .borrow()
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v.clone()))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -4103,7 +4627,40 @@ pub fn extract_dict_map(val: &PhpValue) -> IndexMap<String, PhpValue> {
             }
             map
         }
+        PhpValue::Set(s) => {
+            let mut map = IndexMap::new();
+            for (i, v) in s.borrow().iter().enumerate() {
+                map.insert(i.to_string(), v.clone());
+            }
+            map
+        }
         _ => IndexMap::new(),
+    }
+}
+
+pub fn get_item_column(item: &PhpValue, key: &str) -> Option<PhpValue> {
+    match item {
+        PhpValue::Object(o) => o.borrow().get_property(key).cloned(),
+        PhpValue::Dict(d) => d.borrow().get(key).cloned(),
+        PhpValue::HashMap(m) => m
+            .borrow()
+            .get(&PhpValue::string(key))
+            .cloned()
+            .or_else(|| {
+                if let Ok(idx) = key.parse::<i32>() {
+                    m.borrow().get(&PhpValue::Int(idx)).cloned()
+                } else {
+                    None
+                }
+            }),
+        PhpValue::List(l) | PhpValue::Array(l) => {
+            if let Ok(idx) = key.parse::<usize>() {
+                l.borrow().get(idx).cloned()
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
