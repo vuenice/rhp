@@ -674,6 +674,260 @@ if (Int::compare($raw_id, 100)) {
 
 ---
 
+## 6. Directive Statements (`declare(...)`)
+
+**Not supported:** `declare(strict_types=1);`, `declare(ticks=1);`, `declare(encoding='...');`, and all block or statement forms of `declare(...)`.
+
+### What Was Bad About It in PHP
+
+- **Redundant per-file boilerplate:** PHP required developers to manually copy-paste `declare(strict_types=1);` onto line 1 of every single file. Forgetting it in a single file silently reverted that file to legacy loose typing, creating insidious bugs where invalid types were silently coerced.
+- **Fragmented, caller-dependent semantics:** In PHP, whether a function call enforces type contracts depends on the caller file's `strict_types` pragma, not on the function declaration itself. If an un-strict legacy file invoked a strictly typed library function, PHP silently coerced invalid arguments at runtime, destroying cross-module type integrity.
+- **Tick overhead cripples JIT compiler optimizations:** The `declare(ticks=N)` directive registers low-level tick callbacks that the PHP Zend Engine polls every $N$ opcodes. Polling tick counters between instructions severely degrades instruction pipelining, invalidates CPU branch prediction, and prevents modern optimizing JIT compilers (such as Cranelift) from inlining and optimizing hot loops.
+- **Archaic script-encoding pragmas:** Directives like `declare(encoding=...);` were created before universal UTF-8 adoption. Modern web architectures require uniform UTF-8 encoding across all compilation units, making per-file source encoding declarations obsolete.
+
+---
+
+### What Replaces It in RHP
+
+1. **Universal Compiler-Enforced Strict Typing:**
+   In RHP, strict typing is an unalterable compiler guarantee applied uniformly across the entire project. There are no loose-type execution modes, and no per-file pragmas are needed. Function parameter types, property types, and return values are verified at compile time and enforced at runtime boundaries with zero boilerplate.
+2. **Deterministic Cross-Module Contracts:**
+   Type signatures in RHP are always enforced at the callee boundary, regardless of how or where a function is called.
+3. **Tokio Async Fiber Runtime & OpenTelemetry:**
+   Instead of archaic interpreter tick polling (`declare(ticks=1)`), RHP uses an asynchronous Tokio fiber runtime and native OpenTelemetry tracing (`Telemetry::trace()`), providing low-overhead task scheduling, profiling, signal interception, and execution tracing.
+4. **Strict UTF-8 Source Encoding:**
+   All RHP source files are strictly validated as UTF-8 during lexing, eliminating the need for encoding directives.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Eliminating `declare(strict_types=1);`
+
+**Before (Legacy PHP):**
+```php
+<?php
+// In PHP: Required on every single file to prevent silent coercion
+declare(strict_types=1);
+
+function calculateTax(int $amount, float $rate): float {
+    return $amount * $rate;
+}
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: No declare directive needed.
+// Strict type safety is active project-wide by default.
+function calculateTax(int $amount, float $rate): float {
+    return $amount * $rate;
+}
+```
+
+#### Example B: Replacing `declare(ticks=1);` with Native Telemetry / Async
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Slow opcode-level tick handler for profiling/signals
+declare(ticks=1);
+
+register_tick_function(function() {
+    echo "Tick executed\n";
+});
+
+doHeavyProcessing();
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Zero-overhead OpenTelemetry tracing or Tokio async tasks
+use App\Telemetry;
+
+Telemetry::trace('heavy_processing', function(): void {
+    doHeavyProcessing();
+});
+```
+
+---
+
+### Why RHP Is Better Than PHP
+
+| Feature Dimension | Legacy PHP Directives (`declare(...)`) | RHP Compiler Architecture | Why RHP Wins |
+| :--- | :--- | :--- | :--- |
+| **Typing Consistency** | Fragmented per-file; caller decides callee strictness | Universal compiler-enforced strict typing | Immune to caller-dependent type coercion bugs; zero per-file boilerplate |
+| **Project Maintenance** | Must paste `declare(strict_types=1);` on every file | Zero declaration needed | Cleaner files; impossible to accidentally omit strict typing in new files |
+| **JIT Optimization** | `ticks` forces opcode polling, destroying JIT loops | Clean loop IR with zero instruction polling | Cranelift JIT can fully inline, vectorize, and optimize hot compilation units |
+| **Signal & Tracing** | Archaic synchronous tick callbacks | Non-blocking Tokio fiber runtime & OpenTelemetry | Enterprise-grade tracing, profiling, and cancellation with negligible overhead |
+
+---
+
+## 7. Classic `list()` Destructuring Assignment (`list($a, $b) = $array`)
+
+**Not supported:** `list($a, $b) = $array`, `list($a, , $c) = $array`, `list('key' => $val) = $array`, and the `list(...)` statement construct for destructuring assignment.
+
+### What Was Bad About It in PHP
+
+- **Lexical keyword collision with RHP typed collections:** In RHP, `list` is a dedicated language keyword for sequential contiguous-memory collection subtypes (`list $items`, `list<string>`, `Arr::list()`). Allowing `list(...)` as a destructuring construct introduces parsing ambiguity between variable type declarations, constructor-like expressions, and destructuring statements.
+- **Pseudo-function syntactical illusion:** While `list()` resembled a built-in function or constructor, it was actually a special parser construct that could only appear on the left-hand side of an assignment operator (`=`). It could not be evaluated as an expression, passed to callables, or assigned directly, creating confusing language asymmetries.
+- **Inconsistent error semantics:** Legacy PHP emitted undefined key warnings (`E_WARNING: Undefined array key`) or fatal type errors depending on PHP version when unpacking non-arrays or incomplete arrays, lacking type-safe guarantees.
+- **Outdated and redundant:** Modern PHP (since 7.1) and all modern programming languages (Rust, JavaScript/TypeScript, Python) standardize on square-bracket or pattern destructuring (`[$a, $b] = $array;`), rendering the `list()` construct an obsolete syntax artifact.
+
+---
+
+### What Replaces It in RHP
+
+1. **Clean Square-Bracket Destructuring (`[...]`):**
+   RHP natively supports concise, modern square-bracket destructuring for sequential arrays, lists, and associative dictionaries:
+   - Positional unpacking: `[$id, $name, $email] = $user;`
+   - Skipping items: `[$first, , $third] = $items;`
+   - Keyed dictionary unpacking: `['status' => $status, 'data' => $payload] = $response;`
+2. **Dedicated `list` Collection Subtype:**
+   The `list` keyword is cleanly repurposed as a first-class, cache-efficient sequential collection type: `list $nums = [1, 2, 3];` or `Arr::list([1, 2, 3])`.
+3. **Foreach Tuple Unpacking:**
+   Foreach loops natively support clean tuple and list unpacking: `foreach ($entries as [$key, $value]) { ... }`.
+4. **Type-Safe `match` Pattern Destructuring:**
+   Pattern matching allows robust extraction with compile-time type guarantees and pattern guards.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Sequential Array Destructuring
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Clunky list() language construct
+$coords = [100, 250];
+list($x, $y) = $coords;
+
+// Skipping elements with empty slots
+list($r, , $b) = getRgbColors();
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Modern square-bracket destructuring
+$coords = [100, 250];
+[$x, $y] = $coords;
+
+// Skipping elements with clean commas
+[$r, , $b] = getRgbColors();
+
+// list is reserved for typed collection declarations:
+list $numbers = Arr::list([100, 250]);
+```
+
+#### Example B: Keyed Associative Destructuring
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Verbose list() with string keys
+list('id' => $id, 'role' => $role) = $sessionData;
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Clean dictionary destructuring
+['id' => $id, 'role' => $role] = $sessionData;
+```
+
+---
+
+### Why RHP Is Better Than PHP
+
+| Feature Dimension | Legacy PHP `list(...)` | RHP Destructuring Model | Why RHP Wins |
+| :--- | :--- | :--- | :--- |
+| **Grammar & Lexing** | Ambiguous pseudo-function construct | Unambiguous `[...]` destructuring syntax | Clean parser grammar without special-case lvalue pseudo-functions |
+| **Language Consistency** | Two competing syntaxes (`list()` vs `[]`) | Single unified `[...]` syntax | Standardized modern destructuring identical to modern JS, Rust, and PHP 8+ |
+| **Keyword Clarity** | `list` hijacked as destructuring keyword | `list` reserved for sequential collection types | Enables high-performance typed arrays (`list<T>`) with optimal memory layout |
+| **Type Safety** | Silent warnings on missing elements | Compile-time pattern checks and exception boundaries | Prevents undefined offset bugs during record extraction |
+
+---
+
+## 8. `die()` Language Construct
+
+**Not supported:** `die()` and `die($message)`.
+
+### What Was Bad About It in PHP
+
+- **Terminating persistent workers:** In modern persistent worker runtimes (such as RHP's Tokio fiber pool, RoadRunner, FrankenPHP, and Laravel Octane), invoking `die()` aborts or crashes the worker execution thread. Abrupt termination destroys worker recycling, drops uncommitted database transactions, abandons connection pools, and can terminate concurrent tasks running inside the same process arena.
+- **Bypasses structured exception handling:** `die()` terminates execution immediately without unwinding the call stack. It bypasses `try / catch / finally` blocks and prevents application cleanup hooks and destructors from executing cleanly.
+- **Unformatted, unescaped raw output:** Calling `die("Something went wrong")` flushes an unformatted, unescaped plain string directly to stdout/HTTP response with a default `200 OK` status header. In REST APIs, GraphQL, and microservices, this breaks client JSON parsers and masks severe errors as successful HTTP responses.
+- **Redundant Perl artifact:** `die()` was originally inherited from Perl idioms (`open(...) or die(...)`). In a typed, modern language with structured exceptions, having an alias for abnormal script termination encourages fragile and untestable control-flow anti-patterns.
+
+---
+
+### What Replaces It in RHP
+
+1. **Structured Typed Exceptions:**
+   Throw descriptive, domain-specific exceptions that unwind the stack safely, guarantee execution of `finally` blocks, and allow centralized error middleware to handle failure:
+   `throw new RuntimeException("Database unreachable");` or `throw new NotFoundException("User not found");`.
+2. **Standardized HTTP Aborts (`abort()` / `Response::json()`):**
+   In web requests, terminate execution cleanly by returning structured HTTP error responses with appropriate HTTP status codes (e.g. 400, 403, 404, 500):
+   `abort(404, "User not found");` or `return Response::json(['error' => 'Unauthorized'], 401);`.
+3. **Explicit CLI Process Termination (`Sys::exit($code)`):**
+   When intentionally exiting a command-line script or daemon task with a specific OS return code, use the explicit, intention-revealing `Sys::exit($code)` facade method.
+4. **Scope-Guaranteed Teardown (`defer`):**
+   Use RHP's native `defer` statements to guarantee that file handles, database locks, and tracing spans are cleaned up before any exit path.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Web Request Error Handling
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Raw termination breaks API JSON format and sends 200 OK
+$order = Order::find($orderId);
+if (!$order) {
+    die("Order not found"); // Unformatted plain text sent to client!
+}
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Proper HTTP abort with correct status code and JSON format
+$order = Order::find($orderId);
+if (!$order) {
+    abort(404, "Order not found");
+    // Or throw structured exception:
+    // throw new NotFoundException("Order not found");
+}
+```
+
+#### Example B: CLI Tool Termination
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Abrupt die() call without clear exit code
+if (!File::exists($configPath)) {
+    die("Fatal: missing configuration file\n");
+}
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Explicit Sys facade with standard POSIX exit code
+if (!File::exists($configPath)) {
+    Log::error("Fatal: missing configuration file");
+    Sys::exit(1);
+}
+```
+
+---
+
+### Why RHP Is Better Than PHP
+
+| Feature Dimension | Legacy PHP `die(...)` | RHP Error Architecture | Why RHP Wins |
+| :--- | :--- | :--- | :--- |
+| **Worker Stability** | Hard crash disrupts persistent worker pools | Clean stack unwinding via exceptions / abort | **Zero worker process crashes**; safe in Tokio concurrent fiber runtimes |
+| **API Contract Integrity** | Emits raw text with misleading `200 OK` | Structured JSON responses with proper HTTP codes | Preserves API response contracts; clients receive standard JSON error bodies |
+| **Resource Cleanup** | Skips `finally` blocks and deferred callbacks | Guaranteed execution of `finally` and `defer` | Locks, transactions, and temporary files are always cleaned up safely |
+| **Code Maintainability** | Uncontrolled side effects; impossible to unit test | Testable, catchable exceptions and mockable aborts | Deterministic error handling testable via `assertThrows()` and HTTP assertions |
+
+---
+
 ## Comprehensive Feature Matrix
 
 | Legacy PHP Feature | Status in RHP | Primary Architectural Reason | Recommended RHP Replacement | Key Win Over PHP |
@@ -684,6 +938,9 @@ if (Int::compare($raw_id, 100)) {
 | **Legacy Serialization** (`serialize()`, `unserialize()`, `__sleep()`, `__wakeup()`) | ❌ **Rejected** | Pervasive RCE gadget chains; open-by-default class loading; slow text format with null-byte mangling | Compact binary format, `__serialize()`/`__unserialize(dict)`, `#[Transient]`, deny-by-default `allowed_classes` | Immune to gadget chains; $3\times$ to $8\times$ smaller payloads; destructor suppressed on failure |
 | **Strict Operators (`===`, `!==`) & Loose `==`** | ❌ **Rejected** | Implicit type coercion causes security vulnerabilities; redundant `===` syntax | Strict `==`/`!=`, compile-time mismatch errors, `Bool/Str/Int/Float/Array::compare*` | Eradicates loose comparison exploits; `rhp lint` auto-converts `===` to `==` |
 | **Implicit Arithmetic Coercion & Silent `+` Overflow** | ❌ **Rejected** | Strings coerced to int (`"5 apples" + 3`), lossy float promotion on overflow, array union | Checked `+` (traps), wrapping `+%`, saturating `+\|`, explicit casts, `.` for concat, `[...$a, ...$b]` for merge | Immune to silent numeric overflow exploits, no data loss from array union |
+| **Directive Statements** (`declare(strict_types=1);`, `declare(ticks=1);`) | ❌ **Rejected** | Redundant per-file boilerplate; caller-dependent type semantics; ticks cripple JIT optimization | Universal compiler-enforced strict typing; Tokio fiber runtime & OpenTelemetry | Zero per-file boilerplate; strict typing enforced across entire project; uncompromised JIT compilation |
+| **Classic `list()` Destructuring** (`list($a, $b) = $array`) | ❌ **Rejected** | Lexical keyword collision with `list` collection type; archaic pseudo-function syntax | Square-bracket destructuring `[$a, $b] = $array;`, dedicated `list` collection type | Clean grammar; `list` keyword dedicated to high-performance sequential collections; unified syntax |
+| **`die()` Language Construct** (`die()`) | ❌ **Rejected** | Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw text with `200 OK` | Typed exceptions (`throw new ...`), `abort(status, msg)`, `Response::json(...)`, `Sys::exit($code)` | Zero worker crashes; structured HTTP error payloads; guaranteed `finally` and `defer` resource cleanup |
 
 ---
 
@@ -702,6 +959,9 @@ rhp migrate ./app --write
 - **cURL Calls:** Standard `curl_init()` and `curl_setopt()` chains configured with common options (`CURLOPT_RETURNTRANSFER`, `CURLOPT_HTTPHEADER`, `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT`, `CURLOPT_USERPWD`) are rewritten into expressive `Http::` facade chains.
 - **Dependency Injection:** Standard constructor injection and container bindings are formatted to leverage RHP's build-time DI generator.
 - **Serialization Hooks:** Legacy `__sleep()` returning property arrays is rewritten to automatic serialization with `#[Transient]` attributes placed on unlisted properties; simple `__wakeup()` logic is moved into `__unserialize(dict $data)`.
+- **Directive Statements:** Strips redundant `declare(strict_types=1);`, `declare(ticks=1);`, and `declare(encoding=...);` statements automatically.
+- **Classic `list()` Destructuring:** Automatically converts `list($a, $b) = $expr` to modern square-bracket destructuring `[$a, $b] = $expr`.
+- **`die()` Calls:** Simple `die("message")` or `die()` statements in web requests are converted to `abort(500, "message")` or `throw new RuntimeException("message")`, and in CLI scripts to `Sys::exit(1)`.
 
 ### What `rhp migrate` Flags for Manual Review
 
@@ -711,3 +971,6 @@ rhp migrate ./app --write
 - **Insecure `unserialize()` Calls:** Any call to `unserialize()` lacking an explicit `allowed_classes` parameter is flagged as a high-severity security risk and must specify allowed classes or be migrated to typed JSON / binary serialization.
 - **Closure Serialization:** Usages of `Opis\Closure` or `Laravel\SerializableClosure` are flagged to be refactored into named job classes or named callables with typed parameters.
 - **Legacy PHP Format Data:** Calls consuming serialized PHP string data (`O:4:...`) are flagged to use the migration reader `unserialize_php($payload)` during transition or to migrate cache stores to the versioned RHP binary format.
+- **Tick Callbacks:** Any usage of `register_tick_function()` combined with `declare(ticks=1)` is flagged to be migrated to Tokio asynchronous event handlers or OpenTelemetry tracing spans.
+- **Complex Control-Flow `die()` Statements:** Usages of `... or die(...)` guards or expressions where `die()` return values are conditionally evaluated are flagged for refactoring into typed exceptions or explicit `abort()` handlers.
+
