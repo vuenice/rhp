@@ -358,6 +358,24 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     // String functions -> Str::*
     LegacyPhpFunctionMapping {
+        php_name: "ctype_digit",
+        rhp_facade: "Str",
+        rhp_method: "digit",
+        rhp_signature: "Str::digit(string $string): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ctype_alpha",
+        rhp_facade: "Str",
+        rhp_method: "alpha",
+        rhp_signature: "Str::alpha(string $string): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ctype_alnum",
+        rhp_facade: "Str",
+        rhp_method: "alnum",
+        rhp_signature: "Str::alnum(string $string): bool",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "strlen",
         rhp_facade: "Str",
         rhp_method: "length",
@@ -459,6 +477,36 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "File",
         rhp_method: "delete",
         rhp_signature: "File::delete(string $path): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "copy",
+        rhp_facade: "File",
+        rhp_method: "copy",
+        rhp_signature: "File::copy(string $from, string $to): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rename",
+        rhp_facade: "File",
+        rhp_method: "rename",
+        rhp_signature: "File::rename(string $from, string $to): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "chmod",
+        rhp_facade: "File",
+        rhp_method: "chmod",
+        rhp_signature: "File::chmod(string $path, ?int $mode = null): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "chown",
+        rhp_facade: "File",
+        rhp_method: "chown",
+        rhp_signature: "File::chown(string $path, string|int $user): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "touch",
+        rhp_facade: "File",
+        rhp_method: "touch",
+        rhp_signature: "File::touch(string $path, ?int $time = null, ?int $atime = null): bool",
     },
     LegacyPhpFunctionMapping {
         php_name: "mime_content_type",

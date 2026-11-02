@@ -415,6 +415,67 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::Bool(true))
             }
         }
+        "digit" | "isDigit" | "is_digit" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::digit".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let is_match = match target {
+                PhpValue::String(s) => {
+                    let b = s.as_bytes();
+                    !b.is_empty() && b.iter().all(|c| c.is_ascii_digit())
+                }
+                PhpValue::Int(n) => {
+                    let s = n.to_string();
+                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
+                }
+                PhpValue::RustInt { value, .. } => {
+                    let s = value.to_string();
+                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
+                }
+                _ => false,
+            };
+            Ok(PhpValue::Bool(is_match))
+        }
+        "alpha" | "isAlpha" | "is_alpha" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::alpha".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let is_match = match target {
+                PhpValue::String(s) => {
+                    let b = s.as_bytes();
+                    !b.is_empty() && b.iter().all(|c| c.is_ascii_alphabetic())
+                }
+                _ => false,
+            };
+            Ok(PhpValue::Bool(is_match))
+        }
+        "alnum" | "isAlnum" | "is_alnum" | "alphaNum" | "alphanumeric" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::alnum".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let is_match = match target {
+                PhpValue::String(s) => {
+                    let b = s.as_bytes();
+                    !b.is_empty() && b.iter().all(|c| c.is_ascii_alphanumeric())
+                }
+                PhpValue::Int(n) => {
+                    let s = n.to_string();
+                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric())
+                }
+                PhpValue::RustInt { value, .. } => {
+                    let s = value.to_string();
+                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric())
+                }
+                _ => false,
+            };
+            Ok(PhpValue::Bool(is_match))
+        }
         "contains" | "includes" => {
             let haystack = get_arg_str(args, 0, "Str::contains")?;
             let needle = get_arg_str(args, 1, "Str::contains")?;
@@ -1624,6 +1685,213 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             record_fiber_io_finish();
             Ok(PhpValue::Bool(ok))
         }
+        "copy" => {
+            let from = get_arg_str(args, 0, "File::copy")?;
+            let to = get_arg_str(args, 1, "File::copy")?;
+            record_fiber_io_start(IoKind::FileWrite {
+                path: to.clone(),
+                bytes: 0,
+            });
+            let ok = std::fs::copy(&from, &to).is_ok();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
+        }
+        "rename" | "move" => {
+            let from = get_arg_str(args, 0, "File::rename")?;
+            let to = get_arg_str(args, 1, "File::rename")?;
+            record_fiber_io_start(IoKind::FileWrite {
+                path: to.clone(),
+                bytes: 0,
+            });
+            let ok = std::fs::rename(&from, &to).is_ok();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
+        }
+        "chmod" => {
+            let path = get_arg_str(args, 0, "File::chmod")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let res = if let Some(mode_val) = args.get(1) {
+                if matches!(mode_val, PhpValue::Null) {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            let mode = meta.permissions().mode() & 0o7777;
+                            Ok(PhpValue::string(format!("{:04o}", mode)))
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        Ok(PhpValue::Null)
+                    }
+                } else {
+                    let mode: u32 = match mode_val {
+                        PhpValue::Int(n) => *n as u32,
+                        PhpValue::RustInt { value, .. } => *value as u32,
+                        PhpValue::String(s) => {
+                            let s_str = s.to_str_lossy();
+                            let clean = s_str.trim().trim_start_matches("0o");
+                            u32::from_str_radix(clean, 8).unwrap_or_else(|_| clean.parse().unwrap_or(0))
+                        }
+                        _ => 0,
+                    };
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let permissions = std::fs::Permissions::from_mode(mode);
+                        let ok = std::fs::set_permissions(&path, permissions).is_ok();
+                        Ok(PhpValue::Bool(ok))
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        Ok(PhpValue::Bool(std::path::Path::new(&path).exists()))
+                    }
+                }
+            } else {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        let mode = meta.permissions().mode() & 0o7777;
+                        Ok(PhpValue::string(format!("{:04o}", mode)))
+                    } else {
+                        Ok(PhpValue::Null)
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(PhpValue::Null)
+                }
+            };
+            record_fiber_io_finish();
+            res
+        }
+        "chown" => {
+            let path = get_arg_str(args, 0, "File::chown")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            #[cfg(unix)]
+            let res = {
+                use std::ffi::CString;
+                let path_c = match CString::new(path.as_str()) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        record_fiber_io_finish();
+                        return Ok(PhpValue::Bool(false));
+                    }
+                };
+                let user_val = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                    callable: "File::chown".to_string(),
+                    passed: args.len(),
+                    expected: 2,
+                })?;
+                let uid = match user_val {
+                    PhpValue::Int(uid) => *uid as libc::uid_t,
+                    PhpValue::RustInt { value, .. } => *value as libc::uid_t,
+                    PhpValue::String(s) => {
+                        let user_str = s.to_str_lossy();
+                        if let Ok(uid_num) = user_str.parse::<libc::uid_t>() {
+                            uid_num
+                        } else if let Ok(c_user) = CString::new(user_str.as_ref()) {
+                            unsafe {
+                                let pwd = libc::getpwnam(c_user.as_ptr());
+                                if pwd.is_null() {
+                                    record_fiber_io_finish();
+                                    return Ok(PhpValue::Bool(false));
+                                }
+                                (*pwd).pw_uid
+                            }
+                        } else {
+                            record_fiber_io_finish();
+                            return Ok(PhpValue::Bool(false));
+                        }
+                    }
+                    _ => {
+                        record_fiber_io_finish();
+                        return Ok(PhpValue::Bool(false));
+                    }
+                };
+                let gid = if let Some(g_val) = args.get(2) {
+                    match g_val {
+                        PhpValue::Int(gid) => *gid as libc::gid_t,
+                        PhpValue::RustInt { value, .. } => *value as libc::gid_t,
+                        PhpValue::String(s) => {
+                            let grp_str = s.to_str_lossy();
+                            if let Ok(gid_num) = grp_str.parse::<libc::gid_t>() {
+                                gid_num
+                            } else if let Ok(c_grp) = CString::new(grp_str.as_ref()) {
+                                unsafe {
+                                    let grp = libc::getgrnam(c_grp.as_ptr());
+                                    if grp.is_null() {
+                                        record_fiber_io_finish();
+                                        return Ok(PhpValue::Bool(false));
+                                    }
+                                    (*grp).gr_gid
+                                }
+                            } else {
+                                record_fiber_io_finish();
+                                return Ok(PhpValue::Bool(false));
+                            }
+                        }
+                        _ => !0 as libc::gid_t,
+                    }
+                } else {
+                    !0 as libc::gid_t
+                };
+                let ret = unsafe { libc::chown(path_c.as_ptr(), uid, gid) };
+                Ok(PhpValue::Bool(ret == 0))
+            };
+            #[cfg(not(unix))]
+            let res = Ok(PhpValue::Bool(false));
+            record_fiber_io_finish();
+            res
+        }
+        "touch" => {
+            let path = get_arg_str(args, 0, "File::touch")?;
+            record_fiber_io_start(IoKind::FileWrite {
+                path: path.clone(),
+                bytes: 0,
+            });
+            let file = match std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&path)
+            {
+                Ok(f) => f,
+                Err(_) => {
+                    record_fiber_io_finish();
+                    return Ok(PhpValue::Bool(false));
+                }
+            };
+
+            let mtime_opt = args.get(1).and_then(|v| v.to_i64());
+            let atime_opt = args.get(2).and_then(|v| v.to_i64()).or(mtime_opt);
+
+            let ok = if let Some(mtime_sec) = mtime_opt {
+                let to_system_time = |sec: i64| -> std::time::SystemTime {
+                    if sec >= 0 {
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(sec as u64)
+                    } else {
+                        std::time::UNIX_EPOCH - std::time::Duration::from_secs((-sec) as u64)
+                    }
+                };
+                let mtime = to_system_time(mtime_sec);
+                let atime = atime_opt.map(to_system_time).unwrap_or(mtime);
+                let times = std::fs::FileTimes::new()
+                    .set_modified(mtime)
+                    .set_accessed(atime);
+                file.set_times(times).is_ok()
+            } else {
+                let now = std::time::SystemTime::now();
+                let times = std::fs::FileTimes::new()
+                    .set_modified(now)
+                    .set_accessed(now);
+                file.set_times(times).is_ok()
+            };
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
+        }
         "mimeType" | "mime_type" => {
             let path = get_arg_str(args, 0, "File::mimeType")?;
             record_fiber_io_start(IoKind::FileExists { path: path.clone() });
@@ -1814,6 +2082,46 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
                 let res = match tokio::fs::remove_file(&path).await {
                     Ok(_) => Ok(FrozenValue::Bool(true)),
                     Err(err) => Err(format!("AFile::delete failed: {}", err)),
+                };
+                let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "copy" => {
+            let from = get_arg_str(args, 0, "AFile::copy")?;
+            let to = get_arg_str(args, 1, "AFile::copy")?;
+            record_fiber_io_start(IoKind::FileWrite {
+                path: to.clone(),
+                bytes: 0,
+            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match tokio::fs::copy(&from, &to).await {
+                    Ok(_) => Ok(FrozenValue::Bool(true)),
+                    Err(err) => Err(format!("AFile::copy failed: {}", err)),
+                };
+                let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "rename" | "move" => {
+            let from = get_arg_str(args, 0, "AFile::rename")?;
+            let to = get_arg_str(args, 1, "AFile::rename")?;
+            record_fiber_io_start(IoKind::FileWrite {
+                path: to.clone(),
+                bytes: 0,
+            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match tokio::fs::rename(&from, &to).await {
+                    Ok(_) => Ok(FrozenValue::Bool(true)),
+                    Err(err) => Err(format!("AFile::rename failed: {}", err)),
                 };
                 let _ = tx.send(res);
             });
@@ -3587,6 +3895,9 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "strtoupper" => dispatch_str("upper", args),
         "str_replace" => dispatch_str("replace", args),
         "strpos" => dispatch_str("find", args),
+        "ctype_digit" => dispatch_str("digit", args),
+        "ctype_alpha" => dispatch_str("alpha", args),
+        "ctype_alnum" => dispatch_str("alnum", args),
         "preg_match" => dispatch_regex("testString", args),
         "preg_replace" => dispatch_regex("replace", args),
         "preg_quote" => dispatch_regex("quote", args),
@@ -3616,6 +3927,11 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "filesize" => dispatch_file("size", args),
         "is_file" => dispatch_file("isFile", args),
         "is_dir" => dispatch_file("isDirectory", args),
+        "copy" => dispatch_file("copy", args),
+        "rename" => dispatch_file("rename", args),
+        "chmod" => dispatch_file("chmod", args),
+        "chown" => dispatch_file("chown", args),
+        "touch" => dispatch_file("touch", args),
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),

@@ -48,8 +48,16 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `strlen($str)` | `phpFun::strlen($str)` | `Str::byteLength($str)` |
 | `strpos($h, $n, $off)` | `phpFun::strpos($h, $n, $off)` | `Str::find($h, $n, $off)` |
 | `implode($glue, $arr)` | `phpFun::implode($glue, $arr)` | `Arr::implode($glue, $arr)` |
+| `ctype_digit($str)` | `phpFun::ctype_digit($str)` | `Str::digit($str)` |
+| `ctype_alpha($str)` | `phpFun::ctype_alpha($str)` | `Str::alpha($str)` |
+| `ctype_alnum($str)` | `phpFun::ctype_alnum($str)` | `Str::alnum($str)` |
 | `file_get_contents($path)` | `phpFun::file_get_contents($path)` | `File::read($path)` |
 | `file_put_contents($path, $data)` | `phpFun::file_put_contents($path, $data)` | `File::write($path, $data)` |
+| `copy($from, $to)` | `phpFun::copy($from, $to)` | `File::copy($from, $to)` |
+| `rename($from, $to)` | `phpFun::rename($from, $to)` | `File::rename($from, $to)` |
+| `chmod($path, $mode)` | `phpFun::chmod($path, $mode)` | `File::chmod($path, $mode)` |
+| `chown($path, $user)` | `phpFun::chown($path, $user)` | `File::chown($path, $user)` |
+| `touch($path)` | `phpFun::touch($path)` | `File::touch($path)` |
 | `collect($items)` | `phpFun::collect($items)` | Creates an iterable `Collection` instance |
 | `md5($str)` | `phpFun::md5($str)` | `Crypt::md5($str)` |
 | `sha1($str)` | `phpFun::sha1($str)` | `Crypt::sha1($str)` |

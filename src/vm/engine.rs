@@ -6266,6 +6266,30 @@ impl VM {
                         Ok(PhpValue::Bool(true))
                     }
                 }
+                "compare" => {
+                    let other = args.first().unwrap_or(&PhpValue::Null);
+                    let case_insensitive = args.get(1).and_then(|v| v.to_bool()).unwrap_or(false);
+                    let s1 = s.to_str_lossy();
+                    let s2 = other.to_php_string();
+                    let eq = if case_insensitive {
+                        s1.eq_ignore_ascii_case(&s2)
+                    } else {
+                        s1 == s2
+                    };
+                    Ok(PhpValue::Bool(eq))
+                }
+                "digit" | "isDigit" | "is_digit" => {
+                    let b = s.as_bytes();
+                    Ok(PhpValue::Bool(!b.is_empty() && b.iter().all(|c| c.is_ascii_digit())))
+                }
+                "alpha" | "isAlpha" | "is_alpha" => {
+                    let b = s.as_bytes();
+                    Ok(PhpValue::Bool(!b.is_empty() && b.iter().all(|c| c.is_ascii_alphabetic())))
+                }
+                "alnum" | "isAlnum" | "is_alnum" | "alphaNum" | "alphanumeric" => {
+                    let b = s.as_bytes();
+                    Ok(PhpValue::Bool(!b.is_empty() && b.iter().all(|c| c.is_ascii_alphanumeric())))
+                }
                 "trim" => {
                     let str_val = s.to_str_lossy();
                     let chars = if let Some(arg1) = args.first() {

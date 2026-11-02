@@ -360,6 +360,10 @@ Str::join(string $glue, array $pieces): string;
 Str::split(string $delimiter, string $string): list;
 Str::replace(string $search, string $replace, string $subject): string;
 Str::find(string $haystack, string $needle, int $offset = 0): ?int;
+Str::compare(mixed $a, mixed $b, bool $caseInsensitive = false): bool; // String coercion comparison (optional case-insensitive)
+Str::digit(mixed $value): bool;                                        // Checks if string contains only digits [0-9]
+Str::alpha(mixed $value): bool;                                        // Checks if string contains only alphabetic characters [a-zA-Z]
+Str::alnum(mixed $value): bool;                                        // Checks if string contains only alphanumeric characters [a-zA-Z0-9]
 
 // Multi-Byte Encodings & Binary Constructors
 Str::fromEncoding(string|array $bytes, string $encoding): string; // Decodes Shift-JIS, EUC-JP, ISO-2022-JP, UTF-8
@@ -395,6 +399,42 @@ $str->utf8(): string;
 $str->bytes(): list;
 $str->isUtf8(): bool;
 $str->isEmpty(): bool;
+$str->compare(mixed $other, bool $caseInsensitive = false): bool;
+$str->digit(): bool;
+$str->alpha(): bool;
+$str->alnum(): bool;
+```
+
+---
+
+## Primitive Comparison Facades (`Bool`, `Int`, `Float`)
+
+RHP provides dedicated facades for explicit, loose equality comparisons across differing scalar types:
+
+```php
+// Boolean truthiness comparison
+Bool::compare(mixed $a, mixed $b): bool;
+// Coerces both operands to boolean truthiness before comparing:
+Bool::compare(1, true);       // true
+Bool::compare("", false);     // true
+Bool::compare("0", false);    // true
+Bool::compare("hello", true); // true
+
+// Integer numeric comparison
+Int::compare(mixed $a, mixed $b): bool;
+// Coerces strings, floats, and booleans to 64-bit signed integers:
+Int::compare("42", 42);       // true
+Int::compare(true, 1);        // true
+Int::compare(3.9, 3);         // true (truncates float)
+
+// Float precision comparison
+Float::compare(mixed $a, mixed $b, ?float $epsilon = null): bool;
+// If $epsilon is omitted or null, dynamically checks maximum decimal places between both operands
+// and compares formatted representations. If $epsilon is supplied, checks abs($a - $b) <= $epsilon:
+Float::compare("3.14", 3.14);             // true
+Float::compare(10, 10.0);                 // true
+Float::compare(0.1 + 0.2, 0.3);           // true (handles IEEE 754 precision)
+Float::compare(1.0001, 1.0002, 0.001);    // true (within epsilon tolerance)
 ```
 
 ---
@@ -431,6 +471,11 @@ File::read(string $path): string;                    // Read file contents as st
 File::write(string $path, string $content): bool;    // Write string to file
 File::exists(string $path): bool;                   // Check if file exists
 File::delete(string $path): bool;                   // Remove file
+File::copy(string $from, string $to): bool;         // Copy file from source to destination
+File::rename(string $from, string $to): bool;       // Rename or move file (alias: move)
+File::chmod(string $path, ?int $mode = null): mixed;// Set or inspect file permission mode (e.g. 0755)
+File::chown(string $path, string|int $user, string|int $group = null): bool; // Change file owner
+File::touch(string $path, ?int $time = null, ?int $atime = null): bool;      // Create file or update timestamp
 File::mimeType(string $path): string|false;         // Sniff magic bytes & detect MIME type (like Laravel)
 File::guessExtension(string $pathOrMime): ?string;  // Guess extension from MIME type or file content
 File::extension(string $path): string;              // Extract file extension from path
@@ -467,6 +512,8 @@ AFile::read(string $path): Future;                  // Resolves to string (file 
 AFile::write(string $path, string $content): Future; // Resolves to bool
 AFile::exists(string $path): Future;                 // Resolves to bool
 AFile::delete(string $path): Future;                 // Resolves to bool
+AFile::copy(string $from, string $to): Future;        // Resolves to bool
+AFile::rename(string $from, string $to): Future;      // Resolves to bool
 AFile::append(string $path, string $content): Future;// Resolves to bool
 AFile::size(string $path): Future;                   // Resolves to int (byte size)
 AFile::mimeType(string $path): Future;               // Resolves to string|false (detected MIME type)

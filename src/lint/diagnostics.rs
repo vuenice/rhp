@@ -356,7 +356,7 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::Array(Box::new(RhpType::Mixed)),
                     },
                     "Str" => match method.name {
-                        "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
+                        "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
                         "length" => RhpType::Int,
                         "find" | "indexOf" => RhpType::Nullable(Box::new(RhpType::Int)),
                         _ => RhpType::String,

@@ -377,3 +377,125 @@ fn test_afile_mime_type_async() {
 
     let _ = std::fs::remove_file(test_path);
 }
+
+#[test]
+fn test_file_copy_rename_chmod_chown_touch() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir();
+    let f1 = dir.join(format!("rhp_test_file_helpers_{}_1.txt", pid));
+    let f2 = dir.join(format!("rhp_test_file_helpers_{}_2.txt", pid));
+    let f3 = dir.join(format!("rhp_test_file_helpers_{}_3.txt", pid));
+    let f4 = dir.join(format!("rhp_test_file_helpers_{}_4.txt", pid));
+
+    let _ = std::fs::remove_file(&f1);
+    let _ = std::fs::remove_file(&f2);
+    let _ = std::fs::remove_file(&f3);
+    let _ = std::fs::remove_file(&f4);
+
+    let current_uid = {
+        #[cfg(unix)]
+        {
+            unsafe { libc::getuid() }
+        }
+        #[cfg(not(unix))]
+        {
+            1000
+        }
+    };
+
+    let source = format!(
+        r#"
+        // 1. File::touch creates a non-existent file
+        $t1 = File::touch("{p1}");
+        $e1 = File::exists("{p1}");
+
+        // 2. Write content and File::copy
+        File::write("{p1}", "file helper payload");
+        $c1 = File::copy("{p1}", "{p2}");
+        $content2 = File::read("{p2}");
+
+        // 3. File::rename / move
+        $r1 = File::rename("{p2}", "{p3}");
+        $e2_old = File::exists("{p2}");
+        $e3_new = File::exists("{p3}");
+
+        // 4. File::chmod
+        $cm1 = File::chmod("{p3}", 0o755);
+        $cm_mode = File::chmod("{p3}");
+
+        // 5. File::chown (using current uid)
+        $ch1 = File::chown("{p3}", {uid});
+
+        // 6. File::touch with specific timestamp
+        $t2 = File::touch("{p3}", 1700000000);
+
+        // 7. Legacy PHP function calls: touch, copy, rename, chmod
+        $leg_touch = touch("{p4}");
+        $leg_copy = copy("{p4}", "{p2}");
+        $leg_rename = rename("{p2}", "{p1}");
+        $leg_chmod = chmod("{p4}", 0o644);
+
+        // 8. Chmod with string octal & failure handling
+        $cm_str = File::chmod("{p3}", "0644");
+        $cm_str_mode = File::chmod("{p3}");
+        $err_copy = File::copy("/nonexistent_path_xyz_123.txt", "{p2}");
+        $err_rename = File::rename("/nonexistent_path_xyz_123.txt", "{p2}");
+        $err_chmod = File::chmod("/nonexistent_path_xyz_123.txt", 0o755);
+
+        return [
+            $t1, $e1,
+            $c1, $content2,
+            $r1, $e2_old, $e3_new,
+            $cm1, $cm_mode,
+            $ch1, $t2,
+            $leg_touch, $leg_copy, $leg_rename, $leg_chmod,
+            $cm_str, $cm_str_mode,
+            $err_copy, $err_rename, $err_chmod,
+        ];
+        "#,
+        p1 = f1.display(),
+        p2 = f2.display(),
+        p3 = f3.display(),
+        p4 = f4.display(),
+        uid = current_uid,
+    );
+
+    let res = run_source(&source).expect("Script execution failed");
+    if let PhpValue::List(list) | PhpValue::Array(list) = res {
+        let b = list.borrow();
+        assert_eq!(b[0], PhpValue::Bool(true)); // touch creates file
+        assert_eq!(b[1], PhpValue::Bool(true)); // exists is true
+        assert_eq!(b[2], PhpValue::Bool(true)); // copy is true
+        assert_eq!(b[3].to_php_string(), "file helper payload"); // copied content
+        assert_eq!(b[4], PhpValue::Bool(true)); // rename is true
+        assert_eq!(b[5], PhpValue::Bool(false)); // old path does not exist
+        assert_eq!(b[6], PhpValue::Bool(true)); // new path exists
+        assert_eq!(b[7], PhpValue::Bool(true)); // chmod returns true
+        #[cfg(unix)]
+        assert_eq!(b[8].to_php_string(), "0755"); // chmod returns mode string
+        assert_eq!(b[9], PhpValue::Bool(true)); // chown current user returns true
+        assert_eq!(b[10], PhpValue::Bool(true)); // touch with mtime returns true
+
+        // Legacy calls
+        assert_eq!(b[11], PhpValue::Bool(true));
+        assert_eq!(b[12], PhpValue::Bool(true));
+        assert_eq!(b[13], PhpValue::Bool(true));
+        assert_eq!(b[14], PhpValue::Bool(true));
+
+        // String chmod & error handling
+        assert_eq!(b[15], PhpValue::Bool(true));
+        #[cfg(unix)]
+        assert_eq!(b[16].to_php_string(), "0644");
+        assert_eq!(b[17], PhpValue::Bool(false));
+        assert_eq!(b[18], PhpValue::Bool(false));
+        assert_eq!(b[19], PhpValue::Bool(false));
+    } else {
+        panic!("Expected array return value");
+    }
+
+    let _ = std::fs::remove_file(&f1);
+    let _ = std::fs::remove_file(&f2);
+    let _ = std::fs::remove_file(&f3);
+    let _ = std::fs::remove_file(&f4);
+}
+

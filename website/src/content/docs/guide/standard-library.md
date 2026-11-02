@@ -19,14 +19,14 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Session` | Session state management across requests | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_SESSION` is not supported** &mdash; use `Session::get()` |
 | `Cookie` | HTTP cookie reading and setting | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_COOKIE` is not supported** &mdash; use `Cookie::get()` |
 | `Arr` | Subtyped collection creation & fluent operations | `list()`, `dict()`, `set()`, `hashMap()`, `macro()` | &mdash; |
-| `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `upper()`, `fromEncoding()` | &mdash; |
+| `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `digit()`, `alpha()`, `alnum()`, `upper()`, `fromEncoding()` | &mdash; |
 | `Crypt` | Cryptographic hashing, HMAC, OpenSSL AES encryption & random bytes | `hash()`, `hashHmac()`, `opensslEncrypt()`, `opensslDecrypt()`, `randomBytes()`, `md5()` | &mdash; |
 | `Html` | HTML entity escaping, tag stripping, sanitization & tag generation | `specialChars()`, `stripTags()`, `entities()`, `specialCharsDecode()`, `clean()`, `tag()` | &mdash; |
 | `Url` | URL component parsing, query string building & Base64 encoding | `parseUrl()`, `httpBuildQuery()`, `base64Encode()`, `base64Decode()`, `to()`, `encode()` | &mdash; |
 | `Carbon` | High-performance date & time manipulation modeled after Laravel Carbon | `now()`, `parse()`, `today()`, `toDateTimeString()`, `toDateString()`, `addDay()`, `lastOfMonth()`, `diffForHumans()` | &mdash; |
 | `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` | &mdash; |
 | `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` | &mdash; |
-| `File` | Synchronous filesystem I/O operations & uploads | `read()`, `write()`, `exists()`, `delete()`, `fromRequest()` | **`$_FILES` is not supported** &mdash; use `File::fromRequest()` |
+| `File` | Synchronous filesystem I/O operations & uploads | `read()`, `write()`, `exists()`, `delete()`, `copy()`, `rename()`, `chmod()`, `chown()`, `touch()`, `fromRequest()` | **`$_FILES` is not supported** &mdash; use `File::fromRequest()` |
 | `AFile` | Non-blocking async filesystem I/O returning `Future` | `read()`, `write()`, `exists()`, `delete()`, `append()`, `size()` | &mdash; |
 | `HTTP` | Synchronous HTTP client and server kernel | `get()`, `post()`, `withHeaders()`, `serve()` | &mdash; |
 | `AHTTP` | Non-blocking async HTTP client returning `Future` | `get()`, `post()`, `put()`, `delete()`, `patch()`, `withHeaders()` | &mdash; |

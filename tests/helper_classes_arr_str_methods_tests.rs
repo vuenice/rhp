@@ -595,5 +595,122 @@ fn test_float_round_floor_ceil_ciel_helpers() {
     }
 }
 
+#[test]
+fn test_str_digit_alpha_alnum_helpers() {
+    clear_runtime_closure_macros();
 
+    let code = r#"
+        // 1. Static Str::digit
+        $d1 = Str::digit("123456");
+        $d2 = Str::digit("123a45");
+        $d3 = Str::digit("");
+        $d4 = Str::digit("   ");
+        $d5 = Str::digit(42);
+        $d6 = Str::digit(-42);
+        $d7 = Str::digit(null);
+        $d8 = Str::digit([1, 2]);
 
+        // 2. Static Str::alpha
+        $a1 = Str::alpha("HelloWorld");
+        $a2 = Str::alpha("Hello World");
+        $a3 = Str::alpha("Hello123");
+        $a4 = Str::alpha("");
+        $a5 = Str::alpha(null);
+        $a6 = Str::alpha([1, 2]);
+
+        // 3. Static Str::alnum
+        $an1 = Str::alnum("HelloWorld");
+        $an2 = Str::alnum("123456");
+        $an3 = Str::alnum("Hello123");
+        $an4 = Str::alnum("Hello 123");
+        $an5 = Str::alnum("Hello-123");
+        $an6 = Str::alnum("");
+        $an7 = Str::alnum(null);
+        $an8 = Str::alnum([1, 2]);
+
+        // 4. Instance fluent methods
+        $u_d1 = "98765"->digit();
+        $u_d2 = "987a"->digit();
+        $u_a1 = "QuickBrownFox"->alpha();
+        $u_a2 = "Quick 123"->alpha();
+        $u_an1 = "AlphaNum99"->alnum();
+        $u_an2 = "Not_Alnum!"->alnum();
+
+        // 5. Aliases
+        $alias_d = Str::isDigit("123");
+        $alias_a = Str::isAlpha("abc");
+        $alias_an = Str::isAlnum("abc123");
+        $u_alias_d = "123"->isDigit();
+        $u_alias_a = "abc"->isAlpha();
+        $u_alias_an = "abc123"->isAlnum();
+
+        // 6. Legacy PHP function mappings
+        $legacy_d = ctype_digit("999");
+        $legacy_a = ctype_alpha("Word");
+        $legacy_an = ctype_alnum("Word999");
+
+        return [
+            $d1, $d2, $d3, $d4, $d5, $d6, $d7, $d8,
+            $a1, $a2, $a3, $a4, $a5, $a6,
+            $an1, $an2, $an3, $an4, $an5, $an6, $an7, $an8,
+            $u_d1, $u_d2, $u_a1, $u_a2, $u_an1, $u_an2,
+            $alias_d, $alias_a, $alias_an, $u_alias_d, $u_alias_a, $u_alias_an,
+            $legacy_d, $legacy_a, $legacy_an,
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        // 1. digit
+        assert_eq!(b[0], PhpValue::Bool(true));
+        assert_eq!(b[1], PhpValue::Bool(false));
+        assert_eq!(b[2], PhpValue::Bool(false));
+        assert_eq!(b[3], PhpValue::Bool(false));
+        assert_eq!(b[4], PhpValue::Bool(true));
+        assert_eq!(b[5], PhpValue::Bool(false));
+        assert_eq!(b[6], PhpValue::Bool(false));
+        assert_eq!(b[7], PhpValue::Bool(false));
+
+        // 2. alpha
+        assert_eq!(b[8], PhpValue::Bool(true));
+        assert_eq!(b[9], PhpValue::Bool(false));
+        assert_eq!(b[10], PhpValue::Bool(false));
+        assert_eq!(b[11], PhpValue::Bool(false));
+        assert_eq!(b[12], PhpValue::Bool(false));
+        assert_eq!(b[13], PhpValue::Bool(false));
+
+        // 3. alnum
+        assert_eq!(b[14], PhpValue::Bool(true));
+        assert_eq!(b[15], PhpValue::Bool(true));
+        assert_eq!(b[16], PhpValue::Bool(true));
+        assert_eq!(b[17], PhpValue::Bool(false));
+        assert_eq!(b[18], PhpValue::Bool(false));
+        assert_eq!(b[19], PhpValue::Bool(false));
+        assert_eq!(b[20], PhpValue::Bool(false));
+        assert_eq!(b[21], PhpValue::Bool(false));
+
+        // 4. instance methods
+        assert_eq!(b[22], PhpValue::Bool(true));
+        assert_eq!(b[23], PhpValue::Bool(false));
+        assert_eq!(b[24], PhpValue::Bool(true));
+        assert_eq!(b[25], PhpValue::Bool(false));
+        assert_eq!(b[26], PhpValue::Bool(true));
+        assert_eq!(b[27], PhpValue::Bool(false));
+
+        // 5. aliases
+        assert_eq!(b[28], PhpValue::Bool(true));
+        assert_eq!(b[29], PhpValue::Bool(true));
+        assert_eq!(b[30], PhpValue::Bool(true));
+        assert_eq!(b[31], PhpValue::Bool(true));
+        assert_eq!(b[32], PhpValue::Bool(true));
+        assert_eq!(b[33], PhpValue::Bool(true));
+
+        // 6. legacy
+        assert_eq!(b[34], PhpValue::Bool(true));
+        assert_eq!(b[35], PhpValue::Bool(true));
+        assert_eq!(b[36], PhpValue::Bool(true));
+    } else {
+        panic!("expected array/list result");
+    }
+}

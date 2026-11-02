@@ -322,7 +322,7 @@ pub fn resolve_facade_static_call(
         },
 
         "Str" => match method {
-            "check" | "compare" => Ok(RhpType::Bool),
+            "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Ok(RhpType::Bool),
             "slug" => {
                 check_arg_type(
                     "Str::slug",
@@ -442,7 +442,7 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Bool)
             }
-            "exists" | "delete" => {
+            "exists" | "delete" | "remove" | "copy" | "rename" | "move" | "chown" | "touch" => {
                 check_arg_type(
                     &format!("File::{}", method),
                     "$path",
@@ -454,12 +454,13 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Bool)
             }
+            "chmod" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
 
         "AFile" => match method {
             "read" => Ok(RhpType::Future(Box::new(RhpType::String))),
-            "write" | "exists" | "delete" | "remove" | "append" => {
+            "write" | "exists" | "delete" | "remove" | "append" | "copy" | "rename" | "move" => {
                 Ok(RhpType::Future(Box::new(RhpType::Bool)))
             }
             "size" => Ok(RhpType::Future(Box::new(RhpType::Int))),
@@ -870,7 +871,7 @@ pub fn resolve_builtin_fluent_method(
             | "replace" | "substr" | "reverse" | "repeat" | "utf8" => Some(RhpType::String),
             "length" | "byteLength" | "bytesCount" => Some(RhpType::Int),
             "find" | "indexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
-            "check" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" => Some(RhpType::Bool),
+            "check" | "compare" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
             "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
             _ => {
