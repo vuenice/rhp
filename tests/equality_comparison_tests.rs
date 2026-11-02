@@ -1,238 +1,350 @@
-use rhp::{execute, parse_expr, run_source, Environment, PhpValue, RunMode};
+use rhp::{
+    lint::replace_strict_equality_operators, lint_source, parse, parse_and_check, parse_expr,
+    run_source, ParseErrorKind, PhpValue, TypeErrorKind,
+};
 
 #[test]
-fn test_strict_equality_and_identity() {
-    let source = r#"
-        $intStrictMatch = (42 === 42);
-        $intStrictMismatch = (42 === '42');
-        $stringStrictMatch = ('hello' === 'hello');
-        $stringStrictMismatch = ('hello' === 'world');
-        $boolStrictMatch = (true === true);
-        $boolIntStrictMismatch = (true === 1);
-        $boolStringStrictMismatch = (true === '1');
-        $boolEmptyStrictMismatch = (false === '');
-        $nullStrictMatch = (null === null);
-        $nullEmptyStrictMismatch = (null === '');
-        $nullFalseStrictMismatch = (null === false);
-
-        // Not identical !==
-        $intNotIdentical = (42 !== '42');
-        $intIdenticalNegation = (42 !== 42);
-
-        return [
-            $intStrictMatch,
-            $intStrictMismatch,
-            $stringStrictMatch,
-            $stringStrictMismatch,
-            $boolStrictMatch,
-            $boolIntStrictMismatch,
-            $boolStringStrictMismatch,
-            $boolEmptyStrictMismatch,
-            $nullStrictMatch,
-            $nullEmptyStrictMismatch,
-            $nullFalseStrictMismatch,
-            $intNotIdentical,
-            $intIdenticalNegation,
-        ];
-    "#;
-
-    let result = run_source(source).expect("Strict equality checks should execute");
-    assert_eq!(
-        result,
-        PhpValue::list(vec![
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-        ])
-    );
-}
-
-#[test]
-fn test_loose_equality_strict_then_string_fallback() {
-    let source = r#"
-        // 1. First strict match passes immediately
-        $intInt = (100 == 100);
-        $strStr = ('rhp' == 'rhp');
-        $boolBool = (true == true);
-
-        // 2. Strict match fails, falls back to string conversion
-        $intString = (42 == '42');
-        $stringInt = ('42' == 42);
-        $boolOne = (true == '1');
-        $boolEmpty = (false == '');
-        $nullEmpty = (null == '');
-        $nullFalse = (null == false); // both convert to ""
-
-        // 3. String conversion comparison returns false
-        $diffInts = (42 == 43);
-        $diffIntStr = (42 == '99');
-        $nullZero = (null == 0); // "" == "0" -> false
-        $falseZero = (false == '0'); // "" == "0" -> false
-
-        // 4. Negated loose equality != and <>
-        $notEqFalse = (42 != '42');
-        $notEqAltFalse = (42 <> '42');
-        $notEqTrue = (42 != '99');
-        $notEqAltTrue = (42 <> '99');
-
-        return [
-            $intInt,
-            $strStr,
-            $boolBool,
-            $intString,
-            $stringInt,
-            $boolOne,
-            $boolEmpty,
-            $nullEmpty,
-            $nullFalse,
-            $diffInts,
-            $diffIntStr,
-            $nullZero,
-            $falseZero,
-            $notEqFalse,
-            $notEqAltFalse,
-            $notEqTrue,
-            $notEqAltTrue,
-        ];
-    "#;
-
-    let result = run_source(source).expect("Loose equality checks should execute");
-    assert_eq!(
-        result,
-        PhpValue::list(vec![
-            // Strict matches
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            // String fallback matches
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            // Mismatches
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            // Negations
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-        ])
-    );
-}
-
-#[test]
-fn test_collections_equality() {
-    let source = r#"
-        $arr1 = [1, 2, 3];
-        $arr2 = ['1', '2', '3'];
-        $arr3 = [1, 2, 3];
-        $arr4 = [4, 5, 6];
-
-        $looseMatch = ($arr1 == $arr2);
-        $strictMatch = ($arr1 === $arr3);
-        $strictMismatch = ($arr1 === $arr2);
-        $looseMismatch = ($arr1 == $arr4);
-
-        $dict1 = Arr::dict(['id' => 10, 'role' => 'admin']);
-        $dict2 = Arr::dict(['id' => '10', 'role' => 'admin']);
-        $dict3 = Arr::dict(['id' => 10, 'role' => 'admin']);
-
-        $dictLooseMatch = ($dict1 == $dict2);
-        $dictStrictMatch = ($dict1 === $dict3);
-        $dictStrictMismatch = ($dict1 === $dict2);
-
-        return [
-            $looseMatch,
-            $strictMatch,
-            $strictMismatch,
-            $looseMismatch,
-            $dictLooseMatch,
-            $dictStrictMatch,
-            $dictStrictMismatch,
-        ];
-    "#;
-
-    let result = run_source(source).expect("Collection equality should execute");
-    assert_eq!(
-        result,
-        PhpValue::list(vec![
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-        ])
-    );
-}
-
-#[test]
-fn test_switch_and_match_semantics() {
-    let source = r#"
-        // Switch uses == (loose equality with string fallback)
-        $code = 200;
-        $switchRes = '';
-        switch ($code) {
-            case '200':
-                $switchRes = 'matched_string_case';
-                break;
-            default:
-                $switchRes = 'default';
-                break;
+fn test_strict_equality_operator_rejection_at_parse_time() {
+    let err_eq = parse("<?php $x = 1 === 2;").unwrap_err();
+    match err_eq.kind {
+        ParseErrorKind::UnsupportedOperator { op, suggested } => {
+            assert_eq!(op, "===");
+            assert_eq!(suggested, "==");
         }
+        other => panic!("Expected UnsupportedOperator, got {:?}", other),
+    }
 
-        // Match uses === (strict identity check)
-        $matchRes = match ($code) {
-            '200' => 'matched_string',
-            200 => 'matched_int',
-            default => 'other',
-        };
+    let err_neq = parse("<?php $x = 1 !== 2;").unwrap_err();
+    match err_neq.kind {
+        ParseErrorKind::UnsupportedOperator { op, suggested } => {
+            assert_eq!(op, "!==");
+            assert_eq!(suggested, "!=");
+        }
+        other => panic!("Expected UnsupportedOperator, got {:?}", other),
+    }
 
-        return [$switchRes, $matchRes];
+    let expr_err = parse_expr("42 === 42").unwrap_err();
+    match expr_err.kind {
+        ParseErrorKind::UnsupportedOperator { op, suggested } => {
+            assert_eq!(op, "===");
+            assert_eq!(suggested, "==");
+        }
+        other => panic!("Expected UnsupportedOperator, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_rhp_lint_converts_strict_operators() {
+    let source = r#"<?php
+if ($a === 1 && $b !== 2) {
+    $c = $a === $b;
+    $msg = "=== not an operator in string ===";
+    $neq = '!== not an operator either';
+    // === comment should stay ===
+    /* !== block comment !== */
+}
+"#;
+
+    let lint_res = lint_source(source, "test.php");
+    let linted = &lint_res.formatted_content;
+    assert!(linted.contains("if ($a == 1 && $b != 2)"));
+    assert!(linted.contains("$c = $a == $b;"));
+    assert!(linted.contains("\"=== not an operator in string ===\""));
+    assert!(linted.contains("'!== not an operator either'"));
+    assert!(linted.contains("// === comment should stay ==="));
+    assert!(linted.contains("/* !== block comment !== */"));
+
+    // Also verify direct function
+    let converted = replace_strict_equality_operators("$a === $b && $c !== $d");
+    assert_eq!(converted, "$a == $b && $c != $d");
+}
+
+#[test]
+fn test_strict_type_comparison_enforcement() {
+    // 1. Same types succeed at compile time and evaluate correctly
+    let valid_source = r#"
+        $intSame = (42 == 42);
+        $intDiff = (42 == 43);
+        $intNotEq = (42 != 43);
+        $strSame = ('hello' == 'hello');
+        $strDiff = ('hello' == 'world');
+        $boolSame = (true == true);
+        $boolDiff = (true == false);
+        $nullSame = (null == null);
+
+        return [
+            $intSame,
+            $intDiff,
+            $intNotEq,
+            $strSame,
+            $strDiff,
+            $boolSame,
+            $boolDiff,
+            $nullSame,
+        ];
     "#;
 
-    let result = run_source(source).expect("Switch and match should execute");
+    let res = run_source(valid_source).expect("Strict same-type comparisons must succeed");
     assert_eq!(
-        result,
+        res,
         PhpValue::list(vec![
-            PhpValue::string("matched_string_case"),
-            PhpValue::string("matched_int"),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+        ])
+    );
+
+    // 2. Mismatched types must produce compile/type error
+    let invalid_cases = [
+        "42 == '42';",
+        "'42' == 42;",
+        "true == 1;",
+        "false == '';",
+        "null == '';",
+        "null == false;",
+        "42 != '42';",
+        "true != 0;",
+    ];
+
+    for code in invalid_cases {
+        let full = format!("<?php $x = {};", code);
+        let check_res = parse_and_check(&full);
+        assert!(
+            check_res.is_err(),
+            "Expected compile error for mismatched types in '{}', but got Ok",
+            code
+        );
+        match check_res.unwrap_err() {
+            rhp::FrontendError::Type(err) => match err.kind {
+                TypeErrorKind::InvalidBinaryOperation { op, left_type, right_type } => {
+                    assert!(op == "==" || op == "!=");
+                    assert_ne!(left_type, right_type);
+                }
+                other => panic!("Expected InvalidBinaryOperation for '{}', got {:?}", code, other),
+            },
+            other => panic!("Expected TypeError for '{}', got {:?}", code, other),
+        }
+    }
+}
+
+#[test]
+fn test_primitive_loose_comparison_helpers() {
+    let source = r#"
+        // Bool::compare
+        $b1 = Bool::compare(1, true);
+        $b2 = Bool::compare(0, false);
+        $b3 = Bool::compare('', false);
+        $b4 = Bool::compare('1', true);
+        $b5 = Bool::compare('0', false);
+        $b6 = Bool::compare(null, false);
+        $b7 = Bool::compare('hello', true);
+        $b8 = Bool::compare(100, false);
+
+        // Str::compare
+        $s1 = Str::compare('hello', 'hello');
+        $s2 = Str::compare('hello', 'HELLO');
+        $s3 = Str::compare('hello', 'HELLO', true);
+        $s4 = Str::compare(42, '42');
+        $s5 = Str::compare(42, 43);
+
+        // Int::compare
+        $i1 = Int::compare(42, '42');
+        $i2 = Int::compare('100', 100);
+        $i3 = Int::compare('042', 42);
+        $i4 = Int::compare(true, 1);
+        $i5 = Int::compare(false, 0);
+        $i6 = Int::compare(42, 43);
+
+        // Float::compare
+        $f1 = Float::compare(3.14, '3.14');
+        $f2 = Float::compare(10, 10.0);
+        $f3 = Float::compare(1.00001, 1.00002);
+        $f4 = Float::compare(1.00001, 1.00002, 0.001);
+
+        return [
+            $b1, $b2, $b3, $b4, $b5, $b6, $b7, $b8,
+            $s1, $s2, $s3, $s4, $s5,
+            $i1, $i2, $i3, $i4, $i5, $i6,
+            $f1, $f2, $f3, $f4,
+        ];
+    "#;
+
+    let res = run_source(source).expect("Loose comparison helpers must execute cleanly");
+    assert_eq!(
+        res,
+        PhpValue::list(vec![
+            // Bool::compare
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            // Str::compare
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            // Int::compare
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            // Float::compare
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
         ])
     );
 }
 
 #[test]
-fn test_ast_dev_mode_evaluation() {
-    let mut env = Environment::new();
+fn test_array_static_comparison_helpers() {
+    let source = r#"
+        $list1 = [1, 2, 3];
+        $list2 = [1, 2, 3];
+        $list3 = [3, 2, 1];
+        $list4 = [1, 2];
 
-    let expr_strict_true = parse_expr("10 === 10").unwrap();
-    let expr_strict_false = parse_expr("10 === '10'").unwrap();
-    let expr_loose_true = parse_expr("10 == '10'").unwrap();
-    let expr_loose_false = parse_expr("10 == '20'").unwrap();
+        // 1. JSON comparison
+        $jsonSame = Array::compareJson($list1, $list2);
+        $jsonDiff = Array::compareJson($list1, $list3);
+        $jsonArrSame = Arr::compareJson($list1, $list2);
 
-    let res_strict_true = execute(RunMode::Dev { hot_reload: false, dap_port: None }, &expr_strict_true, &mut env).unwrap();
-    let res_strict_false = execute(RunMode::Dev { hot_reload: false, dap_port: None }, &expr_strict_false, &mut env).unwrap();
-    let res_loose_true = execute(RunMode::Dev { hot_reload: false, dap_port: None }, &expr_loose_true, &mut env).unwrap();
-    let res_loose_false = execute(RunMode::Dev { hot_reload: false, dap_port: None }, &expr_loose_false, &mut env).unwrap();
+        // 2. Reference comparison
+        $refA = [10, 20];
+        $refB = $refA;
+        $refC = [10, 20];
+        $refSame = Array::compareRef($refA, $refB);
+        $refDiff = Array::compareRef($refA, $refC);
+        $refArrSame = Arr::compareRef($refA, $refB);
 
-    assert_eq!(res_strict_true, PhpValue::Bool(true));
-    assert_eq!(res_strict_false, PhpValue::Bool(false));
-    assert_eq!(res_loose_true, PhpValue::Bool(true));
-    assert_eq!(res_loose_false, PhpValue::Bool(false));
+        // 3. Joined string comparison
+        $joinedSame = Array::compareJoined([1, 2, 3], ['1', '2', '3']);
+        $joinedCustomSep = Array::compareJoined([1, 2, 3], ['1', '2', '3'], '-');
+        $joinedDiff = Array::compareJoined([1, 2, 3], [1, 2]);
+
+        // 4. Unordered comparison (list and set)
+        $set1 = Arr::set([1, 2, 3]);
+        $set2 = Arr::set([3, 1, 2]);
+        $unorderListList = Array::compareUnordered($list1, $list3);
+        $unorderListSet = Array::compareUnordered($list1, $set2);
+        $unorderSetSet = Array::compareUnordered($set1, $set2);
+        $unorderDiff = Array::compareUnordered($list1, $list4);
+
+        return [
+            $jsonSame, $jsonDiff, $jsonArrSame,
+            $refSame, $refDiff, $refArrSame,
+            $joinedSame, $joinedCustomSep, $joinedDiff,
+            $unorderListList, $unorderListSet, $unorderSetSet, $unorderDiff,
+        ];
+    "#;
+
+    let res = run_source(source).expect("Array static comparison helpers must execute cleanly");
+    assert_eq!(
+        res,
+        PhpValue::list(vec![
+            // JSON
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            // Ref
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            // Joined
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            // Unordered
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+        ])
+    );
+}
+
+#[test]
+fn test_array_compare_unordered_rejects_dict() {
+    let source = r#"
+        $d1 = Arr::dict(['a' => 1]);
+        $d2 = Arr::dict(['a' => 1]);
+        Array::compareUnordered($d1, $d2);
+    "#;
+
+    let res = run_source(source);
+    assert!(res.is_err(), "compareUnordered must reject dict with runtime error");
+}
+
+#[test]
+fn test_float_comparison_checks_maximum_decimal_point() {
+    let source = r#"
+        // 1. Same decimal points matching
+        $c1 = (1.23 == 1.23);
+        $c2 = (3.14159 == 3.14159);
+        $c3 = (0.0005 == 0.0005);
+
+        // 2. Different values with same decimal points
+        $c4 = (1.23 == 1.24);
+        $c5 = (3.14159 == 3.14158);
+        $c6 = (0.0005 == 0.0006);
+
+        // 3. Different decimal points: checked up to maximum decimal point
+        // 1.23 (2 decimals) vs 1.234 (3 decimals) -> max is 3 -> 1.230 != 1.234
+        $c7 = (1.23 == 1.234);
+        $c8 = (1.23 != 1.234);
+
+        // 4. Zero decimal points
+        $c9 = (10.0 == 10.0);
+        $c10 = (10.0 == 10.1);
+        $c11 = (10.0 != 10.1);
+
+        // 5. Cross Float and Float::f64 (RustFloat) with matching decimal point
+        $f32Val = 3.14;
+        $f64Val = Float::f64(3.14);
+        $c12 = ($f32Val == $f64Val);
+
+        // 6. Signed zero
+        $c13 = (-0.0 == 0.0);
+
+        return [
+            $c1, $c2, $c3,
+            $c4, $c5, $c6,
+            $c7, $c8,
+            $c9, $c10, $c11,
+            $c12, $c13,
+        ];
+    "#;
+
+    let res = run_source(source).expect("Float max-decimal comparisons must execute cleanly");
+    assert_eq!(
+        res,
+        PhpValue::list(vec![
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(false),
+            PhpValue::Bool(false),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(false),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+            PhpValue::Bool(true),
+        ])
+    );
 }

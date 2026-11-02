@@ -4388,7 +4388,7 @@ impl VM {
                         let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
                         Ok(dict.borrow_mut().shift_remove(&key).unwrap_or(default))
                     }
-                    "forget" => {
+                    "forget" | "remove" | "delete" => {
                         let keys: Vec<String> = if let Some(PhpValue::Array(a) | PhpValue::List(a)) = args.first() {
                             a.borrow().iter().map(|v| v.to_php_string()).collect()
                         } else {
@@ -5626,6 +5626,16 @@ impl VM {
                             let mut it = items;
                             Ok(it.pop().unwrap_or(PhpValue::Null))
                         }
+                    }
+                    "remove" | "forget" | "delete" => {
+                        let idx = args.first().and_then(|v| v.to_i64()).unwrap_or(-1);
+                        if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                            let mut b = rc.borrow_mut();
+                            if idx >= 0 && (idx as usize) < b.len() {
+                                b.remove(idx as usize);
+                            }
+                        }
+                        Ok(receiver.clone())
                     }
                     "shift" => {
                         if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
@@ -8425,9 +8435,9 @@ impl VM {
                 Ok(PhpValue::Int(res))
             }
 
-            // Equality & Identity comparisons
-            BinaryOp::Eq => Ok(PhpValue::Bool(Self::loose_eq(lhs, rhs))),
-            BinaryOp::NotEq => Ok(PhpValue::Bool(!Self::loose_eq(lhs, rhs))),
+            // Equality & Identity comparisons (strict equality)
+            BinaryOp::Eq => Ok(PhpValue::Bool(Self::strict_eq(lhs, rhs))),
+            BinaryOp::NotEq => Ok(PhpValue::Bool(!Self::strict_eq(lhs, rhs))),
             BinaryOp::Identical => Ok(PhpValue::Bool(Self::strict_eq(lhs, rhs))),
             BinaryOp::NotIdentical => Ok(PhpValue::Bool(!Self::strict_eq(lhs, rhs))),
 
@@ -8472,6 +8482,7 @@ impl VM {
         a.strict_eq(b)
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn loose_eq(a: &PhpValue, b: &PhpValue) -> bool {
         a.loose_eq(b)

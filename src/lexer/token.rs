@@ -248,6 +248,22 @@ pub enum Token<'s> {
     #[token("global")]
     Global,
 
+    // Language Constructs & Intrinsics
+    #[token("isset")]
+    Isset,
+
+    #[token("empty")]
+    Empty,
+
+    #[token("unset")]
+    Unset,
+
+    #[token("exit")]
+    Exit,
+
+    #[token("die")]
+    Die,
+
     // Exception Handling
     #[token("try")]
     Try,
@@ -690,6 +706,11 @@ impl<'s> Token<'s> {
             Token::And => "and",
             Token::Or => "or",
             Token::Xor => "xor",
+            Token::Isset => "isset",
+            Token::Empty => "empty",
+            Token::Unset => "unset",
+            Token::Exit => "exit",
+            Token::Die => "die",
             Token::True => "true",
             Token::False => "false",
             Token::Null => "null",
@@ -853,6 +874,11 @@ impl<'s> Token<'s> {
                 | Token::And
                 | Token::Or
                 | Token::Xor
+                | Token::Isset
+                | Token::Empty
+                | Token::Unset
+                | Token::Exit
+                | Token::Die
         )
     }
 

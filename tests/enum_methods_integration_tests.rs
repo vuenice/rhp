@@ -16,7 +16,7 @@ fn test_enum_from_string_backed() {
         $request = new UserRequest('published');
         $status = SiteStatus::from($request->status);
 
-        $isPublished = ($status === SiteStatus::Published);
+        $isPublished = ($status == SiteStatus::Published);
         $name = $status->name;
         $val = $status->value;
 
@@ -51,8 +51,8 @@ fn test_enum_cases_unit_enum() {
             $names[] = $c->name;
         }
 
-        $isFirstFree = ($cases[0] === PlanType::Free);
-        $isSecondPro = ($cases[1] === PlanType::Pro);
+        $isFirstFree = ($cases[0] == PlanType::Free);
+        $isSecondPro = ($cases[1] == PlanType::Pro);
 
         return [$count, $names, $isFirstFree, $isSecondPro];
     "#;
@@ -116,9 +116,9 @@ fn test_enum_try_from() {
         $invalid = SiteStatus::tryFrom('deleted');
         $nullVal = SiteStatus::tryFrom(null);
 
-        $isValidPublished = ($valid === SiteStatus::Published);
-        $isInvalidNull = ($invalid === null);
-        $isNullValNull = ($nullVal === null);
+        $isValidPublished = ($valid == SiteStatus::Published);
+        $isInvalidNull = ($invalid == null);
+        $isNullValNull = ($nullVal == null);
 
         return [$isValidPublished, $isInvalidNull, $isNullValNull];
     "#;
@@ -180,11 +180,11 @@ fn test_enum_from_int_backed() {
         }
 
         return [
-            $p === Priority::Medium,
+            $p == Priority::Medium,
             $p->name,
             $p->value,
-            $tryValid === Priority::High,
-            $tryInvalid === null,
+            $tryValid == Priority::High,
+            $tryInvalid == null,
             $caught
         ];
     "#;
@@ -274,7 +274,7 @@ fn test_enum_methods_dynamic_class_variable() {
         $status = $className::from('draft');
         $maybe = $className::tryFrom('unknown');
 
-        return [count($cases), $status->name, $maybe === null];
+        return [count($cases), $status->name, $maybe == null];
     "#;
 
     let result = run_source(source).expect("Dynamic class variable enum call should succeed");

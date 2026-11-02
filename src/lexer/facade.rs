@@ -72,6 +72,10 @@ impl FacadeInfo {
 /// All registered Tier 1 Native Facades pre-compiled inside the RHP engine.
 pub static NATIVE_FACADES: &[FacadeInfo] = &[
     FacadeInfo::native(
+        "Bool",
+        "Static facade helper for boolean operations and loose truthiness comparisons (compare)",
+    ),
+    FacadeInfo::native(
         "Int",
         "Static facade helper for integer utilities and specialized Rust numeric types (i64, u32, etc.)",
     ),
@@ -86,6 +90,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     FacadeInfo::native(
         "Arr",
         "Static collection factory (list, dict, set, hashMap) with fluent chaining and runtime macro support",
+    ),
+    FacadeInfo::native(
+        "Array",
+        "Canonical static facade alias for Arr collections (compareJson, compareRef, compareJoined, compareUnordered)",
     ),
     FacadeInfo::native(
         "Str",
@@ -202,8 +210,11 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
-/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`, `Sys::print_r()`, `Sys::dump()`).
-pub static RESERVED_INTRINSICS: &[&str] = &["env", "print", "println", "echo", "dd", "print_r", "var_dump", "dump"];
+/// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`, `Sys::print_r()`, `Sys::dump()`, `Sys::isset()`, `Sys::empty()`, `Sys::exit()`).
+pub static RESERVED_INTRINSICS: &[&str] = &[
+    "env", "print", "println", "echo", "dd", "print_r", "var_dump", "dump", "isset", "empty",
+    "exit", "die",
+];
 
 /// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`, `print_r`, `var_dump`, `dump`).
 #[inline]
@@ -497,6 +508,30 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "Sys",
         rhp_method: "print_r",
         rhp_signature: "Sys::print_r(mixed $value, bool $return = false): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "isset",
+        rhp_facade: "Sys",
+        rhp_method: "isset",
+        rhp_signature: "Sys::isset(mixed ...$vars): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "empty",
+        rhp_facade: "Sys",
+        rhp_method: "empty",
+        rhp_signature: "Sys::empty(mixed $val): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "exit",
+        rhp_facade: "Sys",
+        rhp_method: "exit",
+        rhp_signature: "Sys::exit(mixed $status = 0): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "die",
+        rhp_facade: "Sys",
+        rhp_method: "exit",
+        rhp_signature: "Sys::exit(mixed $status = 0): void",
     },
     LegacyPhpFunctionMapping {
         php_name: "get_class",
@@ -796,6 +831,7 @@ impl FacadeRegistry {
         }
         // Normalize primitive/canonical names (e.g. 'int' -> 'Int', 'float' -> 'Float', etc.)
         let normalized = match name.to_ascii_lowercase().as_str() {
+            "bool" | "boolean" => "Bool",
             "int" => "Int",
             "float" => "Float",
             "str" | "string" => "Str",
@@ -875,7 +911,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
     }
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
+        "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html"
     )

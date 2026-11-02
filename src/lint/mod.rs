@@ -59,11 +59,14 @@ pub fn lint_source(source: &str, file_name: &str) -> LintResult {
 pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOptions) -> LintResult {
     if options.fix {
         // Fix mode:
+        // 0. Auto-convert strict comparison operators `===` and `!==` to `==` and `!=`
+        let eq_fixed_code = replace_strict_equality_operators(source);
+
         // 1. Casing transformations (if enabled)
         let (cased_code, _) = if options.case_change {
-            apply_casing(source, file_name)
+            apply_casing(&eq_fixed_code, file_name)
         } else {
-            (source.to_string(), Vec::new())
+            (eq_fixed_code, Vec::new())
         };
 
         // 2. Infer and add variable types
@@ -193,4 +196,85 @@ fn is_rhp_or_php_file(path: &Path) -> bool {
     } else {
         false
     }
+}
+
+/// Replaces strict comparison operators `===` and `!==` with `==` and `!=`
+/// outside string literals and comments.
+pub fn replace_strict_equality_operators(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let chars: Vec<char> = source.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut str_delim = '"';
+
+    while i < n {
+        let c = chars[i];
+
+        if in_str {
+            output.push(c);
+            if c == '\\' && i + 1 < n {
+                output.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if c == str_delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '"' || c == '\'' || c == '`' {
+            in_str = true;
+            str_delim = c;
+            output.push(c);
+            i += 1;
+            continue;
+        }
+
+        // Single-line comments: preserve until newline
+        if (c == '/' && i + 1 < n && chars[i + 1] == '/') || c == '#' {
+            while i < n && chars[i] != '\n' {
+                output.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        // Multi-line comments: preserve until */
+        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+            output.push_str("/*");
+            i += 2;
+            while i < n {
+                if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    output.push_str("*/");
+                    i += 2;
+                    break;
+                }
+                output.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        // Check for ===
+        if c == '=' && i + 2 < n && chars[i + 1] == '=' && chars[i + 2] == '=' {
+            output.push_str("==");
+            i += 3;
+            continue;
+        }
+
+        // Check for !==
+        if c == '!' && i + 2 < n && chars[i + 1] == '=' && chars[i + 2] == '=' {
+            output.push_str("!=");
+            i += 3;
+            continue;
+        }
+
+        output.push(c);
+        i += 1;
+    }
+
+    output
 }

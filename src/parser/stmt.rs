@@ -1,12 +1,12 @@
 use crate::ast::{
-    expr::Expr,
+    expr::{Argument, Expr, ExprKind},
     stmt::{
         Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind,
         ElseIfBranch, EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, PropertyDecl,
         Stmt, StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf,
         TraitUseDecl, UseImport,
     },
-    types::{ClassModifiers, Visibility},
+    types::{ClassModifiers, Ident, Visibility},
 };
 use crate::lexer::{
     facade::{is_static_facade, is_static_only, register_tier3_facade},
@@ -547,7 +547,67 @@ impl<'s> CombinatorStream<'s> {
             return Ok(Stmt::new(StmtKind::Global(vars), span));
         }
 
-        // 17. Echo statement or echo(...) / echo!(...) invocation
+        // 17. Unset statement: unset($x), unset($arr['k']), unset($a, $b)
+        if self.matches(&Token::Unset) {
+            let _open_paren = self.expect(Token::OpenParen)?;
+            let mut stmts = Vec::new();
+            let mut vars = Vec::new();
+            while !self.check(&Token::CloseParen) && !self.is_eof() {
+                let expr = self.parse_expr_lowest()?;
+                match expr.kind {
+                    ExprKind::ArrayIndex { array, index } => {
+                        if let Some(idx) = index {
+                            let call_span = expr.span;
+                            let remove_call = Expr::new(
+                                ExprKind::MethodCall {
+                                    object: array,
+                                    method: Ident::new("remove", call_span),
+                                    args: vec![Argument::new(*idx, call_span)],
+                                    is_nullsafe: false,
+                                },
+                                call_span,
+                            );
+                            stmts.push(Stmt::new(StmtKind::Expr(remove_call), call_span));
+                        } else {
+                            return Err(ParseError::new(
+                                ParseErrorKind::InvalidUnsetTarget {
+                                    reason: "Cannot unset empty array subscript `[]`".to_string(),
+                                },
+                                expr.span,
+                            ));
+                        }
+                    }
+                    ExprKind::Variable(_) => {
+                        vars.push(expr);
+                    }
+                    _ => {
+                        return Err(ParseError::new(
+                            ParseErrorKind::InvalidUnsetTarget {
+                                reason: "Only variables and array/map elements can be unset".to_string(),
+                            },
+                            expr.span,
+                        ));
+                    }
+                }
+                if !self.matches(&Token::Comma) {
+                    break;
+                }
+            }
+            let close_paren = self.expect(Token::CloseParen)?;
+            self.expect_statement_terminator()?;
+            let span = start_span.merge(close_paren.span);
+
+            if !vars.is_empty() {
+                stmts.push(Stmt::new(StmtKind::Unset(vars), span));
+            }
+            if stmts.len() == 1 {
+                return Ok(stmts.pop().unwrap());
+            } else {
+                return Ok(Stmt::new(StmtKind::Block(stmts), span));
+            }
+        }
+
+        // 18. Echo statement or echo(...) / echo!(...) invocation
         if self.matches(&Token::Echo) {
             if self.check(&Token::Bang) {
                 self.advance(); // consume '!'

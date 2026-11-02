@@ -104,6 +104,161 @@ impl<'s> CombinatorStream<'s> {
         Ok(left)
     }
 
+    fn unroll_array_indices(&self, expr: &Expr<'s>) -> (Expr<'s>, Vec<Expr<'s>>) {
+        let mut curr = expr;
+        let mut indices = Vec::new();
+        while let ExprKind::ArrayIndex { array, index } = &curr.kind {
+            if let Some(idx) = index {
+                indices.push((**idx).clone());
+            }
+            curr = array;
+        }
+        indices.reverse();
+        (curr.clone(), indices)
+    }
+
+    fn lower_isset_operand(&self, operand: &Expr<'s>) -> Result<Expr<'s>, ParseError> {
+        match &operand.kind {
+            ExprKind::Variable(var) => Err(ParseError::new(
+                ParseErrorKind::BareVariableIssetForbidden {
+                    var_name: var.name.to_string(),
+                },
+                operand.span,
+            )),
+            ExprKind::ArrayIndex { .. } => {
+                let (root, indices) = self.unroll_array_indices(operand);
+                let mut curr = root;
+                for (i, idx) in indices.into_iter().enumerate() {
+                    let is_nullsafe = i > 0;
+                    let span = curr.span.merge(idx.span);
+                    curr = Expr::new(
+                        ExprKind::MethodCall {
+                            object: Box::new(curr),
+                            method: Ident::new("get", span),
+                            args: vec![Argument::new(idx, span)],
+                            is_nullsafe,
+                        },
+                        span,
+                    );
+                }
+                let null_expr = Expr::new(ExprKind::Literal(Literal::Null), operand.span);
+                Ok(Expr::new(
+                    ExprKind::Binary {
+                        left: Box::new(curr),
+                        op: BinaryOp::NotEq,
+                        right: Box::new(null_expr),
+                    },
+                    operand.span,
+                ))
+            }
+            ExprKind::PropertyFetch {
+                object,
+                property,
+                ..
+            } => {
+                let nullsafe_prop = Expr::new(
+                    ExprKind::PropertyFetch {
+                        object: object.clone(),
+                        property: property.clone(),
+                        is_nullsafe: true,
+                    },
+                    operand.span,
+                );
+                let null_expr = Expr::new(ExprKind::Literal(Literal::Null), operand.span);
+                Ok(Expr::new(
+                    ExprKind::Binary {
+                        left: Box::new(nullsafe_prop),
+                        op: BinaryOp::NotEq,
+                        right: Box::new(null_expr),
+                    },
+                    operand.span,
+                ))
+            }
+            ExprKind::DynamicPropertyFetch {
+                object,
+                property,
+                ..
+            } => {
+                let nullsafe_prop = Expr::new(
+                    ExprKind::DynamicPropertyFetch {
+                        object: object.clone(),
+                        property: property.clone(),
+                        is_nullsafe: true,
+                    },
+                    operand.span,
+                );
+                let null_expr = Expr::new(ExprKind::Literal(Literal::Null), operand.span);
+                Ok(Expr::new(
+                    ExprKind::Binary {
+                        left: Box::new(nullsafe_prop),
+                        op: BinaryOp::NotEq,
+                        right: Box::new(null_expr),
+                    },
+                    operand.span,
+                ))
+            }
+            _ => {
+                let null_expr = Expr::new(ExprKind::Literal(Literal::Null), operand.span);
+                Ok(Expr::new(
+                    ExprKind::Binary {
+                        left: Box::new(operand.clone()),
+                        op: BinaryOp::NotEq,
+                        right: Box::new(null_expr),
+                    },
+                    operand.span,
+                ))
+            }
+        }
+    }
+
+    fn lower_empty_operand(&self, operand: &Expr<'s>) -> Expr<'s> {
+        match &operand.kind {
+            ExprKind::ArrayIndex { .. } => {
+                let (root, indices) = self.unroll_array_indices(operand);
+                let mut curr = root;
+                for (i, idx) in indices.into_iter().enumerate() {
+                    let is_nullsafe = i > 0;
+                    let span = curr.span.merge(idx.span);
+                    curr = Expr::new(
+                        ExprKind::MethodCall {
+                            object: Box::new(curr),
+                            method: Ident::new("get", span),
+                            args: vec![Argument::new(idx, span)],
+                            is_nullsafe,
+                        },
+                        span,
+                    );
+                }
+                curr
+            }
+            ExprKind::PropertyFetch {
+                object,
+                property,
+                ..
+            } => Expr::new(
+                ExprKind::PropertyFetch {
+                    object: object.clone(),
+                    property: property.clone(),
+                    is_nullsafe: true,
+                },
+                operand.span,
+            ),
+            ExprKind::DynamicPropertyFetch {
+                object,
+                property,
+                ..
+            } => Expr::new(
+                ExprKind::DynamicPropertyFetch {
+                    object: object.clone(),
+                    property: property.clone(),
+                    is_nullsafe: true,
+                },
+                operand.span,
+            ),
+            _ => operand.clone(),
+        }
+    }
+
     /// Parse prefix expressions (null denotation / nud).
     fn parse_prefix(&mut self) -> Result<Expr<'s>, ParseError> {
         let spanned = match self.advance() {
@@ -1057,6 +1212,90 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
+            Token::Isset => {
+                let _open_paren = self.expect(Token::OpenParen)?;
+                let mut isset_exprs = Vec::new();
+                while !self.check(&Token::CloseParen) && !self.is_eof() {
+                    let arg = self.parse_expr_lowest()?;
+                    let lowered = self.lower_isset_operand(&arg)?;
+                    let span = arg.span;
+                    let isset_single = Expr::new(
+                        ExprKind::Isset {
+                            operand: Box::new(arg),
+                            lowered: Box::new(lowered),
+                        },
+                        span,
+                    );
+                    isset_exprs.push(isset_single);
+                    if !self.matches(&Token::Comma) {
+                        break;
+                    }
+                }
+                let close_paren = self.expect(Token::CloseParen)?;
+
+                if isset_exprs.is_empty() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken {
+                            expected: "expression".to_string(),
+                            found: ")".to_string(),
+                        },
+                        close_paren.span,
+                    ));
+                }
+
+                let mut result = isset_exprs.remove(0);
+                for next_isset in isset_exprs {
+                    let span = result.span.merge(next_isset.span);
+                    result = Expr::new(
+                        ExprKind::Binary {
+                            left: Box::new(result),
+                            op: BinaryOp::LogicalAnd,
+                            right: Box::new(next_isset),
+                        },
+                        span,
+                    );
+                }
+                Ok(result)
+            }
+
+            Token::Empty => {
+                let open_paren = self.expect(Token::OpenParen)?;
+                let arg = self.parse_expr_lowest()?;
+                let close_paren = self.expect(Token::CloseParen)?;
+                let full_span = spanned.span.merge(close_paren.span);
+                let lowered = self.lower_empty_operand(&arg);
+                let lowered_span = lowered.span;
+                Ok(Expr::static_call(
+                    "Sys",
+                    "empty",
+                    vec![Argument::new(lowered, lowered_span)],
+                    open_paren.span,
+                    full_span,
+                ))
+            }
+
+            Token::Exit | Token::Die => {
+                let mut args = Vec::new();
+                let mut end_span = spanned.span;
+                if self.matches(&Token::OpenParen) {
+                    if !self.check(&Token::CloseParen) {
+                        let arg_expr = self.parse_expr_lowest()?;
+                        let span = arg_expr.span;
+                        args.push(Argument::new(arg_expr, span));
+                    }
+                    let close_paren = self.expect(Token::CloseParen)?;
+                    end_span = close_paren.span;
+                }
+                let full_span = spanned.span.merge(end_span);
+                Ok(Expr::static_call(
+                    "Sys",
+                    "exit",
+                    args,
+                    spanned.span,
+                    full_span,
+                ))
+            }
+
             token if token.is_type() => {
                 let type_name = token.as_str();
                 Ok(Expr::new(
@@ -1443,6 +1682,22 @@ impl<'s> CombinatorStream<'s> {
                         },
                         span,
                     ))
+                } else if op_tok.token == Token::Identical {
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnsupportedOperator {
+                            op: "===".to_string(),
+                            suggested: "==".to_string(),
+                        },
+                        op_tok.span,
+                    ));
+                } else if op_tok.token == Token::NotIdentical {
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnsupportedOperator {
+                            op: "!==".to_string(),
+                            suggested: "!=".to_string(),
+                        },
+                        op_tok.span,
+                    ));
                 } else if let Some(bin_op) = to_binary_op(&op_tok.token) {
                     let right = self.parse_expr(right_bp)?;
                     let span = left.span.merge(right.span);
@@ -1750,9 +2005,7 @@ fn to_binary_op(token: &Token<'_>) -> Option<BinaryOp> {
         Token::ShiftLeft => Some(BinaryOp::Shl),
         Token::ShiftRight => Some(BinaryOp::Shr),
         Token::Equal => Some(BinaryOp::Eq),
-        Token::Identical => Some(BinaryOp::Identical),
         Token::NotEqual | Token::NotEqualAlt => Some(BinaryOp::NotEq),
-        Token::NotIdentical => Some(BinaryOp::NotIdentical),
         Token::LessThan => Some(BinaryOp::Lt),
         Token::GreaterThan => Some(BinaryOp::Gt),
         Token::LessThanOrEqual => Some(BinaryOp::LtEq),

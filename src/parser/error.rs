@@ -81,6 +81,27 @@ pub enum ParseErrorKind {
         message: String,
     },
 
+    #[error("Unsupported operator '{op}'. RHP does not support '{op}'. Use '{suggested}' instead for strict comparison.")]
+    UnsupportedOperator {
+        op: String,
+        suggested: String,
+    },
+
+    #[error("Compile Error: isset() cannot be used on bare variable '{var_name}'. In RHP, undefined variables are compile errors; restrict isset() to array access, property access, or nullable expressions.")]
+    BareVariableIssetForbidden {
+        var_name: String,
+    },
+
+    #[error("Compile Error: Cannot unset object variable '{var_name}': removing objects via unset() is forbidden.")]
+    CannotUnsetObject {
+        var_name: String,
+    },
+
+    #[error("Compile Error: Invalid unset target: {reason}")]
+    InvalidUnsetTarget {
+        reason: String,
+    },
+
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 }

@@ -780,6 +780,69 @@ impl fmt::Debug for VmFuture {
     }
 }
 
+/// Count the number of fractional decimal digits (decimal point precision) in a float's decimal representation.
+pub fn count_float_decimal_places(s: &str) -> usize {
+    let s = s.trim();
+    if let Some(pos) = s.find(['e', 'E']) {
+        let (mantissa, exp_str) = s.split_at(pos);
+        let exp: i32 = exp_str[1..].parse().unwrap_or(0);
+        let mantissa_dec = mantissa
+            .find('.')
+            .map_or(0, |dot| mantissa.len().saturating_sub(dot + 1));
+        if exp < 0 {
+            mantissa_dec + (exp.unsigned_abs() as usize)
+        } else {
+            mantissa_dec.saturating_sub(exp as usize)
+        }
+    } else if let Some(dot) = s.find('.') {
+        s.len().saturating_sub(dot + 1)
+    } else {
+        0
+    }
+}
+
+/// Compare two float values by checking the maximum decimal point on both sides
+/// and then comparing both values to that maximum decimal point.
+pub fn compare_floats_by_max_decimal_point(
+    v1: f64,
+    s1: &str,
+    v2: f64,
+    s2: &str,
+) -> bool {
+    if v1.is_nan() || v2.is_nan() {
+        return false;
+    }
+    if v1.is_infinite() || v2.is_infinite() {
+        return v1 == v2;
+    }
+    // +0.0 and -0.0 are strictly equal
+    if v1 == 0.0 && v2 == 0.0 {
+        return true;
+    }
+
+    let d1 = count_float_decimal_places(s1);
+    let d2 = count_float_decimal_places(s2);
+    let max_decimals = d1.max(d2).min(100);
+
+    // Format both numbers to `max_decimals` decimal places
+    let str1 = format!("{:.prec$}", v1, prec = max_decimals);
+    let str2 = format!("{:.prec$}", v2, prec = max_decimals);
+
+    // Normalize "-0.00..." vs "0.00..."
+    let clean1 = if str1.starts_with('-') && str1[1..].chars().all(|c| c == '0' || c == '.') {
+        &str1[1..]
+    } else {
+        &str1
+    };
+    let clean2 = if str2.starts_with('-') && str2[1..].chars().all(|c| c == '0' || c == '.') {
+        &str2[1..]
+    } else {
+        &str2
+    };
+
+    clean1 == clean2
+}
+
 impl PhpValue {
     // =========================================================================
     // Constructors & Factories
@@ -1183,14 +1246,23 @@ impl PhpValue {
     // Strict & Loose Equality
     // =========================================================================
 
-    /// Strict equality comparison (`===`):
+    /// Strict equality comparison (`==` and `!=`):
     /// Returns `true` if and only if types and values strictly match without type coercion.
+    /// When comparing floats, checks the maximum decimal point on both sides and compares
+    /// both sides to that maximum decimal point for accurate representation.
     pub fn strict_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Null, Self::Null) => true,
             (Self::Bool(x), Self::Bool(y)) => x == y,
             (Self::Int(x), Self::Int(y)) => x == y,
-            (Self::Float(x), Self::Float(y)) => x == y,
+            (Self::Float(x), Self::Float(y)) => {
+                compare_floats_by_max_decimal_point(
+                    *x as f64,
+                    &x.to_string(),
+                    *y as f64,
+                    &y.to_string(),
+                )
+            }
             (
                 Self::RustInt {
                     kind: k1,
@@ -1210,7 +1282,41 @@ impl PhpValue {
                     kind: k2,
                     value: v2,
                 },
-            ) => k1 == k2 && v1 == v2,
+            ) => {
+                let s1 = if *k1 == RustFloatKind::F32 {
+                    (*v1 as f32).to_string()
+                } else {
+                    v1.to_string()
+                };
+                let s2 = if *k2 == RustFloatKind::F32 {
+                    (*v2 as f32).to_string()
+                } else {
+                    v2.to_string()
+                };
+                compare_floats_by_max_decimal_point(*v1, &s1, *v2, &s2)
+            }
+            (
+                Self::Float(x),
+                Self::RustFloat { kind, value: v2 },
+            ) => {
+                let s2 = if *kind == RustFloatKind::F32 {
+                    (*v2 as f32).to_string()
+                } else {
+                    v2.to_string()
+                };
+                compare_floats_by_max_decimal_point(*x as f64, &x.to_string(), *v2, &s2)
+            }
+            (
+                Self::RustFloat { kind, value: v1 },
+                Self::Float(y),
+            ) => {
+                let s1 = if *kind == RustFloatKind::F32 {
+                    (*v1 as f32).to_string()
+                } else {
+                    v1.to_string()
+                };
+                compare_floats_by_max_decimal_point(*v1, &s1, *y as f64, &y.to_string())
+            }
             (Self::String(x), Self::String(y)) => x == y,
             (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
                 let a = x.borrow();
@@ -1803,15 +1909,48 @@ impl PartialEq for PhpValue {
             (Self::Null, Self::Null) => true,
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Int(a), Self::Int(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => {
+                compare_floats_by_max_decimal_point(
+                    *a as f64,
+                    &a.to_string(),
+                    *b as f64,
+                    &b.to_string(),
+                )
+            }
             (Self::Int(a), Self::Float(b)) => (*a as f32) == *b,
             (Self::Float(a), Self::Int(b)) => *a == (*b as f32),
             (Self::RustInt { value: a, .. }, Self::RustInt { value: b, .. }) => a == b,
             (Self::RustInt { value: a, .. }, Self::Int(b)) => *a == (*b as i128),
             (Self::Int(a), Self::RustInt { value: b, .. }) => (*a as i128) == *b,
-            (Self::RustFloat { value: a, .. }, Self::RustFloat { value: b, .. }) => a == b,
-            (Self::RustFloat { value: a, .. }, Self::Float(b)) => (*a as f32) == *b,
-            (Self::Float(a), Self::RustFloat { value: b, .. }) => *a == (*b as f32),
+            (Self::RustFloat { kind: k1, value: a }, Self::RustFloat { kind: k2, value: b }) => {
+                let s1 = if *k1 == RustFloatKind::F32 {
+                    (*a as f32).to_string()
+                } else {
+                    a.to_string()
+                };
+                let s2 = if *k2 == RustFloatKind::F32 {
+                    (*b as f32).to_string()
+                } else {
+                    b.to_string()
+                };
+                compare_floats_by_max_decimal_point(*a, &s1, *b, &s2)
+            }
+            (Self::RustFloat { kind, value: a }, Self::Float(b)) => {
+                let s1 = if *kind == RustFloatKind::F32 {
+                    (*a as f32).to_string()
+                } else {
+                    a.to_string()
+                };
+                compare_floats_by_max_decimal_point(*a, &s1, *b as f64, &b.to_string())
+            }
+            (Self::Float(a), Self::RustFloat { kind, value: b }) => {
+                let s2 = if *kind == RustFloatKind::F32 {
+                    (*b as f32).to_string()
+                } else {
+                    b.to_string()
+                };
+                compare_floats_by_max_decimal_point(*a as f64, &a.to_string(), *b, &s2)
+            }
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Array(a) | Self::List(a), Self::Array(b) | Self::List(b)) => {
                 *a.borrow() == *b.borrow()

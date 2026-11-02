@@ -360,4 +360,19 @@ pub enum TypeErrorKind {
         trait_name: String,
         method_name: String,
     },
+
+    #[error("Type Error: Redundant isset() check: operand of type '{operand_type}' is non-nullable and can never be null or missing.")]
+    RedundantIssetCheck {
+        operand_type: String,
+    },
+
+    #[error("Compile Error: Cannot unset object variable '{var_name}': removing objects via unset() is forbidden.")]
+    CannotUnsetObject {
+        var_name: String,
+    },
+
+    #[error("Compile Error: isset() cannot be used on bare variable '{var_name}'. In RHP, undefined variables are compile errors; restrict isset() to array access, property access, or nullable expressions.")]
+    BareVariableIssetForbidden {
+        var_name: String,
+    },
 }

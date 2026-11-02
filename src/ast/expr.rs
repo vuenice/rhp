@@ -229,6 +229,12 @@ pub enum ExprKind<'s> {
 
     /// Parenthesized grouping `(expr)`.
     Grouping(Box<Expr<'s>>),
+
+    /// Special language construct `isset($arg)` with tracked operand and lowered condition.
+    Isset {
+        operand: Box<Expr<'s>>,
+        lowered: Box<Expr<'s>>,
+    },
 }
 
 /// Primitive literal representations.

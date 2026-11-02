@@ -227,7 +227,7 @@ fn test_loop_with_continue() {
         $i = 0;
         loop {
             $i++;
-            if ($i % 2 === 0) continue;
+            if ($i % 2 == 0) continue;
             if ($i > 10) break;
             $sum += $i;
         }
@@ -243,7 +243,7 @@ fn test_break_and_continue_in_for_in_loop() {
     let source = r#"
         $sum = 0;
         for ($i in [0..20]) {
-            if ($i % 2 !== 0) continue;
+            if ($i % 2 != 0) continue;
             if ($i >= 10) break;
             $sum += $i;
         }

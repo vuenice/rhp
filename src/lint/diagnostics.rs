@@ -22,9 +22,13 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
     let program = match parse(source) {
         Ok(p) => p,
         Err(parse_err) => {
+            let code = match &parse_err.kind {
+                crate::parser::error::ParseErrorKind::UnsupportedOperator { .. } => "unsupported-operator",
+                _ => "parse-error",
+            };
             issues.push(Issue::new(
                 IssueLevel::Error,
-                "parse-error",
+                code,
                 parse_err.to_string(),
                 file_name,
                 parse_err.span.line,
@@ -485,6 +489,9 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::AbstractMethodCannotBePrivate { .. } => "abstract-method-cannot-be-private",
         TypeErrorKind::UnimplementedAbstractMethod { .. } => "unimplemented-abstract-method",
         TypeErrorKind::TraitAbstractMethodUnimplemented { .. } => "trait-abstract-method-unimplemented",
+        TypeErrorKind::RedundantIssetCheck { .. } => "redundant-isset-check",
+        TypeErrorKind::CannotUnsetObject { .. } => "cannot-unset-object",
+        TypeErrorKind::BareVariableIssetForbidden { .. } => "bare-variable-isset-forbidden",
     }
 }
 

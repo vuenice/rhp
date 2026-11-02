@@ -711,6 +711,59 @@ fn test_vm_runtime_type_casting_and_collection_boundary_contracts() {
         Some(&PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]))
     );
 }
+#[test]
+fn test_php_fidelity_dot_concat_and_plus_arithmetic() {
+    let source = r#"
+        // 1. Dot concatenation (always string)
+        $concat1 = "10" . "20";
+        $concat2 = 5 . 5;
+        $concat3 = "User: " . 42;
 
+        // 2. Plus arithmetic (+ is strictly arithmetic addition, never string concatenation)
+        $add1 = 10 + 20;
+        $add2 = 15 + 25;
 
+        // 3. Concat assignment (.=) and Add assignment (+=)
+        $msg = "hello";
+        $msg .= " world";
 
+        $counter = 10;
+        $counter += 5;
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("PHP fidelity operators must execute cleanly");
+    assert_eq!(vm.get_main_variable("$concat1"), Some(&PhpValue::string("1020")));
+    assert_eq!(vm.get_main_variable("$concat2"), Some(&PhpValue::string("55")));
+    assert_eq!(vm.get_main_variable("$concat3"), Some(&PhpValue::string("User: 42")));
+
+    assert_eq!(vm.get_main_variable("$add1"), Some(&PhpValue::Int(30)));
+    assert_eq!(vm.get_main_variable("$add2"), Some(&PhpValue::Int(40)));
+
+    assert_eq!(vm.get_main_variable("$msg"), Some(&PhpValue::string("hello world")));
+    assert_eq!(vm.get_main_variable("$counter"), Some(&PhpValue::Int(15)));
+}
+
+#[test]
+fn test_php_fidelity_strict_equality() {
+    let source = r#"
+        $intSame = (10 == 10);
+        $intDiff = (10 != 20);
+        $strSame = ("hello" == "hello");
+        $strDiff = ("hello" != "world");
+
+        $intLooseSame = Int::compare(10, "10");
+        $boolLooseZero = Bool::compare(0, false);
+        $boolLooseNull = Bool::compare(null, false);
+        $strLooseSame = Str::compare("hello", "hello");
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Strict equality and helper comparison must execute cleanly");
+    assert_eq!(vm.get_main_variable("$intSame"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$intDiff"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$strSame"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$strDiff"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$intLooseSame"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$boolLooseZero"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$boolLooseNull"), Some(&PhpValue::Bool(true)));
+    assert_eq!(vm.get_main_variable("$strLooseSame"), Some(&PhpValue::Bool(true)));
+}

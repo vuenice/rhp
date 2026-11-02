@@ -141,6 +141,12 @@ impl TypeEnvironment {
         self.vars.get(&key)
     }
 
+    /// Remove a variable binding from the scope (`unset($var)`).
+    pub fn unset(&mut self, name: &str) -> Option<VariableBinding> {
+        let key = normalize_var_name(name.to_string());
+        self.vars.remove(&key)
+    }
+
     /// Export all variable bindings as a map of `variable_name -> RhpType`.
     pub fn snapshot_types(&self) -> HashMap<String, RhpType> {
         self.vars
@@ -205,11 +211,13 @@ pub fn resolve_facade_static_call(
                 let kind = RustIntKind::from_name(method).unwrap_or(RustIntKind::I32);
                 Ok(RhpType::RustInt(kind))
             }
+            "compare" => Ok(RhpType::Bool),
             "random" | "max" | "min" | "abs" | "clamp" => Ok(RhpType::Int),
             _ => Ok(RhpType::Int),
         },
 
         "Float" => match method {
+            "compare" => Ok(RhpType::Bool),
             "f32" => {
                 if let Some(first_arg) = arg_types.first() {
                     if !first_arg.is_assignable_to(&RhpType::Float, hierarchy) {
@@ -247,7 +255,13 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Float),
         },
 
-        "Arr" => match method {
+        "Bool" => Ok(RhpType::Bool),
+
+        "Arr" | "Array" => match method {
+            "compareJson" | "compareRef" | "compareJoined" | "compareUnordered"
+            | "jsonCompare" | "compareByJson" | "sameRef" | "compareAddress" | "compareMemory"
+            | "compareToString" | "compareImplode" | "compareJoin"
+            | "compareValuesUnordered" | "compareIgnoreOrder" | "unorderedCompare" => Ok(RhpType::Bool),
             "list" => {
                 let elem_ty = arg_types
                     .first()
@@ -308,7 +322,7 @@ pub fn resolve_facade_static_call(
         },
 
         "Str" => match method {
-            "check" => Ok(RhpType::Bool),
+            "check" | "compare" => Ok(RhpType::Bool),
             "slug" => {
                 check_arg_type(
                     "Str::slug",

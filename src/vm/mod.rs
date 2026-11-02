@@ -51,12 +51,12 @@ pub use exception::{
     root_cause, Frame, RawFrame, Throwable, BUILTIN_THROWABLE_PARENTS,
 };
 pub use facade::{
-    append_log, clear_log_history, clear_request_context, clear_runtime_closure_macros, clear_tier2_plugins,
+    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_runtime_closure_macros, clear_tier2_plugins,
     dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,
     extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
     has_runtime_closure_macro, has_tier2_plugin, init_cookie_data, init_request_params, init_session_data,
-    parse_json_value, register_runtime_closure_macro, register_tier2_plugin, register_tier2_plugin_handler,
-    FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
+    parse_json_value, php_value_is_empty, register_runtime_closure_macro, register_tier2_plugin, register_tier2_plugin_handler,
+    set_exit_hook, FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
 };
 pub use fiber::{
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, enter_fiber,
@@ -141,6 +141,15 @@ impl Environment {
         } else {
             let norm = format!("${}", name);
             self.vars.get(&norm)
+        }
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<PhpValue> {
+        if name.starts_with('$') {
+            self.vars.remove(name)
+        } else {
+            let norm = format!("${}", name);
+            self.vars.remove(&norm)
         }
     }
 }
@@ -260,8 +269,8 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     lhs.to_php_string(),
                     rhs.to_php_string()
                 ))),
-                BinaryOp::Eq => Ok(PhpValue::Bool(lhs.loose_eq(&rhs))),
-                BinaryOp::NotEq => Ok(PhpValue::Bool(!lhs.loose_eq(&rhs))),
+                BinaryOp::Eq => Ok(PhpValue::Bool(lhs.strict_eq(&rhs))),
+                BinaryOp::NotEq => Ok(PhpValue::Bool(!lhs.strict_eq(&rhs))),
                 BinaryOp::Identical => Ok(PhpValue::Bool(lhs.strict_eq(&rhs))),
                 BinaryOp::NotIdentical => Ok(PhpValue::Bool(!lhs.strict_eq(&rhs))),
                 BinaryOp::Lt => Ok(PhpValue::Bool(lhs < rhs)),
@@ -328,6 +337,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             })?;
             VM::new(chunk, false).run()
         }
+        ExprKind::Isset { lowered, .. } => eval_expr(lowered, env),
         _ => {
             let chunk = compile_to_bytecode(node).map_err(|e| {
                 RuntimeError::new(

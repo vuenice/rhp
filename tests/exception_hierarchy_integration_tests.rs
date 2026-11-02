@@ -45,8 +45,8 @@ fn test_exception_instantiation_site_captured_not_thrown() {
         }
 
         return [
-            'line_match' => $line_at_create === $caught_line,
-            'file_match' => $file_at_create === $caught_file,
+            'line_match' => $line_at_create == $caught_line,
+            'file_match' => $file_at_create == $caught_file,
             'file' => $caught_file,
             'line' => $caught_line
         ];
@@ -78,7 +78,7 @@ fn test_exception_previous_chaining() {
         $prev_of_e3 = $e3->getPrevious();
 
         return [
-            'e1_prev_is_null' => $prev_of_e1 === null,
+            'e1_prev_is_null' => $prev_of_e1 == null,
             'e2_prev_msg' => $prev_of_e2->getMessage(),
             'e2_prev_code' => $prev_of_e2->getCode(),
             'e3_prev_msg' => $prev_of_e3->getMessage(),
@@ -422,7 +422,7 @@ fn test_tostring_and_string_cast_representation() {
         $to_str = $e->__toString();
 
         return [
-            'matches' => $as_str === $to_str,
+            'matches' => $as_str == $to_str,
             'has_class' => str_contains($as_str, 'Exception: formatted output error'),
             'has_stack_trace' => str_contains($as_str, 'Stack trace:'),
             'has_main' => str_contains($as_str, '{main}'),
@@ -452,17 +452,17 @@ fn test_source_root_cause_and_chain_primary_and_alias_methods() {
         // 1. source() is primary, getPrevious() is alias
         $src = $e3->source();
         $prev = $e3->getPrevious();
-        $src_matches_prev = ($src->getMessage() === $prev->getMessage());
+        $src_matches_prev = ($src->getMessage() == $prev->getMessage());
 
         // 2. rootCause() is primary, getRootCause() is alias
         $root = $e3->rootCause();
         $get_root = $e3->getRootCause();
-        $root_matches_get_root = ($root->getMessage() === $get_root->getMessage());
-        $root_is_e1 = ($root->getMessage() === "root cause error" && $root->getCode() === 1);
+        $root_matches_get_root = ($root->getMessage() == $get_root->getMessage());
+        $root_is_e1 = ($root->getMessage() == "root cause error" && $root->getCode() == 1);
 
         // Standalone exception with no previous: rootCause() is itself
         $e1_root = $e1->rootCause();
-        $e1_root_is_self = ($e1_root->getMessage() === "root cause error");
+        $e1_root_is_self = ($e1_root->getMessage() == "root cause error");
 
         // 3. chain() is primary, getChain() is alias
         $chain_list = $e3->chain();

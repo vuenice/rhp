@@ -552,11 +552,11 @@ fn format_line_spacing(line: &str) -> String {
             continue;
         }
 
-        // Strict comparison `===` and `!==`
+        // Convert `===` and `!==` to `==` and `!=`
         if (c == '=' || c == '!') && i + 2 < n && chars[i + 1] == '=' && chars[i + 2] == '=' {
             ensure_space_before(&mut output);
             output.push(c);
-            output.push_str("== ");
+            output.push_str("= ");
             i += 3;
             while i < n && (chars[i] == ' ' || chars[i] == '\t') {
                 i += 1;
@@ -1073,7 +1073,7 @@ fn is_valid_trailing_op(trimmed: &str, before_op: &str, op: &str) -> bool {
             }
         }
         "/" => {
-            if trimmed.ends_with("//") || trimmed.ends_with("/*") {
+            if trimmed.ends_with("//") || trimmed.ends_with("/*") || trimmed.ends_with("*/") {
                 return false;
             }
         }

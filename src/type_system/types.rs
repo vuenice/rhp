@@ -463,6 +463,15 @@ impl RhpType {
         }
     }
 
+    /// Returns true if this type represents an object instance or class type.
+    pub fn is_object_type(&self) -> bool {
+        match self {
+            RhpType::Object | RhpType::Class(_) => true,
+            RhpType::Nullable(inner) => inner.is_object_type(),
+            _ => false,
+        }
+    }
+
     /// Strip `Null` / `Nullable` wrapper to obtain the non-null inner type (used in `?:`, `??`, `?->`).
     pub fn non_null_type(&self) -> RhpType {
         match self {
@@ -789,6 +798,136 @@ impl RhpType {
                     false
                 }
             }
+
+            _ => false,
+        }
+    }
+
+    /// Returns true if two types are strictly comparable (`==` and `!=`).
+    /// In RHP, `==` and `!=` perform strict comparison without implicit type coercion.
+    /// If both sides are known concrete types and are not the same type, comparison is rejected at compile time.
+    pub fn is_strictly_comparable_to(
+        &self,
+        other: &RhpType,
+        hierarchy: Option<&TypeHierarchy>,
+    ) -> bool {
+        if self == other {
+            return true;
+        }
+
+        // Gradual typing: unconstrained dynamic or mixed can be anything at runtime
+        if matches!(self, RhpType::Dynamic | RhpType::Mixed)
+            || matches!(other, RhpType::Dynamic | RhpType::Mixed)
+        {
+            return true;
+        }
+
+        // Null comparison: a type can be compared to Null if it accepts null, or is a reference/object type
+        if matches!(self, RhpType::Null) {
+            return other.accepts_null()
+                || matches!(
+                    other,
+                    RhpType::Class(_)
+                        | RhpType::Object
+                        | RhpType::Intersection(_)
+                        | RhpType::Future(_)
+                        | RhpType::Callable { .. }
+                );
+        }
+        if matches!(other, RhpType::Null) {
+            return self.accepts_null()
+                || matches!(
+                    self,
+                    RhpType::Class(_)
+                        | RhpType::Object
+                        | RhpType::Intersection(_)
+                        | RhpType::Future(_)
+                        | RhpType::Callable { .. }
+                );
+        }
+
+        // Nullable types: ?T can be compared with T or ?T
+        if let RhpType::Nullable(inner) = self {
+            return inner.is_strictly_comparable_to(other, hierarchy);
+        }
+        if let RhpType::Nullable(inner) = other {
+            return self.is_strictly_comparable_to(inner, hierarchy);
+        }
+
+        // Union types: at least one variant must be strictly comparable
+        if let RhpType::Union(variants) = self {
+            return variants
+                .iter()
+                .any(|v| v.is_strictly_comparable_to(other, hierarchy));
+        }
+        if let RhpType::Union(variants) = other {
+            return variants
+                .iter()
+                .any(|v| self.is_strictly_comparable_to(v, hierarchy));
+        }
+
+        // Class hierarchies:
+        match (self, other) {
+            (RhpType::Class(c1), RhpType::Class(c2)) => {
+                let s1 = c1.strip_prefix('\\').unwrap_or(c1);
+                let s2 = c2.strip_prefix('\\').unwrap_or(c2);
+                if s1 == s2 {
+                    return true;
+                }
+                if let Some(h) = hierarchy {
+                    h.is_subtype_of(s1, s2)
+                        || h.is_subtype_of(s2, s1)
+                } else {
+                    false
+                }
+            }
+            (RhpType::Object, RhpType::Class(_)) | (RhpType::Class(_), RhpType::Object) => true,
+
+            // Sequential Arrays / Collections:
+            (RhpType::Array(e1), RhpType::Array(e2)) => {
+                e1.is_strictly_comparable_to(e2, hierarchy)
+            }
+            (
+                RhpType::Collection(CollectionSubtype::List(e1)),
+                RhpType::Collection(CollectionSubtype::List(e2)),
+            ) => e1.is_strictly_comparable_to(e2, hierarchy),
+            (RhpType::Array(e1), RhpType::Collection(CollectionSubtype::List(e2)))
+            | (RhpType::Collection(CollectionSubtype::List(e1)), RhpType::Array(e2)) => {
+                e1.is_strictly_comparable_to(e2, hierarchy)
+            }
+            (RhpType::Tuple(_), RhpType::Array(_)) | (RhpType::Array(_), RhpType::Tuple(_)) => true,
+            (RhpType::Tuple(_), RhpType::Collection(CollectionSubtype::List(_)))
+            | (RhpType::Collection(CollectionSubtype::List(_)), RhpType::Tuple(_)) => true,
+            (RhpType::Tuple(t1), RhpType::Tuple(t2)) => {
+                t1.len() == t2.len()
+                    && t1
+                        .iter()
+                        .zip(t2.iter())
+                        .all(|(a, b)| a.is_strictly_comparable_to(b, hierarchy))
+            }
+
+            // Keyed collections:
+            (
+                RhpType::Collection(CollectionSubtype::Dict(v1)),
+                RhpType::Collection(CollectionSubtype::Dict(v2)),
+            ) => v1.is_strictly_comparable_to(v2, hierarchy),
+            (
+                RhpType::Collection(CollectionSubtype::Set(e1)),
+                RhpType::Collection(CollectionSubtype::Set(e2)),
+            ) => e1.is_strictly_comparable_to(e2, hierarchy),
+            (
+                RhpType::Collection(CollectionSubtype::HashMap(k1, v1)),
+                RhpType::Collection(CollectionSubtype::HashMap(k2, v2)),
+            ) => {
+                k1.is_strictly_comparable_to(k2, hierarchy)
+                    && v1.is_strictly_comparable_to(v2, hierarchy)
+            }
+
+            // Rust numeric types:
+            (RhpType::RustInt(k1), RhpType::RustInt(k2)) => k1 == k2,
+            (RhpType::Int, RhpType::RustInt(_)) | (RhpType::RustInt(_), RhpType::Int) => true,
+            (RhpType::RustFloat(_), RhpType::RustFloat(_)) => true,
+            (RhpType::Float, RhpType::RustFloat(_)) | (RhpType::RustFloat(_), RhpType::Float) => true,
 
             _ => false,
         }

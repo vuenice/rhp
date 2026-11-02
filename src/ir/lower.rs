@@ -6,7 +6,7 @@ use crate::ast::{
         ClassDecl, ClassMemberKind, EnumDecl, FunctionDecl, InterfaceDecl, Param, Stmt, StmtKind,
         SwitchCase, TraitAdaptation, TraitDecl,
     },
-    types::{CastType, TypeHint, Visibility},
+    types::{CastType, Ident, TypeHint, Visibility},
     Program,
 };
 use crate::ir::{
@@ -1191,6 +1191,39 @@ impl<'a> IrLowerer<'a> {
                 });
 
                 b.emit(OpCode::Defer { func_id }, stmt.span);
+                Ok(())
+            }
+
+            StmtKind::Unset(exprs) => {
+                for expr in exprs {
+                    match &expr.kind {
+                        ExprKind::Variable(var) => {
+                            let norm = normalize_var_name(var.name);
+                            let reg = b.get_or_alloc_local(&norm, None, false, false, stmt.span)?;
+                            b.emit(OpCode::LoadNull { dst: reg }, stmt.span);
+                            if b.globals.contains(&norm) {
+                                let name_const = b.intern_string(&norm);
+                                b.emit(OpCode::StoreGlobal { src: reg, name: name_const }, stmt.span);
+                            }
+                        }
+                        ExprKind::ArrayIndex { array, index: Some(idx) } => {
+                            let call_span = expr.span;
+                            let remove_expr = Expr::new(
+                                ExprKind::MethodCall {
+                                    object: array.clone(),
+                                    method: Ident::new("remove", call_span),
+                                    args: vec![Argument::new((**idx).clone(), call_span)],
+                                    is_nullsafe: false,
+                                },
+                                call_span,
+                            );
+                            self.lower_expr(b, &remove_expr, None)?;
+                        }
+                        _ => {
+                            self.lower_expr(b, expr, None)?;
+                        }
+                    }
+                }
                 Ok(())
             }
         }
@@ -2506,6 +2539,10 @@ impl<'a> IrLowerer<'a> {
                     expr.span,
                 );
                 Ok(dst)
+            }
+
+            ExprKind::Isset { lowered, .. } => {
+                self.lower_expr(b, lowered, target_reg)
             }
         }
     }
@@ -4544,6 +4581,9 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
             if let Some(v) = value {
                 collect_expr_variables(v, out);
             }
+        }
+        ExprKind::Isset { lowered, .. } => {
+            collect_expr_variables(lowered, out);
         }
         ExprKind::Literal(_)
         | ExprKind::Ident(_)

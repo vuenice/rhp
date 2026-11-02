@@ -201,7 +201,7 @@ pub fn walk_stmt<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, stmt: &Stmt<'s
             }
         }
         StmtKind::Use(_) | StmtKind::RustImport { .. } | StmtKind::Global(_) => {}
-        StmtKind::Echo(exprs) => {
+        StmtKind::Echo(exprs) | StmtKind::Unset(exprs) => {
             for e in exprs {
                 visitor.visit_expr(e);
             }
@@ -343,6 +343,10 @@ pub fn walk_expr<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, expr: &Expr<'s
         }
         ExprKind::Clone(e) | ExprKind::Await(e) | ExprKind::Grouping(e) => {
             visitor.visit_expr(e);
+        }
+        ExprKind::Isset { operand, lowered } => {
+            visitor.visit_expr(operand);
+            visitor.visit_expr(lowered);
         }
         ExprKind::Instanceof { expr, class } => {
             visitor.visit_expr(expr);

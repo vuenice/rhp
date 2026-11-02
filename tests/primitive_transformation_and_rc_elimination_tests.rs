@@ -239,7 +239,7 @@ fn test_script_execution_with_cased_and_primitive_hints() {
                 return 0.0;
             }
             float $res = float($count) * $rate;
-            if ($fallback !== null) {
+            if ($fallback != null) {
                 $res = $res + float($fallback);
             }
             return $res;

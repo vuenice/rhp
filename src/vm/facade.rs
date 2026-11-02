@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -304,8 +305,9 @@ pub fn dispatch_facade_call(
     }
 
     let result = match facade {
+        "Bool" => dispatch_bool(method, args),
         "Str" => dispatch_str(method, args),
-        "Arr" => dispatch_arr(method, args),
+        "Arr" | "Array" => dispatch_arr(method, args),
         "Future" => dispatch_future(method, args),
         "Sys" => dispatch_sys(method, args),
         "File" => dispatch_file(method, args),
@@ -350,11 +352,56 @@ pub fn dispatch_facade_call(
 }
 
 // =========================================================================
+// Bool Facade
+// =========================================================================
+
+pub fn to_bool_loose(v: &PhpValue) -> bool {
+    match v {
+        PhpValue::Bool(b) => *b,
+        PhpValue::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => true,
+            "false" | "0" | "no" | "off" | "" => false,
+            _ => v.is_truthy(),
+        },
+        _ => v.is_truthy(),
+    }
+}
+
+fn dispatch_bool(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "compare" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let b1 = to_bool_loose(a);
+            let b2 = to_bool_loose(b);
+            Ok(PhpValue::Bool(b1 == b2))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Bool".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
 // Str Facade
 // =========================================================================
 
 fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "compare" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let case_insensitive = args.get(2).and_then(|v| v.to_bool()).unwrap_or(false);
+            let s1 = a.to_php_string();
+            let s2 = b.to_php_string();
+            let eq = if case_insensitive {
+                s1.eq_ignore_ascii_case(&s2)
+            } else {
+                s1 == s2
+            };
+            Ok(PhpValue::Bool(eq))
+        }
         "check" => {
             let target = match args.first() {
                 Some(PhpValue::String(s)) => s,
@@ -707,6 +754,57 @@ pub fn extract_raw_byte_payload(val: &PhpValue) -> Vec<u8> {
 
 fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "compareJson" | "jsonCompare" | "compareByJson" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            if !is_array_or_collection(a) || !is_array_or_collection(b) {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Array::compareJson() expects array or collection arguments".to_string(),
+                });
+            }
+            let json_a = php_value_to_json_canonical(a);
+            let json_b = php_value_to_json_canonical(b);
+            Ok(PhpValue::Bool(json_a == json_b))
+        }
+        "compareRef" | "sameRef" | "compareAddress" | "compareMemory" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let same = match (a, b) {
+                (PhpValue::Array(x), PhpValue::Array(y))
+                | (PhpValue::List(x), PhpValue::List(y))
+                | (PhpValue::Array(x), PhpValue::List(y))
+                | (PhpValue::List(x), PhpValue::Array(y)) => Rc::ptr_eq(x, y),
+                (PhpValue::Dict(x), PhpValue::Dict(y)) => Rc::ptr_eq(x, y),
+                (PhpValue::Set(x), PhpValue::Set(y)) => Rc::ptr_eq(x, y),
+                (PhpValue::HashMap(x), PhpValue::HashMap(y)) => Rc::ptr_eq(x, y),
+                _ => false,
+            };
+            Ok(PhpValue::Bool(same))
+        }
+        "compareJoined" | "compareToString" | "compareImplode" | "compareJoin" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let delim = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| ",".to_string());
+            if !is_array_or_collection(a) || !is_array_or_collection(b) {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Array::compareJoined() expects array or collection arguments".to_string(),
+                });
+            }
+            let str_a = collection_to_joined_string(a, &delim);
+            let str_b = collection_to_joined_string(b, &delim);
+            Ok(PhpValue::Bool(str_a == str_b))
+        }
+        "compareUnordered" | "compareValuesUnordered" | "compareIgnoreOrder" | "unorderedCompare" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            if !is_list_or_set(a) || !is_list_or_set(b) {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Array::compareUnordered() only supports list and set collections".to_string(),
+                });
+            }
+            let match_res = compare_collections_unordered(a, b);
+            Ok(PhpValue::Bool(match_res))
+        }
         "list" => {
             let items = if args.len() > 1 {
                 args.to_vec()
@@ -1341,8 +1439,84 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
 // Sys Facade
 // =========================================================================
 
+type ExitHook = Box<dyn Fn(i32) + Send + Sync>;
+static EXIT_HOOK: std::sync::Mutex<Option<ExitHook>> = std::sync::Mutex::new(None);
+
+/// Set a custom hook to intercept `exit()` and `die()` calls during testing.
+pub fn set_exit_hook<F>(hook: F)
+where
+    F: Fn(i32) + Send + Sync + 'static,
+{
+    if let Ok(mut guard) = EXIT_HOOK.lock() {
+        *guard = Some(Box::new(hook));
+    }
+}
+
+/// Clear any active exit hook.
+pub fn clear_exit_hook() {
+    if let Ok(mut guard) = EXIT_HOOK.lock() {
+        *guard = None;
+    }
+}
+
+/// Check if a value is empty under RHP semantics (type-aware, non-falsy for 0/0.0/"0").
+pub fn php_value_is_empty(val: &PhpValue) -> bool {
+    match val {
+        PhpValue::Null => true,
+        PhpValue::Bool(b) => !b,
+        PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::RustInt { .. } | PhpValue::RustFloat { .. } => false,
+        PhpValue::String(s) => s.is_empty(),
+        PhpValue::Array(a) | PhpValue::List(a) => a.borrow().is_empty(),
+        PhpValue::Dict(d) => d.borrow().is_empty(),
+        PhpValue::Set(s) => s.borrow().is_empty(),
+        PhpValue::HashMap(m) => m.borrow().is_empty(),
+        _ => false,
+    }
+}
+
+pub fn execute_process_exit(args: &[PhpValue]) -> FacadeResult {
+    let mut exit_code = 0;
+    if let Some(arg) = args.first() {
+        match arg {
+            PhpValue::String(s) => {
+                use std::io::Write;
+                print!("{}", s.as_str());
+                let _ = std::io::stdout().flush();
+                exit_code = 0;
+            }
+            PhpValue::Int(i) => {
+                exit_code = *i;
+            }
+            PhpValue::RustInt { value, .. } => {
+                exit_code = *value as i32;
+            }
+            _ => {
+                exit_code = 0;
+            }
+        }
+    }
+
+    if let Ok(guard) = EXIT_HOOK.lock() {
+        if let Some(ref hook) = *guard {
+            hook(exit_code);
+            return Ok(PhpValue::Int(exit_code));
+        }
+    }
+
+    std::process::exit(exit_code);
+}
+
 fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "isset" => {
+            let is_set = !args.is_empty() && args.iter().all(|a| !matches!(a, PhpValue::Null));
+            Ok(PhpValue::Bool(is_set))
+        }
+        "empty" => {
+            let is_emp = php_value_is_empty(args.first().unwrap_or(&PhpValue::Null));
+            Ok(PhpValue::Bool(is_emp))
+        }
+        "exit" | "die" => execute_process_exit(args),
         "env" => {
             let key = get_arg_str(args, 0, "Sys::env")?;
             match std::env::var(&key) {
@@ -2282,8 +2456,34 @@ fn dispatch_weak(method: &str, args: &[PhpValue]) -> FacadeResult {
     }
 }
 
+pub fn to_int_loose(v: &PhpValue) -> Option<i64> {
+    match v {
+        PhpValue::Int(n) => Some(*n as i64),
+        PhpValue::Bool(b) => Some(if *b { 1 } else { 0 }),
+        PhpValue::Float(f) => Some(*f as i64),
+        PhpValue::RustInt { value, .. } => Some(*value as i64),
+        PhpValue::RustFloat { value, .. } => Some(*value as i64),
+        PhpValue::String(s) => {
+            let trimmed = s.trim();
+            trimmed.parse::<i64>().ok().or_else(|| trimmed.parse::<f64>().ok().map(|f| f as i64))
+        }
+        PhpValue::Null => Some(0),
+        _ => None,
+    }
+}
+
 fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "compare" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let i1 = to_int_loose(a);
+            let i2 = to_int_loose(b);
+            match (i1, i2) {
+                (Some(v1), Some(v2)) => Ok(PhpValue::Bool(v1 == v2)),
+                _ => Ok(PhpValue::Bool(false)),
+            }
+        }
         "i64" => {
             let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
             Ok(PhpValue::RustInt {
@@ -2376,8 +2576,49 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
     }
 }
 
+pub fn to_float_loose(v: &PhpValue) -> Option<f64> {
+    match v {
+        PhpValue::Float(f) => Some(*f as f64),
+        PhpValue::Int(n) => Some(*n as f64),
+        PhpValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        PhpValue::RustInt { value, .. } => Some(*value as f64),
+        PhpValue::RustFloat { value, .. } => Some(*value),
+        PhpValue::String(s) => s.trim().parse::<f64>().ok(),
+        PhpValue::Null => Some(0.0),
+        _ => None,
+    }
+}
+
 fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "compare" => {
+            let a = args.get(0).unwrap_or(&PhpValue::Null);
+            let b = args.get(1).unwrap_or(&PhpValue::Null);
+            let epsilon = args.get(2).and_then(|v| v.to_f64());
+            let f1 = to_float_loose(a);
+            let f2 = to_float_loose(b);
+            match (f1, f2) {
+                (Some(v1), Some(v2)) => {
+                    let eq = if let Some(eps) = epsilon {
+                        (v1 - v2).abs() <= eps.abs()
+                    } else {
+                        let s1 = if let PhpValue::Float(f) = a {
+                            f.to_string()
+                        } else {
+                            v1.to_string()
+                        };
+                        let s2 = if let PhpValue::Float(f) = b {
+                            f.to_string()
+                        } else {
+                            v2.to_string()
+                        };
+                        crate::vm::value::compare_floats_by_max_decimal_point(v1, &s1, v2, &s2)
+                    };
+                    Ok(PhpValue::Bool(eq))
+                }
+                _ => Ok(PhpValue::Bool(false)),
+            }
+        }
         "f64" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
             Ok(PhpValue::RustFloat {
@@ -3879,6 +4120,140 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
             format!("{{{}}}", entries.join(","))
         }
         _ => "null".to_string(),
+    }
+}
+
+pub fn is_array_or_collection(v: &PhpValue) -> bool {
+    matches!(
+        v,
+        PhpValue::Array(_)
+            | PhpValue::List(_)
+            | PhpValue::Dict(_)
+            | PhpValue::Set(_)
+            | PhpValue::HashMap(_)
+    )
+}
+
+pub fn is_list_or_set(v: &PhpValue) -> bool {
+    matches!(v, PhpValue::Array(_) | PhpValue::List(_) | PhpValue::Set(_))
+}
+
+pub fn collection_to_joined_string(val: &PhpValue, delim: &str) -> String {
+    match val {
+        PhpValue::Array(a) | PhpValue::List(a) => {
+            let items: Vec<String> = a.borrow().iter().map(|v| v.to_php_string()).collect();
+            items.join(delim)
+        }
+        PhpValue::Set(s) => {
+            let items: Vec<String> = s.borrow().iter().map(|v| v.to_php_string()).collect();
+            items.join(delim)
+        }
+        PhpValue::Dict(d) => {
+            let items: Vec<String> = d.borrow().values().map(|v| v.to_php_string()).collect();
+            items.join(delim)
+        }
+        PhpValue::HashMap(m) => {
+            let items: Vec<String> = m.borrow().values().map(|v| v.to_php_string()).collect();
+            items.join(delim)
+        }
+        _ => val.to_php_string(),
+    }
+}
+
+pub fn compare_collections_unordered(a: &PhpValue, b: &PhpValue) -> bool {
+    match (a, b) {
+        (PhpValue::Set(s1), PhpValue::Set(s2)) => *s1.borrow() == *s2.borrow(),
+        (PhpValue::Array(l1), PhpValue::Array(l2))
+        | (PhpValue::List(l1), PhpValue::List(l2))
+        | (PhpValue::Array(l1), PhpValue::List(l2))
+        | (PhpValue::List(l1), PhpValue::Array(l2)) => {
+            let vec1 = l1.borrow();
+            let vec2 = l2.borrow();
+            if vec1.len() != vec2.len() {
+                return false;
+            }
+            let mut remaining: Vec<&PhpValue> = vec2.iter().collect();
+            for item1 in vec1.iter() {
+                if let Some(pos) = remaining.iter().position(|item2| item1.strict_eq(item2)) {
+                    remaining.swap_remove(pos);
+                } else {
+                    return false;
+                }
+            }
+            remaining.is_empty()
+        }
+        (PhpValue::Set(s), PhpValue::Array(l))
+        | (PhpValue::Set(s), PhpValue::List(l))
+        | (PhpValue::Array(l), PhpValue::Set(s))
+        | (PhpValue::List(l), PhpValue::Set(s)) => {
+            let set = s.borrow();
+            let list = l.borrow();
+            for item in set.iter() {
+                if !list.iter().any(|li| li.strict_eq(item)) {
+                    return false;
+                }
+            }
+            for item in list.iter() {
+                if !set.iter().any(|si| si.strict_eq(item)) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn php_value_to_json_canonical(val: &PhpValue) -> String {
+    match val {
+        PhpValue::Null => "null".to_string(),
+        PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
+        PhpValue::Int(n) => n.to_string(),
+        PhpValue::Float(fl) => fl.to_string(),
+        PhpValue::RustInt { value, .. } => value.to_string(),
+        PhpValue::RustFloat { value, .. } => value.to_string(),
+        PhpValue::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{}\"", escaped)
+        }
+        PhpValue::Array(a) | PhpValue::List(a) => {
+            let items: Vec<String> = a.borrow().iter().map(php_value_to_json_canonical).collect();
+            format!("[{}]", items.join(","))
+        }
+        PhpValue::Set(s) => {
+            let items: Vec<String> = s.borrow().iter().map(php_value_to_json_canonical).collect();
+            format!("[{}]", items.join(","))
+        }
+        PhpValue::Dict(d) => {
+            let borrowed = d.borrow();
+            let mut keys: Vec<&String> = borrowed.keys().collect();
+            keys.sort();
+            let entries: Vec<String> = keys
+                .into_iter()
+                .map(|k| {
+                    let escaped_k = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\":{}", escaped_k, php_value_to_json_canonical(&borrowed[k]))
+                })
+                .collect();
+            format!("{{{}}}", entries.join(","))
+        }
+        PhpValue::HashMap(m) => {
+            let borrowed = m.borrow();
+            let mut entries: Vec<(String, String)> = borrowed
+                .iter()
+                .map(|(k, v)| (k.to_php_string(), php_value_to_json_canonical(v)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let str_entries: Vec<String> = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    let escaped_k = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}\":{}", escaped_k, v)
+                })
+                .collect();
+            format!("{{{}}}", str_entries.join(","))
+        }
+        _ => php_value_to_json(val),
     }
 }
 

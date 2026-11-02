@@ -272,7 +272,7 @@ fn test_uploaded_file_methods_and_file_from_request() {
         $hasFile = Request::hasFile('avatar');
         $reqFile = Request::file('avatar');
 
-        if ($uploaded === null) {{
+        if ($uploaded == null) {{
             return false;
         }}
 

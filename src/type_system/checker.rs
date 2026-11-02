@@ -2111,6 +2111,40 @@ impl TypeChecker {
                 self.check_enum_bodies(enm)?;
                 Ok(false)
             }
+
+            StmtKind::Unset(exprs) => {
+                for expr in exprs {
+                    match &expr.kind {
+                        ExprKind::Variable(var) => {
+                            let var_ty = env.get_type(var.name).unwrap_or(RhpType::Dynamic);
+                            if var_ty.is_object_type() {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::CannotUnsetObject {
+                                        var_name: var.name.to_string(),
+                                    },
+                                    expr.span,
+                                ));
+                            }
+                            env.unset(var.name);
+                        }
+                        ExprKind::ArrayIndex { .. } => {
+                            let _ = self.infer_expr(expr, env, ctx, None)?;
+                        }
+                        _ => {
+                            let ty = self.infer_expr(expr, env, ctx, None)?;
+                            if ty.is_object_type() {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::CannotUnsetObject {
+                                        var_name: "object".to_string(),
+                                    },
+                                    expr.span,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(false)
+            }
         }
     }
 
@@ -3203,6 +3237,56 @@ impl TypeChecker {
                     RhpType::Dynamic
                 }
             }
+
+            ExprKind::Isset { operand, lowered } => {
+                if let ExprKind::Variable(var) = &operand.kind {
+                    return Err(TypeError::new(
+                        TypeErrorKind::BareVariableIssetForbidden {
+                            var_name: var.name.to_string(),
+                        },
+                        operand.span,
+                    ));
+                }
+
+                if let ExprKind::PropertyFetch { object, property, .. } = &operand.kind {
+                    let obj_ty = self.infer_expr(object, env, ctx, None)?;
+                    let base_obj = obj_ty.non_null_type();
+                    if let RhpType::Class(ref cls_name) = base_obj {
+                        let has_magic_isset = self
+                            .result
+                            .hierarchy
+                            .lookup_method(cls_name, "__isset")
+                            .is_some();
+                        if !has_magic_isset {
+                            if let Some(prop) = self.result.hierarchy.lookup_property(cls_name, property.name) {
+                                if !obj_ty.accepts_null() && !prop.rhp_type.accepts_null() {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::RedundantIssetCheck {
+                                            operand_type: prop.rhp_type.to_string(),
+                                        },
+                                        operand.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                } else if !matches!(operand.kind, ExprKind::ArrayIndex { .. }) {
+                    let op_ty = self.infer_expr(operand, env, ctx, None)?;
+                    if !op_ty.accepts_null() {
+                        return Err(TypeError::new(
+                            TypeErrorKind::RedundantIssetCheck {
+                                operand_type: op_ty.to_string(),
+                            },
+                            operand.span,
+                        ));
+                    }
+                } else {
+                    let _ = self.infer_expr(operand, env, ctx, None)?;
+                }
+
+                let _ = self.infer_expr(lowered, env, ctx, None)?;
+                RhpType::Bool
+            }
         };
 
         Ok(self.record_expr_type(expr.span, inferred))
@@ -3400,12 +3484,29 @@ impl TypeChecker {
                 }
             }
 
-            // Comparisons & Equality
-            BinaryOp::Eq
-            | BinaryOp::Identical
-            | BinaryOp::NotEq
-            | BinaryOp::NotIdentical
-            | BinaryOp::Lt
+            // Strict equality & non-equality comparisons
+            BinaryOp::Eq | BinaryOp::NotEq | BinaryOp::Identical | BinaryOp::NotIdentical => {
+                if !left_ty.is_strictly_comparable_to(right_ty, Some(&self.result.hierarchy)) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::InvalidBinaryOperation {
+                            op: match op {
+                                BinaryOp::Eq => "==".to_string(),
+                                BinaryOp::NotEq => "!=".to_string(),
+                                BinaryOp::Identical => "===".to_string(),
+                                BinaryOp::NotIdentical => "!==".to_string(),
+                                _ => op.to_string(),
+                            },
+                            left_type: left_ty.to_string(),
+                            right_type: right_ty.to_string(),
+                        },
+                        span,
+                    ));
+                }
+                Ok(RhpType::Bool)
+            }
+
+            // Relational comparisons
+            BinaryOp::Lt
             | BinaryOp::Gt
             | BinaryOp::LtEq
             | BinaryOp::GtEq => Ok(RhpType::Bool),

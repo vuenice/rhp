@@ -140,6 +140,38 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("class User extends SingletonBase {}"),
         fix: Some("Mark the child class as singleton or use composition instead of inheritance."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0116",
+        title: "Unsupported comparison operator",
+        summary: "The operator '===' or '!==' is not supported in RHP.",
+        explanation: "RHP uses '==' and '!=' for strict type-safe equality. Run 'rhp lint' to automatically convert '===' to '==' and '!==' to '!='.",
+        example: Some("if ($a === $b) {}"),
+        fix: Some("Use '==' or '!=' instead, or run 'rhp lint'."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0117",
+        title: "Bare variable isset() forbidden",
+        summary: "isset() cannot be used on a bare variable.",
+        explanation: "In RHP, undefined variables are compile errors. isset() is restricted to array elements, property access, and nullable expressions. To test if a nullable variable has a value, use '!= null'.",
+        example: Some("if (isset($x)) {}"),
+        fix: Some("Check array index 'isset($arr[\"key\"])', property 'isset($obj->prop)', or use '$x != null'."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0118",
+        title: "Cannot unset object",
+        summary: "Removing an object instance with unset() is forbidden.",
+        explanation: "RHP manages object lifetimes deterministically. Removing an object via unset() is not allowed. Objects are dropped when their scope ends or references fall out of scope.",
+        example: Some("unset($user);"),
+        fix: Some("Let the object fall out of scope or assign null to a nullable reference."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0119",
+        title: "Invalid unset target",
+        summary: "unset() can only be called on variables or array/map elements.",
+        explanation: "unset() removes variables from memory or keys from collections ($arr['key']). It cannot be called on complex expressions or literals.",
+        example: Some("unset(123);"),
+        fix: Some("Pass a variable or an array/map element ($arr['key']) to unset()."),
+    },
 
     // --- 0200 - 0299: Type system & boundary errors ---
     DiagnosticCodeInfo {
@@ -333,6 +365,14 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         explanation: "Circular parent-child object links prevent automatic resource cleanup. Use explicit 'Weak::to(...)' wrappers for back-references.",
         example: Some("$child->parent = $this;"),
         fix: Some("Wrap the back-reference with Weak::to:\n$child->parent = Weak::to($this);"),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0227",
+        title: "Redundant isset() check",
+        summary: "isset() on non-nullable operand is always true.",
+        explanation: "The operand of isset() can never be null or missing because its declared/inferred type is non-nullable. Checking isset() on it is redundant and likely indicates a bug.",
+        example: Some("class User { public string $name; }\nisset($user->name);"),
+        fix: Some("Remove the redundant isset() check or mark the property/variable as nullable (e.g. '?string')."),
     },
 
     // --- 0300 - 0399: OOP & Trait errors ---

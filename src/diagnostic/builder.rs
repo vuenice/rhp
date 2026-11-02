@@ -132,6 +132,39 @@ impl<'a> DiagnosticBuilder<'a> {
                 None,
                 None,
             ),
+            ParseErrorKind::UnsupportedOperator { op, suggested } => (
+                "RHP0116".to_string(),
+                format!(
+                    "unsupported operator '{}'. Use '{}' instead for strict comparison.",
+                    op, suggested
+                ),
+                Some(op.clone()),
+                Some(vec![suggested.clone()]),
+            ),
+            ParseErrorKind::BareVariableIssetForbidden { var_name } => (
+                "RHP0117".to_string(),
+                format!(
+                    "isset() cannot be used on bare variable '{}'. Restrict isset() to array access, property access, or use '!= null'.",
+                    var_name
+                ),
+                Some(var_name.clone()),
+                None,
+            ),
+            ParseErrorKind::CannotUnsetObject { var_name } => (
+                "RHP0118".to_string(),
+                format!(
+                    "cannot unset object variable '{}': removing objects via unset() is forbidden.",
+                    var_name
+                ),
+                Some(var_name.clone()),
+                None,
+            ),
+            ParseErrorKind::InvalidUnsetTarget { reason } => (
+                "RHP0119".to_string(),
+                format!("invalid unset target: {}", reason),
+                None,
+                None,
+            ),
             ParseErrorKind::Lex(lex_err) => match lex_err {
                 crate::lexer::error::LexError::UnterminatedString => (
                     "RHP0002".to_string(),
@@ -486,6 +519,9 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::AbstractMethodCannotBePrivate { .. } => "RHP0309",
         TypeErrorKind::UnimplementedAbstractMethod { .. } => "RHP0310",
         TypeErrorKind::TraitAbstractMethodUnimplemented { .. } => "RHP0311",
+        TypeErrorKind::RedundantIssetCheck { .. } => "RHP0227",
+        TypeErrorKind::CannotUnsetObject { .. } => "RHP0118",
+        TypeErrorKind::BareVariableIssetForbidden { .. } => "RHP0117",
     };
 
     (code.to_string(), kind.to_string())
@@ -522,6 +558,9 @@ pub fn map_lint_code_to_rhp(code: &str) -> String {
         "static-facade-inheritance-forbidden" => "RHP0111".to_string(),
         "deprecated-superglobal" => "RHP0401".to_string(),
         "naming-casing" => "RHP0402".to_string(),
+        "redundant-isset-check" => "RHP0227".to_string(),
+        "cannot-unset-object" => "RHP0118".to_string(),
+        "bare-variable-isset-forbidden" => "RHP0117".to_string(),
         c if c.starts_with("RHP") => c.to_string(),
         _ => "RHP0106".to_string(),
     }

@@ -339,7 +339,7 @@ fn test_user_requested_dnf_and_namespaced_union_types() {
 
         // Accepts: an object implementing BOTH interfaces, OR null
         function save((HasId&Arrayable)|null $item): string {
-            if ($item === null) {
+            if ($item == null) {
                 return "saved_null";
             }
             return "saved_item";
@@ -377,7 +377,7 @@ fn test_user_requested_dnf_and_namespaced_union_types() {
         $findRes = $repo->find();
         $repo->setCache($itemObj);
         $cachedRes = $repo->getCache();
-        $hasCached = ($cachedRes !== null);
+        $hasCached = ($cachedRes != null);
 
         namespace App\Models {
             class User {}
@@ -491,8 +491,8 @@ fn test_dnf_local_variable_declaration_and_multiple_clauses() {
 
         $r1 = check($ab);
         $r2 = check($cd);
-        $isLocal1Set = ($local1 !== null);
-        $isLocal2Null = ($local2 === null);
+        $isLocal1Set = ($local1 != null);
+        $isLocal2Null = ($local2 == null);
     "#;
 
     let (vm, _) = run_source_with_vm(source).expect("Multiple DNF clauses and local variables must succeed");
@@ -518,7 +518,7 @@ fn test_namespaced_dnf_types_with_fully_qualified_and_aliased_interfaces() {
 
             class Handler {
                 public function process((Identifiable&JsonSerializable)|null $target): string {
-                    if ($target === null) {
+                    if ($target == null) {
                         return "processed_null";
                     }
                     return "processed_entity";

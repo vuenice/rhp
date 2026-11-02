@@ -144,6 +144,9 @@ pub enum StmtKind<'s> {
     /// Echo output statement (`echo $msg, "\n";`).
     Echo(Vec<Expr<'s>>),
 
+    /// Unset statement removing variables or array/map elements (`unset($var)`).
+    Unset(Vec<Expr<'s>>),
+
     /// Post-response or scope defer hook statement (`defer { ... };`).
     Defer(Box<Stmt<'s>>),
 

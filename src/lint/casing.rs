@@ -204,7 +204,11 @@ pub fn is_builtin_type_or_facade(name: &str) -> bool {
             | "HashMap"
             | "Future"
             | "Arr"
+            | "Array"
             | "Str"
+            | "Bool"
+            | "Int"
+            | "Float"
             | "Crypt"
             | "Html"
             | "Carbon"
@@ -626,7 +630,7 @@ impl<'a> CasingCollector<'a> {
                     self.visit_var(v);
                 }
             }
-            StmtKind::Echo(exprs) => {
+            StmtKind::Echo(exprs) | StmtKind::Unset(exprs) => {
                 for e in exprs {
                     self.visit_expr(e);
                 }
@@ -1150,6 +1154,10 @@ impl<'a> CasingCollector<'a> {
             }
             ExprKind::Await(expr) | ExprKind::Grouping(expr) => {
                 self.visit_expr(expr);
+            }
+            ExprKind::Isset { operand, lowered } => {
+                self.visit_expr(operand);
+                self.visit_expr(lowered);
             }
         }
     }

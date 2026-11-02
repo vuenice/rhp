@@ -240,7 +240,7 @@ fn test_weak_facade_runtime_get_and_is_valid() {
 
             public function getParentName(): string {
                 $p = $this->parentRef->get();
-                if ($p !== null) {
+                if ($p != null) {
                     return $p->name;
                 }
                 return "detached";
