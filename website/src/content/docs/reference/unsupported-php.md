@@ -610,6 +610,70 @@ Queue::push(new ProcessOrderJob($order));
 
 ---
 
+## 5. Strict Comparison Operators (`===` / `!==`) & Implicit Loose Coercion
+
+**Not supported:** The triple-equals operators `===` and `!==`, as well as implicit type-coercing loose equality.
+
+### What Was Bad About It in PHP
+
+- **Security vulnerabilities & logic flaws:** PHP's legacy loose equality `==` was notoriously unpredictable. Operands of different types were coerced implicitly, leading to critical vulnerabilities (e.g. `'admin' == 0` evaluating to `true` in PHP 7, hash collision bypasses like `"0e123" == "0e456"`, and `42 == "42"`).
+- **Redundant operator syntax:** Requiring developers to remember typing three equal signs (`===`) for basic safety added mental overhead and resulted in accidental bugs whenever someone typed `==` instead.
+- **Float representation bugs:** Traditional float comparison with `==` failed on IEEE-754 rounding differences (such as `3.14f32` vs `3.14f64` or representation inaccuracies).
+
+---
+
+### What Replaces It in RHP
+
+1. **Strict Type-Safe `==` and `!=` by Default:**
+   In RHP, `==` and `!=` are strict by design. They compare both the types and the values.
+2. **Compile-Time Type Mismatch Rejection:**
+   If operands on either side of `==` or `!=` are not of compatible types (e.g. `42 == "42"` or `true == 1`), the compiler emits an immediate compile-time type error (`InvalidBinaryOperation`).
+3. **Compiler Rejection of `===` and `!==`:**
+   The parser rejects `===` and `!==` with diagnostic error `RHP0116`, pointing developers to `==` and `!=`.
+4. **Automated Linter Conversion:**
+   Running `rhp run lint` automatically updates all legacy `===` to `==` and `!==` to `!=` while preserving string literals and comments intact.
+5. **Accurate Float Precision Comparison:**
+   When comparing floats with `==`, RHP checks the maximum decimal point across both operands ($D_{\max} = \max(D_{\text{left}}, D_{\text{right}})$) and compares both sides to that exact decimal precision.
+6. **Explicit Loose Comparison Facades:**
+   When cross-type coercion is explicitly required, developers use intention-revealing facade helpers:
+   - `Bool::compare($a, $b)`
+   - `Str::compare($a, $b, $case_insensitive = false)`
+   - `Int::compare($a, $b)`
+   - `Float::compare($a, $b, $epsilon = null)`
+   - `Array::compareJson($a, $b)`, `Array::compareRef($a, $b)`, `Array::compareJoined($a, $b, $sep)`, `Array::compareUnordered($a, $b)`
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Equality and Identity Checks
+
+**Before (Legacy PHP):**
+```php
+// In PHP: === was required to prevent dangerous loose coercion
+if ($status === 200) {
+    // ...
+}
+if ($raw_id == 100) {
+    // Unsafe: converts "100-abc" or true to 100
+}
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: == is already strict and type-safe
+if ($status == 200) {
+    // ...
+}
+
+// Loose cross-type comparison is explicit:
+if (Int::compare($raw_id, 100)) {
+    // Intentionally loose comparison
+}
+```
+
+---
+
 ## Comprehensive Feature Matrix
 
 | Legacy PHP Feature | Status in RHP | Primary Architectural Reason | Recommended RHP Replacement | Key Win Over PHP |
@@ -618,6 +682,8 @@ Queue::push(new ProcessOrderJob($order));
 | **Output Buffering** (`ob_*`) | ❌ **Rejected** | Process-global state leaks across persistent workers; unsafe in async fibers | `Output::capture(fn() => ...)`, direct `Writer` templates, `Response::stream` | Exception-safe scoped captures; impossible to corrupt subsequent requests |
 | **cURL Extension** (`curl_*`) | ❌ **Rejected** | Untypable integer constant API; missing safe timeouts; redundant wrapper layer | Fluent `Http` facade, async `AHTTP`, Rust `.rs` interop for exotic protocols | Strictly-typed builder; secure defaults; native Tokio asynchronous concurrency |
 | **Legacy Serialization** (`serialize()`, `unserialize()`, `__sleep()`, `__wakeup()`) | ❌ **Rejected** | Pervasive RCE gadget chains; open-by-default class loading; slow text format with null-byte mangling | Compact binary format, `__serialize()`/`__unserialize(dict)`, `#[Transient]`, deny-by-default `allowed_classes` | Immune to gadget chains; $3\times$ to $8\times$ smaller payloads; destructor suppressed on failure |
+| **Strict Operators (`===`, `!==`) & Loose `==`** | ❌ **Rejected** | Implicit type coercion causes security vulnerabilities; redundant `===` syntax | Strict `==`/`!=`, compile-time mismatch errors, `Bool/Str/Int/Float/Array::compare*` | Eradicates loose comparison exploits; `rhp lint` auto-converts `===` to `==` |
+| **Implicit Arithmetic Coercion & Silent `+` Overflow** | ❌ **Rejected** | Strings coerced to int (`"5 apples" + 3`), lossy float promotion on overflow, array union | Checked `+` (traps), wrapping `+%`, saturating `+\|`, explicit casts, `.` for concat, `[...$a, ...$b]` for merge | Immune to silent numeric overflow exploits, no data loss from array union |
 
 ---
 
@@ -631,6 +697,7 @@ rhp migrate ./app --write
 
 ### What `rhp migrate` Automatically Rewrites
 
+- **Strict Comparison Operators:** Automatically converts `===` to `==` and `!==` to `!=`.
 - **Output Buffering:** Simple `ob_start(); ... $html = ob_get_clean();` blocks are automatically transformed into `Output::capture(function() { ... })`.
 - **cURL Calls:** Standard `curl_init()` and `curl_setopt()` chains configured with common options (`CURLOPT_RETURNTRANSFER`, `CURLOPT_HTTPHEADER`, `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT`, `CURLOPT_USERPWD`) are rewritten into expressive `Http::` facade chains.
 - **Dependency Injection:** Standard constructor injection and container bindings are formatted to leverage RHP's build-time DI generator.

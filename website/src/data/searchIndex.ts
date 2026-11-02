@@ -235,6 +235,13 @@ const rawSearchIndex: SearchItem[] = [
     url: "/docs/advanced/compiler-internals",
     keywords: ["compiler", "vm", "jit", "cranelift", "bytecode", "logos", "ir", "internals", "pratt parser", "combinators", "ast", "ast visitor", "span tracking", "tree-walk", "register vm", "phpvalue", "dispatch loop", "callframe", "exception table"]
   },
+  {
+    title: "Safe Addition & Arithmetic Semantics",
+    section: "Advanced",
+    description: "Checked addition (+), wrapping (+%), saturating (+|), constant folding, LLVM overflow intrinsics, and eliminating PHP coercion pitfalls.",
+    url: "/docs/advanced/safe-addition-semantics",
+    keywords: ["safe addition", "addition", "arithmetic", "overflow", "checked add", "+%", "+|", "wrapping", "saturating", "checked_add", "overflowing_add", "llvm", "intrinsics", "inkwell", "php pitfalls", "constant folding", "type checking", "traits", "Add interface"]
+  },
 
   // Meta
   {

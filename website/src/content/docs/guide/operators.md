@@ -13,50 +13,112 @@ RHP supports standard PHP-compatible operators for arithmetic, comparison, logic
 
 ## Comparison & Relational Operators
 
-RHP provides a full suite of comparison and relational operators. Comparisons evaluate to boolean `true` or `false` (or `-1`, `0`, `1` in the case of the spaceship operator).
+RHP enforces **strict, type-safe equality** by design to eradicate subtle bugs caused by PHP's legacy implicit type coercion.
 
 | Operator | Name | Syntax | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `<` | **Less than** | `$a < $b` | `true` if `$a` is strictly strictly less than `$b` | `5 < 10` $\rightarrow$ `true` |
+| `<` | **Less than** | `$a < $b` | `true` if `$a` is strictly less than `$b` | `5 < 10` $\rightarrow$ `true` |
 | `>` | **Greater than** | `$a > $b` | `true` if `$a` is strictly greater than `$b` | `10 > 5` $\rightarrow$ `true` |
 | `<=` | **Less than or equal** | `$a <= $b` | `true` if `$a` is less than or equal to `$b` | `5 <= 5` $\rightarrow$ `true` |
 | `>=` | **Greater than or equal** | `$a >= $b` | `true` if `$a` is greater than or equal to `$b` | `10 >= 8` $\rightarrow$ `true` |
-| `==` | **Loose Equality** | `$a == $b` | `true` if values are equivalent after loose coercion | `10 == "10"` $\rightarrow$ `true` |
-| `!=` or `<>` | **Loose Inequality** | `$a != $b` | `true` if values are not equivalent | `10 != 20` $\rightarrow$ `true` |
-| `===` | **Strict Identity** | `$a === $b` | `true` if values match and share the identical datatype | `10 === 10` $\rightarrow$ `true` |
-| `!==` | **Strict Non-identity** | `$a !== $b` | `true` if values differ or datatypes do not match | `10 !== "10"` $\rightarrow$ `true` |
+| `==` | **Strict Type-Safe Equality** | `$a == $b` | `true` if both operands share the same type and have equal values | `10 == 10` $\rightarrow$ `true` |
+| `!=` or `<>` | **Strict Type-Safe Inequality** | `$a != $b` | `true` if values differ | `10 != 20` $\rightarrow$ `true` |
 | `<=>` | **Spaceship** | `$a <=> $b` | Returns `-1` if `$a < $b`, `0` if `$a == $b`, `1` if `$a > $b` | `5 <=> 10` $\rightarrow$ `-1` |
 
-### Comparison Examples
+> [!IMPORTANT]
+> **No `===` or `!==` in RHP:** The compiler deliberately does not support `===` or `!==` (emits error `RHP0116`). Because `==` and `!=` in RHP are already 100% strict and type-safe, the triple-equals syntax is redundant. Running `rhp run lint` automatically converts all `===` to `==` and `!==` to `!=`.
+
+> [!WARNING]
+> **Mismatched Types Cause Compile-Time Errors:** If you attempt to compare operands of incompatible types using `==` or `!=` (e.g. `42 == "42"` or `true == 1`), the compiler emits a compile-time type error (`InvalidBinaryOperation`).
+
+### Float Precision Comparison via `==`
+
+Comparing floating-point numbers in traditional languages often suffers from IEEE-754 representation inaccuracies (e.g., `3.14f32` vs `3.14f64`).
+
+In RHP, when comparing floats via `==` or `!=`:
+1. The engine checks the **maximum decimal point (places)** across both sides:
+   $$D_{\max} = \max(D_{\text{left}}, D_{\text{right}})$$
+2. Both sides are formatted and compared up to that exact decimal point.
 
 ```php
-int $count = 42;
-int $limit = 50;
+// Both have 2 decimal points -> true
+bool $match = (1.23 == 1.23); // true
 
-// Relational bounds checking (< and >)
-if ($count > 0 && $count < $limit) {
-    print("Count is within valid bounds.\n");
-}
+// 1.23 (2 decimals) vs 1.234 (3 decimals) -> compared at 3 decimals (1.230 != 1.234)
+bool $diff = (1.23 == 1.234); // false
 
-// Relational boundary checking (<= and >=)
-if ($count >= 42) {
-    print("Reached or exceeded quota.\n");
-}
+// Cross-precision between Float (f32) and Float::f64 (f64)
+float $f32 = 3.14;
+float $f64 = Float::f64(3.14);
+bool $equal = ($f32 == $f64); // true (both verified to 2 decimal places)
+```
 
-// Strict identity check (=== vs ==)
-int $id = 100;
-string $rawId = "100";
+---
 
-if ($id == $rawId) {
-    print("Equivalent values\n"); // Prints
-}
+## Loose Comparison Helper Functions
 
-if ($id === $rawId) {
-    // Will not execute: int does not strictly match string
-}
+When loose or cross-type comparison is explicitly intended, RHP provides dedicated static facade methods instead of unpredictable operator coercion:
 
-// Spaceship operator (<=>) for custom sorting
-int $cmp = $count <=> 100; // -1 because 42 < 100
+```php
+// Boolean truthiness comparison
+Bool::compare(1, true);       // true (1 is truthy)
+Bool::compare("0", false);    // true ("0" is falsy)
+Bool::compare(null, false);   // true (null is falsy)
+
+// String comparison with optional case-insensitivity
+Str::compare("hello", "hello");        // true
+Str::compare("hello", "HELLO");        // false
+Str::compare("hello", "HELLO", true);  // true (case-insensitive)
+Str::compare(42, "42");                // true (converts 42 to string)
+
+// Integer loose comparison
+Int::compare(42, "42");       // true
+Int::compare(true, 1);        // true
+Int::compare(false, 0);       // true
+Int::compare(42, 43);         // false
+
+// Float loose comparison with optional epsilon tolerance
+Float::compare(3.14, "3.14");                  // true
+Float::compare(1.00001, 1.00002);              // false
+Float::compare(1.00001, 1.00002, 0.001);       // true (within epsilon)
+```
+
+---
+
+## Array & Collection Comparison Functions
+
+To compare collections across different underlying types (`array`, `list`, `set`, `dict`, `hashMap`), use the static comparison functions available on `Array` (or `Arr`):
+
+```php
+$listA = [1, 2, 3];
+$listB = [1, 2, 3];
+$listC = [3, 2, 1];
+
+// 1. JSON Stringify and Compare
+// Serializes both structures to canonical JSON and compares representations
+Array::compareJson($listA, $listB); // true
+Array::compareJson($listA, $listC); // false
+
+// 2. Memory Address / Reference Comparison
+// Checks if two variables refer to the exact same memory allocation (pointer equality)
+$ref1 = [10, 20];
+$ref2 = $ref1;
+$ref3 = [10, 20];
+Array::compareRef($ref1, $ref2); // true (same memory allocation)
+Array::compareRef($ref1, $ref3); // false (distinct allocations)
+
+// 3. Delimited Joined String Comparison
+// Converts elements to a delimited string (e.g. [1, 2, 3] -> '1,2,3') and compares
+Array::compareJoined([1, 2, 3], ['1', '2', '3']);        // true (default separator ',')
+Array::compareJoined([1, 2, 3], ['1', '2', '3'], '-');    // true (custom separator '-')
+
+// 4. Unordered Value Comparison (Strictly supports list and set only)
+// Compares elements irrespective of order; rejects dict/hashmap with runtime error
+$setA = Arr::set([1, 2, 3]);
+$setB = Arr::set([3, 1, 2]);
+Array::compareUnordered($listA, $listC); // true (list vs list, order ignored)
+Array::compareUnordered($listA, $setB);  // true (list vs set, order ignored)
+Array::compareUnordered($setA, $setB);   // true (set vs set, order ignored)
 ```
 
 ---
@@ -142,26 +204,38 @@ RHP supports standard mathematical operators with compile-time type validation:
 
 | Operator | Name | Syntax | Description |
 | :--- | :--- | :--- | :--- |
-| `+` | **Addition** | `$a + $b` | Sum of operands |
-| `-` | **Subtraction** | `$a - $b` | Difference of operands |
-| `*` | **Multiplication** | `$a * $b` | Product of operands |
-| `/` | **Division** | `$a / $b` | Quotient of operands (returns float if non-integer) |
-| `%` | **Modulo** | `$a % $b` | Integer remainder of division |
-| `**` | **Exponentiation** | `$a ** $b` | Base raised to exponent (**Right-associative**) |
+| `+` | **Checked Addition** | `$a + $b` | Sum of operands. **Always checked for overflow** in all build modes (traps on overflow). |
+| `+%` | **Wrapping Addition** | `$a +% $b` | Two's-complement modular addition (wrapping on overflow). |
+| `+\|` | **Saturating Addition** | `$a +\| $b` | Clamps result to `MIN` / `MAX` bound on overflow. |
+| `-` | **Subtraction** | `$a - $b` | Difference of operands (checked for underflow). |
+| `*` | **Multiplication** | `$a * $b` | Product of operands (checked for overflow). |
+| `/` | **Division** | `$a / $b` | Quotient of operands. Integer division truncates; division by zero traps. |
+| `%` | **Modulo** | `$a % $b` | Integer remainder of division. |
+| `**` | **Exponentiation** | `$a ** $b` | Base raised to exponent (**Right-associative**). |
 
 ```php
 int $a = 15;
 int $b = 4;
 
-int $sum  = $a + $b; // 19
+int $sum  = $a + $b; // 19 (Checked: traps if $a + $b overflows)
 int $diff = $a - $b; // 11
 int $prod = $a * $b; // 60
 int $rem  = $a % $b; // 3
 int $pow  = 2 ** 3;  // 8
+
+// Overflow-handling operators:
+u8 $wrapped = 255u8 +% 1u8; // 0u8 (wrapping)
+u8 $clamped = 250u8 +| 20u8; // 255u8 (saturating)
 ```
 
 > [!IMPORTANT]
-> In RHP, `+` is strictly mathematical and requires numeric operands (`int`, `float`, `i64`, `f64`). Using `+` for array unions or string concatenations is rejected at compile time.
+> **No Implicit Coercion & No Silent Overflow:**
+> - `+` is **strictly mathematical**. Both operands must have identical numeric types (e.g. `int + int` or `float + float`).
+> - Mixed-type addition (`int + float`, `string + int`, `null + int`, `bool + int`) is rejected with actionable compile-time errors.
+> - String concatenation **must** use `.` (`$first . $second`).
+> - Array merging **must** use `array_merge()` or spread `[...$a, ...$b]`.
+> - Constant expressions that overflow are flagged as **compile-time errors**, never deferred to runtime.
+> - For full specifications, LLVM codegen details, and custom `Add` traits, see [Safe Addition & Arithmetic Semantics](/docs/advanced/safe-addition-semantics).
 
 ---
 

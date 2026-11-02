@@ -66,6 +66,12 @@ Arr::unique(mixed $items): set;
 Arr::reverse(mixed $target): list|dict;
 Arr::sort(mixed $items): list;
 
+// Static Cross-Collection Comparison (also available via Array::)
+Arr::compareJson(mixed $a, mixed $b): bool;                   // Canonical JSON stringification and comparison across collection types
+Arr::compareRef(mixed $a, mixed $b): bool;                    // Memory address / pointer identity check (same allocation)
+Arr::compareJoined(mixed $a, mixed $b, string $sep = ','): bool; // Converts elements to joined string and compares
+Arr::compareUnordered(mixed $a, mixed $b): bool;              // Unordered value comparison (strictly supports list and set only)
+
 // Dynamic Macro Extension
 Arr::macro(string $name, callable $closure): bool;
 ```

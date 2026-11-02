@@ -73,6 +73,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Language Layer & Semantics", "advanced/language-layer"),
       item("FFI & Rust Native Interop", "advanced/ffi-interop"),
       item("Compiler & VM Internals", "advanced/compiler-internals"),
+      item("Safe Addition & Arithmetic Semantics", "advanced/safe-addition-semantics"),
     ]
   },
   {
