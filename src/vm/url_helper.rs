@@ -272,6 +272,61 @@ pub fn base64_url_decode(data: &str) -> Result<Vec<u8>, String> {
     BASE64_URL_SAFE_NO_PAD.decode(data.trim()).map_err(|e| e.to_string())
 }
 
+/// Parse a query string or full URL into a key-value dictionary (`Url::parseQuery`, wrapping `parse_str`).
+pub fn parse_query(input: &str) -> IndexMap<String, PhpValue> {
+    let mut map = IndexMap::new();
+    let query_str = if let Some(pos) = input.find('?') {
+        let after = &input[pos + 1..];
+        if let Some(hash_pos) = after.find('#') {
+            &after[..hash_pos]
+        } else {
+            after
+        }
+    } else if let Some(hash_pos) = input.find('#') {
+        &input[..hash_pos]
+    } else {
+        input
+    };
+
+    if query_str.is_empty() {
+        return map;
+    }
+
+    for pair in query_str.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (raw_key, raw_val) = match pair.find('=') {
+            Some(idx) => (&pair[..idx], &pair[idx + 1..]),
+            None => (pair, ""),
+        };
+
+        let decoded_key = url_decode(raw_key, false);
+        let decoded_val = url_decode(raw_val, false);
+
+        if decoded_key.ends_with("[]") {
+            let base_key = decoded_key[..decoded_key.len() - 2].to_string();
+            match map.get_mut(&base_key) {
+                Some(PhpValue::List(list)) => {
+                    list.borrow_mut().push(PhpValue::string(decoded_val));
+                }
+                Some(existing) => {
+                    let prev = existing.clone();
+                    let new_list = PhpValue::list(vec![prev, PhpValue::string(decoded_val)]);
+                    map.insert(base_key, new_list);
+                }
+                None => {
+                    map.insert(base_key, PhpValue::list(vec![PhpValue::string(decoded_val)]));
+                }
+            }
+        } else {
+            map.insert(decoded_key, PhpValue::string(decoded_val));
+        }
+    }
+
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

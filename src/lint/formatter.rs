@@ -551,10 +551,13 @@ fn format_line_spacing(line: &str) -> String {
             continue;
         }
 
-        // Normalize commas: no space before, one space after
+        // Normalize commas: no space before, one space after (preserve single space between consecutive commas for skipped parameters)
         if c == ',' {
-            while output.ends_with(' ') {
-                output.pop();
+            let was_consecutive = output.ends_with(", ");
+            if !was_consecutive {
+                while output.ends_with(' ') {
+                    output.pop();
+                }
             }
             output.push(',');
             i += 1;

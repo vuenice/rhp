@@ -125,8 +125,8 @@ fn test_pass_by_reference_named_arguments() {
         applyBonus(score: &$playerScore, bonus: 50);
     "#;
 
-    let (vm, _) = run_source_with_vm(source).expect("Script execution should succeed");
-    assert_eq!(vm.get_main_variable("$playerScore"), Some(&PhpValue::Int(150)));
+    let err = rhp::run_source(source).expect_err("Named parameters should be rejected");
+    assert!(err.to_string().contains("Named parameters are not supported in RHP"));
 }
 
 #[test]

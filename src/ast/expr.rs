@@ -425,6 +425,7 @@ pub struct Argument<'s> {
     pub value: Expr<'s>,
     pub is_unpack: bool,
     pub is_reference: bool,
+    pub is_skipped: bool,
 }
 
 impl<'s> Argument<'s> {
@@ -436,6 +437,7 @@ impl<'s> Argument<'s> {
             value,
             is_unpack: false,
             is_reference: false,
+            is_skipped: false,
         }
     }
 
@@ -447,6 +449,7 @@ impl<'s> Argument<'s> {
             value,
             is_unpack: false,
             is_reference: false,
+            is_skipped: false,
         }
     }
 
@@ -458,6 +461,7 @@ impl<'s> Argument<'s> {
             value,
             is_unpack: true,
             is_reference: false,
+            is_skipped: false,
         }
     }
 
@@ -469,6 +473,19 @@ impl<'s> Argument<'s> {
             value,
             is_unpack: false,
             is_reference: true,
+            is_skipped: false,
+        }
+    }
+
+    #[inline]
+    pub fn skipped(span: Span) -> Self {
+        Self {
+            span,
+            name: None,
+            value: Expr::new(ExprKind::Literal(Literal::Null), span),
+            is_unpack: false,
+            is_reference: false,
+            is_skipped: true,
         }
     }
 }

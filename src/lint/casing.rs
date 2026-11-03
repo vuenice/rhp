@@ -209,6 +209,8 @@ pub fn is_builtin_type_or_facade(name: &str) -> bool {
             | "Bool"
             | "Int"
             | "Float"
+            | "Ip"
+            | "Compress"
             | "Crypt"
             | "Html"
             | "Carbon"

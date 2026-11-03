@@ -185,6 +185,23 @@ pub enum TypeErrorKind {
     },
 
     #[error(
+        "Type Error: Required parameter '{param_name}' cannot follow optional parameter '{optional_param_name}' in {callable_name}."
+    )]
+    RequiredParameterAfterOptional {
+        callable_name: String,
+        param_name: String,
+        optional_param_name: String,
+    },
+
+    #[error(
+        "Type Error: Cannot skip required parameter '{param_name}' in call to {callable_name}."
+    )]
+    CannotSkipRequiredParameter {
+        callable_name: String,
+        param_name: String,
+    },
+
+    #[error(
         "Type Error: Cannot assign value of type '{found}' to typed variable '{var_name}' of type '{expected}'."
     )]
     VariableTypeMismatch {

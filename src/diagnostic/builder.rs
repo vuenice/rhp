@@ -523,6 +523,8 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::CannotUnsetObject { .. } => "RHP0118",
         TypeErrorKind::BareVariableIssetForbidden { .. } => "RHP0117",
         TypeErrorKind::DictPropertyAccessForbidden { .. } => "RHP0228",
+        TypeErrorKind::RequiredParameterAfterOptional { .. } => "RHP0230",
+        TypeErrorKind::CannotSkipRequiredParameter { .. } => "RHP0231",
         TypeErrorKind::Custom { .. } => "RHP0100",
     };
 
@@ -565,6 +567,8 @@ pub fn map_lint_code_to_rhp(code: &str) -> String {
         "bare-variable-isset-forbidden" => "RHP0117".to_string(),
         "dict-property-access-forbidden" => "RHP0228".to_string(),
         "cannot-decide-variable-type" => "RHP0229".to_string(),
+        "required-param-after-optional" => "RHP0230".to_string(),
+        "cannot-skip-required-parameter" => "RHP0231".to_string(),
         c if c.starts_with("RHP") => c.to_string(),
         _ => "RHP0106".to_string(),
     }

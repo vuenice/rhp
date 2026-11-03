@@ -166,7 +166,32 @@ fn validate_function_boundaries(
     file_name: &str,
     issues: &mut Vec<Issue>,
 ) {
+    let mut has_seen_optional = false;
+    let mut first_opt: Option<&crate::ast::stmt::Param> = None;
     for param in &func.params {
+        if param.default_value.is_some() {
+            has_seen_optional = true;
+            if first_opt.is_none() {
+                first_opt = Some(param);
+            }
+        } else if !param.is_variadic && has_seen_optional {
+            if let Some(opt) = first_opt {
+                issues.push(Issue::new(
+                    IssueLevel::Error,
+                    "required-param-after-optional",
+                    format!(
+                        "Type Error: Required parameter '{}' cannot follow optional parameter '{}' in {} '{}'.",
+                        param.name.name, opt.name.name, callable_kind, func.name.name
+                    ),
+                    file_name,
+                    param.span.line,
+                    param.span.col,
+                    param.span.start,
+                    param.span.end,
+                ));
+            }
+        }
+
         if param.type_hint.is_none() {
             issues.push(Issue::new(
                 IssueLevel::Error,
@@ -227,8 +252,32 @@ fn validate_method_boundaries(
     let is_constructor = method.function.name.name == "__construct";
     let is_destructor = method.function.name.name == "__destruct";
     let display_name = format!("{}::{}", class_name, method.function.name.name);
-
+    let mut has_seen_optional = false;
+    let mut first_opt: Option<&crate::ast::stmt::Param> = None;
     for param in &method.function.params {
+        if param.default_value.is_some() {
+            has_seen_optional = true;
+            if first_opt.is_none() {
+                first_opt = Some(param);
+            }
+        } else if !param.is_variadic && has_seen_optional {
+            if let Some(opt) = first_opt {
+                issues.push(Issue::new(
+                    IssueLevel::Error,
+                    "required-param-after-optional",
+                    format!(
+                        "Type Error: Required parameter '{}' cannot follow optional parameter '{}' in method '{}'.",
+                        param.name.name, opt.name.name, display_name
+                    ),
+                    file_name,
+                    param.span.line,
+                    param.span.col,
+                    param.span.start,
+                    param.span.end,
+                ));
+            }
+        }
+
         if param.type_hint.is_none() {
             issues.push(Issue::new(
                 IssueLevel::Error,
@@ -384,9 +433,14 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::Class("Carbon".to_string()),
                     },
                     "Url" | "URL" => match method.name {
-                        "parseUrl" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+                        "parseUrl" | "parseQuery" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
                         _ => RhpType::String,
                     },
+                    "Ip" => match method.name {
+                        "toLong" => RhpType::Int,
+                        _ => RhpType::String,
+                    },
+                    "Compress" => RhpType::String,
                     "Int" => RhpType::Int,
                     "Float" => RhpType::Float,
                     _ => RhpType::Dynamic,
@@ -471,6 +525,8 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::ArgumentTypeMismatch { .. } => "argument-type-mismatch",
         TypeErrorKind::ArityMismatch { .. } => "arity-mismatch",
         TypeErrorKind::UnknownNamedArgument { .. } => "unknown-named-argument",
+        TypeErrorKind::RequiredParameterAfterOptional { .. } => "required-param-after-optional",
+        TypeErrorKind::CannotSkipRequiredParameter { .. } => "cannot-skip-required-parameter",
         TypeErrorKind::VariableTypeMismatch { .. } => "variable-type-mismatch",
         TypeErrorKind::ParameterDefaultTypeMismatch { .. } => "parameter-default-type-mismatch",
         TypeErrorKind::PropertyDefaultTypeMismatch { .. } => "property-default-type-mismatch",

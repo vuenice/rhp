@@ -469,9 +469,14 @@ pub fn infer_expression_type_name(
                         _ => Some("Carbon".to_string()),
                     },
                     "Url" | "URL" => match method.name {
-                        "parseUrl" => Some("dict".to_string()),
+                        "parseUrl" | "parseQuery" => Some("dict".to_string()),
                         _ => Some("string".to_string()),
                     },
+                    "Ip" => match method.name {
+                        "toLong" => Some("int".to_string()),
+                        _ => Some("string".to_string()),
+                    },
+                    "Compress" => Some("string".to_string()),
                     "Int" => Some("int".to_string()),
                     "Float" => Some("float".to_string()),
                     _ => None,

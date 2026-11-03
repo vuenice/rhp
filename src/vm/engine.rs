@@ -40,7 +40,21 @@ struct StagedArg {
     name: Option<String>,
     is_unpack: bool,
     is_reference: bool,
+    is_skipped: bool,
     caller_reg: Option<usize>,
+}
+
+impl StagedArg {
+    fn simple(value: PhpValue) -> Self {
+        Self {
+            value,
+            name: None,
+            is_unpack: false,
+            is_reference: false,
+            is_skipped: false,
+            caller_reg: None,
+        }
+    }
 }
 
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
@@ -1723,6 +1737,7 @@ impl VM {
                     name,
                     is_unpack,
                     is_reference,
+                    is_skipped,
                 } => {
                     let arg_name = if let Some(cid) = name {
                         let chunk = self.chunk_for_func(func_id);
@@ -1741,6 +1756,7 @@ impl VM {
                         name: arg_name,
                         is_unpack,
                         is_reference,
+                        is_skipped,
                         caller_reg,
                     });
                 }
@@ -1999,7 +2015,24 @@ impl VM {
                     };
 
                     let flat_args = Self::flatten_positional_args(&staged);
-                    let res = self.exec_facade_call(&facade_name, &method_name, &flat_args, span)?;
+                    let res = match self.exec_facade_call(&facade_name, &method_name, &flat_args, span) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            let (cls, msg) = match &err.kind {
+                                RuntimeErrorKind::UncaughtException { class, message } => (class.clone(), message.clone()),
+                                RuntimeErrorKind::Custom { message } => ("Exception".to_string(), message.clone()),
+                                RuntimeErrorKind::TypeError { message } => ("TypeError".to_string(), message.clone()),
+                                _ => ("Exception".to_string(), err.kind.to_string()),
+                            };
+                            let mut obj = VmObject::new(&cls);
+                            obj.set_property("message", PhpValue::string(msg));
+                            if self.try_dispatch_to_catch(PhpValue::object(obj), stop_depth) {
+                                continue;
+                            } else {
+                                return Err(err);
+                            }
+                        }
+                    };
                     self.registers[base_reg + dst.index()] = res;
                 }
 
@@ -2189,20 +2222,8 @@ impl VM {
                         // 4. __callStatic:
                         if let Some(call_static_mid) = self.resolve_method_id(&class_name, "__callStatic") {
                             let call_static_args = vec![
-                                StagedArg {
-                                    value: PhpValue::string(method_name.clone()),
-                                    name: None,
-                                    is_unpack: false,
-                                    is_reference: false,
-                                    caller_reg: None,
-                                },
-                                StagedArg {
-                                    value: PhpValue::list(flat_args),
-                                    name: None,
-                                    is_unpack: false,
-                                    is_reference: false,
-                                    caller_reg: None,
-                                },
+                                StagedArg::simple(PhpValue::string(method_name.clone())),
+                                StagedArg::simple(PhpValue::list(flat_args)),
                             ];
                             self.push_compiled_call_frame(
                                 call_static_mid,
@@ -2979,18 +3000,31 @@ impl VM {
         }
 
         // 2. Bind positional, unpacked, and named arguments to parameter registers
-        let mut positional_values: Vec<(PhpValue, bool, Option<usize>)> = Vec::new();
+        let mut positional_values: Vec<(PhpValue, bool, bool, Option<usize>)> = Vec::new();
         let mut named_values: Vec<(String, PhpValue, bool, Option<usize>)> = Vec::new();
         for arg in staged_args {
             if let Some(ref name) = arg.name {
                 named_values.push((name.clone(), arg.value.clone(), arg.is_reference, arg.caller_reg));
             } else if arg.is_unpack {
                 for item in Self::extract_items(&arg.value) {
-                    positional_values.push((item, false, None));
+                    positional_values.push((item, false, false, None));
                 }
             } else {
-                positional_values.push((arg.value.clone(), arg.is_reference, arg.caller_reg));
+                positional_values.push((arg.value.clone(), arg.is_reference, arg.is_skipped, arg.caller_reg));
             }
+        }
+
+        if !named_values.is_empty() {
+            let (arg_name, _, _, _) = &named_values[0];
+            return Err(self.make_error(
+                RuntimeErrorKind::Custom {
+                    message: format!(
+                        "Named parameters are not supported in RHP (found '${}' in call to '{}()'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at call site.",
+                        arg_name, func.name
+                    ),
+                },
+                span,
+            ));
         }
 
         let mut ref_bindings = Vec::new();
@@ -2998,7 +3032,7 @@ impl VM {
         for (idx, param) in func.params.iter().enumerate() {
             if param.is_variadic {
                 let rest: Vec<PhpValue> = if idx < positional_values.len() {
-                    positional_values[idx..].iter().map(|(v, _, _)| v.clone()).collect()
+                    positional_values[idx..].iter().map(|(v, _, _, _)| v.clone()).collect()
                 } else {
                     Vec::new()
                 };
@@ -3006,7 +3040,24 @@ impl VM {
                 assigned_params[idx] = true;
                 break;
             } else if idx < positional_values.len() {
-                let (val, is_ref, caller_reg) = &positional_values[idx];
+                let (val, is_ref, is_skipped, caller_reg) = &positional_values[idx];
+                if *is_skipped {
+                    if !param.has_default {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Cannot skip required parameter '${}' in call to '{}()'",
+                                    param.name, func.name
+                                ),
+                            },
+                            span,
+                        ));
+                    }
+                    // Optional parameter skipped: leave register as Null (unassigned)
+                    // so the bytecode prologue evaluates the default expression
+                    assigned_params[idx] = true;
+                    continue;
+                }
                 if param.is_reference {
                     if !*is_ref {
                         return Err(self.make_error(
@@ -3033,55 +3084,6 @@ impl VM {
                 }
                 self.registers[new_base + param.reg.index()] = val.clone();
                 assigned_params[idx] = true;
-            }
-        }
-
-        for (arg_name, arg_val, is_ref, caller_reg) in named_values {
-            let norm = if arg_name.starts_with('$') {
-                arg_name.clone()
-            } else {
-                format!("${}", arg_name)
-            };
-            if let Some((idx, param)) = func
-                .params
-                .iter()
-                .enumerate()
-                .find(|(_, p)| p.name == norm)
-            {
-                if param.is_reference {
-                    if !is_ref {
-                        return Err(self.make_error(
-                            RuntimeErrorKind::MissingReferenceArgument {
-                                callable: func.name.clone(),
-                                param_name: param.name.clone(),
-                                arg_index: idx + 1,
-                            },
-                            span,
-                        ));
-                    }
-                    if let Some(caller_r) = caller_reg {
-                        ref_bindings.push((new_base + param.reg.index(), caller_r));
-                    }
-                } else if is_ref {
-                    return Err(self.make_error(
-                        RuntimeErrorKind::UnexpectedReferenceArgument {
-                            callable: func.name.clone(),
-                            param_name: param.name.clone(),
-                            arg_index: idx + 1,
-                        },
-                        span,
-                    ));
-                }
-                self.registers[new_base + param.reg.index()] = arg_val.clone();
-                assigned_params[idx] = true;
-            } else {
-                return Err(self.make_error(
-                    RuntimeErrorKind::UnknownNamedArgument {
-                        callable: func.name.clone(),
-                        name: arg_name,
-                    },
-                    span,
-                ));
             }
         }
 
@@ -3140,13 +3142,7 @@ impl VM {
     ) -> Result<PhpValue, RuntimeError> {
         let staged: Vec<StagedArg> = args
             .into_iter()
-            .map(|value| StagedArg {
-                value,
-                name: None,
-                is_unpack: false,
-                is_reference: false,
-                caller_reg: None,
-            })
+            .map(StagedArg::simple)
             .collect();
         let depth_before = self.frames.len();
         self.push_compiled_call_frame(func_id, None, &staged, &[], None, called_class, span)?;
@@ -3195,13 +3191,7 @@ impl VM {
         if let Some(target_id) = self.resolve_method_id(clean, method) {
             let staged: Vec<StagedArg> = args
                 .into_iter()
-                .map(|value| StagedArg {
-                    value,
-                    name: None,
-                    is_unpack: false,
-                    is_reference: false,
-                    caller_reg: None,
-                })
+                .map(StagedArg::simple)
                 .collect();
 
             let depth_before = self.frames.len();
@@ -3220,13 +3210,7 @@ impl VM {
                 rc.borrow_mut().forwarded_from = Some(clean.to_string());
                 let recv_cls = rc.borrow().class_name.clone();
                 if let Some(target_mid) = self.resolve_method_id(&recv_cls, method) {
-                    let staged: Vec<StagedArg> = args.into_iter().map(|value| StagedArg {
-                        value,
-                        name: None,
-                        is_unpack: false,
-                        is_reference: false,
-                        caller_reg: None,
-                    }).collect();
+                    let staged: Vec<StagedArg> = args.into_iter().map(StagedArg::simple).collect();
                     let depth_before = self.frames.len();
                     self.push_compiled_call_frame(target_mid, Some(recv), &staged, &[], None, Some(recv_cls), span)?;
                     return self.dispatch_loop(depth_before);
@@ -3246,20 +3230,8 @@ impl VM {
         // __callStatic check:
         if let Some(call_static_mid) = self.resolve_method_id(clean, "__callStatic") {
             let call_static_args = vec![
-                StagedArg {
-                    value: PhpValue::string(method.to_string()),
-                    name: None,
-                    is_unpack: false,
-                    is_reference: false,
-                    caller_reg: None,
-                },
-                StagedArg {
-                    value: PhpValue::list(args),
-                    name: None,
-                    is_unpack: false,
-                    is_reference: false,
-                    caller_reg: None,
-                },
+                StagedArg::simple(PhpValue::string(method.to_string())),
+                StagedArg::simple(PhpValue::list(args)),
             ];
             let depth_before = self.frames.len();
             self.push_compiled_call_frame(call_static_mid, None, &call_static_args, &[], None, Some(clean.to_string()), span)?;
@@ -3288,13 +3260,7 @@ impl VM {
         if let Some(ctor_id) = self.resolve_method_id(clean, "__construct") {
             let staged: Vec<StagedArg> = args
                 .into_iter()
-                .map(|value| StagedArg {
-                    value,
-                    name: None,
-                    is_unpack: false,
-                    is_reference: false,
-                    caller_reg: None,
-                })
+                .map(StagedArg::simple)
                 .collect();
             let depth_before = self.frames.len();
             self.push_compiled_call_frame(ctor_id, Some(instance.clone()), &staged, &[], None, Some(clean.to_string()), span)?;
@@ -3313,13 +3279,7 @@ impl VM {
     ) -> Result<PhpValue, RuntimeError> {
         let staged: Vec<StagedArg> = args
             .into_iter()
-            .map(|value| StagedArg {
-                value,
-                name: None,
-                is_unpack: false,
-                is_reference: false,
-                caller_reg: None,
-            })
+            .map(StagedArg::simple)
             .collect();
         let depth_before = self.frames.len();
         self.push_compiled_call_frame(
@@ -3344,13 +3304,7 @@ impl VM {
     ) -> Result<PhpValue, RuntimeError> {
         let staged: Vec<StagedArg> = args
             .into_iter()
-            .map(|value| StagedArg {
-                value,
-                name: None,
-                is_unpack: false,
-                is_reference: false,
-                caller_reg: None,
-            })
+            .map(StagedArg::simple)
             .collect();
         let called_cls = this_val.as_ref().and_then(|t| {
             if let PhpValue::Object(o) = t {
@@ -3386,13 +3340,7 @@ impl VM {
                 let cls_name = obj_rc.borrow().class_name.clone();
                 let staged: Vec<StagedArg> = args
                     .into_iter()
-                    .map(|value| StagedArg {
-                        value,
-                        name: None,
-                        is_unpack: false,
-                        is_reference: false,
-                        caller_reg: None,
-                    })
+                    .map(StagedArg::simple)
                     .collect();
                 if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
                     let depth_before = self.frames.len();
@@ -3418,13 +3366,7 @@ impl VM {
             PhpValue::String(fn_name) => {
                 let staged: Vec<StagedArg> = args
                     .into_iter()
-                    .map(|value| StagedArg {
-                        value,
-                        name: None,
-                        is_unpack: false,
-                        is_reference: false,
-                        caller_reg: None,
-                    })
+                    .map(StagedArg::simple)
                     .collect();
                 let target_id = self
                     .module
@@ -3463,13 +3405,7 @@ impl VM {
         let flat_args = args.clone();
         let staged: Vec<StagedArg> = args
             .into_iter()
-            .map(|value| StagedArg {
-                value,
-                name: None,
-                is_unpack: false,
-                is_reference: false,
-                caller_reg: None,
-            })
+            .map(StagedArg::simple)
             .collect();
 
         match &receiver {
@@ -6416,13 +6352,13 @@ impl VM {
             // 2. Integer fluent methods
             PhpValue::Int(value) => {
                 let val = *value;
-                let rhs = args.first().and_then(|v| v.to_i32()).unwrap_or(1);
                 let next_val = match method {
                     "round" | "floor" | "ceil" | "ciel" => val,
-                    "add" => val.wrapping_add(rhs),
-                    "subtract" | "sub" => val.wrapping_sub(rhs),
-                    "multiply" | "mul" => val.wrapping_mul(rhs),
+                    "add" => val.wrapping_add(args.first().and_then(|v| v.to_i32()).unwrap_or(0)),
+                    "subtract" | "sub" => val.wrapping_sub(args.first().and_then(|v| v.to_i32()).unwrap_or(0)),
+                    "multiply" | "mul" => val.wrapping_mul(args.first().and_then(|v| v.to_i32()).unwrap_or(1)),
                     "divide" | "div" => {
+                        let rhs = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
                         if rhs == 0 {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
@@ -6447,17 +6383,17 @@ impl VM {
 
             // Native Rust Integer Wrapper fluent methods (`Int::i64()->random()->add()->subtract()`)
             PhpValue::RustInt { kind, value } => {
-                let rhs = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as i128;
                 let next_val = match method {
                     "round" | "floor" | "ceil" | "ciel" => *value,
                     "random" => {
                         let bound = args.first().and_then(|v| v.to_i64()).unwrap_or(100).max(1) as i128;
                         ((*value).wrapping_add(42)) % bound
                     }
-                    "add" => value.wrapping_add(rhs),
-                    "subtract" | "sub" => value.wrapping_sub(rhs),
-                    "multiply" | "mul" => value.wrapping_mul(rhs),
+                    "add" => value.wrapping_add(args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128),
+                    "subtract" | "sub" => value.wrapping_sub(args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128),
+                    "multiply" | "mul" => value.wrapping_mul(args.first().and_then(|v| v.to_i64()).unwrap_or(1) as i128),
                     "divide" | "div" => {
+                        let rhs = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128;
                         if rhs == 0 {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
@@ -6487,7 +6423,16 @@ impl VM {
             PhpValue::RustFloat { kind, value } => {
                 let fk = *kind;
                 let val = *value;
-                let rhs = args.first().and_then(|v| v.to_f64()).unwrap_or(1.0);
+                let extract_f64 = |pv: &PhpValue| -> f64 {
+                    match pv {
+                        PhpValue::Float(f) => f.to_string().parse::<f64>().unwrap_or(*f as f64),
+                        PhpValue::RustFloat { value, .. } => *value,
+                        PhpValue::Int(n) => *n as f64,
+                        PhpValue::RustInt { value, .. } => *value as f64,
+                        PhpValue::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+                        _ => pv.to_f64().unwrap_or(0.0),
+                    }
+                };
                 let next_val = match method {
                     "round" => {
                         let places = args.first().and_then(|v| v.to_i64()).unwrap_or(0).clamp(0, 15) as i32;
@@ -6499,14 +6444,40 @@ impl VM {
                         let factor = 10_f64.powi(places);
                         (val * factor).round() / factor
                     }
-                    "add" => val + rhs,
-                    "subtract" | "sub" => val - rhs,
-                    "multiply" | "mul" => val * rhs,
-                    "divide" | "div" => {
+                    // Binary format operations (IEEE-754 64-bit float)
+                    "bAdd" => val + args.first().map(extract_f64).unwrap_or(0.0),
+                    "bSub" => val - args.first().map(extract_f64).unwrap_or(0.0),
+                    "bMul" => val * args.first().map(extract_f64).unwrap_or(0.0),
+                    "bDiv" => {
+                        let rhs = args.first().map(extract_f64).unwrap_or(0.0);
                         if rhs == 0.0 {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
                         val / rhs
+                    }
+                    // Arbitrary-precision decimal math
+                    "add" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        dec_a.add(&dec_b).to_f64()
+                    }
+                    "subtract" | "sub" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        dec_a.sub(&dec_b).to_f64()
+                    }
+                    "multiply" | "mul" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
+                        dec_a.mul(&dec_b).to_f64()
+                    }
+                    "divide" | "div" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        if dec_b.is_zero() {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        dec_a.div(&dec_b, None).map_err(|_| self.make_error(RuntimeErrorKind::DivisionByZero, span))?.to_f64()
                     }
                     "floor" => val.floor(),
                     "ceil" | "ciel" => val.ceil(),
@@ -6531,30 +6502,91 @@ impl VM {
 
             PhpValue::Float(value) => {
                 let val = *value;
-                let rhs = args.first().and_then(|v| v.to_f32()).unwrap_or(1.0);
-                let next_val = match method {
+                let extract_f64 = |pv: &PhpValue| -> f64 {
+                    match pv {
+                        PhpValue::Float(f) => f.to_string().parse::<f64>().unwrap_or(*f as f64),
+                        PhpValue::RustFloat { value, .. } => *value,
+                        PhpValue::Int(n) => *n as f64,
+                        PhpValue::RustInt { value, .. } => *value as f64,
+                        PhpValue::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+                        _ => pv.to_f64().unwrap_or(0.0),
+                    }
+                };
+                match method {
+                    // Binary format operations (IEEE-754 64-bit float)
+                    "bAdd" => {
+                        let a = extract_f64(receiver);
+                        let b = args.first().map(extract_f64).unwrap_or(0.0);
+                        return Ok(PhpValue::RustFloat {
+                            kind: RustFloatKind::F64,
+                            value: a + b,
+                        });
+                    }
+                    "bSub" => {
+                        let a = extract_f64(receiver);
+                        let b = args.first().map(extract_f64).unwrap_or(0.0);
+                        return Ok(PhpValue::RustFloat {
+                            kind: RustFloatKind::F64,
+                            value: a - b,
+                        });
+                    }
+                    "bMul" => {
+                        let a = extract_f64(receiver);
+                        let b = args.first().map(extract_f64).unwrap_or(0.0);
+                        return Ok(PhpValue::RustFloat {
+                            kind: RustFloatKind::F64,
+                            value: a * b,
+                        });
+                    }
+                    "bDiv" => {
+                        let a = extract_f64(receiver);
+                        let b = args.first().map(extract_f64).unwrap_or(0.0);
+                        if b == 0.0 {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        return Ok(PhpValue::RustFloat {
+                            kind: RustFloatKind::F64,
+                            value: a / b,
+                        });
+                    }
+                    // Arbitrary-precision decimal math
+                    "add" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        return Ok(PhpValue::Float(dec_a.add(&dec_b).to_f32()));
+                    }
+                    "subtract" | "sub" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        return Ok(PhpValue::Float(dec_a.sub(&dec_b).to_f32()));
+                    }
+                    "multiply" | "mul" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
+                        return Ok(PhpValue::Float(dec_a.mul(&dec_b).to_f32()));
+                    }
+                    "divide" | "div" => {
+                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                        if dec_b.is_zero() {
+                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
+                        }
+                        let quot = dec_a.div(&dec_b, None).map_err(|_| self.make_error(RuntimeErrorKind::DivisionByZero, span))?;
+                        return Ok(PhpValue::Float(quot.to_f32()));
+                    }
                     "round" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(0).clamp(0, 15);
                         let factor = 10_f32.powi(places);
-                        (val * factor).round() / factor
+                        return Ok(PhpValue::Float((val * factor).round() / factor));
                     }
                     "toDecimal" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(2).clamp(0, 15);
                         let factor = 10_f32.powi(places);
-                        (val * factor).round() / factor
+                        return Ok(PhpValue::Float((val * factor).round() / factor));
                     }
-                    "add" => val + rhs,
-                    "subtract" | "sub" => val - rhs,
-                    "multiply" | "mul" => val * rhs,
-                    "divide" | "div" => {
-                        if rhs == 0.0 {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        val / rhs
-                    }
-                    "floor" => val.floor(),
-                    "ceil" | "ciel" => val.ceil(),
-                    "abs" => val.abs(),
+                    "floor" => return Ok(PhpValue::Float(val.floor())),
+                    "ceil" | "ciel" => return Ok(PhpValue::Float(val.ceil())),
+                    "abs" => return Ok(PhpValue::Float(val.abs())),
                     "toInt" => return Ok(PhpValue::Int(val as i32)),
                     "toFloat" => return Ok(PhpValue::Float(val)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
@@ -6567,8 +6599,7 @@ impl VM {
                             span,
                         ))
                     }
-                };
-                Ok(PhpValue::Float(next_val))
+                }
             }
 
             // 4. Future fluent methods (`->wait()`, `->then()`, `->catch()`, `->isCompleted()`, etc.)
@@ -8440,20 +8471,8 @@ impl VM {
 
                     if let Some(call_mid) = call_mid {
                         let call_args = vec![
-                            StagedArg {
-                                value: PhpValue::string(method_name.clone()),
-                                name: None,
-                                is_unpack: false,
-                                is_reference: false,
-                                caller_reg: None,
-                            },
-                            StagedArg {
-                                value: PhpValue::list(flat_args),
-                                name: None,
-                                is_unpack: false,
-                                is_reference: false,
-                                caller_reg: None,
-                            },
+                            StagedArg::simple(PhpValue::string(method_name.clone())),
+                            StagedArg::simple(PhpValue::list(flat_args)),
                         ];
                         self.push_compiled_call_frame(
                             call_mid,
@@ -8585,20 +8604,8 @@ impl VM {
                     // Check __callStatic:
                     if let Some(call_static_mid) = self.resolve_method_id(cls_name, "__callStatic") {
                         let call_static_args = vec![
-                            StagedArg {
-                                value: PhpValue::string(method_name.clone()),
-                                name: None,
-                                is_unpack: false,
-                                is_reference: false,
-                                caller_reg: None,
-                            },
-                            StagedArg {
-                                value: PhpValue::list(flat_args),
-                                name: None,
-                                is_unpack: false,
-                                is_reference: false,
-                                caller_reg: None,
-                            },
+                            StagedArg::simple(PhpValue::string(method_name.clone())),
+                            StagedArg::simple(PhpValue::list(flat_args)),
                         ];
                         self.push_compiled_call_frame(
                             call_static_mid,
@@ -8612,12 +8619,39 @@ impl VM {
                         return Ok(true);
                     }
                 }
-                let res = self.exec_fluent_value_method(
+                let res = match self.exec_fluent_value_method(
                     &receiver,
                     &method_name,
                     &flat_args,
                     span,
-                )?;
+                ) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        let (cls, msg) = match &err.kind {
+                            RuntimeErrorKind::DivisionByZero => (
+                                "DivisionByZeroError".to_string(),
+                                "Division by zero".to_string(),
+                            ),
+                            RuntimeErrorKind::UncaughtException { class, message } => {
+                                (class.clone(), message.clone())
+                            }
+                            RuntimeErrorKind::Custom { message } => {
+                                ("Exception".to_string(), message.clone())
+                            }
+                            RuntimeErrorKind::TypeError { message } => {
+                                ("TypeError".to_string(), message.clone())
+                            }
+                            _ => ("Exception".to_string(), err.kind.to_string()),
+                        };
+                        let mut obj = VmObject::new(&cls);
+                        obj.set_property("message", PhpValue::string(msg));
+                        if self.try_dispatch_to_catch(PhpValue::object(obj), stop_depth) {
+                            return Ok(true);
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                };
                 self.registers[base_reg + dst.index()] = res;
                 Ok(false)
             }

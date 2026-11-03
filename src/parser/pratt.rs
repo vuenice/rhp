@@ -1745,50 +1745,49 @@ impl<'s> CombinatorStream<'s> {
 
         loop {
             let arg_start = self.current_span();
-            let is_unpack = self.matches(&Token::Ellipsis);
-            let mut is_reference = self.matches(&Token::Ampersand);
 
-            // Named argument check `name: $val` or `name: &$val`
+            // Check if this argument is skipped (empty argument indicated by comma)
+            if self.check(&Token::Comma) {
+                args.push(Argument::skipped(arg_start));
+                self.advance(); // consume the comma
+                if self.check(&Token::CloseParen) {
+                    break;
+                }
+                continue;
+            }
+
+            let is_unpack = self.matches(&Token::Ellipsis);
+            let is_reference = self.matches(&Token::Ampersand);
+
+            // Named argument check `name: $val` or `name: &$val` - reject named parameters
             if let Some(tok) = self.peek() {
                 if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
                     && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
                 {
                     let name = self.expect_ident()?;
-                    self.expect(Token::Colon)?;
-                    if self.matches(&Token::Ampersand) {
-                        is_reference = true;
-                    }
-                    let value = self.parse_expr_lowest()?;
-                    let span = arg_start.merge(value.span);
-                    args.push(Argument {
-                        span,
-                        name: Some(name),
-                        value,
-                        is_unpack,
-                        is_reference,
-                    });
-                } else {
-                    let value = self.parse_expr_lowest()?;
-                    let span = arg_start.merge(value.span);
-                    args.push(Argument {
-                        span,
-                        name: None,
-                        value,
-                        is_unpack,
-                        is_reference,
-                    });
+                    let colon = self.expect(Token::Colon)?;
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: format!(
+                                "Named parameters are not supported in RHP (found '{}:'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at the call site.",
+                                name.name
+                            ),
+                        },
+                        arg_start.merge(colon.span),
+                    ));
                 }
-            } else {
-                let value = self.parse_expr_lowest()?;
-                let span = arg_start.merge(value.span);
-                args.push(Argument {
-                    span,
-                    name: None,
-                    value,
-                    is_unpack,
-                    is_reference,
-                });
             }
+
+            let value = self.parse_expr_lowest()?;
+            let span = arg_start.merge(value.span);
+            args.push(Argument {
+                span,
+                name: None,
+                value,
+                is_unpack,
+                is_reference,
+                is_skipped: false,
+            });
 
             if self.matches(&Token::Comma) {
                 if self.check(&Token::CloseParen) {

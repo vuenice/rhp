@@ -218,6 +218,8 @@ pub fn resolve_facade_static_call(
 
         "Float" => match method {
             "compare" => Ok(RhpType::Bool),
+            "format" => Ok(RhpType::String),
+            "abs" | "min" | "max" | "random" => Ok(RhpType::Float),
             "f32" => {
                 if let Some(first_arg) = arg_types.first() {
                     if !first_arg.is_assignable_to(&RhpType::Float, hierarchy) {
@@ -307,11 +309,14 @@ pub fn resolve_facade_static_call(
                     RhpType::Mixed,
                 ))))
             }
-            "merge" | "keys" | "values" | "unique" | "slice" | "reverse" | "filter" | "map" => {
+            "merge" | "keys" | "values" | "unique" | "slice" | "reverse" | "filter" | "map"
+            | "fill" | "fillKeys" | "pad" => {
                 Ok(RhpType::Array(Box::new(RhpType::Mixed)))
             }
             "count" | "length" | "size" | "len" | "push" | "unshift" => Ok(RhpType::Int),
             "check" | "contains" | "hasKey" | "hasValue" => Ok(RhpType::Bool),
+            "firstKey" | "lastKey" => Ok(RhpType::Union(vec![RhpType::Int, RhpType::String, RhpType::Null])),
+            "sum" | "product" => Ok(RhpType::Union(vec![RhpType::Int, RhpType::Float])),
             "search" => Ok(RhpType::Union(vec![
                 RhpType::Int,
                 RhpType::String,
@@ -403,6 +408,7 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Int)
             }
             "split" => Ok(RhpType::Array(Box::new(RhpType::String))),
+            "countOccurrences" => Ok(RhpType::Int),
             "find" | "pos" | "indexOf" => Ok(RhpType::Nullable(Box::new(RhpType::Int))),
             _ => Ok(RhpType::String),
         },
@@ -451,7 +457,9 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Int)
             }
-            "exists" | "delete" | "remove" | "copy" | "rename" | "move" | "chown" | "touch" => {
+            "exists" | "delete" | "remove" | "copy" | "rename" | "move" | "chown" | "touch"
+            | "isReadable" | "is_readable" | "isWritable" | "is_writable"
+            | "mkdir" | "makeDirectory" | "make_directory" => {
                 check_arg_type(
                     &format!("File::{}", method),
                     "$path",
@@ -463,14 +471,17 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Bool)
             }
-            "chmod" => Ok(RhpType::Mixed),
+            "info" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::String)))),
+            "modifiedAt" | "modified_at" => Ok(RhpType::Int),
+            "chmod" | "parseMode" | "parse_mode" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
 
         "AFile" => match method {
             "read" => Ok(RhpType::Future(Box::new(RhpType::String))),
             "readBytes" => Ok(RhpType::Future(Box::new(RhpType::Bytes))),
-            "write" | "exists" | "delete" | "remove" | "append" | "copy" | "rename" | "move" => {
+            "write" | "exists" | "delete" | "remove" | "append" | "copy" | "rename" | "move"
+            | "mkdir" | "makeDirectory" | "make_directory" => {
                 Ok(RhpType::Future(Box::new(RhpType::Bool)))
             }
             "size" => Ok(RhpType::Future(Box::new(RhpType::Int))),
@@ -576,11 +587,20 @@ pub fn resolve_facade_static_call(
             | "encode" | "urlencode" | "urlEncode" | "decode" | "urldecode" | "urlDecode"
             | "rawUrlEncode" | "raw_url_encode" | "rawurlencode"
             | "rawUrlDecode" | "raw_url_decode" | "rawurldecode" => Ok(RhpType::String),
-            "parseUrl" | "parse_url" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            "parseUrl" | "parse_url" | "parseQuery" | "parse_query" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
             "base64Decode" | "base64_decode" | "base64UrlDecode" | "base64_url_decode" => {
                 Ok(RhpType::Union(vec![RhpType::String, RhpType::Bool]))
             }
             _ => Ok(RhpType::Mixed),
+        },
+        "Ip" => match method {
+            "toLong" | "to_long" => Ok(RhpType::Int),
+            "fromLong" | "from_long" => Ok(RhpType::String),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Compress" => match method {
+            "zlib" | "unzlib" | "gzip" | "gunzip" => Ok(RhpType::String),
+            _ => Ok(RhpType::String),
         },
         "Crypt" => match method {
             "hash" | "hashHmac" | "hash_hmac" | "opensslEncrypt" | "openssl_encrypt"
@@ -765,7 +785,7 @@ pub fn resolve_builtin_fluent_method(
     match receiver_type {
         // Fluent numeric APIs (`Int::i64()->random()->add()->subtract()`, `Float::f64()->toDecimal(2)`)
         RhpType::Int | RhpType::RustInt(_) => match method {
-            "random" | "add" | "subtract" | "mul" | "div" | "abs" | "clamp" | "round" | "floor" | "ceil" | "ciel" => {
+            "random" | "add" | "subtract" | "sub" | "multiply" | "mul" | "divide" | "div" | "abs" | "clamp" | "round" | "floor" | "ceil" | "ciel" => {
                 Some(receiver_type.clone())
             }
             "toDecimal" => Some(RhpType::RustFloat(RustFloatKind::F64)),
@@ -773,7 +793,8 @@ pub fn resolve_builtin_fluent_method(
             _ => None,
         },
         RhpType::Float | RhpType::RustFloat(_) => match method {
-            "toDecimal" | "round" | "floor" | "ceil" | "ciel" | "add" | "subtract" | "mul" | "div"
+            "toDecimal" | "round" | "floor" | "ceil" | "ciel" | "add" | "subtract" | "sub" | "multiply" | "mul" | "divide" | "div"
+            | "bAdd" | "bSub" | "bMul" | "bDiv"
             | "abs" | "random" => Some(receiver_type.clone()),
             "toInt" => Some(RhpType::Int),
             "toFloat" => Some(RhpType::Float),

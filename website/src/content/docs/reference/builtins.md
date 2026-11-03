@@ -56,8 +56,10 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `file_put_contents($path, $data)` | `phpFun::file_put_contents($path, $data)` | `File::write($path, $data)` |
 | `copy($from, $to)` | `phpFun::copy($from, $to)` | `File::copy($from, $to)` |
 | `rename($from, $to)` | `phpFun::rename($from, $to)` | `File::rename($from, $to)` |
-| `chmod($path, $mode)` | `phpFun::chmod($path, $mode)` | `File::chmod($path, $mode)` |
+| `chmod($path, $mode)` | `phpFun::chmod($path, $mode)` | `File::chmod($path, $mode)` (accepts string `"0755"` or `"rwxr-xr-x"`) |
 | `chown($path, $user)` | `phpFun::chown($path, $user)` | `File::chown($path, $user)` |
+| `mkdir($path, $mode, $recursive)` | `phpFun::mkdir($path, $mode, $recursive)` | `File::mkdir($path, $mode, $recursive)` (accepts string `"0755"` or `"rwxr-xr-x"`) |
+| `parse_mode($mode)` | `phpFun::parse_mode($mode)` | `File::parseMode($mode)` |
 | `touch($path)` | `phpFun::touch($path)` | `File::touch($path)` |
 | `collect($items)` | `phpFun::collect($items)` | Creates an iterable `Collection` instance |
 | `md5($str)` | `phpFun::md5($str)` | `Crypt::md5($str)` |

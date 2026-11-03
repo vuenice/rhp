@@ -420,7 +420,7 @@ fn test_file_copy_rename_chmod_chown_touch() {
         $e3_new = File::exists("{p3}");
 
         // 4. File::chmod
-        $cm1 = File::chmod("{p3}", 0o755);
+        $cm1 = File::chmod("{p3}", "0755");
         $cm_mode = File::chmod("{p3}");
 
         // 5. File::chown (using current uid)
@@ -433,14 +433,15 @@ fn test_file_copy_rename_chmod_chown_touch() {
         $leg_touch = touch("{p4}");
         $leg_copy = copy("{p4}", "{p2}");
         $leg_rename = rename("{p2}", "{p1}");
-        $leg_chmod = chmod("{p4}", 0o644);
+        $leg_chmod = chmod("{p4}", "0644");
 
         // 8. Chmod with string octal & failure handling
         $cm_str = File::chmod("{p3}", "0644");
         $cm_str_mode = File::chmod("{p3}");
         $err_copy = File::copy("/nonexistent_path_xyz_123.txt", "{p2}");
         $err_rename = File::rename("/nonexistent_path_xyz_123.txt", "{p2}");
-        $err_chmod = File::chmod("/nonexistent_path_xyz_123.txt", 0o755);
+        $err_chmod = File::chmod("/nonexistent_path_xyz_123.txt", "0755");
+        $err_int_chmod = File::chmod("{p3}", 0o755);
 
         return [
             $t1, $e1,
@@ -450,7 +451,7 @@ fn test_file_copy_rename_chmod_chown_touch() {
             $ch1, $t2,
             $leg_touch, $leg_copy, $leg_rename, $leg_chmod,
             $cm_str, $cm_str_mode,
-            $err_copy, $err_rename, $err_chmod,
+            $err_copy, $err_rename, $err_chmod, $err_int_chmod,
         ];
         "#,
         p1 = f1.display(),
@@ -489,6 +490,7 @@ fn test_file_copy_rename_chmod_chown_touch() {
         assert_eq!(b[17], PhpValue::Bool(false));
         assert_eq!(b[18], PhpValue::Bool(false));
         assert_eq!(b[19], PhpValue::Bool(false));
+        assert_eq!(b[20], PhpValue::Bool(false)); // integer mode rejected, returns false
     } else {
         panic!("Expected array return value");
     }

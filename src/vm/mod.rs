@@ -14,6 +14,7 @@
 pub mod arena;
 pub mod carbon;
 pub mod crypto;
+pub mod decimal;
 pub mod encoding;
 pub mod engine;
 pub mod error;

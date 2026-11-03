@@ -3,6 +3,7 @@ pub mod autotype;
 pub mod casing;
 pub mod diagnostics;
 pub mod formatter;
+pub mod param_order;
 pub mod ref_params;
 pub mod reporter;
 
@@ -18,6 +19,7 @@ pub use casing::{
 };
 pub use diagnostics::{run_typecheck, type_error_to_code};
 pub use formatter::{format_source, split_statements_on_semicolons};
+pub use param_order::{check_parameter_order, fix_parameter_order, has_required_after_optional};
 pub use ref_params::convert_mutated_array_params_to_ref;
 pub use reporter::{Issue, IssueLevel, IssueSpan, LintReport};
 
@@ -75,21 +77,24 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
         // 3. Convert mutated array parameters to pass-by-reference (&$param)
         let ref_param_code = convert_mutated_array_params_to_ref(&auto_assigned_code);
 
-        // 4. Casing transformations (if enabled)
+        // 4. Reorder function parameters so required arguments always come before optional
+        let param_ordered_code = fix_parameter_order(&ref_param_code);
+
+        // 5. Casing transformations (if enabled)
         let (cased_code, _) = if options.case_change {
-            apply_casing(&ref_param_code, file_name)
+            apply_casing(&param_ordered_code, file_name)
         } else {
-            (ref_param_code, Vec::new())
+            (param_ordered_code, Vec::new())
         };
 
-        // 5. Infer and add variable types
+        // 6. Infer and add variable types
         let typed_code = add_variable_types(&cased_code);
 
-        // 6. Format indentation, operators, and braces
+        // 7. Format indentation, operators, and braces
         let formatted_code = format_source(&typed_code);
         let modified = formatted_code != source;
 
-        // 7. Run typecheck on resulting code and collect issues
+        // 8. Run typecheck on resulting code and collect issues
         let issues = run_typecheck(&formatted_code, file_name);
 
         LintResult {
@@ -103,7 +108,10 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
         // Check only (--no-fix or --check):
         let mut issues = Vec::new();
 
-        // 1. Check casing issues (if enabled)
+        // 1. Check parameter ordering (required arguments must precede optional arguments)
+        issues.extend(check_parameter_order(source, file_name));
+
+        // 2. Check casing issues (if enabled)
         if options.case_change {
             issues.extend(check_casing(source, file_name));
         }

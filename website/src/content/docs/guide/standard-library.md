@@ -556,8 +556,9 @@ Cookie::forget('theme');
 
 ---
 
-### 4. `File` Facade (`File::fromRequest()`) &mdash; `$_FILES` is not supported
+### 4. `File` Facade (`File::fromRequest()`, `File::mkdir()`, `File::chmod()`)
 
+#### Uploaded Files (`$_FILES` is not supported)
 Legacy `$_FILES` is **not supported** in RHP. In multi-part HTTP requests, uploaded files are parsed directly into typed file representations using `File::fromRequest()`:
 
 ```php
@@ -574,6 +575,38 @@ if ($uploaded !== null) {
     File::write("uploads/{$origName}", File::read($tmpPath));
 }
 ```
+
+#### Directory Creation & String Permissions (`File::mkdir`, `File::parseMode`, `File::chmod`)
+
+In traditional PHP, functions like `mkdir` and `chmod` accept octal integers (such as `0755`), which frequently leads to severe bugs when developers mistakenly write decimal `755` (interpreted as octal `01363`).
+
+In RHP, helper functions that accept octal-format file permissions **only accept strings** such as `"0755"` or POSIX symbolic strings like `"rwxr-xr-x"`. Integer permissions are strictly rejected and return `false`.
+
+Inside these functions, `File::parseMode("0755")` is called. If `parseMode` fails or directory creation fails, `File::mkdir` returns `false`:
+
+```php
+// 1. Directory creation with octal string permission
+bool $created = File::mkdir('/var/run/cache', '0755');
+
+// 2. Directory creation with symbolic permission string
+bool $logDir = File::mkdir('/var/log/app', 'rwxr-xr-x', true); // recursive
+
+// 3. Parsing permission strings with File::parseMode()
+int|false $mode = File::parseMode('0755');     // 493 (0o755)
+int|false $sym  = File::parseMode('rwxr-xr-x'); // 493
+int|false $bad  = File::parseMode(0755);       // false (integers rejected)
+
+// 4. If parseMode fails or unable to create directory, mkdir returns false
+if (!File::mkdir('/restricted/path', '0755')) {
+    Log::error('Failed to create directory');
+}
+
+// 5. Changing file permissions (File::chmod)
+File::chmod('/tmp/secure.key', '0600');       // Set permissions
+File::chmod('/tmp/secure.key', 'rw-------');  // Set with symbolic string
+string $currentMode = File::chmod('/tmp/secure.key'); // Inspect current mode ("0600")
+```
+
 
 ---
 

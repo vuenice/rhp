@@ -24,6 +24,11 @@ use crate::vm::html;
 use crate::vm::mime::{detect_mime_type_for_path, guess_extension};
 use crate::vm::url_helper;
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
+use std::net::Ipv4Addr;
+use std::io::{Read, Write};
+use flate2::Compression;
+use flate2::read::{GzDecoder, ZlibDecoder};
+use flate2::write::{GzEncoder, ZlibEncoder};
 use tokio::runtime::{Builder as TokioBuilder, Runtime as TokioRuntime};
 
 /// Global multi-threaded Tokio runtime for asynchronous facades (`AFile`, `AHTTP`, `ADB`).
@@ -335,6 +340,8 @@ pub fn dispatch_facade_call(
         "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
         "Reflect" => dispatch_reflect(method, args),
         "Carbon" => dispatch_carbon(method, args),
+        "Ip" => dispatch_ip(method, args),
+        "Compress" => dispatch_compress(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -910,10 +917,111 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::string(sub))
         }
+        // Pad a string to a given length with another string.
+        // Example: `Str::pad("Alien", 10, "_", "right")` -> `"Alien_____"`
+        "pad" => {
+            let s = get_arg_str(args, 0, "Str::pad")?;
+            let length = args.get(1).and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::pad".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let pad = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| " ".to_string());
+            let side = args.get(3).map(|v| v.to_php_string()).unwrap_or_else(|| "right".to_string());
+            if pad.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Str::pad(): Padding string cannot be empty".to_string(),
+                });
+            }
+            let target_len = length.max(0) as usize;
+            let current_len = s.chars().count();
+            if target_len <= current_len {
+                return Ok(PhpValue::string(s));
+            }
+            let needed = target_len - current_len;
+            let side_lower = side.to_ascii_lowercase();
+            let res = match side_lower.as_str() {
+                "left" | "0" => {
+                    let padding: String = pad.chars().cycle().take(needed).collect();
+                    format!("{}{}", padding, s)
+                }
+                "right" | "1" => {
+                    let padding: String = pad.chars().cycle().take(needed).collect();
+                    format!("{}{}", s, padding)
+                }
+                "both" | "2" => {
+                    let left_count = needed / 2;
+                    let right_count = needed - left_count;
+                    let left_pad: String = pad.chars().cycle().take(left_count).collect();
+                    let right_pad: String = pad.chars().cycle().take(right_count).collect();
+                    format!("{}{}{}", left_pad, s, right_pad)
+                }
+                _ => return Err(RuntimeErrorKind::Custom {
+                    message: format!("Str::pad(): Invalid padding side '{}', expected 'left', 'right', or 'both'", side),
+                }),
+            };
+            Ok(PhpValue::string(res))
+        }
+        // Repeat a string a specified number of times.
+        // Example: `Str::repeat("abc", 3)` -> `"abcabcabc"`
         "repeat" => {
             let s = get_arg_str(args, 0, "Str::repeat")?;
-            let times = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
-            Ok(PhpValue::string(s.repeat(times)))
+            let times = args.get(1).and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::repeat".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            if times < 0 {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Str::repeat(): Argument #2 ($times) must be greater than or equal to 0".to_string(),
+                });
+            }
+            Ok(PhpValue::string(s.repeat(times as usize)))
+        }
+        // Count the number of non-overlapping substring occurrences.
+        // Example: `Str::countOccurrences("hello world hello", "hello")` -> `2`
+        "countOccurrences" | "count_occurrences" => {
+            let haystack = get_arg_str(args, 0, "Str::countOccurrences")?;
+            let needle = get_arg_str(args, 1, "Str::countOccurrences")?;
+            if needle.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Str::countOccurrences(): Substring cannot be empty".to_string(),
+                });
+            }
+            let count = haystack.matches(&needle).count();
+            Ok(PhpValue::Int(count as i32))
+        }
+        // Replace text within a portion of a string.
+        // Example: `Str::replaceAt("abcdef", "123", 2, 2)` -> `"ab123ef"`
+        "replaceAt" | "replace_at" => {
+            let s = get_arg_str(args, 0, "Str::replaceAt")?;
+            let replacement = get_arg_str(args, 1, "Str::replaceAt")?;
+            let start = args.get(2).and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::replaceAt".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let length_opt = args.get(3).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+
+            let chars: Vec<char> = s.chars().collect();
+            let total_len = chars.len() as i64;
+            let start_idx = if start < 0 {
+                (total_len + start).max(0) as usize
+            } else {
+                start.min(total_len) as usize
+            };
+
+            let end_idx = match length_opt {
+                None => total_len as usize,
+                Some(l) if l >= 0 => (start_idx as i64 + l).min(total_len) as usize,
+                Some(l) => (total_len + l).max(start_idx as i64) as usize,
+            };
+
+            let mut out = String::new();
+            out.extend(&chars[..start_idx]);
+            out.push_str(&replacement);
+            out.extend(&chars[end_idx..]);
+            Ok(PhpValue::string(out))
         }
         "reverse" => {
             let s = get_arg_str(args, 0, "Str::reverse")?;
@@ -1151,13 +1259,203 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::list(items))
         }
+        // Return the first element of an array, or `$default` if empty.
+        // Example: `Arr::first([10, 20], null)` -> `10`
         "first" => {
             let items = args.first().map(extract_array_elements).unwrap_or_default();
-            Ok(items.into_iter().next().unwrap_or(PhpValue::Null))
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            Ok(items.into_iter().next().unwrap_or(default_val))
         }
+        // Return the last element of an array, or `$default` if empty.
+        // Example: `Arr::last([10, 20], null)` -> `20`
         "last" => {
             let items = args.first().map(extract_array_elements).unwrap_or_default();
-            Ok(items.into_iter().last().unwrap_or(PhpValue::Null))
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            Ok(items.into_iter().last().unwrap_or(default_val))
+        }
+        // Return the first key of an array, or null if empty.
+        // Example: `Arr::firstKey(['a' => 1, 'b' => 2])` -> `'a'`
+        "firstKey" => {
+            let res = match args.first() {
+                Some(PhpValue::Dict(d)) => d
+                    .borrow()
+                    .keys()
+                    .next()
+                    .map(|k| PhpValue::string(k.clone()))
+                    .unwrap_or(PhpValue::Null),
+                Some(PhpValue::HashMap(m)) => {
+                    m.borrow().keys().next().cloned().unwrap_or(PhpValue::Null)
+                }
+                Some(PhpValue::Array(a) | PhpValue::List(a)) => {
+                    if a.borrow().is_empty() {
+                        PhpValue::Null
+                    } else {
+                        PhpValue::Int(0)
+                    }
+                }
+                Some(PhpValue::Set(s)) => {
+                    s.borrow().iter().next().cloned().unwrap_or(PhpValue::Null)
+                }
+                _ => PhpValue::Null,
+            };
+            Ok(res)
+        }
+        // Return the last key of an array, or null if empty.
+        // Example: `Arr::lastKey(['a' => 1, 'b' => 2])` -> `'b'`
+        "lastKey" => {
+            let res = match args.first() {
+                Some(PhpValue::Dict(d)) => d
+                    .borrow()
+                    .keys()
+                    .last()
+                    .map(|k| PhpValue::string(k.clone()))
+                    .unwrap_or(PhpValue::Null),
+                Some(PhpValue::HashMap(m)) => {
+                    m.borrow().keys().last().cloned().unwrap_or(PhpValue::Null)
+                }
+                Some(PhpValue::Array(a) | PhpValue::List(a)) => {
+                    let len = a.borrow().len();
+                    if len == 0 {
+                        PhpValue::Null
+                    } else {
+                        PhpValue::Int((len - 1) as i32)
+                    }
+                }
+                Some(PhpValue::Set(s)) => {
+                    s.borrow().iter().last().cloned().unwrap_or(PhpValue::Null)
+                }
+                _ => PhpValue::Null,
+            };
+            Ok(res)
+        }
+        // Return the sum of values in an array.
+        // Example: `Arr::sum([1, 2, 3])` -> `6`
+        "sum" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            let mut is_float = false;
+            let mut float_sum = 0.0f64;
+            let mut int_sum = 0i64;
+            for item in &items {
+                if let Some(fl) = item.to_f64() {
+                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. }) {
+                        is_float = true;
+                    }
+                    float_sum += fl;
+                }
+                if let Some(i) = item.to_i64() {
+                    int_sum = int_sum.wrapping_add(i);
+                }
+            }
+            if is_float {
+                Ok(PhpValue::Float(float_sum as f32))
+            } else {
+                Ok(PhpValue::Int(int_sum as i32))
+            }
+        }
+        // Return the product of values in an array.
+        // Example: `Arr::product([2, 3, 4])` -> `24`
+        "product" => {
+            let items = args.first().map(extract_array_elements).unwrap_or_default();
+            if items.is_empty() {
+                return Ok(PhpValue::Int(1));
+            }
+            let mut is_float = false;
+            let mut float_prod = 1.0f64;
+            let mut int_prod = 1i64;
+            for item in &items {
+                if let Some(fl) = item.to_f64() {
+                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. }) {
+                        is_float = true;
+                    }
+                    float_prod *= fl;
+                }
+                if let Some(i) = item.to_i64() {
+                    int_prod = int_prod.wrapping_mul(i);
+                }
+            }
+            if is_float {
+                Ok(PhpValue::Float(float_prod as f32))
+            } else {
+                Ok(PhpValue::Int(int_prod as i32))
+            }
+        }
+        // Fill an array with `$count` entries of `$value`, starting at `$start`.
+        // Example: `Arr::fill(0, 3, 'val')` -> `['val', 'val', 'val']`
+        "fill" => {
+            let start = args.first().and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Arr::fill".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let count = args.get(1).and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Arr::fill".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let val = args.get(2).cloned().unwrap_or(PhpValue::Null);
+            if count < 0 {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Arr::fill(): Argument #2 ($count) must be greater than or equal to 0".to_string(),
+                });
+            }
+            if count == 0 {
+                return Ok(PhpValue::list(Vec::new()));
+            }
+            if start == 0 {
+                Ok(PhpValue::list(vec![val; count as usize]))
+            } else {
+                let mut map = IndexMap::new();
+                for i in 0..count {
+                    map.insert(format!("{}", start + i), val.clone());
+                }
+                Ok(PhpValue::dict_from_map(map))
+            }
+        }
+        // Fill an array with values using the specified keys.
+        // Example: `Arr::fillKeys(['a', 'b'], 10)` -> `['a' => 10, 'b' => 10]`
+        "fillKeys" => {
+            let keys_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Arr::fillKeys".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            let keys = extract_array_elements(keys_val);
+            let mut map = IndexMap::new();
+            for k in keys {
+                map.insert(k.to_php_string(), val.clone());
+            }
+            Ok(PhpValue::dict_from_map(map))
+        }
+        // Pad an array to `$size` with `$value`.
+        // Example: `Arr::pad([1, 2], 4, 0)` -> `[1, 2, 0, 0]`
+        "pad" => {
+            let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Arr::pad".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let size = args.get(1).and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Arr::pad".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let val = args.get(2).cloned().unwrap_or(PhpValue::Null);
+            let mut items = extract_array_elements(target);
+            let abs_size = size.abs() as usize;
+            if abs_size > items.len() {
+                let pad_count = abs_size - items.len();
+                if size > 0 {
+                    for _ in 0..pad_count {
+                        items.push(val.clone());
+                    }
+                } else {
+                    let mut new_items = vec![val; pad_count];
+                    new_items.extend(items);
+                    items = new_items;
+                }
+            }
+            Ok(PhpValue::list(items))
         }
         "flatten" => {
             let mut out = Vec::new();
@@ -2049,6 +2347,110 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
 // File, HTTP, Log, DB, Session, Image, URL, Glob, phpFun Facades
 // =========================================================================
 
+/// Parse file permissions from string format (octal e.g. "0755", "755", "0o755" or symbolic e.g. "rwxr-xr-x").
+pub fn parse_file_mode_str(s: &str) -> Option<u32> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // 1. Symbolic mode: 9 chars (e.g. "rwxr-xr-x") or 10 chars (e.g. "drwxr-xr-x", "-rwxr-xr-x")
+    let sym_chars: Vec<char> = trimmed.chars().collect();
+    let sym_slice = if sym_chars.len() == 10 && matches!(sym_chars[0], '-' | 'd' | 'l' | 'c' | 'b' | 'p' | 's') {
+        &sym_chars[1..]
+    } else if sym_chars.len() == 9 {
+        &sym_chars[..]
+    } else {
+        &[]
+    };
+
+    if sym_slice.len() == 9 {
+        let mut mode: u32 = 0;
+        let valid_u_r = match sym_slice[0] {
+            'r' => { mode |= 0o400; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_u_w = match sym_slice[1] {
+            'w' => { mode |= 0o200; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_u_x = match sym_slice[2] {
+            'x' => { mode |= 0o100; true }
+            's' => { mode |= 0o4100; true }
+            'S' => { mode |= 0o4000; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_g_r = match sym_slice[3] {
+            'r' => { mode |= 0o040; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_g_w = match sym_slice[4] {
+            'w' => { mode |= 0o020; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_g_x = match sym_slice[5] {
+            'x' => { mode |= 0o010; true }
+            's' => { mode |= 0o2010; true }
+            'S' => { mode |= 0o2000; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_o_r = match sym_slice[6] {
+            'r' => { mode |= 0o004; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_o_w = match sym_slice[7] {
+            'w' => { mode |= 0o002; true }
+            '-' => true,
+            _ => false,
+        };
+        let valid_o_x = match sym_slice[8] {
+            'x' => { mode |= 0o001; true }
+            't' => { mode |= 0o1001; true }
+            'T' => { mode |= 0o1000; true }
+            '-' => true,
+            _ => false,
+        };
+
+        if valid_u_r && valid_u_w && valid_u_x && valid_g_r && valid_g_w && valid_g_x && valid_o_r && valid_o_w && valid_o_x {
+            return Some(mode);
+        }
+    }
+
+    // 2. Octal string: e.g. "0755", "755", "0o755", "0644", "1777"
+    let oct_str = if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
+        &trimmed[2..]
+    } else {
+        trimmed
+    };
+
+    if !oct_str.is_empty() && oct_str.chars().all(|c| ('0'..='7').contains(&c)) {
+        if oct_str.len() <= 5 {
+            if let Ok(val) = u32::from_str_radix(oct_str, 8) {
+                if val <= 0o7777 {
+                    return Some(val);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Helper that only accepts PhpValue::String and parses permissions mode.
+pub fn parse_file_mode(val: &PhpValue) -> Option<u32> {
+    match val {
+        PhpValue::String(s) => parse_file_mode_str(&s.to_str_lossy()),
+        _ => None,
+    }
+}
+
 fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
         "read" => {
@@ -2192,15 +2594,12 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
                         Ok(PhpValue::Null)
                     }
                 } else {
-                    let mode: u32 = match mode_val {
-                        PhpValue::Int(n) => *n as u32,
-                        PhpValue::RustInt { value, .. } => *value as u32,
-                        PhpValue::String(s) => {
-                            let s_str = s.to_str_lossy();
-                            let clean = s_str.trim().trim_start_matches("0o");
-                            u32::from_str_radix(clean, 8).unwrap_or_else(|_| clean.parse().unwrap_or(0))
+                    let mode: u32 = match parse_file_mode(mode_val) {
+                        Some(m) => m,
+                        None => {
+                            record_fiber_io_finish();
+                            return Ok(PhpValue::Bool(false));
                         }
-                        _ => 0,
                     };
                     #[cfg(unix)]
                     {
@@ -2232,6 +2631,62 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             record_fiber_io_finish();
             res
+        }
+        "parseMode" | "parse_mode" => {
+            let mode_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::parseMode".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match parse_file_mode(mode_val) {
+                Some(mode) => Ok(PhpValue::Int(mode as i32)),
+                None => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "mkdir" | "makeDirectory" | "make_directory" => {
+            let path = get_arg_str(args, 0, "File::mkdir")?;
+            let mode = if let Some(mode_val) = args.get(1) {
+                if mode_val.is_null() {
+                    0o777
+                } else {
+                    match parse_file_mode(mode_val) {
+                        Some(m) => m,
+                        None => return Ok(PhpValue::Bool(false)),
+                    }
+                }
+            } else {
+                0o777
+            };
+            let recursive = args.get(2).map(|v| v.is_truthy()).unwrap_or(false);
+            let force = args.get(3).map(|v| v.is_truthy()).unwrap_or(false);
+
+            record_fiber_io_start(IoKind::FileWrite {
+                path: path.clone(),
+                bytes: 0,
+            });
+
+            let p = std::path::Path::new(&path);
+            if p.exists() && !force {
+                record_fiber_io_finish();
+                return Ok(PhpValue::Bool(false));
+            }
+
+            let ok = if recursive {
+                std::fs::create_dir_all(p).is_ok()
+            } else {
+                std::fs::create_dir(p).is_ok()
+            };
+
+            if ok {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode));
+                }
+            }
+
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
         }
         "chown" => {
             let path = get_arg_str(args, 0, "File::chown")?;
@@ -2458,6 +2913,92 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             let path = get_arg_str(args, 0, "File::isDirectory")?;
             let is_d = std::path::Path::new(&path).is_dir();
             Ok(PhpValue::Bool(is_d))
+        }
+        "info" => {
+            let path = get_arg_str(args, 0, "File::info")?;
+            let p = std::path::Path::new(&path);
+            let dirname = p.parent().and_then(|s| s.to_str()).unwrap_or("");
+            let basename = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let extension = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let filename = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let mut map = IndexMap::new();
+            map.insert("dirname".to_string(), PhpValue::string(dirname));
+            map.insert("basename".to_string(), PhpValue::string(basename));
+            map.insert("extension".to_string(), PhpValue::string(extension));
+            map.insert("filename".to_string(), PhpValue::string(filename));
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "modifiedAt" | "modified_at" => {
+            let path = get_arg_str(args, 0, "File::modifiedAt")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let meta = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(err) => {
+                    record_fiber_io_finish();
+                    return Err(RuntimeErrorKind::Custom {
+                        message: format!("File::modifiedAt failed: {}", err),
+                    });
+                }
+            };
+            let mtime = match meta.modified() {
+                Ok(t) => t,
+                Err(err) => {
+                    record_fiber_io_finish();
+                    return Err(RuntimeErrorKind::Custom {
+                        message: format!("File::modifiedAt failed: {}", err),
+                    });
+                }
+            };
+            record_fiber_io_finish();
+            let duration = match mtime.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => d.as_secs() as i64,
+                Err(_) => 0,
+            };
+            if let Ok(narrow) = i32::try_from(duration) {
+                Ok(PhpValue::Int(narrow))
+            } else {
+                Ok(PhpValue::RustInt {
+                    kind: RustIntKind::I64,
+                    value: duration as i128,
+                })
+            }
+        }
+        "isReadable" | "is_readable" => {
+            let path = get_arg_str(args, 0, "File::isReadable")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            #[cfg(unix)]
+            let ok = {
+                use std::ffi::CString;
+                if let Ok(c_path) = CString::new(path.as_str()) {
+                    unsafe { libc::access(c_path.as_ptr(), libc::R_OK) == 0 }
+                } else {
+                    false
+                }
+            };
+            #[cfg(not(unix))]
+            let ok = std::fs::File::open(&path).is_ok();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
+        }
+        "isWritable" | "is_writable" => {
+            let path = get_arg_str(args, 0, "File::isWritable")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            #[cfg(unix)]
+            let ok = {
+                use std::ffi::CString;
+                if let Ok(c_path) = CString::new(path.as_str()) {
+                    unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+                } else {
+                    false
+                }
+            };
+            #[cfg(not(unix))]
+            let ok = match std::fs::metadata(&path) {
+                Ok(m) => !m.permissions().readonly(),
+                Err(_) => false,
+            };
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
         }
         "fromRequest" => {
             let key = args.first().and_then(|a| match a {
@@ -2721,6 +3262,115 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
                     Err(err) => Err(format!("AFile::type failed: {}", err)),
                 };
                 let _ = tx.send(res);
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "chmod" => {
+            let path = get_arg_str(args, 0, "AFile::chmod")?;
+            let mode = if let Some(mode_val) = args.get(1) {
+                if mode_val.is_null() {
+                    None
+                } else {
+                    match parse_file_mode(mode_val) {
+                        Some(m) => Some(m),
+                        None => {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let _ = tx.send(Ok(FrozenValue::Bool(false)));
+                            return Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                                VmFuture::pending(rx),
+                            ))));
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let p = std::path::Path::new(&path);
+                if let Some(m) = mode {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let ok = tokio::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).await.is_ok();
+                        let _ = tx.send(Ok(FrozenValue::Bool(ok)));
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = tx.send(Ok(FrozenValue::Bool(p.exists())));
+                    }
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = tokio::fs::metadata(p).await {
+                            let m = meta.permissions().mode() & 0o7777;
+                            let _ = tx.send(Ok(FrozenValue::String(format!("{:04o}", m).into())));
+                        } else {
+                            let _ = tx.send(Ok(FrozenValue::Null));
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = tx.send(Ok(FrozenValue::Null));
+                    }
+                }
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "mkdir" | "makeDirectory" | "make_directory" => {
+            let path = get_arg_str(args, 0, "AFile::mkdir")?;
+            let mode = if let Some(mode_val) = args.get(1) {
+                if mode_val.is_null() {
+                    0o777
+                } else {
+                    match parse_file_mode(mode_val) {
+                        Some(m) => m,
+                        None => {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let _ = tx.send(Ok(FrozenValue::Bool(false)));
+                            return Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                                VmFuture::pending(rx),
+                            ))));
+                        }
+                    }
+                }
+            } else {
+                0o777
+            };
+            let recursive = args.get(2).map(|v| v.is_truthy()).unwrap_or(false);
+            let force = args.get(3).map(|v| v.is_truthy()).unwrap_or(false);
+            record_fiber_io_start(IoKind::FileWrite {
+                path: path.clone(),
+                bytes: 0,
+            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let p = std::path::Path::new(&path);
+                if p.exists() && !force {
+                    let _ = tx.send(Ok(FrozenValue::Bool(false)));
+                    return;
+                }
+                let ok = if recursive {
+                    tokio::fs::create_dir_all(p).await.is_ok()
+                } else {
+                    tokio::fs::create_dir(p).await.is_ok()
+                };
+                if ok {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = tokio::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).await;
+                    }
+                }
+                let _ = tx.send(Ok(FrozenValue::Bool(ok)));
             });
             record_fiber_io_finish();
             Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
@@ -3353,15 +4003,63 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
                 value: val as i128,
             })
         }
+        "abs" => {
+            let val = args.first().and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Int::abs".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let res = val.saturating_abs();
+            if let Ok(narrow) = i32::try_from(res) {
+                Ok(PhpValue::Int(narrow))
+            } else {
+                Ok(PhpValue::RustInt {
+                    kind: RustIntKind::I64,
+                    value: res as i128,
+                })
+            }
+        }
         "min" => {
-            let a = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            let b = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((a.min(b)) as i32))
+            let nums: Vec<i64> = if args.len() == 1 && (matches!(args[0], PhpValue::List(_) | PhpValue::Dict(_) | PhpValue::Array(_) | PhpValue::HashMap(_) | PhpValue::Set(_))) {
+                extract_array_elements(&args[0]).into_iter().filter_map(|v| v.to_i64()).collect()
+            } else {
+                args.iter().filter_map(|v| v.to_i64()).collect()
+            };
+            if nums.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Int::min(): Argument cannot be empty".to_string(),
+                });
+            }
+            let min_val = nums.into_iter().min().unwrap();
+            if let Ok(narrow) = i32::try_from(min_val) {
+                Ok(PhpValue::Int(narrow))
+            } else {
+                Ok(PhpValue::RustInt {
+                    kind: RustIntKind::I64,
+                    value: min_val as i128,
+                })
+            }
         }
         "max" => {
-            let a = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            let b = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((a.max(b)) as i32))
+            let nums: Vec<i64> = if args.len() == 1 && (matches!(args[0], PhpValue::List(_) | PhpValue::Dict(_) | PhpValue::Array(_) | PhpValue::HashMap(_) | PhpValue::Set(_))) {
+                extract_array_elements(&args[0]).into_iter().filter_map(|v| v.to_i64()).collect()
+            } else {
+                args.iter().filter_map(|v| v.to_i64()).collect()
+            };
+            if nums.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Int::max(): Argument cannot be empty".to_string(),
+                });
+            }
+            let max_val = nums.into_iter().max().unwrap();
+            if let Ok(narrow) = i32::try_from(max_val) {
+                Ok(PhpValue::Int(narrow))
+            } else {
+                Ok(PhpValue::RustInt {
+                    kind: RustIntKind::I64,
+                    value: max_val as i128,
+                })
+            }
         }
         "clamp" => {
             let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
@@ -3377,10 +4075,41 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
         "random" => {
             let min_v = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
             let max_v = args.get(1).and_then(|v| v.to_i64()).unwrap_or(100);
-            let span = if max_v > min_v { max_v - min_v + 1 } else { 1 };
-            let count = ASYNC_TASK_COUNTER.fetch_add(1, Ordering::Relaxed) as i64;
-            let val = min_v + (count.wrapping_mul(6364136223846793005).abs() % span);
-            Ok(PhpValue::Int(val as i32))
+            if min_v > max_v {
+                return Err(RuntimeErrorKind::Custom {
+                    message: format!("Int::random(): min ({}) cannot be greater than max ({})", min_v, max_v),
+                });
+            }
+            if min_v == max_v {
+                if let Ok(narrow) = i32::try_from(min_v) {
+                    return Ok(PhpValue::Int(narrow));
+                } else {
+                    return Ok(PhpValue::RustInt {
+                        kind: RustIntKind::I64,
+                        value: min_v as i128,
+                    });
+                }
+            }
+            let span = (max_v - min_v) as u64 + 1;
+            let limit = u64::MAX - (u64::MAX % span);
+            let val_offset = loop {
+                let bytes = crate::vm::crypto::random_bytes(8).map_err(|e| RuntimeErrorKind::Custom {
+                    message: format!("Int::random failed: {}", e),
+                })?;
+                let n = u64::from_ne_bytes(bytes.try_into().unwrap_or([0; 8]));
+                if n < limit {
+                    break n % span;
+                }
+            };
+            let res = min_v + val_offset as i64;
+            if let Ok(narrow) = i32::try_from(res) {
+                Ok(PhpValue::Int(narrow))
+            } else {
+                Ok(PhpValue::RustInt {
+                    kind: RustIntKind::I64,
+                    value: res as i128,
+                })
+            }
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Int".to_string(),
@@ -3400,6 +4129,35 @@ pub fn to_float_loose(v: &PhpValue) -> Option<f64> {
         PhpValue::Null => Some(0.0),
         _ => None,
     }
+}
+
+fn format_number(val: f64, decimals: usize, dec_point: &str, thousands_sep: &str) -> String {
+    let is_neg = val.is_sign_negative() && val != 0.0;
+    let abs_val = val.abs();
+    let s = format!("{:.*}", decimals, abs_val);
+    let parts: Vec<&str> = s.split('.').collect();
+    let int_part = parts[0];
+    let frac_part = if parts.len() > 1 { parts[1] } else { "" };
+
+    let mut formatted_int = String::with_capacity(int_part.len() + int_part.len() / 3);
+    let len = int_part.len();
+    for (i, ch) in int_part.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 && !thousands_sep.is_empty() {
+            formatted_int.push_str(thousands_sep);
+        }
+        formatted_int.push(ch);
+    }
+
+    let mut res = String::new();
+    if is_neg {
+        res.push('-');
+    }
+    res.push_str(&formatted_int);
+    if decimals > 0 {
+        res.push_str(dec_point);
+        res.push_str(frac_part);
+    }
+    res
 }
 
 fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
@@ -3464,10 +4222,168 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
             Ok(PhpValue::Float(val.abs() as f32))
         }
+        "format" => {
+            let val = args.first().and_then(|v| v.to_f64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Float::format".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let decimals = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
+            let dec_point = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| ".".to_string());
+            let thousands_sep = args.get(3).map(|v| v.to_php_string()).unwrap_or_else(|| ",".to_string());
+            Ok(PhpValue::string(format_number(val, decimals, &dec_point, &thousands_sep)))
+        }
+        "min" => {
+            let nums: Vec<f64> = if args.len() == 1 && (matches!(args[0], PhpValue::List(_) | PhpValue::Dict(_) | PhpValue::Array(_) | PhpValue::HashMap(_) | PhpValue::Set(_))) {
+                extract_array_elements(&args[0]).into_iter().filter_map(|v| v.to_f64()).collect()
+            } else {
+                args.iter().filter_map(|v| v.to_f64()).collect()
+            };
+            if nums.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Float::min(): Argument cannot be empty".to_string(),
+                });
+            }
+            let min_val = nums.into_iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+            Ok(PhpValue::Float(min_val as f32))
+        }
+        "max" => {
+            let nums: Vec<f64> = if args.len() == 1 && (matches!(args[0], PhpValue::List(_) | PhpValue::Dict(_) | PhpValue::Array(_) | PhpValue::HashMap(_) | PhpValue::Set(_))) {
+                extract_array_elements(&args[0]).into_iter().filter_map(|v| v.to_f64()).collect()
+            } else {
+                args.iter().filter_map(|v| v.to_f64()).collect()
+            };
+            if nums.is_empty() {
+                return Err(RuntimeErrorKind::Custom {
+                    message: "Float::max(): Argument cannot be empty".to_string(),
+                });
+            }
+            let max_val = nums.into_iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+            Ok(PhpValue::Float(max_val as f32))
+        }
+        "random" => {
+            let min_v = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let max_v = args.get(1).and_then(|v| v.to_f64()).unwrap_or(1.0);
+            if min_v > max_v {
+                return Err(RuntimeErrorKind::Custom {
+                    message: format!("Float::random(): min ({}) cannot be greater than max ({})", min_v, max_v),
+                });
+            }
+            if (min_v - max_v).abs() < f64::EPSILON {
+                return Ok(PhpValue::Float(min_v as f32));
+            }
+            let bytes = crate::vm::crypto::random_bytes(8).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Float::random failed: {}", e),
+            })?;
+            let u = u64::from_ne_bytes(bytes.try_into().unwrap_or([0; 8]));
+            let factor = (u as f64) / (u64::MAX as f64);
+            let res = min_v + factor * (max_v - min_v);
+            Ok(PhpValue::Float(res as f32))
+        }
         "parse" => {
             let s = get_arg_str(args, 0, "Float::parse")?;
             let val = s.trim().parse::<f64>().unwrap_or(0.0);
             Ok(PhpValue::Float(val as f32))
+        }
+        "add" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let sum = a.add(&b);
+            if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                Ok(PhpValue::string(sum.to_string()))
+            } else {
+                Ok(PhpValue::Float(sum.to_f32()))
+            }
+        }
+        "sub" | "subtract" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let diff = a.sub(&b);
+            if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                Ok(PhpValue::string(diff.to_string()))
+            } else {
+                Ok(PhpValue::Float(diff.to_f32()))
+            }
+        }
+        "mul" | "multiply" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
+            let prod = a.mul(&b);
+            if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                Ok(PhpValue::string(prod.to_string()))
+            } else {
+                Ok(PhpValue::Float(prod.to_f32()))
+            }
+        }
+        "div" | "divide" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            if b.is_zero() {
+                return Err(RuntimeErrorKind::DivisionByZero);
+            }
+            let scale = args.get(2).and_then(|v| v.to_i64()).map(|s| s.max(0) as usize);
+            let quot = a.div(&b, scale).map_err(|_| RuntimeErrorKind::DivisionByZero)?;
+            if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                Ok(PhpValue::string(quot.to_string()))
+            } else {
+                Ok(PhpValue::Float(quot.to_f32()))
+            }
+        }
+        "bAdd" => {
+            let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F64,
+                value: a + b,
+            })
+        }
+        "bSub" => {
+            let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F64,
+                value: a - b,
+            })
+        }
+        "bMul" => {
+            let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F64,
+                value: a * b,
+            })
+        }
+        "bDiv" => {
+            let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+            if b == 0.0 {
+                return Err(RuntimeErrorKind::DivisionByZero);
+            }
+            Ok(PhpValue::RustFloat {
+                kind: RustFloatKind::F64,
+                value: a / b,
+            })
+        }
+        "bccomp" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let scale = args.get(2).and_then(|v| v.to_i64()).map(|s| s.max(0) as usize);
+            let ord = match scale {
+                Some(s) => {
+                    let mut a_trunc = a.clone();
+                    let mut b_trunc = b.clone();
+                    a_trunc.fractional.truncate(s);
+                    b_trunc.fractional.truncate(s);
+                    a_trunc.cmp(&b_trunc)
+                }
+                None => a.cmp(&b),
+            };
+            let res = match ord {
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+            };
+            Ok(PhpValue::Int(res))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Float".to_string(),
@@ -3903,6 +4819,11 @@ fn dispatch_url(method: &str, args: &[PhpValue]) -> FacadeResult {
             let sep = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| "&".to_string());
             let enc_type = args.get(3).and_then(|v| v.to_i64()).unwrap_or(url_helper::PHP_QUERY_RFC1738);
             Ok(PhpValue::string(url_helper::http_build_query(&data, &prefix, &sep, enc_type)))
+        }
+        "parseQuery" | "parse_query" => {
+            let input = get_arg_str(args, 0, "Url::parseQuery")?;
+            let map = url_helper::parse_query(&input);
+            Ok(PhpValue::dict_from_map(map))
         }
         "base64Encode" | "base64_encode" => {
             let s = get_arg_str(args, 0, "Url::base64Encode")?;
@@ -4422,6 +5343,31 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "round" => dispatch_float("round", args),
         "floor" => dispatch_float("floor", args),
         "ceil" | "ciel" => dispatch_float("ceil", args),
+        "bcadd" => dispatch_float("add", args),
+        "bcsub" => dispatch_float("sub", args),
+        "bcmul" => dispatch_float("mul", args),
+        "bcdiv" => dispatch_float("div", args),
+        "bccomp" => {
+            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+            let scale = args.get(2).and_then(|v| v.to_i64()).map(|s| s.max(0) as usize);
+            let ord = match scale {
+                Some(s) => {
+                    let mut a_trunc = a.clone();
+                    let mut b_trunc = b.clone();
+                    a_trunc.fractional.truncate(s);
+                    b_trunc.fractional.truncate(s);
+                    a_trunc.cmp(&b_trunc)
+                }
+                None => a.cmp(&b),
+            };
+            let res = match ord {
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+            };
+            Ok(PhpValue::Int(res))
+        }
         "json_encode" => {
             let val = args.first().cloned().unwrap_or(PhpValue::Null);
             Ok(PhpValue::string(php_value_to_json(&val)))
@@ -4447,9 +5393,149 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "is_dir" => dispatch_file("isDirectory", args),
         "copy" => dispatch_file("copy", args),
         "rename" => dispatch_file("rename", args),
+        "mkdir" => dispatch_file("mkdir", args),
         "chmod" => dispatch_file("chmod", args),
         "chown" => dispatch_file("chown", args),
         "touch" => dispatch_file("touch", args),
+        "parse_mode" => dispatch_file("parseMode", args),
+        "number_format" => dispatch_float("format", args),
+        "pathinfo" => {
+            let path = get_arg_str(args, 0, "pathinfo")?;
+            let p = std::path::Path::new(&path);
+            let dirname = p.parent().and_then(|s| s.to_str()).unwrap_or("");
+            let basename = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let extension = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let filename = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some(opt_val) = args.get(1) {
+                if let Some(opt) = opt_val.to_i64() {
+                    match opt {
+                        1 => return Ok(PhpValue::string(dirname)),
+                        2 => return Ok(PhpValue::string(basename)),
+                        4 => return Ok(PhpValue::string(extension)),
+                        8 => return Ok(PhpValue::string(filename)),
+                        _ => {}
+                    }
+                }
+            }
+            let mut map = IndexMap::new();
+            map.insert("dirname".to_string(), PhpValue::string(dirname));
+            map.insert("basename".to_string(), PhpValue::string(basename));
+            map.insert("extension".to_string(), PhpValue::string(extension));
+            map.insert("filename".to_string(), PhpValue::string(filename));
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "basename" => {
+            let path = get_arg_str(args, 0, "basename")?;
+            let mut base = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(suffix_val) = args.get(1) {
+                let suffix = suffix_val.to_php_string();
+                if !suffix.is_empty() && base.ends_with(&suffix) {
+                    base.truncate(base.len() - suffix.len());
+                }
+            }
+            Ok(PhpValue::string(base))
+        }
+        "filemtime" => dispatch_file("modifiedAt", args),
+        "is_readable" => dispatch_file("isReadable", args),
+        "is_writable" => dispatch_file("isWritable", args),
+        "abs" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "abs".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::Float(_) | PhpValue::RustFloat { .. } => dispatch_float("abs", args),
+                _ => dispatch_int("abs", args),
+            }
+        }
+        "min" => {
+            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::RustFloat { .. }))
+                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::RustFloat { .. })));
+            if is_any_float {
+                dispatch_float("min", args)
+            } else {
+                dispatch_int("min", args)
+            }
+        }
+        "max" => {
+            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::RustFloat { .. }))
+                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::RustFloat { .. })));
+            if is_any_float {
+                dispatch_float("max", args)
+            } else {
+                dispatch_int("max", args)
+            }
+        }
+        "rand" | "mt_rand" => dispatch_int("random", args),
+        "ip2long" => {
+            let s = match args.first() {
+                Some(v) => v.to_php_string(),
+                None => return Ok(PhpValue::Bool(false)),
+            };
+            match s.trim().parse::<Ipv4Addr>() {
+                Ok(ip) => {
+                    let val = u32::from(ip) as i64;
+                    if let Ok(narrow) = i32::try_from(val) {
+                        Ok(PhpValue::Int(narrow))
+                    } else {
+                        Ok(PhpValue::RustInt {
+                            kind: RustIntKind::I64,
+                            value: val as i128,
+                        })
+                    }
+                }
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "long2ip" => dispatch_ip("fromLong", args),
+        "parse_str" => {
+            let s = get_arg_str(args, 0, "parse_str")?;
+            let map = url_helper::parse_query(&s);
+            if let Some(target) = args.get(1) {
+                if let PhpValue::Dict(d) = target {
+                    d.borrow_mut().clear();
+                    for (k, v) in map.clone() {
+                        d.borrow_mut().insert(k, v);
+                    }
+                }
+            }
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "str_pad" => {
+            let s = get_arg_str(args, 0, "str_pad")?;
+            let len = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let pad = args.get(2).map(|v| v.to_php_string()).unwrap_or_else(|| " ".to_string());
+            let side_val = args.get(3);
+            let side = match side_val {
+                Some(PhpValue::Int(0)) => "left",
+                Some(PhpValue::Int(1)) => "right",
+                Some(PhpValue::Int(2)) => "both",
+                Some(v) => match v.to_php_string().to_ascii_lowercase().as_str() {
+                    "0" | "left" => "left",
+                    "2" | "both" => "both",
+                    _ => "right",
+                },
+                None => "right",
+            };
+            dispatch_str("pad", &[PhpValue::string(s), PhpValue::Int(len as i32), PhpValue::string(pad), PhpValue::string(side)])
+        }
+        "str_repeat" => dispatch_str("repeat", args),
+        "substr_count" => dispatch_str("countOccurrences", args),
+        "substr_replace" => dispatch_str("replaceAt", args),
+        "array_sum" => dispatch_arr("sum", args),
+        "array_product" => dispatch_arr("product", args),
+        "array_fill" => dispatch_arr("fill", args),
+        "array_fill_keys" => dispatch_arr("fillKeys", args),
+        "array_pad" => dispatch_arr("pad", args),
+        "gzcompress" => dispatch_compress("zlib", args),
+        "gzuncompress" => dispatch_compress("unzlib", args),
+        "gzencode" => dispatch_compress("gzip", args),
+        "gzdecode" => dispatch_compress("gunzip", args),
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),
@@ -5312,6 +6398,172 @@ fn parse_json_string(chars: &[char], i: &mut usize) -> Result<String, String> {
         }
     }
     Err("Unterminated string".to_string())
+}
+
+// =========================================================================
+// Ip Facade
+// =========================================================================
+
+fn dispatch_ip(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        // Convert IPv4 dotted-decimal string to integer. Throws on invalid.
+        // Example: `Ip::toLong("127.0.0.1")` -> `2130706433`
+        "toLong" | "to_long" => {
+            let s = get_arg_str(args, 0, "Ip::toLong")?;
+            match s.trim().parse::<Ipv4Addr>() {
+                Ok(ip) => {
+                    let val = u32::from(ip) as i64;
+                    if let Ok(narrow) = i32::try_from(val) {
+                        Ok(PhpValue::Int(narrow))
+                    } else {
+                        Ok(PhpValue::RustInt {
+                            kind: RustIntKind::I64,
+                            value: val as i128,
+                        })
+                    }
+                }
+                Err(_) => Err(RuntimeErrorKind::Custom {
+                    message: format!("Ip::toLong(): Invalid IPv4 address '{}'", s),
+                }),
+            }
+        }
+        // Convert integer to IPv4 dotted-decimal string.
+        // Example: `Ip::fromLong(2130706433)` -> `"127.0.0.1"`
+        "fromLong" | "from_long" => {
+            let val = args.first().and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Ip::fromLong".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let ip = Ipv4Addr::from(val as u32);
+            Ok(PhpValue::string(ip.to_string()))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Ip".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Compress Facade
+// =========================================================================
+
+fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        // Compress data using ZLIB format (wraps gzcompress).
+        // Example: `Compress::zlib("data")`
+        "zlib" => {
+            let data_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Compress::zlib".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let data_bytes: std::borrow::Cow<[u8]> = match data_val {
+                PhpValue::String(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
+                other => std::borrow::Cow::Owned(other.to_php_string().into_bytes()),
+            };
+            let level = args.get(1).and_then(|v| v.to_i64()).unwrap_or(-1);
+            let comp_level = match level {
+                -1 => Compression::default(),
+                0..=9 => Compression::new(level as u32),
+                _ => return Err(RuntimeErrorKind::Custom {
+                    message: format!("Compress::zlib(): Compression level ({}) must be within -1 and 9", level),
+                }),
+            };
+            let mut encoder = ZlibEncoder::new(Vec::new(), comp_level);
+            encoder.write_all(&data_bytes).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::zlib failed: {}", e),
+            })?;
+            let compressed = encoder.finish().map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::zlib failed: {}", e),
+            })?;
+            Ok(PhpValue::bytes(compressed))
+        }
+        // Uncompress ZLIB compressed data (wraps gzuncompress).
+        // Example: `Compress::unzlib($compressed)`
+        "unzlib" => {
+            let data_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Compress::unzlib".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let data_bytes = match data_val {
+                PhpValue::String(s) => s.as_bytes(),
+                _ => return Err(RuntimeErrorKind::TypeError {
+                    message: format!("Compress::unzlib() expects string, got {}", data_val.type_name()),
+                }),
+            };
+            let mut decoder = ZlibDecoder::new(data_bytes);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::unzlib failed: {}", e),
+            })?;
+            if let Ok(valid) = std::str::from_utf8(&decompressed) {
+                Ok(PhpValue::string(valid))
+            } else {
+                Ok(PhpValue::bytes(decompressed))
+            }
+        }
+        // Compress data using GZIP format (wraps gzencode).
+        // Example: `Compress::gzip("data")`
+        "gzip" => {
+            let data_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Compress::gzip".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let data_bytes: std::borrow::Cow<[u8]> = match data_val {
+                PhpValue::String(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
+                other => std::borrow::Cow::Owned(other.to_php_string().into_bytes()),
+            };
+            let level = args.get(1).and_then(|v| v.to_i64()).unwrap_or(-1);
+            let comp_level = match level {
+                -1 => Compression::default(),
+                0..=9 => Compression::new(level as u32),
+                _ => return Err(RuntimeErrorKind::Custom {
+                    message: format!("Compress::gzip(): Compression level ({}) must be within -1 and 9", level),
+                }),
+            };
+            let mut encoder = GzEncoder::new(Vec::new(), comp_level);
+            encoder.write_all(&data_bytes).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::gzip failed: {}", e),
+            })?;
+            let compressed = encoder.finish().map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::gzip failed: {}", e),
+            })?;
+            Ok(PhpValue::bytes(compressed))
+        }
+        // Decode a gzip compressed string (wraps gzdecode).
+        // Example: `Compress::gunzip($compressed)`
+        "gunzip" => {
+            let data_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Compress::gunzip".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let data_bytes = match data_val {
+                PhpValue::String(s) => s.as_bytes(),
+                _ => return Err(RuntimeErrorKind::TypeError {
+                    message: format!("Compress::gunzip() expects string, got {}", data_val.type_name()),
+                }),
+            };
+            let mut decoder = GzDecoder::new(data_bytes);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Compress::gunzip failed: {}", e),
+            })?;
+            if let Ok(valid) = std::str::from_utf8(&decompressed) {
+                Ok(PhpValue::string(valid))
+            } else {
+                Ok(PhpValue::bytes(decompressed))
+            }
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Compress".to_string(),
+            method: method.to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]

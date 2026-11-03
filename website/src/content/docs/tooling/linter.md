@@ -17,9 +17,10 @@ By default, running `rhp run lint` executes in fix-and-report mode:
 1. **PER-CS Code Formatting & Semicolon Splitting:** Enforces standard 4-space indentation, normalized brace positioning, parameter comma spacing, and separates statements ending with semicolons onto distinct lines while preserving comments, docblocks, and string literals verbatim.
 2. **Automated Copy-by-Reference for Mutated Arrays:** Automatically updates function and method array parameters (`array`, `list`, `dict`, `hashMap`, `set`) to copy-by-reference (`&$param`) whenever the array is mutated inside the function, updating callers in the same file.
 3. **Auto-Assignment of Collection Calls:** Automatically assigns pure, unassigned collection transformations (such as `$x->map();` and `Arr::list($z)->map();`) back to the target variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
-4. **Automated Type Inference:** Automatically prepends optimal type annotations before untyped variables, class properties, and parameter defaults wherever statically determinable.
-5. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
-6. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
+4. **Parameter Order Normalization (Required Before Optional):** Automatically reorganizes parameter signatures across functions, methods, closures, and arrow functions so required parameters precede optional ones.
+5. **Automated Type Inference:** Automatically prepends optimal type annotations before untyped variables, class properties, and parameter defaults wherever statically determinable.
+6. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
+7. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
 
 ---
 
@@ -147,6 +148,47 @@ class ServiceConfig {
 
 - **Existing Types Preserved:** If the developer already wrote an explicit type annotation (e.g. `int $count = "not an int";`), the linter **never overwrites** the author's declared type. Instead, the static type checker emits a type mismatch diagnostic for the developer to resolve.
 - **Ambiguous or Dynamic Variables:** When a variable is initialized to a dynamic expression whose type cannot be statically resolved, or when a variable is reassigned to incompatible types within the same scope, the linter leaves the variable untyped without error ("whenever not possible, no issue").
+
+---
+
+## Automated Parameter Order Normalization (Required Before Optional)
+
+RHP requires all **required parameters** (parameters without default values) to precede **optional parameters** (parameters with default values) across all functions, methods, closures, and arrow functions. Declaring an optional parameter before a required parameter creates ambiguous call-site contracts and is disallowed.
+
+`rhp run lint` automatically detects non-conforming parameter lists and normalizes them:
+
+```php
+// BEFORE LINTING:
+function queryDatabase(int $limit = 50, string $sql, int $timeout = 30) {
+    // ...
+}
+
+class UserRepository {
+    public function findUsers(bool $activeOnly = true, string $tenantId, int $max = 100) {
+        // ...
+    }
+}
+
+$filter = fn(int $step = 1, array $items) => $items;
+
+// AFTER 'rhp run lint':
+function queryDatabase(string $sql, int $limit = 50, int $timeout = 30) {
+    // ...
+}
+
+class UserRepository {
+    public function findUsers(string $tenantId, bool $activeOnly = true, int $max = 100) {
+        // ...
+    }
+}
+
+$filter = fn(array $items, int $step = 1) => $items;
+```
+
+### Invariants Preserved
+- **Type Annotations & References:** Parameter types (`int`, `string`, `list`, etc.) and reference indicators (`&$var`) stay intact during reordering.
+- **Relative Order Maintained:** Within each category (required parameters vs. optional parameters), original relative ordering is preserved. Variadic arguments (`...$rest`) always remain at the end.
+- **Dry-Run Check Mode:** When run with `--check` or `--no-fix`, the linter emits a `required-param-after-optional` (`RHP0230`) diagnostic without touching disk files.
 
 ---
 

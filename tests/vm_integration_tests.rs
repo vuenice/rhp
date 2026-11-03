@@ -86,7 +86,7 @@ fn test_arithmetic_bitwise_unary_and_short_circuit_execution() {
 }
 
 #[test]
-fn test_functions_recursion_default_and_named_arguments_and_type_contracts() {
+fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
     let source = r#"
         function fib(int $n): int {
             if ($n <= 1) {
@@ -95,16 +95,17 @@ fn test_functions_recursion_default_and_named_arguments_and_type_contracts() {
             return fib($n - 1) + fib($n - 2);
         }
 
-        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
+        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05, float $discount = 0.0): float {
             $subtotal = $quantity * $price;
             $tax = $subtotal * $taxRate;
-            float $total = $subtotal + $tax;
+            float $total = $subtotal + $tax - $discount;
             return $total;
         }
 
         $fib8 = fib(8);
         $totalDefault = calculateTotal(4, 25.0);
-        $totalNamed = calculateTotal(price: 50.0, quantity: 2, taxRate: 0.10);
+        // Skip $taxRate with extra comma to use default 0.05, and provide $discount = 10.0:
+        $totalSkipped = calculateTotal(4, 25.0, , 10.0);
     "#;
 
     let (vm, _) = run_source_with_vm(source).expect("Function execution should pass");
@@ -114,9 +115,18 @@ fn test_functions_recursion_default_and_named_arguments_and_type_contracts() {
         Some(&PhpValue::Float(105.0))
     );
     assert_eq!(
-        vm.get_main_variable("$totalNamed"),
-        Some(&PhpValue::Float(110.0))
+        vm.get_main_variable("$totalSkipped"),
+        Some(&PhpValue::Float(95.0))
     );
+
+    // Named parameters must be rejected with ParseError
+    let named_source = r#"
+        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
+            return $quantity * $price;
+        }
+        $res = calculateTotal(price: 50.0, quantity: 2);
+    "#;
+    assert!(run_source_with_vm(named_source).is_err(), "Named parameters must be rejected");
 }
 
 #[test]

@@ -39,6 +39,8 @@
 - **Function Bodies:** Evaluated using dynamic inference and assignment, preserving rapid prototyping, clean syntax, and low syntactic overhead.
 - **Reference Mechanics:** Explicit pass-by-reference (`&$var`) is removed in favor of explicit returns and mutable collection wrappers. Objects pass by reference handle, while arrays/strings utilize Copy-On-Write (COW) semantics.
 - **Strict Type Safety & No Implicit Type-Shifting:** RHP enforces strict type boundaries akin to Rust. Once a variable holds a specific declared type (e.g. `int $x = 0;`), you cannot implicitly reassign it to an incompatible type (`$x = 'hello';` throws a Rust-style `VariableTypeMismatch` compile/runtime error).
+- **Parameter Ordering (Required Before Optional):** In all function definitions, class/trait/interface/enum methods, closures, and arrow functions, all required parameters (parameters without default values) must strictly precede optional parameters (parameters with default values). The RHP linter (`rhp run lint`) automatically reorders definitions to enforce this invariant.
+- **No Named Parameters & Skipping Optional Parameters (`fn($req, , $opt)`):** Named arguments (`param: $value`) are strictly **not supported**. Call sites use positional arguments. If a caller wants to skip intermediate optional parameters and keep their default values while providing later parameters, they simply use an extra comma (e.g. `sendEmail($to, , , true)`). Attempting to skip a required parameter triggers compile-time and runtime diagnostics.
 
 ### 2. Type System, Type Hints & Casting Syntax
 
@@ -366,8 +368,9 @@ $response = HTTP::withHeaders(['Authorization' => 'Bearer token'])
 
 High-level file I/O interface supporting both synchronous fibers and non-blocking asynchronous execution models:
 
-- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`.
-- **Execution Models:** Standard call `File::read('app.log')` blocks the local fiber transparently. Using `Future::run(fn() => File::read(...))` spawns a background task for non-blocking concurrent execution.
+- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`, `File::mkdir()`, `File::makeDirectory()`, `File::parseMode()`, `File::chmod()`.
+- **String Permission Formats:** Functions accepting octal-format file permissions (`File::mkdir`, `File::chmod`, procedural `mkdir`) strictly require string format (`"0755"`, `"0o755"`, or symbolic `"rwxr-xr-x"`). Non-string arguments (integers) or invalid modes return `false`. Permission strings are validated via `File::parseMode($mode)`. If `parseMode` fails or directory creation fails, `File::mkdir` returns `false`.
+- **Execution Models:** Standard call `File::read('app.log')` blocks the local fiber transparently. Using `Future::run(fn() => File::read(...))` or the `AFile` facade spawns a background task for non-blocking concurrent execution.
 
 ### 5. Session Facade
 
@@ -774,7 +777,12 @@ When variables or function parameters are declared without explicit types, the i
   - **Test Function Exception:** Any function or method whose name begins with `test` (case-insensitive) is normalized to `snake_case` (`function testUserLogin()` $\rightarrow$ `function test_user_login()`).
 - **`--no-case-change` Option:** Disables identifier casing normalization while leaving formatting, autotyping, and typechecking fully operational.
 
-#### 5. CLI Flags & Carthage Mago JSON Schema
+#### 5. Parameter Order Enforcement & Auto-Fixing
+Functions, methods, closures, and arrow functions are strictly required to declare required parameters before optional parameters:
+- **Auto-Fix Mode (`rhp run lint` / `--fix`):** Automatically reorders parameter signatures so all required parameters precede optional parameters (`function query($limit = 10, $sql)` $\rightarrow$ `function query($sql, $limit = 10)`), while preserving comments, variadics, and type hints.
+- **Check Mode (`rhp run lint --check`):** Reports diagnostic code `required-param-after-optional` (`RHP0230`) if an optional parameter is followed by a required parameter.
+
+#### 6. CLI Flags & Carthage Mago JSON Schema
 ```bash
 rhp run lint [PATH] [--check | --no-fix] [--no-case-change] [--fix]
 ```

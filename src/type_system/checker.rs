@@ -578,7 +578,25 @@ impl TypeChecker {
             current_class.is_some() && matches!(func.name.name, "__construct" | "__destruct");
 
         let mut param_sigs = Vec::with_capacity(func.params.len());
+        let mut has_seen_optional = false;
+        let mut first_opt_name = String::new();
         for param in &func.params {
+            if param.default_value.is_some() {
+                has_seen_optional = true;
+                if first_opt_name.is_empty() {
+                    first_opt_name = param.name.name.to_string();
+                }
+            } else if !param.is_variadic && has_seen_optional {
+                return Err(TypeError::new(
+                    TypeErrorKind::RequiredParameterAfterOptional {
+                        callable_name: display_name.to_string(),
+                        param_name: param.name.name.to_string(),
+                        optional_param_name: first_opt_name.clone(),
+                    },
+                    param.span,
+                ));
+            }
+
             // Strict parameter type signature requirement across function/method boundaries
             let type_hint = param.type_hint.as_ref().ok_or_else(|| {
                 TypeError::new(
@@ -3361,8 +3379,26 @@ impl TypeChecker {
         contextual_param_hints: Option<&[RhpType]>,
     ) -> Result<Vec<RhpType>, TypeError> {
         let mut param_types = Vec::with_capacity(params.len());
+        let mut has_seen_optional = false;
+        let mut first_opt_name = String::new();
 
         for (idx, param) in params.iter().enumerate() {
+            if param.default_value.is_some() {
+                has_seen_optional = true;
+                if first_opt_name.is_empty() {
+                    first_opt_name = param.name.name.to_string();
+                }
+            } else if !param.is_variadic && has_seen_optional {
+                return Err(TypeError::new(
+                    TypeErrorKind::RequiredParameterAfterOptional {
+                        callable_name: "closure".to_string(),
+                        param_name: param.name.name.to_string(),
+                        optional_param_name: first_opt_name.clone(),
+                    },
+                    param.span,
+                ));
+            }
+
             let default_ty = if let Some(ref def_expr) = param.default_value {
                 Some(self.infer_expr(def_expr, fn_env, None, None)?)
             } else {
@@ -3842,22 +3878,34 @@ impl TypeChecker {
                 continue;
             }
 
-            // Resolve target parameter by named argument or position
-            let target_param = if let Some(ref named_id) = arg.name {
-                let target_name = format!("${}", named_id.name);
-                sig.params
-                    .iter()
-                    .find(|p| p.name == target_name || p.name == named_id.name)
-                    .ok_or_else(|| {
-                        TypeError::new(
-                            TypeErrorKind::UnknownNamedArgument {
+            if arg.is_skipped {
+                if let Some(target_param) = sig.params.get(idx) {
+                    if !target_param.has_default {
+                        return Err(TypeError::new(
+                            TypeErrorKind::CannotSkipRequiredParameter {
                                 callable_name: callable_name.to_string(),
-                                arg_name: named_id.name.to_string(),
+                                param_name: target_param.name.clone(),
                             },
                             arg.span,
-                        )
-                    })?
-            } else if let Some(p) = sig.params.get(idx) {
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            // Reject named arguments
+            if let Some(ref named_id) = arg.name {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnknownNamedArgument {
+                        callable_name: callable_name.to_string(),
+                        arg_name: named_id.name.to_string(),
+                    },
+                    arg.span,
+                ));
+            }
+
+            // Resolve target parameter by position
+            let target_param = if let Some(p) = sig.params.get(idx) {
                 p
             } else if let Some(last_variadic) = sig.params.last().filter(|p| p.is_variadic) {
                 last_variadic

@@ -1,9 +1,9 @@
 ---
 title: "Deprecated PHP Features"
-description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting, var_export), architectural rationale, modern RHP replacements, and migration guide."
+description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting, Named Arguments, var_export), architectural rationale, modern RHP replacements, and migration guide."
 section: "Reference"
 order: 5
-keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
+keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "named arguments", "named parameters", "skipped arguments", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
 ---
 
 # Deprecated PHP Features
@@ -1052,6 +1052,62 @@ App::onError(function(Throwable $e, Request $req): Response {
 
 ---
 
+## 10. Named Arguments (`func(param: $val)`)
+
+**Not supported:** PHP 8.0+ named argument call syntax (`func(name: $val)`).
+
+### What Was Bad About It in PHP
+
+- **Brittle Coupling to Private Implementation Details:** Named arguments turn internal parameter variable names into part of the public API contract. Renaming a parameter during routine refactoring (e.g., from `$n` to `$name` or fixing a typo) silently breaks all external callers that passed named arguments, even though the parameter type, position, and semantics did not change.
+- **Inheritance and Interface Fragility:** In PHP, if an interface defines `function save(array $data)` and an implementing class names it `public function save(array $payload)`, calling `$obj->save(data: $arr)` fails at runtime with a fatal error if invoked on the concrete class instance rather than through an interface variable. This creates subtle, hard-to-detect runtime bugs across polymorphic codebases.
+- **Runtime Argument Reconciliation Tax:** Supporting named arguments forces the VM to perform dynamic dictionary lookups and argument-to-parameter slot reconciliation on every function invocation. This prevents optimal register allocation, hinders Cranelift JIT devirtualization, and inflates call-frame initialization overhead.
+- **Syntactic Bloat:** Call sites become excessively verbose and duplicate method documentation without providing type safety.
+
+---
+
+### What Replaces It in RHP
+
+1. **Positional Arguments with Skipped Parameters (`func($a, , $c)`):**
+   When calling functions or methods with multiple optional parameters, callers can skip intermediate optional arguments while preserving their default values simply by using extra commas:
+   ```php
+   function createToken(string $user, int $ttl = 3600, bool $refreshable = false, string $scope = 'read'): Token {
+       // ...
+   }
+
+   // Skip $ttl (3600) and $refreshable (false), but customize $scope:
+   $token = createToken('alice', , , 'admin');
+   ```
+2. **Strict Parameter Ordering Invariant:**
+   All required parameters must strictly precede optional parameters. The RHP linter (`rhp run lint`) automatically reorders non-conforming signatures so required parameters always come first.
+3. **Structured Options with `dict` or Configuration Objects:**
+   For functions taking dozens of optional flags or configuration settings, pass a typed dictionary (`dict $options`) or a typed configuration struct (`UserOptions $options`), which provides compile-time property safety and autocomplete without fragile parameter-name coupling.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example: Skipping Optional Parameters
+
+**Before (PHP 8 Named Arguments):**
+```php
+// In PHP: Couples call sites to parameter names '$apiKey' and '$debug'
+$client = new ApiClient(
+    apiKey: 'secret_key',
+    debug: true
+);
+```
+
+**After (Modern RHP Positional & Skipped Parameters):**
+```php
+// In RHP: Method defined with required parameter before optional parameters:
+// public function __construct(string $apiKey, int $timeout = 30, bool $debug = false)
+
+// Call site skips $timeout (uses default 30) with an extra comma:
+$client = new ApiClient('secret_key', , true);
+```
+
+---
+
 ## 11. Code Export & State Restorers (`var_export()`, `__set_state()`)
 
 **Not supported:** `var_export()`, `Debug::export()`, `__set_state()`, and writing executable PHP source code files to disk for application caching.
@@ -1164,6 +1220,7 @@ dict $loadedJson = Json::decode(File::read('bootstrap/cache/config.json'));
 | **Classic `list()` Destructuring** (`list($a, $b) = $array`) | ❌ **Rejected** | Lexical keyword collision with `list` collection type; archaic pseudo-function syntax | Square-bracket destructuring `[$a, $b] = $array;`, dedicated `list` collection type | Clean grammar; `list` keyword dedicated to high-performance sequential collections; unified syntax |
 | **`die()` Language Construct** (`die()`) | ❌ **Rejected** | Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw text with `200 OK` | Typed exceptions (`throw new ...`), `abort(status, msg)`, `Response::json(...)`, `Sys::exit($code)` | Zero worker crashes; structured HTTP error payloads; guaranteed `finally` and `defer` resource cleanup |
 | **Error Reporting Configuration** (`error_reporting()`, `set_error_handler()`, `@`) | ❌ **Rejected / Deprecated** | Process-global mutable error bitmask causes race conditions in concurrent workers; masks silent bugs | Compile-time checks, `rhp.toml` logging, structured `Log` facade, `try-catch` | Thread-safe; zero silent production bugs; native OpenTelemetry tracing integration |
+| **Named Arguments** (`func(param: $val)`) | ❌ **Rejected** | Couples call sites to internal variable names; breaks refactoring and interface variance; runtime dictionary binding tax | Positional arguments with skipped optional arguments via extra comma (`func($a, , $c)`), typed `dict $options` | High-performance positional register calling; safe parameter renaming; clean skipped-argument syntax |
 | **Code Export & Caching** (`var_export()`, `__set_state()`) | ❌ **Rejected** | Generating executable source code for caching is an anti-pattern in compiled binaries; silent failure on closures/cycles | `Debug::dump/dd/format` for inspection; `Json`/`Bin::encode/decode` for caching | Zero `__set_state` boilerplate; $10\times$ faster binary cache loading; fail-fast serialization |
 
 ---

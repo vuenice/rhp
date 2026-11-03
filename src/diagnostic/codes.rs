@@ -216,11 +216,11 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
     },
     DiagnosticCodeInfo {
         code: "RHP0206",
-        title: "Unknown named argument",
-        summary: "A named argument passed to a function does not match any declared parameter.",
-        explanation: "When using named arguments (e.g. 'fn(param: $val)'), the parameter name must match a declared parameter.",
-        example: Some("function greet(string $name): void {}\ngreet(user: \"Alice\");"),
-        fix: Some("Ensure named arguments match the exact parameter names declared on the function."),
+        title: "Named arguments not supported",
+        summary: "Named arguments are not supported in RHP.",
+        explanation: "RHP does not support named arguments (e.g. 'fn(param: $val)'). To skip optional parameters, use extra commas at the call site (e.g. 'fn($req, , $opt)').",
+        example: Some("function calculate(int $a, int $b = 1, int $c = 2): int {}\ncalculate(a: 5, c: 10); // Not supported"),
+        fix: Some("Use positional arguments and extra commas to skip optional parameters: 'calculate(5, , 10)'."),
     },
     DiagnosticCodeInfo {
         code: "RHP0207",
@@ -389,6 +389,22 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         explanation: "Variables assigned from dynamic or heterogeneous collections such as 'dict' have an undetermined element type. An explicit type annotation is required.",
         example: Some("dict $x = [];\n$z = $x['new_key'];"),
         fix: Some("Explicitly declare the variable type, e.g. 'string $z = $x[\"new_key\"];' or 'mixed $z = $x[\"new_key\"];'."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0230",
+        title: "Required parameter follows optional parameter",
+        summary: "A required parameter without a default value is declared after an optional parameter.",
+        explanation: "In RHP, all required parameters must precede optional parameters with default values. The linter will automatically reorder parameters to fix this.",
+        example: Some("function example(int $opt = 1, string $req): void {}"),
+        fix: Some("Place all required parameters before optional parameters: 'function example(string $req, int $opt = 1): void {}'."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0231",
+        title: "Cannot skip required parameter",
+        summary: "A required parameter without a default value was skipped at the call site.",
+        explanation: "Skipping parameters with extra commas is only permitted for optional parameters that declare a default value.",
+        example: Some("function example(int $req, int $opt = 1): void {}\nexample(, 2); // Error: $req is required"),
+        fix: Some("Provide a value for the required parameter at the call site."),
     },
 
     // --- 0300 - 0399: OOP & Trait errors ---

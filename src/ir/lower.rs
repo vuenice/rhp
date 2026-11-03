@@ -1415,6 +1415,7 @@ impl<'a> IrLowerer<'a> {
                                     name: None,
                                     is_unpack: false,
                                     is_reference: false,
+                                    is_skipped: false,
                                 },
                                 expr.span,
                             );
@@ -2596,16 +2597,17 @@ impl<'a> IrLowerer<'a> {
         for arg in args {
             let val_reg = self.lower_expr(b, &arg.value, None)?;
             let name_const = arg.name.as_ref().map(|id| b.intern_string(id.name));
-            staged.push((val_reg, name_const, arg.is_unpack, arg.is_reference, arg.span));
+            staged.push((val_reg, name_const, arg.is_unpack, arg.is_reference, arg.is_skipped, arg.span));
         }
 
-        for (src, name, is_unpack, is_reference, span) in staged {
+        for (src, name, is_unpack, is_reference, is_skipped, span) in staged {
             b.emit(
                 OpCode::PushArg {
                     src,
                     name,
                     is_unpack,
                     is_reference,
+                    is_skipped,
                 },
                 span,
             );

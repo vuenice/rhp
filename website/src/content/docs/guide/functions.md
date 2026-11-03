@@ -18,6 +18,52 @@ float $finalPrice = calculateDiscount(100.0, 0.15);
 print("Final price: " . (string)$finalPrice);
 ```
 
+### Parameter Ordering: Required Parameters Must Precede Optional Parameters
+
+In RHP, all **required parameters** (parameters without default values) must strictly precede **optional parameters** (parameters with default values) across all function signatures, class/trait/interface/enum methods, closures, and arrow functions:
+
+```php
+// Valid: Required parameters precede optional parameters
+function query(string $sql, int $limit = 10, int $offset = 0): list {
+    // ...
+}
+
+// Invalid: Optional parameter before required parameter
+// function query(int $limit = 10, string $sql): list { ... }
+// Compile Error (RHP0230): Required parameter '$sql' follows optional parameter '$limit'
+```
+
+If an existing codebase declares optional parameters before required ones, running the RHP linter (`rhp run lint`) will automatically reorder the parameter signatures so that required parameters appear first without changing parameter types or comments.
+
+### No Named Parameters & Skipping Optional Parameters (`fn($req, , $opt)`)
+
+RHP **deliberately does not support named arguments** (e.g. `query(sql: "SELECT ...")` is rejected with compile diagnostic `RHP0206`). Call sites strictly use positional arguments to ensure high-performance execution, eliminate runtime argument-dictionary binding overhead, and prevent brittle coupling to internal parameter variable names.
+
+To skip optional parameters at call time while retaining their default values, provide an **extra comma** at the call site:
+
+```php
+function sendNotification(
+    string $userId,
+    string $channel = 'email',
+    string $priority = 'normal',
+    bool $retry = true
+): bool {
+    // ...
+}
+
+// 1. Standard call providing all arguments:
+sendNotification('u123', 'sms', 'urgent', false);
+
+// 2. Skip $channel (uses default 'email') and $priority (uses default 'normal'), while setting $retry = false:
+sendNotification('u123', , , false);
+
+// 3. Skip $channel (uses default 'email'), but specify $priority as 'high':
+sendNotification('u123', , 'high');
+```
+
+> [!IMPORTANT]
+> You **cannot** skip required parameters. Attempting to skip a parameter without a default value (e.g., `sendNotification(, 'sms')`) triggers compile-time and runtime error `RHP0231` (`Cannot skip required parameter '$userId'`).
+
 ### Parameter & Return Type Hints: `array` vs. `list`, `dict`, `set`, `hashmap`
 
 RHP supports both the permissive `array` parent type and strict collection subtypes in function signatures:

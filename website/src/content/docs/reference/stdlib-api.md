@@ -48,10 +48,17 @@ Arr::collapse(array|list $array): list;                        // Collapses list
 Arr::flatten(mixed $array): list;                              // Recursively flattens nested arrays
 Arr::chunk(mixed $array, int $size): list;                     // Chunks array into list of lists
 Arr::from(mixed $items): list;                                 // Converts any iterable/collection to list
-Arr::first(mixed $array): mixed;                               // Returns first element
-Arr::last(mixed $array): mixed;                                // Returns last element
+Arr::first(mixed $array, mixed $default = null): mixed;        // Returns first element or default
+Arr::last(mixed $array, mixed $default = null): mixed;         // Returns last element or default
+Arr::firstKey(mixed $array): mixed;                            // Returns first key or null
+Arr::lastKey(mixed $array): mixed;                             // Returns last key or null
 Arr::isAssoc(mixed $array): bool;                              // Checks if collection is associative dict
 Arr::isList(mixed $array): bool;                               // Checks if collection is sequential list
+Arr::sum(mixed $array): int|float;                             // Computes sum of elements
+Arr::product(mixed $array): int|float;                         // Computes product of elements
+Arr::fill(int $start, int $count, mixed $value): array;        // Fills array with count entries of value
+Arr::fillKeys(array $keys, mixed $value): dict;                // Fills array using keys with value
+Arr::pad(array $array, int $size, mixed $value): array;        // Pads array to size with value
 
 // Generators & Utilities
 Arr::range(int $start, int $end, int $step = 1): list;
@@ -353,7 +360,10 @@ Str::trim(string $text, string $chars = " \t\n\r\0\x0B"): string;
 Str::ltrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
 Str::rtrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
 Str::substr(string $text, int $start, ?int $length = null): string;
+Str::pad(string $s, int $length, string $pad = " ", string|int $side = "right"): string; // mb-safe padding (left, right, both)
 Str::repeat(string $text, int $times): string;
+Str::countOccurrences(string $haystack, string $needle): int; // Count substring frequency
+Str::replaceAt(string $s, string $replacement, int $start, ?int $length = null): string; // Replace by position
 Str::reverse(string $text): string;
 Str::random(int $length = 16): string;
 Str::join(string $glue, array $pieces): string;
@@ -420,14 +430,26 @@ Bool::compare("", false);     // true
 Bool::compare("0", false);    // true
 Bool::compare("hello", true); // true
 
-// Integer numeric comparison
+// Integer numeric utility & comparison
 Int::compare(mixed $a, mixed $b): bool;
 // Coerces strings, floats, and booleans to 64-bit signed integers:
 Int::compare("42", 42);       // true
 Int::compare(true, 1);        // true
 Int::compare(3.9, 3);         // true (truncates float)
+Int::abs(int $n): int;                                         // Absolute value
+Int::min(int ...$n): int;                                      // Variadic or array min: Int::min(1, 2) or Int::min([1, 2])
+Int::max(int ...$n): int;                                      // Variadic or array max: Int::max(1, 2) or Int::max([1, 2])
+Int::random(int $min = 0, int $max = 100): int;                // CSPRNG random integer (uses /dev/urandom internally)
 
-// Float precision comparison
+// Integer Non-Static / Fluent Operations
+int $n = 10;
+$n->add(5);      // 15
+$n->sub(3);      // 7
+$n->mul(4);      // 40
+$n->div(2);      // 5
+$n->div(0);      // Throws \DivisionByZeroError (catchable in try-catch)
+
+// Float numeric utility & precision comparison
 Float::compare(mixed $a, mixed $b, ?float $epsilon = null): bool;
 // If $epsilon is omitted or null, dynamically checks maximum decimal places between both operands
 // and compares formatted representations. If $epsilon is supplied, checks abs($a - $b) <= $epsilon:
@@ -435,6 +457,33 @@ Float::compare("3.14", 3.14);             // true
 Float::compare(10, 10.0);                 // true
 Float::compare(0.1 + 0.2, 0.3);           // true (handles IEEE 754 precision)
 Float::compare(1.0001, 1.0002, 0.001);    // true (within epsilon tolerance)
+Float::format(float $num, int $decimals = 0, string $decPoint = '.', string $thousandsSep = ','): string; // Formats number
+Float::abs(float $n): float;                                   // Absolute value
+Float::min(float ...$n): float;                                // Variadic or array min
+Float::max(float ...$n): float;                                // Variadic or array max
+Float::random(float $min = 0.0, float $max = 1.0): float;      // CSPRNG random float in [min, max]
+
+// Float Binary Format Operations (IEEE-754 64-bit Floating-Point)
+float $x = 0.1;
+$x->bAdd(0.2);   // float(0.30000000000000004)
+$x->bSub(0.05);  // float(0.05)
+$x->bMul(2.0);   // float(0.2)
+$x->bDiv(2.0);   // float(0.05)
+$x->bDiv(0.0);   // Throws \DivisionByZeroError
+
+// Float Arbitrary-Precision Decimal Math (Exact Base-10 Arithmetic, BCMath-style)
+$x->add(0.2);    // float(0.3) - exact decimal representation without binary precision drift
+$x->sub(0.05);   // float(0.05)
+$x->mul(0.2);    // float(0.02)
+0.3->div(0.1);   // float(3)
+$x->div(0.0);    // Throws \DivisionByZeroError
+
+// Arbitrary-Precision Static & Procedural Math (bcmath bridge)
+Float::add('0.1', '0.2');      // '0.3' (or bcadd('0.1', '0.2'))
+Float::sub('0.3', '0.2');      // '0.1' (or bcsub('0.3', '0.2'))
+Float::mul('0.1', '0.2');      // '0.02' (or bcmul('0.1', '0.2'))
+Float::div('0.3', '0.1', 2);   // '3.00' (or bcdiv('0.3', '0.1', 2))
+Float::bccomp('0.3', '0.30');  // 0 (or bccomp('0.3', '0.30'))
 ```
 
 ---
@@ -473,7 +522,10 @@ File::exists(string $path): bool;                   // Check if file exists
 File::delete(string $path): bool;                   // Remove file
 File::copy(string $from, string $to): bool;         // Copy file from source to destination
 File::rename(string $from, string $to): bool;       // Rename or move file (alias: move)
-File::chmod(string $path, ?int $mode = null): mixed;// Set or inspect file permission mode (e.g. 0755)
+File::mkdir(string $path, string $mode = "0755", bool $recursive = false): bool; // Create directory (accepts "0755" or "rwxr-xr-x")
+File::makeDirectory(string $path, string $mode = "0755", bool $recursive = false, bool $force = false): bool; // Create directory (Laravel alias)
+File::parseMode(string $mode): int|false;           // Parse octal string ("0755") or symbolic string ("rwxr-xr-x") to integer mode
+File::chmod(string $path, ?string $mode = null): mixed;// Set or inspect file permission mode (accepts "0755" or "rwxr-xr-x")
 File::chown(string $path, string|int $user, string|int $group = null): bool; // Change file owner
 File::touch(string $path, ?int $time = null, ?int $atime = null): bool;      // Create file or update timestamp
 File::mimeType(string $path): string|false;         // Sniff magic bytes & detect MIME type (like Laravel)
@@ -481,9 +533,13 @@ File::guessExtension(string $pathOrMime): ?string;  // Guess extension from MIME
 File::extension(string $path): string;              // Extract file extension from path
 File::type(string $path): string;                   // Get file type: "file", "dir", or "link"
 File::size(string $path): int;                      // Get file size in bytes
-File::name(string $path): string;                   // Get filename without extension
-File::basename(string $path): string;               // Get trailing name component
+File::name(string $path): string;                   // Get filename without extension (file stem)
+File::basename(string $path): string;               // Get trailing name component with extension
 File::dirname(string $path): string;                // Get directory name
+File::info(string $path): dict;                     // Normalized pathinfo dict with dirname, basename, extension, filename
+File::modifiedAt(string $path): int;                // File modification Unix timestamp (throws if missing)
+File::isReadable(string $path): bool;               // Check if file is readable
+File::isWritable(string $path): bool;               // Check if file is writable
 File::isFile(string $path): bool;                   // Check if path is a regular file
 File::isDirectory(string $path): bool;              // Check if path is a directory
 File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request (UploadedFile)
@@ -503,6 +559,70 @@ $file->move(string $dir, ?string $name = null): string; // Move/persist uploaded
 > **Note on `$_FILES`:**
 > `$_FILES` is **not supported** in RHP. Retrieve uploaded files using `File::fromRequest('upload_field')` or `Request::file('upload_field')`.
 
+### File Permissions & Directory Creation (`File::parseMode`, `File::mkdir`, `File::chmod`)
+
+In RHP, file permission helper functions strictly enforce string formats to prevent security vulnerabilities and bugs caused by integer/octal confusion (such as passing a literal integer `0755` or accidental decimal `755`). Non-string arguments or invalid permission patterns return `false`.
+
+#### Supported Permission String Formats
+
+1. **Octal strings**:
+   - `"0755"`, `"0777"`, `"0644"`, `"0700"` (standard 4-digit octal format)
+   - `"755"`, `"777"`, `"644"` (standard 3-digit octal format)
+   - `"0o755"`, `"0o644"` (prefixed octal string)
+2. **POSIX symbolic strings**:
+   - `"rwxr-xr-x"`, `"rwxrwxrwx"`, `"rw-r--r--"` (9-character format)
+   - `"-rwxr-xr-x"`, `"drwxr-xr-x"` (10-character format with leading type marker)
+
+#### `File::parseMode(string $mode): int|false`
+
+Converts an octal or symbolic permission string into a numeric bitmask, returning `false` if the format is invalid or if a non-string argument is supplied:
+
+```php
+File::parseMode("0755");        // 493 (0o755)
+File::parseMode("rwxr-xr-x");    // 493
+File::parseMode("0644");        // 420 (0o644)
+File::parseMode("rw-r--r--");    // 420
+File::parseMode(0755);          // false (integers are strictly rejected)
+File::parseMode("invalid");     // false
+```
+
+#### `File::mkdir` & `File::makeDirectory`
+
+```php
+File::mkdir(string $path, string $mode = "0755", bool $recursive = false): bool
+File::makeDirectory(string $path, string $mode = "0755", bool $recursive = false, bool $force = false): bool
+```
+
+Creates a directory with the specified permissions. Internally delegates permission validation to `File::parseMode($mode)`:
+- If `parseMode($mode)` fails (e.g. invalid string format or an integer is passed), `mkdir` returns `false`.
+- If directory creation fails (e.g. directory already exists, or intermediate parent directory does not exist and `$recursive` is `false`), it returns `false`.
+- Legacy procedural `mkdir($path, $mode = "0755", $recursive = false)` and `parse_mode($mode)` route directly to these facade implementations.
+
+```php
+// Octal string mode
+File::mkdir("/tmp/cache", "0755"); // true
+
+// Symbolic permission string
+File::mkdir("/tmp/logs", "rwxr-xr-x"); // true
+
+// Recursive directory creation
+File::mkdir("/tmp/nested/app/dir", "0755", true); // true
+
+// Integer mode or invalid syntax returns false
+File::mkdir("/tmp/bad", 0755);       // false (integers are rejected)
+File::mkdir("/tmp/bad", "invalid");  // false
+```
+
+#### `File::chmod` & Procedural `chmod`
+
+```php
+File::chmod(string $path, ?string $mode = null): mixed
+```
+
+- When `$mode` is supplied: sets the permission bitmask for `$path` using string format (`"0755"` or `"rwxr-xr-x"`). Returns `true` on success, or `false` if `parseMode` fails or permissions cannot be set.
+- When `$mode` is omitted or `null`: inspects the current file permissions and returns an octal string representation (e.g. `"0755"`).
+
+
 ---
 
 ## `AFile` Facade API (Asynchronous Tokio Filesystem)
@@ -520,6 +640,8 @@ AFile::mimeType(string $path): Future;               // Resolves to string|false
 AFile::guessExtension(string $path): Future;         // Resolves to ?string (guessed extension)
 AFile::extension(string $path): Future;              // Resolves to string (file extension)
 AFile::type(string $path): Future;                   // Resolves to string ("file" | "dir")
+AFile::mkdir(string $path, string $mode = "0755", bool $recursive = false): Future; // Resolves to bool
+AFile::chmod(string $path, ?string $mode = null): Future; // Resolves to bool|string
 ```
 
 ---
@@ -841,6 +963,7 @@ Html::macro(string $name, callable $closure): bool;
 ```php
 // Component Parsing & Query Strings
 Url::parseUrl(string $url, int|string $component = -1): mixed;
+Url::parseQuery(string $input): dict; // Parses full URL or bare query string into dictionary
 Url::httpBuildQuery(mixed $data, string $numericPrefix = '', string $argSeparator = '&', int $encodingType = 1): string;
 
 // Base64 Encoding & Decoding
@@ -863,6 +986,26 @@ Url::full(): string;
 
 // Dynamic Macros
 Url::macro(string $name, callable $closure): bool;
+```
+
+---
+
+## `Ip` Facade API
+
+```php
+Ip::toLong(string $ip): int;       // Converts IPv4 dotted string to integer (throws on invalid)
+Ip::fromLong(int $long): string;   // Converts integer to IPv4 dotted string
+```
+
+---
+
+## `Compress` Facade API
+
+```php
+Compress::zlib(string $data, int $level = -1): string;   // ZLIB compression (wraps gzcompress)
+Compress::unzlib(string $data): string;                  // ZLIB decompression (wraps gzuncompress, throws on corrupt)
+Compress::gzip(string $data, int $level = -1): string;   // GZIP compression (wraps gzencode)
+Compress::gunzip(string $data): string;                  // GZIP decompression (wraps gzdecode, throws on corrupt)
 ```
 
 ---

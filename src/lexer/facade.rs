@@ -207,6 +207,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Carbon",
         "Static date and time manipulation facade inspired by Laravel Carbon (now, parse, today, tomorrow, yesterday, create, toDateTimeString, toDateString, addDay, subDay, lastOfMonth, diffForHumans)",
     ),
+    FacadeInfo::native(
+        "Ip",
+        "Static IPv4 address conversion and utility facade (toLong, fromLong)",
+    ),
+    FacadeInfo::native(
+        "Compress",
+        "Static data compression and decompression facade (zlib, unzlib, gzip, gunzip)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
@@ -569,10 +577,22 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "File::rename(string $from, string $to): bool",
     },
     LegacyPhpFunctionMapping {
+        php_name: "mkdir",
+        rhp_facade: "File",
+        rhp_method: "mkdir",
+        rhp_signature: "File::mkdir(string $path, string $mode = \"0777\", bool $recursive = false): bool",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "chmod",
         rhp_facade: "File",
         rhp_method: "chmod",
-        rhp_signature: "File::chmod(string $path, ?int $mode = null): mixed",
+        rhp_signature: "File::chmod(string $path, ?string $mode = null): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "parse_mode",
+        rhp_facade: "File",
+        rhp_method: "parseMode",
+        rhp_signature: "File::parseMode(string $mode): int|false",
     },
     LegacyPhpFunctionMapping {
         php_name: "chown",
@@ -848,6 +868,205 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "Url",
         rhp_method: "rawUrlDecode",
         rhp_signature: "Url::rawUrlDecode(string $string): string",
+    },
+    // Array arithmetic and padding
+    LegacyPhpFunctionMapping {
+        php_name: "array_sum",
+        rhp_facade: "Arr",
+        rhp_method: "sum",
+        rhp_signature: "Arr::sum(array $a): int|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_product",
+        rhp_facade: "Arr",
+        rhp_method: "product",
+        rhp_signature: "Arr::product(array $a): int|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_fill",
+        rhp_facade: "Arr",
+        rhp_method: "fill",
+        rhp_signature: "Arr::fill(int $start, int $count, mixed $value): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_fill_keys",
+        rhp_facade: "Arr",
+        rhp_method: "fillKeys",
+        rhp_signature: "Arr::fillKeys(array $keys, mixed $value): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_pad",
+        rhp_facade: "Arr",
+        rhp_method: "pad",
+        rhp_signature: "Arr::pad(array $a, int $size, mixed $value): array",
+    },
+    // Numeric & Math
+    LegacyPhpFunctionMapping {
+        php_name: "number_format",
+        rhp_facade: "Float",
+        rhp_method: "format",
+        rhp_signature: "Float::format(float $n, int $decimals = 2, string $decimalSeparator = '.', string $thousandsSeparator = ','): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "abs",
+        rhp_facade: "Float",
+        rhp_method: "abs",
+        rhp_signature: "Float::abs(float $n): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "min",
+        rhp_facade: "Float",
+        rhp_method: "min",
+        rhp_signature: "Float::min(float ...$n): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "max",
+        rhp_facade: "Float",
+        rhp_method: "max",
+        rhp_signature: "Float::max(float ...$n): float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rand",
+        rhp_facade: "Int",
+        rhp_method: "random",
+        rhp_signature: "Int::random(int $min, int $max): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "mt_rand",
+        rhp_facade: "Int",
+        rhp_method: "random",
+        rhp_signature: "Int::random(int $min, int $max): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bcadd",
+        rhp_facade: "Float",
+        rhp_method: "add",
+        rhp_signature: "Float::add(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bcsub",
+        rhp_facade: "Float",
+        rhp_method: "sub",
+        rhp_signature: "Float::sub(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bcmul",
+        rhp_facade: "Float",
+        rhp_method: "mul",
+        rhp_signature: "Float::mul(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bcdiv",
+        rhp_facade: "Float",
+        rhp_method: "div",
+        rhp_signature: "Float::div(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bccomp",
+        rhp_facade: "Float",
+        rhp_method: "bccomp",
+        rhp_signature: "Float::bccomp(string|float $num1, string|float $num2, ?int $scale = null): int",
+    },
+    // String helpers
+    LegacyPhpFunctionMapping {
+        php_name: "str_pad",
+        rhp_facade: "Str",
+        rhp_method: "pad",
+        rhp_signature: "Str::pad(string $s, int $length, string $pad = ' ', string $side = 'right'): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_repeat",
+        rhp_facade: "Str",
+        rhp_method: "repeat",
+        rhp_signature: "Str::repeat(string $s, int $times): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "substr_count",
+        rhp_facade: "Str",
+        rhp_method: "countOccurrences",
+        rhp_signature: "Str::countOccurrences(string $haystack, string $needle): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "substr_replace",
+        rhp_facade: "Str",
+        rhp_method: "replaceAt",
+        rhp_signature: "Str::replaceAt(string $s, string $replacement, int $start, ?int $length = null): string",
+    },
+    // File helpers
+    LegacyPhpFunctionMapping {
+        php_name: "basename",
+        rhp_facade: "File",
+        rhp_method: "basename",
+        rhp_signature: "File::basename(string $path): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "pathinfo",
+        rhp_facade: "File",
+        rhp_method: "info",
+        rhp_signature: "File::info(string $path): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "filemtime",
+        rhp_facade: "File",
+        rhp_method: "modifiedAt",
+        rhp_signature: "File::modifiedAt(string $path): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_readable",
+        rhp_facade: "File",
+        rhp_method: "isReadable",
+        rhp_signature: "File::isReadable(string $path): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_writable",
+        rhp_facade: "File",
+        rhp_method: "isWritable",
+        rhp_signature: "File::isWritable(string $path): bool",
+    },
+    // Url query
+    LegacyPhpFunctionMapping {
+        php_name: "parse_str",
+        rhp_facade: "Url",
+        rhp_method: "parseQuery",
+        rhp_signature: "Url::parseQuery(string $query): array",
+    },
+    // Ip conversion
+    LegacyPhpFunctionMapping {
+        php_name: "ip2long",
+        rhp_facade: "Ip",
+        rhp_method: "toLong",
+        rhp_signature: "Ip::toLong(string $ip): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "long2ip",
+        rhp_facade: "Ip",
+        rhp_method: "fromLong",
+        rhp_signature: "Ip::fromLong(int $long): string",
+    },
+    // Compression
+    LegacyPhpFunctionMapping {
+        php_name: "gzcompress",
+        rhp_facade: "Compress",
+        rhp_method: "zlib",
+        rhp_signature: "Compress::zlib(string $data, int $level = -1): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "gzuncompress",
+        rhp_facade: "Compress",
+        rhp_method: "unzlib",
+        rhp_signature: "Compress::unzlib(string $data): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "gzencode",
+        rhp_facade: "Compress",
+        rhp_method: "gzip",
+        rhp_signature: "Compress::gzip(string $data, int $level = -1): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "gzdecode",
+        rhp_facade: "Compress",
+        rhp_method: "gunzip",
+        rhp_signature: "Compress::gunzip(string $data): string",
     },
 ];
 
