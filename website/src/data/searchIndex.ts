@@ -106,9 +106,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, Future, Memory, File, HTTP, Log, and Sys, plus runtime macro registration.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, Future, Memory, File, HTTP, Log, Sys, Debug, Json, and Bin, plus runtime macro registration.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
+    keywords: ["standard library", "facades", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "var_export", "__set_state", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
   },
   {
     title: "Observability & OpenTelemetry",
@@ -143,23 +143,23 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Built-in Functions",
     section: "Reference",
-    description: "Intrinsic intrinsics (env, print, dd) and legacy PHP bridge lowering (phpFun::*).",
+    description: "Intrinsic intrinsics (env, print, dd, dump) and legacy PHP bridge lowering (phpFun::*, var_export, var_dump, json_encode, serialize).",
     url: "/docs/reference/builtins",
-    keywords: ["builtins", "env", "print", "dd", "phpFun", "legacy functions", "md5", "sha1", "htmlspecialchars", "strip_tags", "parse_url", "http_build_query", "base64_encode"]
+    keywords: ["builtins", "env", "print", "dd", "dump", "var_dump", "var_export", "debug::dump", "debug::format", "json_encode", "json_decode", "serialize", "unserialize", "phpFun", "legacy functions", "md5", "sha1", "htmlspecialchars", "strip_tags", "parse_url", "http_build_query", "base64_encode"]
   },
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, HTTP, File, Memory, and Tier 2 native helper classes (Cache, Log).",
+    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, HTTP, File, Memory, Debug, Json, Bin, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
+    keywords: ["stdlib", "api", "signatures", "methods", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
   {
     title: "Deprecated PHP Features",
     section: "Reference",
-    description: "Detailed overview of deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Legacy Serialization, Directives, list(), die(), error_reporting), reasons for rejection, modern RHP replacements, and migration guide.",
+    description: "Detailed overview of deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Legacy Serialization, Directives, list(), die(), error_reporting, var_export), reasons for rejection, modern RHP replacements, and migration guide.",
     url: "/docs/reference/unsupported-php",
-    keywords: ["deprecated", "deprecated php", "depriciated", "depriciated php features", "unsupported", "php", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "serialize", "unserialize", "__sleep", "__wakeup", "gadget chains", "serialization", "migration", "replacements", "di codegen", "output::capture", "http facade", "declare", "strict_types", "ticks", "list", "destructuring", "die", "sys::exit", "abort"]
+    keywords: ["deprecated", "deprecated php", "depriciated", "depriciated php features", "unsupported", "php", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "serialize", "unserialize", "__sleep", "__wakeup", "gadget chains", "serialization", "migration", "replacements", "di codegen", "output::capture", "http facade", "declare", "strict_types", "ticks", "list", "destructuring", "die", "sys::exit", "abort"]
   },
 
   // Tooling

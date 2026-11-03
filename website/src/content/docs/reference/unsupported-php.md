@@ -1,9 +1,9 @@
 ---
 title: "Deprecated PHP Features"
-description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting), architectural rationale, modern RHP replacements, and migration guide."
+description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting, var_export), architectural rationale, modern RHP replacements, and migration guide."
 section: "Reference"
 order: 5
-keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
+keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
 ---
 
 # Deprecated PHP Features
@@ -1052,6 +1052,104 @@ App::onError(function(Throwable $e, Request $req): Response {
 
 ---
 
+## 11. Code Export & State Restorers (`var_export()`, `__set_state()`)
+
+**Not supported:** `var_export()`, `Debug::export()`, `__set_state()`, and writing executable PHP source code files to disk for application caching.
+
+### What Was Bad About It in PHP
+
+- **Name Misleads Intent ("Export as PHP Code"):** The function name `var_export` literally means "export as PHP source code". In PHP, this was primarily used as a workaround to cache configuration arrays or container manifests to disk (e.g. `bootstrap/cache/config.php`) so opcode caches (OPcache) could parse and execute them. RHP is a compiled native binary language &mdash; a compiled binary cannot and should not `include` generated source files at runtime.
+- **The `__set_state` Boilerplate Tax:** In PHP, exporting an object via `var_export` produces `\ClassName::__set_state([...])`. If a class author forgets to manually implement this static hook, evaluating the exported code fails with a fatal error.
+- **Silent Failures and Mangled Output:** `var_export` fails silently on unsupported values. Closures output invalid syntax (`\Closure::__set_state(...)` which throws fatal errors), stream and database resources emit `NULL`, and circular object references produce unresolvable recursive structures or runtime crashes.
+- **Conflated Responsibilities:** PHP historically conflated three distinct programming jobs under `var_dump`, `print_r`, and `var_export`:
+  1. Inspecting a value for human eyes.
+  2. Formatting that inspection string into a variable.
+  3. Storing and rehydrating structured data across processes.
+
+---
+
+### What Replaces It in RHP: The Three-Job Architecture
+
+RHP completely separates these three distinct jobs into purpose-built, zero-overhead primitives:
+
+| Job | Modern RHP API | Output & Purpose | Under the Hood |
+| :--- | :--- | :--- | :--- |
+| **1. Show a value to a human** | `Debug::dump($x)`<br>`Debug::dd($x)` | Pretty prints to stdout/stderr (`dd` halts execution) | Rust `std::fmt::Debug` machinery |
+| **2. Get inspection text as a string** | `Debug::format($x)` | Formatted diagnostic string (the `var_export($x, true)` / `print_r($x, true)` use case) | Rust `format!("{:?}", ...)` engine |
+| **3. Save and reload structured data** | `Json::encode($x)` / `Json::decode($str)`<br>`Bin::encode($x)` / `Bin::decode($bytes)` | Structured JSON text for human-readable files, or compact binary for maximum cache performance | Rust `serde`, `serde_json`, and `bincode` / `postcard` |
+
+> [!NOTE]
+> **What About Code Generation?**
+> If an application or compiler tooling genuinely requires generating RHP source code literals from in-memory data (e.g., writing static lookup tables), RHP reserves `Code::literal($x)` for future introduction. Laravel internals and application caches have zero need for `Code::literal` once configuration and route manifests are persisted via `Bin::encode`.
+
+---
+
+### Why RHP Is Better Than PHP
+
+1. **Mandatory Types Eliminate `__set_state` Boilerplate:**
+   Because property types are strictly mandatory in RHP, the compiler automatically generates debug printing and serialization routines for every class (analogous to Rust's `#[derive(Debug, Serialize, Deserialize)]`). There is zero manual `__set_state()` hook to write or maintain.
+2. **Compiled Binaries Don't Need Loadable Source Code:**
+   In PHP, caching configuration as `.php` code was necessary because OPcache cached ASTs. In RHP, compiled binaries cannot and should not invoke a PHP parser at runtime. Caching manifests as compact binary (`Bin::encode`) or JSON loads via memory-mapped deserialization at least $10\times$ faster than tokenizing and executing PHP source files.
+3. **Clear, Fail-Fast Boundaries for Unsupported Values:**
+   - On serialization (`Json::encode`, `Bin::encode`), unsupported types (closures, active database handles, circular references) fail fast with a compile-time or explicit runtime `SerializationException` rather than silently corrupting the cache.
+   - On human inspection (`Debug::dump`, `Debug::format`), diagnostic tokens safely depict these constructs (e.g., `<closure: fn(int): string>`, `<resource #fd:3>`, or `<recursion: *1>`) without crashing.
+4. **Zero-Cost Engine Integration via Rust `serde`:**
+   RHP leverages Rust's industry-standard `serde` framework. JSON formatting and compact binary packing incur virtually zero engine overhead, producing compact, portable, and verifiable payloads.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Formatted String Inspection (Replacing `var_export($val, true)`)
+
+**Before (Legacy PHP):**
+```php
+// In PHP: var_export with $return = true was used to format values as string
+$data = ['status' => 'pending', 'retry' => 3];
+$logText = var_export($data, true);
+file_put_contents('/tmp/log.txt', $logText);
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Explicit Debug::format() produces clean inspection string
+dict $data = Arr::dict(['status' => 'pending', 'retry' => 3]);
+string $logText = Debug::format($data);
+File::write('/tmp/log.txt', $logText);
+```
+
+#### Example B: Configuration & Manifest Caching (Replacing Generated PHP Arrays)
+
+**Before (Legacy PHP - Laravel Config Cache):**
+```php
+// In PHP: Writes executable PHP script containing array return
+$config = ['app' => ['name' => 'Rocket', 'env' => 'production']];
+$phpCode = '<?php return ' . var_export($config, true) . ';' . PHP_EOL;
+file_put_contents('bootstrap/cache/config.php', $phpCode);
+
+// Loading:
+$loaded = require 'bootstrap/cache/config.php';
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Blazing-fast binary or readable JSON cache
+dict $config = Arr::dict(['app' => Arr::dict(['name' => 'Rocket', 'env' => 'production'])]);
+
+// Fast binary cache for production boot:
+bytes $cache = Bin::encode($config);
+File::write('bootstrap/cache/config.bin', $cache);
+
+// Loading (instant zero-copy memory mapping):
+dict $loaded = Bin::decode(File::read('bootstrap/cache/config.bin'));
+
+// Or readable JSON:
+File::write('bootstrap/cache/config.json', Json::encode($config, pretty: true));
+dict $loadedJson = Json::decode(File::read('bootstrap/cache/config.json'));
+```
+
+---
+
 ## Comprehensive Feature Matrix
 
 | Legacy PHP Feature | Status in RHP | Primary Architectural Reason | Recommended RHP Replacement | Key Win Over PHP |
@@ -1066,6 +1164,7 @@ App::onError(function(Throwable $e, Request $req): Response {
 | **Classic `list()` Destructuring** (`list($a, $b) = $array`) | ❌ **Rejected** | Lexical keyword collision with `list` collection type; archaic pseudo-function syntax | Square-bracket destructuring `[$a, $b] = $array;`, dedicated `list` collection type | Clean grammar; `list` keyword dedicated to high-performance sequential collections; unified syntax |
 | **`die()` Language Construct** (`die()`) | ❌ **Rejected** | Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw text with `200 OK` | Typed exceptions (`throw new ...`), `abort(status, msg)`, `Response::json(...)`, `Sys::exit($code)` | Zero worker crashes; structured HTTP error payloads; guaranteed `finally` and `defer` resource cleanup |
 | **Error Reporting Configuration** (`error_reporting()`, `set_error_handler()`, `@`) | ❌ **Rejected / Deprecated** | Process-global mutable error bitmask causes race conditions in concurrent workers; masks silent bugs | Compile-time checks, `rhp.toml` logging, structured `Log` facade, `try-catch` | Thread-safe; zero silent production bugs; native OpenTelemetry tracing integration |
+| **Code Export & Caching** (`var_export()`, `__set_state()`) | ❌ **Rejected** | Generating executable source code for caching is an anti-pattern in compiled binaries; silent failure on closures/cycles | `Debug::dump/dd/format` for inspection; `Json`/`Bin::encode/decode` for caching | Zero `__set_state` boilerplate; $10\times$ faster binary cache loading; fail-fast serialization |
 
 ---
 
@@ -1088,6 +1187,7 @@ rhp migrate ./app --write
 - **Classic `list()` Destructuring:** Automatically converts `list($a, $b) = $expr` to modern square-bracket destructuring `[$a, $b] = $expr`.
 - **`die()` Calls:** Simple `die("message")` or `die()` statements in web requests are converted to `abort(500, "message")` or `throw new RuntimeException("message")`, and in CLI scripts to `Sys::exit(1)`.
 - **Error Reporting Statements:** Strips legacy `error_reporting(...)` and `ini_set('display_errors', ...)` calls; rewrites `@` error suppression on dictionary/array lookups and property accesses to modern null-coalescing `??` or null-safe `?->` operators.
+- **Inspection & Code Export:** Automatically rewrites `var_dump(...)` and `dump(...)` to `Debug::dump(...)`, `dd(...)` to `Debug::dd(...)`, and `var_export($x, true)` or `print_r($x, true)` to `Debug::format($x)`.
 
 ### What `rhp migrate` Flags for Manual Review
 
@@ -1100,5 +1200,6 @@ rhp migrate ./app --write
 - **Tick Callbacks:** Any usage of `register_tick_function()` combined with `declare(ticks=1)` is flagged to be migrated to Tokio asynchronous event handlers or OpenTelemetry tracing spans.
 - **Complex Control-Flow `die()` Statements:** Usages of `... or die(...)` guards or expressions where `die()` return values are conditionally evaluated are flagged for refactoring into typed exceptions or explicit `abort()` handlers.
 - **Custom Error Handlers (`set_error_handler`):** Flags custom procedural `set_error_handler()` and `restore_error_handler()` calls to be refactored into centralized application error middleware or `App::onError()`.
+- **File-Based Code Generation / Config Caching with `var_export`:** Code patterns that write `var_export` output to `.php` files for dynamic `require`/`include` are flagged to be migrated to `Bin::encode()` / `Bin::decode()` or `Json::encode()` / `Json::decode()`.
 
 

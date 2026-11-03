@@ -35,8 +35,10 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Log` | Lock-free mpsc async structured logger | `info()`, `warning()`, `error()`, `debug()` | &mdash; |
 | `Sys` | System intrinsics, formatted output & process environment | `env()`, `echo()`, `print()`, `dd()`, `version()`, `timestamp()` | **`$_ENV` is not supported** &mdash; use `env()` / `Sys::env()` |
 | `Glob` | Global helpers & fallback dynamic registry | `match()`, `getClass()`, `customHelper()` | **`$GLOBALS` is also not supported** &mdash; use `Glob::` |
-| `Weak` | Ephemeral weak references for cycle prevention | `to()`, `get()`, `isValid()` | &mdash; |
 | `Trace` / `Telemetry` | Native OpenTelemetry distributed tracing, metrics & APM bridges | `startSpan()`, `endSpan()`, `span()`, `counter()`, `gauge()`, `histogram()`, `exportOtlp()`, `exportSentry()` | &mdash; |
+| `Debug` | Human inspection & diagnostic string formatting | `dump()`, `dd()`, `format()` | Replaces `var_dump`, `dd`, `print_r`, `var_export` |
+| `Json` | High-performance structured JSON serialization powered by `serde` | `encode()`, `decode()`, `validate()` | Replaces `json_encode`, `json_decode` |
+| `Bin` | Compact binary serialization & instant memory-mapped cache loading | `encode()`, `decode()`, `size()` | Replaces `serialize`, `unserialize`, file caching |
 
 ---
 
@@ -1097,6 +1099,56 @@ int $hitCount = Cache::get("hits");
 Logger::info("User session verified", ["user_id" => 10]);
 Logger::warn("Rate limit threshold nearing", ["ip" => "127.0.0.1"]);
 ```
+
+---
+
+## Value Inspection (`Debug`) & Serialization (`Json`, `Bin`) Architecture
+
+RHP completely abandons PHP's legacy `var_export()` function. The name literally meant "export as PHP source code", which was historically used as an awkward hack to generate PHP array files on disk for opcode caching. RHP does not export executable PHP source code, and native compiled binaries cannot and should not parse and execute PHP files at runtime.
+
+Instead, RHP cleanly decomposes these capabilities into **three distinct jobs**:
+
+| Job | Modern Facade API | Output Format | Primary Use Case |
+| :--- | :--- | :--- | :--- |
+| **1. Show a value to a human** | `Debug::dump($x)`<br>`Debug::dd($x)` | Pretty-printed tree with syntax styling | Terminal debugging, error screens, and HTTP dev bars (`dd` terminates execution) |
+| **2. Get that same text as a string** | `Debug::format($x)` | Formatted diagnostic string | Logging inspection values, test assertions, and diagnostic capture |
+| **3. Save and reload structured data** | `Json::encode($x)` / `Json::decode($s)`<br>`Bin::encode($x)` / `Bin::decode($b)` | JSON text, or compact binary bytes | Configuration files, API payloads, fast Redis/disk caching, and route manifests |
+
+### Why This Is Better Than Copying PHP
+
+1. **Mandatory Types Remove the `__set_state` Problem:**
+   In PHP, exporting an object with `var_export` required writing manual `__set_state()` hooks on every class to rehydrate instances. In RHP, property types are mandatory, so the compiler automatically derives inspection formatting and serialization routines for every class (analogous to Rust's `#[derive(Debug, Serialize, Deserialize)]`). There is zero manual boilerplate.
+2. **Compiled Binaries Don't Need Loadable Source Code:**
+   In PHP, caching configuration as `.php` code was an artifact of OPcache caching array returns. In RHP, compiled binaries load pre-computed manifests and configuration as compact binary (`Bin::encode`) or structured JSON (`Json::encode`). Binary deserialization maps directly into memory without tokenizing, parsing, or compiling source files, achieving over $10\times$ faster startup.
+3. **Unsupported Values Fail Clearly:**
+   `var_export` in PHP failed silently or emitted broken syntax on closures, file/socket resources, and circular references. In RHP:
+   - **Serialization (`Json::encode`, `Bin::encode`):** Fails fast with a compile-time or explicit runtime `SerializationException` on unsupported types.
+   - **Inspection (`Debug::dump`, `Debug::format`):** Resiliently outputs safe diagnostic representations such as `<closure: fn(int): string>`, `<resource #fd:3>`, or `<recursion: *1>` without corrupting state.
+4. **Zero-Cost Engine Integration Under the Hood:**
+   Under the hood, RHP leverages Rust's industry-standard `serde` framework for `Json` and `Bin`, and the native Rust `std::fmt::Debug` machinery for `Debug::dump` and `Debug::format`.
+
+```php
+// 1. Human Inspection
+Debug::dump($order);       // Pretty-prints object graph
+Debug::dd($user);          // Dumps state and exits immediately
+
+// 2. String Diagnostic Formatting (Replaces var_export($x, true) and print_r($x, true))
+string $dump = Debug::format($order);
+Log::debug("Processing order:\n{$dump}");
+
+// 3. Structured Data Persistence
+string $json = Json::encode($config, pretty: true);
+dict $restored = Json::decode($json);
+
+// 4. Ultra-Fast Binary Caching (Replaces file-based PHP array caching)
+bytes $cached = Bin::encode($routeManifest);
+File::write('bootstrap/cache/routes.bin', $cached);
+dict $manifest = Bin::decode(File::read('bootstrap/cache/routes.bin'));
+```
+
+> [!TIP]
+> **Code Generation Helper (`Code::literal`):**
+> If userland tooling or code generation ever genuinely requires emitting RHP source code literals from in-memory data (e.g. static lookup table generation), RHP reserves `Code::literal($x)` for future introduction. Framework internals and configuration caches have no need for it once cache leverages `Bin::encode`.
 
 ---
 

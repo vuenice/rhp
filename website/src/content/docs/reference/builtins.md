@@ -14,7 +14,8 @@ To eliminate global namespace pollution while preserving convenient developer sh
 | `echo("text", ...$args)` | `Sys::echo("text", ...$args)` | Directly compiles to Rust `print!()` (stdout without trailing newline) |
 | `print("text", ...$args)` | `Sys::print("text", ...$args)` | Directly compiles to Rust `println!()` (stdout WITH trailing newline `\n`) |
 | `env('KEY', 'default')` | `Sys::env('KEY', 'default')` | Read system environment variable (`$_ENV` is not supported) |
-| `dd($val1, $val2)` | `Sys::dd($val1, $val2)` | Dump variables and terminate execution |
+| `dump($val1, $val2)` | `Debug::dump($val1, $val2)` | Pretty print values for human inspection |
+| `dd($val1, $val2)` | `Debug::dd($val1, $val2)` | Pretty print values and terminate execution |
 
 > **Formatting Engine & Parameters:**
 > Both `Sys::echo` and `Sys::print` directly map to Rust function calls (`print!` and `println!`) with function parameters passed as-is. RHP does **not** support C-style formatting (`%d`, `%s`, `%f`, `%x`, etc.). Use native Rust placeholders such as `{}`, `{:.2}` (floating-point precision), `{:05}` (zero padding), `{:x}` (hexadecimal), and `{:b}` (binary).
@@ -79,6 +80,20 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `urldecode($str)` | `phpFun::urldecode($str)` | `Url::decode($str)` |
 | `rawurlencode($str)` | `phpFun::rawurlencode($str)` | `Url::rawUrlEncode($str)` |
 | `rawurldecode($str)` | `phpFun::rawurldecode($str)` | `Url::rawUrlDecode($str)` |
+| `var_dump(...$vars)` | `phpFun::var_dump(...)` | `Debug::dump(...$vars)` |
+| `dump(...$vars)` | `phpFun::dump(...)` | `Debug::dump(...$vars)` |
+| `print_r($val, true)` | `phpFun::print_r(...)` | `Debug::format($val)` |
+| `var_export($val, true)` | `phpFun::var_export(...)` | `Debug::format($val)` |
+| `json_encode($val)` | `phpFun::json_encode(...)` | `Json::encode($val)` |
+| `json_decode($json)` | `phpFun::json_decode(...)` | `Json::decode($json)` |
+| `serialize($val)` | `phpFun::serialize(...)` | `Bin::encode($val)` |
+| `unserialize($bytes)` | `phpFun::unserialize(...)` | `Bin::decode($bytes)` |
+
+> **Architectural Separation: Inspection vs. String Formatting vs. Persistence:**
+> RHP deliberately decouples what PHP historically conflated under `var_dump`, `print_r`, and `var_export`:
+> - **Human Inspection (`Debug::dump`, `Debug::dd`):** Pretty-prints to console or debug bar.
+> - **String Formatting (`Debug::format`):** Returns the diagnostic representation as a string (the `var_export($x, true)` use case). `var_export` is dropped because RHP does not export executable PHP source code.
+> - **Data Persistence (`Json::*`, `Bin::*`):** Uses Rust `serde` for readable JSON text or compact, ultra-fast binary cache serialization, with mandatory typed properties automatically deriving `Serialize` without `__set_state` boilerplate.
 
 ---
 

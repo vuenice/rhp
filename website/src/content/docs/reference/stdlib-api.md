@@ -677,6 +677,65 @@ Sys::echo("Age: {}, Name: {}", 30, "Bob");  // Age: 30, Name: Bob (same line)
 
 ---
 
+## `Debug` Facade API
+
+The `Debug` facade provides zero-overhead diagnostic inspection for human consumption, backed directly by Rust's `std::fmt::Debug` machinery.
+
+```php
+// Pretty-prints values to stdout/stderr with syntax highlights and structure indentation
+Debug::dump(mixed ...$vars): void;
+
+// Dumps values and halts execution immediately (standard Laravel dd idiom)
+Debug::dd(mixed ...$vars): void;
+
+// Returns the formatted diagnostic inspection as a string (replaces var_export($x, true) and print_r($x, true))
+Debug::format(mixed $value): string;
+```
+
+> **Why `var_export` Was Dropped in Favor of `Debug::format`:**
+> `var_export` literally meant "export as PHP source code", which was historically used in PHP to generate loadable array cache files. RHP binaries cannot and do not parse PHP source at runtime. `Debug::format` cleanly isolates the string-formatting job, safely rendering non-serializable constructs (closures, resources, recursive cycles) as diagnostic tokens like `<closure: fn(int): string>`, `<resource #fd:3>`, or `<recursion: *1>`.
+
+---
+
+## `Json` Facade API
+
+The `Json` facade provides high-performance, structured text serialization powered by Rust's `serde` and `serde_json` engines.
+
+```php
+// Serializes any data structure or typed class into a JSON string
+Json::encode(mixed $value, bool $pretty = false): string;
+
+// Deserializes a JSON string into native RHP scalars, lists, and dicts
+Json::decode(string $json, bool $associative = true): mixed;
+
+// Validates whether a given string is valid JSON without allocating memory
+Json::validate(string $json): bool;
+```
+
+---
+
+## `Bin` Facade API
+
+The `Bin` facade provides compact, ultra-fast binary serialization and cache persistence powered by Rust's `serde` and `bincode` / `postcard` format.
+
+```php
+// Encodes any data structure or typed class into compact binary bytes
+Bin::encode(mixed $value): bytes;
+
+// Decodes compact binary bytes back into typed instances or collections
+Bin::decode(bytes $data): mixed;
+
+// Returns the raw byte length of a binary payload
+Bin::size(bytes $data): int;
+```
+
+> **Why Binary Cache Wins Over PHP Source File Caching:**
+> Because class property types are mandatory in RHP, the compiler automatically generates serialization routines for every class (like Rust's `#[derive(Serialize, Deserialize)]`). Persisting application manifests, configuration, and routes as compact binary allows worker processes to load cached state via instant zero-copy memory mapping &mdash; at least $10\times$ faster than tokenizing and executing generated source code.
+>
+> If source code literal generation is ever genuinely needed for compiler or code-generation tooling, RHP reserves `Code::literal($x)` for future release.
+
+---
+
 ## `Glob` Facade API
 
 ```php
