@@ -6,15 +6,22 @@ interface Props {
   title: string;
   description?: string;
   ogImage?: string;
+  keywords?: string | string[];
+  alternateMarkdown?: string;
+  alternateJson?: string;
 }
 
 const {
   title,
   description = "A Rust-powered, PHP-family language for high-performance web backends. Zero tracing GC, persistent framework memory, native collection subtypes, and async fibers.",
-  ogImage = "/og-image.svg"
+  ogImage = "/og-image.svg",
+  keywords,
+  alternateMarkdown,
+  alternateJson,
 } = Astro.props;
 
 const canonicalURL = new URL(Astro.url.pathname, Astro.site || 'https://rhp.dev');
+const keywordsContent = Array.isArray(keywords) ? keywords.join(', ') : keywords;
 ---
 
 <!doctype html>
@@ -29,7 +36,18 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site || 'https://rhp.dev'
     <title>{title} · RHP Programming Language</title>
     <meta name="title" content={`${title} · RHP Programming Language`} />
     <meta name="description" content={description} />
+    {keywordsContent && <meta name="keywords" content={keywordsContent} />}
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+    <meta name="ai-content-declaration" content="unconstrained" />
     <link rel="canonical" href={canonicalURL} />
+
+    <!-- AI Bots & LLM Machine-Readable Alternates -->
+    {alternateMarkdown && (
+      <link rel="alternate" type="text/markdown" href={alternateMarkdown} title="Markdown content for AI agents and LLMs" />
+    )}
+    {alternateJson && (
+      <link rel="alternate" type="application/json" href={alternateJson} title="Structured JSON representation for AI agents" />
+    )}
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />

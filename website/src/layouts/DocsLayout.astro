@@ -18,18 +18,27 @@ interface Props {
   section?: string;
   slug: string;
   headings?: Heading[];
+  keywords?: string | string[];
 }
 
-const { title, description, section, slug, headings = [] } = Astro.props;
+const { title, description, section, slug, headings = [], keywords } = Astro.props;
 
 const currentPath = Astro.url.pathname.replace(/\/$/, '');
 const { prev, next } = getPrevNextDocs(slug);
 
 const githubEditUrl = `https://github.com/vuenice/rhp/edit/main/website/src/content/docs/${slug}.md`;
+const markdownUrl = siteUrl(`/docs/${slug}.md`);
+const jsonUrl = siteUrl(`/docs/${slug}.json`);
 const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
 ---
 
-<Layout title={`${title} · RHP Docs`} description={description}>
+<Layout
+  title={`${title} · RHP Docs`}
+  description={description}
+  keywords={keywords}
+  alternateMarkdown={markdownUrl}
+  alternateJson={jsonUrl}
+>
   <Navbar />
   <SearchModal />
 
@@ -131,19 +140,152 @@ const tocHeadings = headings.filter(h => h.depth === 2 || h.depth === 3);
           <slot />
         </article>
 
-        <!-- Document Footer: Edit on GitHub & Previous/Next Navigation -->
+        <!-- Structured Data & Machine-Readable AI Knowledge Base (Invisible to visual users) -->
+        <script type="application/ld+json" is:inline set:html={JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "TechArticle",
+          "headline": title,
+          "description": description,
+          "keywords": Array.isArray(keywords) ? keywords.join(", ") : (keywords || "RHP, PHP, rust, programming language, documentation"),
+          "url": Astro.url.href,
+          "inLanguage": "en-US",
+          "mainEntityOfPage": Astro.url.href,
+          "articleSection": section || "Documentation",
+          "author": {
+            "@type": "Organization",
+            "name": "RHP Project",
+            "url": "https://rhp.dev"
+          }
+        })} />
+
+        {slug === 'reference/unsupported-php' && (
+          <>
+            <script type="application/json" id="ai-context" data-purpose="ai-agent-knowledge-base" is:inline set:html={JSON.stringify({
+              "topic": "Deprecated and Unsupported PHP Features in RHP",
+              "canonical_url": Astro.url.href,
+              "markdown_source": markdownUrl,
+              "json_source": jsonUrl,
+              "summary": "Exhaustive guide to deprecated and unsupported PHP features in RHP, reasons for rejection, and modern RHP replacements.",
+              "deprecated_features": [
+                {
+                  "name": "error_reporting",
+                  "status": "deprecated_and_unsupported",
+                  "php_constructs": ["error_reporting()", "set_error_handler()", "restore_error_handler()", "@ error suppression", "E_ALL", "E_NOTICE", "E_WARNING", "E_DEPRECATED", "E_STRICT"],
+                  "reason": "Process-global mutable error bitmask causes race conditions in concurrent Tokio workers and hides bugs.",
+                  "rhp_replacement": "Compiler diagnostics, declarative rhp.toml [logging], structured Log facade, and explicit try-catch / Result types."
+                },
+                {
+                  "name": "Reflection API",
+                  "status": "unsupported",
+                  "php_constructs": ["ReflectionClass", "ReflectionMethod", "ReflectionProperty", "ReflectionFunction", "ReflectionParameter"],
+                  "reason": "Runtime overhead, breaks JIT invariants and dead code elimination.",
+                  "rhp_replacement": "Build-time DI codegen, static ProgramMetadata table, compile-time attribute discovery."
+                },
+                {
+                  "name": "Output Buffering API",
+                  "status": "unsupported",
+                  "php_constructs": ["ob_start()", "ob_get_clean()", "ob_end_clean()", "ob_get_contents()", "ob_end_flush()", "ob_implicit_flush()"],
+                  "reason": "Process-global state leaks across persistent workers; unsafe in async fibers.",
+                  "rhp_replacement": "Output::capture(fn() => ...), direct Writer templates, Response::stream."
+                },
+                {
+                  "name": "cURL Extension",
+                  "status": "unsupported",
+                  "php_constructs": ["curl_init()", "curl_setopt()", "curl_exec()", "curl_multi_*"],
+                  "reason": "Untypable integer constant API, missing safe timeouts, redundant wrapper layer over native Rust clients.",
+                  "rhp_replacement": "Fluent Http facade, async AHTTP, Tokio asynchronous concurrency."
+                },
+                {
+                  "name": "Legacy Object Serialization",
+                  "status": "unsupported",
+                  "php_constructs": ["serialize()", "unserialize()", "__sleep()", "__wakeup()"],
+                  "reason": "Pervasive RCE gadget chains, open-by-default class loading, slow string format.",
+                  "rhp_replacement": "Compact binary format, __serialize()/__unserialize(dict), #[Transient], deny-by-default allowed_classes."
+                },
+                {
+                  "name": "Strict Operators & Loose Coercion",
+                  "status": "unsupported",
+                  "php_constructs": ["===", "!==", "loose =="],
+                  "reason": "Implicit type coercion causes security vulnerabilities; redundant === syntax in strictly typed language.",
+                  "rhp_replacement": "Strict ==/!=, compile-time mismatch errors, Bool/Str/Int/Float/Array::compare*."
+                },
+                {
+                  "name": "Directive Statements",
+                  "status": "unsupported",
+                  "php_constructs": ["declare(strict_types=1);", "declare(ticks=1);"],
+                  "reason": "Redundant per-file boilerplate; caller-dependent type semantics; ticks cripple JIT.",
+                  "rhp_replacement": "Universal compiler-enforced strict typing, Tokio fiber runtime & OpenTelemetry."
+                },
+                {
+                  "name": "Classic list() Destructuring",
+                  "status": "unsupported",
+                  "php_constructs": ["list($a, $b) = $array"],
+                  "reason": "Lexical keyword collision with list collection type; archaic syntax.",
+                  "rhp_replacement": "Square-bracket destructuring [$a, $b] = $array; dedicated list collection type."
+                },
+                {
+                  "name": "die() Construct",
+                  "status": "unsupported",
+                  "php_constructs": ["die()", "die('message')"],
+                  "reason": "Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw string with 200 OK.",
+                  "rhp_replacement": "Typed exceptions (throw new ...), abort(status, msg), Response::json(...), Sys::exit($code)."
+                }
+              ]
+            })} />
+
+            <div hidden id="ai-knowledge-base" aria-hidden="true" class="hidden">
+              <h3>AI Agent Reference: Deprecated &amp; Unsupported PHP Features in RHP</h3>
+              <p>
+                RHP deliberately departs from legacy PHP runtime semantics. The following features are deprecated or unsupported:
+                1. error_reporting(), set_error_handler(), and the @ error suppression operator (replaced by declarative rhp.toml [logging], structured Log facade, compile-time diagnostics, and explicit try-catch / Result types).
+                2. Reflection API (replaced by build-time DI codegen and static compile-time metadata).
+                3. Output Buffering ob_* (replaced by Output::capture and streaming writers).
+                4. cURL extension curl_* (replaced by fluent Http facade and async AHTTP).
+                5. Legacy Serialization serialize/unserialize (replaced by secure binary format and Json).
+                6. Strict/Loose Comparison === and loose == (replaced by strict == and compile-time type checking).
+                7. Directive Statements declare(...) (replaced by compiler defaults).
+                8. Classic list() (replaced by [$a, $b] array destructuring).
+                9. die() (replaced by typed exceptions, abort(), and Sys::exit()).
+              </p>
+            </div>
+          </>
+        )}
+
+        <!-- Document Footer: Edit on GitHub, AI links & Previous/Next Navigation -->
         <div class="mt-12 pt-6 border-t border-slate-200 dark:border-slate-800 space-y-8">
           
-          <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <a
-              href={githubEditUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex items-center gap-1.5 hover:text-brand-500 transition-colors"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-              <span>Edit this page on GitHub</span>
-            </a>
+          <div class="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+            <div class="flex items-center gap-4">
+              <a
+                href={githubEditUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-1.5 hover:text-brand-500 transition-colors"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                <span>Edit this page on GitHub</span>
+              </a>
+              <span class="text-slate-300 dark:text-slate-700">&bull;</span>
+              <!-- AI Bot / LLM Clean Format Links -->
+              <a
+                href={markdownUrl}
+                target="_blank"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 hover:border-brand-500 text-slate-600 dark:text-slate-300 transition-colors"
+                title="View clean raw Markdown for AI bots and LLMs"
+              >
+                <svg class="w-3 h-3 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                <span>Raw .md (AI)</span>
+              </a>
+              <a
+                href={jsonUrl}
+                target="_blank"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 hover:border-brand-500 text-slate-600 dark:text-slate-300 transition-colors"
+                title="View structured JSON format for AI agents"
+              >
+                <span class="font-bold text-[10px] text-brand-500">&#123;&#125;</span>
+                <span>JSON (AI)</span>
+              </a>
+            </div>
             <span>Last verified for RHP v0.1.0-alpha</span>
           </div>
 

@@ -155,11 +155,11 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["stdlib", "api", "signatures", "methods", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
   {
-    title: "Unsupported PHP",
+    title: "Deprecated PHP Features",
     section: "Reference",
-    description: "Detailed overview of unsupported PHP features (Reflection, Output Buffering, cURL, Legacy Serialization, Directives, list(), die()), reasons for rejection, modern RHP replacements, and migration guide.",
+    description: "Detailed overview of deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Legacy Serialization, Directives, list(), die(), error_reporting), reasons for rejection, modern RHP replacements, and migration guide.",
     url: "/docs/reference/unsupported-php",
-    keywords: ["unsupported", "php", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "serialize", "unserialize", "__sleep", "__wakeup", "gadget chains", "serialization", "migration", "replacements", "di codegen", "output::capture", "http facade", "declare", "strict_types", "ticks", "list", "destructuring", "die", "sys::exit", "abort"]
+    keywords: ["deprecated", "deprecated php", "depriciated", "depriciated php features", "unsupported", "php", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "reflectionclass", "output buffering", "ob_start", "ob_get_clean", "curl", "curl_init", "curl_setopt", "serialize", "unserialize", "__sleep", "__wakeup", "gadget chains", "serialization", "migration", "replacements", "di codegen", "output::capture", "http facade", "declare", "strict_types", "ticks", "list", "destructuring", "die", "sys::exit", "abort"]
   },
 
   // Tooling
@@ -173,16 +173,16 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Auto-Formatter",
     section: "Tooling",
-    description: "AST-guided code formatting, 4-space indent rule, and brace normalization.",
+    description: "AST-guided code formatting, 4-space indent rule, semicolon statement splitting, parameter spacing, and brace normalization.",
     url: "/docs/tooling/formatter",
-    keywords: ["formatter", "format", "indentation", "mago", "prettify", "code style"]
+    keywords: ["formatter", "format", "indentation", "mago", "prettify", "code style", "semicolon", "semicolon splitting", "parameter spacing"]
   },
   {
     title: "Linter and Static Typing",
     section: "Tooling",
-    description: "Auto-typing variables, casing enforcement, and JSON diagnostic reporting.",
+    description: "Auto-typing variables, copy-by-reference array parameters, collection call auto-assignment, casing enforcement, and JSON diagnostics.",
     url: "/docs/tooling/linter",
-    keywords: ["linter", "type checker", "casing", "diagnostics", "json", "lint"]
+    keywords: ["linter", "type checker", "casing", "diagnostics", "json", "lint", "copy by reference", "pass by reference", "reference", "mutated array", "auto assign", "map", "arr::list"]
   },
   {
     title: "Editor Setup & LSP",

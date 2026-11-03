@@ -2916,6 +2916,14 @@ impl TypeChecker {
             } => {
                 let obj_ty = self.infer_expr(object, env, ctx, None)?;
                 let base_obj_ty = obj_ty.non_null_type();
+                if matches!(base_obj_ty, RhpType::Collection(CollectionSubtype::Dict(_))) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::DictPropertyAccessForbidden {
+                            property_name: property.name.to_string(),
+                        },
+                        expr.span,
+                    ));
+                }
                 let prop_ty = if let RhpType::Class(ref cls_name) = base_obj_ty {
                     self.result
                         .hierarchy
@@ -2940,6 +2948,15 @@ impl TypeChecker {
             } => {
                 let obj_ty = self.infer_expr(object, env, ctx, None)?;
                 let _ = self.infer_expr(property, env, ctx, None)?;
+                let base_obj_ty = obj_ty.non_null_type();
+                if matches!(base_obj_ty, RhpType::Collection(CollectionSubtype::Dict(_))) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::DictPropertyAccessForbidden {
+                            property_name: "dynamic".to_string(),
+                        },
+                        expr.span,
+                    ));
+                }
                 if *is_nullsafe || obj_ty.accepts_null() {
                     RhpType::Dynamic.into_nullable()
                 } else {
@@ -3669,6 +3686,14 @@ impl TypeChecker {
                 object, property, ..
             } => {
                 let obj_ty = self.infer_expr(object, env, ctx, None)?.non_null_type();
+                if matches!(obj_ty, RhpType::Collection(CollectionSubtype::Dict(_))) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::DictPropertyAccessForbidden {
+                            property_name: property.name.to_string(),
+                        },
+                        span,
+                    ));
+                }
                 if let RhpType::Class(ref cls_name) = obj_ty {
                     if let Some(prop_info) = self
                         .result
@@ -3712,8 +3737,16 @@ impl TypeChecker {
             }
 
             ExprKind::DynamicPropertyFetch { object, property, .. } => {
-                let _ = self.infer_expr(object, env, ctx, None)?;
+                let obj_ty = self.infer_expr(object, env, ctx, None)?.non_null_type();
                 let _ = self.infer_expr(property, env, ctx, None)?;
+                if matches!(obj_ty, RhpType::Collection(CollectionSubtype::Dict(_))) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::DictPropertyAccessForbidden {
+                            property_name: "dynamic".to_string(),
+                        },
+                        span,
+                    ));
+                }
                 Ok(effective_rhs_ty)
             }
 

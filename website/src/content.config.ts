@@ -8,6 +8,7 @@ const docs = defineCollection({
     description: z.string().optional(),
     section: z.string(), // e.g. "Getting Started", "Language Guide", etc.
     order: z.number().default(99),
+    keywords: z.union([z.string(), z.array(z.string())]).optional(),
   }),
 });
 

@@ -376,6 +376,13 @@ pub enum TypeErrorKind {
         var_name: String,
     },
 
+    #[error(
+        "Type Error: Cannot access property '{property_name}' on dict via '->'. Use bracket syntax '$x[\"{property_name}\"]' or '$x->get(\"{property_name}\")' instead."
+    )]
+    DictPropertyAccessForbidden {
+        property_name: String,
+    },
+
     #[error("TypeError: {message}")]
     Custom {
         message: String,

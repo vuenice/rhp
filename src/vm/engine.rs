@@ -1545,7 +1545,14 @@ impl VM {
                         }
                         PhpValue::Dict(dict) => {
                             let key_str = idx_val.to_php_string();
-                            dict.borrow().get(&key_str).cloned().unwrap_or(PhpValue::Null)
+                            if let Some(v) = dict.borrow().get(&key_str) {
+                                v.clone()
+                            } else {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::UndefinedIndex { key: key_str },
+                                    span,
+                                ));
+                            }
                         }
                         PhpValue::HashMap(map) => map
                             .borrow()
@@ -2508,6 +2515,14 @@ impl VM {
                             }
                         }
                         PhpValue::Null => PhpValue::Null,
+                        PhpValue::Dict(_) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!("Cannot access property '{}' on dict via '->'. Use bracket syntax '$x[\"{}\"]' or '$x->get(\"{}\")' instead.", prop_name, prop_name, prop_name),
+                                },
+                                span,
+                            ));
+                        }
                         other => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::UndefinedProperty {
@@ -2561,6 +2576,14 @@ impl VM {
                             }
                         }
                         PhpValue::Null => PhpValue::Null,
+                        PhpValue::Dict(_) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!("Cannot access property '{}' on dict via '->'. Use bracket syntax '$x[\"{}\"]' or '$x->get(\"{}\")' instead.", prop_name, prop_name, prop_name),
+                                },
+                                span,
+                            ));
+                        }
                         other => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::UndefinedProperty {
@@ -2608,6 +2631,14 @@ impl VM {
                             }
                             obj.set_property(prop_name, val);
                         }
+                        PhpValue::Dict(_) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!("Cannot set property '{}' on dict via '->'. Use bracket syntax '$x[\"{}\"] = ...' or '$x->set(\"{}\", ...)' instead.", prop_name, prop_name, prop_name),
+                                },
+                                span,
+                            ));
+                        }
                         other => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::UndefinedProperty {
@@ -2647,6 +2678,14 @@ impl VM {
                                 }
                             }
                             obj.set_property(prop_name, val);
+                        }
+                        PhpValue::Dict(_) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!("Cannot set property '{}' on dict via '->'. Use bracket syntax '$x[\"{}\"] = ...' or '$x->set(\"{}\", ...)' instead.", prop_name, prop_name, prop_name),
+                                },
+                                span,
+                            ));
                         }
                         other => {
                             return Err(self.make_error(
@@ -4451,7 +4490,7 @@ impl VM {
                         let any = keys.iter().any(|k| dict.borrow().contains_key(&k.to_php_string()));
                         Ok(PhpValue::Bool(any))
                     }
-                    "put" => {
+                    "put" | "set" => {
                         let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                         let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
                         dict.borrow_mut().insert(key, val);
@@ -5474,7 +5513,7 @@ impl VM {
                         let found = map.borrow().values().any(|v| v == &target);
                         Ok(PhpValue::Bool(found))
                     }
-                    "put" => {
+                    "put" | "set" => {
                         let key = args.first().cloned().unwrap_or(PhpValue::Null);
                         let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
                         map.borrow_mut().insert(key, val);

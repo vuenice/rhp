@@ -8,6 +8,10 @@ export default defineConfig({
   integrations: [tailwind({ applyBaseStyles: false })],
   site: process.env.ASTRO_SITE || 'https://rhp.dev',
   base: process.env.ASTRO_BASE || '/',
+  redirects: {
+    '/docs/reference/deprecated-php': '/docs/reference/unsupported-php',
+    '/docs/reference/depriciated-php': '/docs/reference/unsupported-php',
+  },
   markdown: {
     shikiConfig: {
       theme: 'github-dark',

@@ -71,6 +71,10 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
         }
     }
 
+    // 5. Undetermined variable type diagnostics (e.g. untyped `$z = $x['key']` where $x is a dict)
+    let type_info = crate::type_system::checker::TypeChecker::new().check_program(&program).ok();
+    collect_undetermined_variable_diagnostics(&program.statements, type_info.as_ref(), file_name, &mut issues);
+
     issues
 }
 
@@ -493,6 +497,7 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::RedundantIssetCheck { .. } => "redundant-isset-check",
         TypeErrorKind::CannotUnsetObject { .. } => "cannot-unset-object",
         TypeErrorKind::BareVariableIssetForbidden { .. } => "bare-variable-isset-forbidden",
+        TypeErrorKind::DictPropertyAccessForbidden { .. } => "dict-property-access-forbidden",
         TypeErrorKind::Custom { .. } => "type-error",
     }
 }
@@ -559,5 +564,213 @@ fn collect_deprecated_superglobals<'s>(
 ) {
     let mut visitor = DeprecatedSuperglobalsVisitor { file_name, issues };
     visitor.visit_program(program);
+}
+
+fn is_expr_dict(
+    expr: &Expr<'_>,
+    type_info: Option<&crate::type_system::TypeCheckResult>,
+    dict_vars: &std::collections::HashSet<String>,
+) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(var) => dict_vars.contains(var.name),
+        ExprKind::Array(elements) => {
+            classify_array_literal(elements).as_deref() == Some("dict")
+        }
+        ExprKind::StaticCall { target, method, .. } => {
+            if let ExprKind::Ident(target_id) = &target.kind {
+                if target_id.name == "Arr" && method.name == "dict" {
+                    return true;
+                }
+                if (target_id.name == "Url" || target_id.name == "URL") && method.name == "parseUrl" {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => {
+            if let Some(info) = type_info {
+                if let Some(rhp_ty) = info.expr_types.get(&expr.span) {
+                    return matches!(rhp_ty, RhpType::Collection(CollectionSubtype::Dict(_)));
+                }
+            }
+            matches!(infer_expr_rhp_type(expr), RhpType::Collection(CollectionSubtype::Dict(_)))
+        }
+    }
+}
+
+fn is_dict_element_access(
+    expr: &Expr<'_>,
+    type_info: Option<&crate::type_system::TypeCheckResult>,
+    dict_vars: &std::collections::HashSet<String>,
+) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayIndex { array, .. } => {
+            is_expr_dict(array, type_info, dict_vars)
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method.name == "get" && is_expr_dict(object, type_info, dict_vars)
+        }
+        _ => false,
+    }
+}
+
+/// Collect diagnostics for untyped variables initialized from dict access or undetermined types.
+fn collect_undetermined_variable_diagnostics(
+    stmts: &[Stmt<'_>],
+    type_info: Option<&crate::type_system::TypeCheckResult>,
+    file_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let mut typed_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut dict_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    collect_scope_undetermined_variables(
+        stmts,
+        &mut typed_vars,
+        &mut dict_vars,
+        type_info,
+        file_name,
+        issues,
+    );
+}
+
+fn collect_scope_undetermined_variables(
+    stmts: &[Stmt<'_>],
+    typed_vars: &mut std::collections::HashSet<String>,
+    dict_vars: &mut std::collections::HashSet<String>,
+    type_info: Option<&crate::type_system::TypeCheckResult>,
+    file_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    // Pass 1: Identify typed variables and dict variables in this scope
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::VarDecl { var, type_hint, init } => {
+                let name = var.name.to_string();
+                if let Some(hint) = type_hint {
+                    typed_vars.insert(name.clone());
+                    if let Some(s) = hint.simple_name() {
+                        if s.eq_ignore_ascii_case("dict") {
+                            dict_vars.insert(name.clone());
+                        }
+                    }
+                }
+                if let Some(init_expr) = init {
+                    if is_expr_dict(init_expr, type_info, dict_vars) {
+                        dict_vars.insert(name);
+                    }
+                }
+            }
+            StmtKind::Expr(expr) => {
+                if let ExprKind::Assign { op: crate::ast::expr::AssignOp::Assign, target, value } = &expr.kind {
+                    if let ExprKind::Variable(var) = &target.kind {
+                        let name = var.name.to_string();
+                        if is_expr_dict(value, type_info, dict_vars) {
+                            dict_vars.insert(name);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Pass 2: Check statements in this scope
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => {
+                if let ExprKind::Assign { op: crate::ast::expr::AssignOp::Assign, target, value } = &expr.kind {
+                    if let ExprKind::Variable(var) = &target.kind {
+                        let name = var.name.to_string();
+                        if !typed_vars.contains(&name) {
+                            if is_dict_element_access(value, type_info, dict_vars) {
+                                issues.push(Issue::new(
+                                    IssueLevel::Error,
+                                    "cannot-decide-variable-type",
+                                    format!(
+                                        "Type Error: Cannot decide what is type of '{}'. An explicit type annotation is required (e.g. 'string {} = ...').",
+                                        name, name
+                                    ),
+                                    file_name,
+                                    var.span.line,
+                                    var.span.col,
+                                    var.span.start,
+                                    var.span.end,
+                                ));
+                                typed_vars.insert(name);
+                            }
+                        }
+                    }
+                }
+            }
+            StmtKind::FunctionDecl(func) => {
+                if let Some(body) = &func.body {
+                    let mut fn_typed = std::collections::HashSet::new();
+                    let mut fn_dict = std::collections::HashSet::new();
+                    for param in &func.params {
+                        let p_name = param.name.name.to_string();
+                        if let Some(ref hint) = param.type_hint {
+                            fn_typed.insert(p_name.clone());
+                            if let Some(s) = hint.simple_name() {
+                                if s.eq_ignore_ascii_case("dict") {
+                                    fn_dict.insert(p_name);
+                                }
+                            }
+                        }
+                    }
+                    collect_scope_undetermined_variables(
+                        body,
+                        &mut fn_typed,
+                        &mut fn_dict,
+                        type_info,
+                        file_name,
+                        issues,
+                    );
+                }
+            }
+            StmtKind::ClassDecl(cls) => {
+                for member in &cls.members {
+                    if let ClassMemberKind::Method(method) = &member.kind {
+                        if let Some(body) = &method.function.body {
+                            let mut method_typed = std::collections::HashSet::new();
+                            let mut method_dict = std::collections::HashSet::new();
+                            method_typed.insert("$this".to_string());
+                            method_typed.insert("this".to_string());
+                            for param in &method.function.params {
+                                let p_name = param.name.name.to_string();
+                                if let Some(ref hint) = param.type_hint {
+                                    method_typed.insert(p_name.clone());
+                                    if let Some(s) = hint.simple_name() {
+                                        if s.eq_ignore_ascii_case("dict") {
+                                            method_dict.insert(p_name);
+                                        }
+                                    }
+                                }
+                            }
+                            collect_scope_undetermined_variables(
+                                body,
+                                &mut method_typed,
+                                &mut method_dict,
+                                type_info,
+                                file_name,
+                                issues,
+                            );
+                        }
+                    }
+                }
+            }
+            StmtKind::Namespace { body: Some(body), .. } | StmtKind::Block(body) => {
+                collect_scope_undetermined_variables(
+                    body,
+                    typed_vars,
+                    dict_vars,
+                    type_info,
+                    file_name,
+                    issues,
+                );
+            }
+            _ => {}
+        }
+    }
 }
 

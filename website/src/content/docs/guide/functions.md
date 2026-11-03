@@ -109,24 +109,34 @@ RHP eliminates PHP's global namespace performance degradation. Global calls are 
 
 ---
 
-## Reference Restrictions: Pass-By-Reference Forbidden
+## Pass-by-Reference Semantics (`&$var`)
 
-To ensure absolute memory safety and eliminate cyclic reference leaks across multi-threaded workers, **pass-by-reference (`&$var`) is strictly forbidden** at the parser and type-checker levels:
+RHP supports explicit pass-by-reference for function and method parameters while ensuring memory safety and thread isolation:
 
-```php
-// COMPILE ERROR: Pass-by-reference is forbidden
-// function modifyValue(&$value) { ... }
-
-// IDIOMATIC RHP: Return explicit values or wrap in mutable collections
-function updateCounter(int $value): int {
-    return $value + 1;
-}
-
-int $counter = 0;
-$counter = updateCounter($counter);
-```
-
-Similarly, closure capture-by-reference (`use (&$var)`) is rejected to ensure closures cannot construct hidden circular memory graphs that would require a tracing garbage collector.
+1. **Explicit Parameter Declaration:** Declare reference parameters using `&$name`:
+   ```php
+   function addTen(int &$val): void {
+       $val = $val + 10;
+   }
+   
+   function appendItem(array &$list, int $item): void {
+       $list[] = $item;
+   }
+   ```
+2. **Explicit Call-Site Ampersand Required:** To prevent subtle bugs and hidden side effects, callers **must** explicitly pass variables with `&` at the call site:
+   ```php
+   $num = 25;
+   addTen(&$num); // $num is now 35
+   
+   $myList = [10, 20];
+   appendItem(&$myList, 30); // $myList is now [10, 20, 30]
+   
+   // Passing without '&' or passing literals fails at compile time:
+   // addTen($num); // Compile Error: Missing reference argument '&'
+   // addTen(&99);  // Compile Error: Reference argument must be a variable
+   ```
+3. **Automated Linter Upgrades:** The `rhp run lint` tool automatically inspects function bodies: if an array parameter (`array`, `list`, `dict`, etc.) is mutated, the linter automatically modifies the parameter signature to `&$param` and synchronizes callers in the same file. See [Linter and Static Typing](/docs/tooling/linter#automated-copy-by-reference-for-mutated-arrays).
+4. **Closure Capture Protection:** Closure capture-by-reference (`use (&$var)`) remains prohibited to prevent hidden cyclic memory graphs that would violate zero-GC memory safety.
 
 ---
 

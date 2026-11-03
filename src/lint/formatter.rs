@@ -9,7 +9,8 @@
 /// - Preserves string literals and comment contents intact
 /// - Trims trailing whitespace and collapses redundant blank lines
 pub fn format_source(source: &str) -> String {
-    let with_conditions = wrap_control_conditions(source);
+    let with_split_stmts = split_statements_on_semicolons(source);
+    let with_conditions = wrap_control_conditions(&with_split_stmts);
     let with_ops_moved = move_trailing_operators(&with_conditions);
     let with_semicolons = insert_missing_semicolons(&with_ops_moved);
     let preprocessed = split_function_braces_to_next_line(&with_semicolons);
@@ -136,6 +137,113 @@ fn count_leading_closes(line: &str) -> usize {
         }
     }
     count
+}
+
+/// Separates statements ending with semicolon `;` onto different lines if they are followed
+/// by another statement on the same line (excluding `for (...)` headers, strings, and comments).
+pub fn split_statements_on_semicolons(source: &str) -> String {
+    let mut output = String::with_capacity(source.len() + 16);
+    let chars: Vec<char> = source.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    let mut in_str = false;
+    let mut str_delim = '"';
+    let mut paren_depth: usize = 0;
+
+    while i < n {
+        let c = chars[i];
+
+        // Handle string literals
+        if in_str {
+            output.push(c);
+            if c == '\\' && i + 1 < n {
+                i += 1;
+                output.push(chars[i]);
+            } else if c == str_delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '"' || c == '\'' || c == '`' {
+            in_str = true;
+            str_delim = c;
+            output.push(c);
+            i += 1;
+            continue;
+        }
+
+        // Single-line comment: preserve until newline
+        if (c == '/' && i + 1 < n && chars[i + 1] == '/') || c == '#' {
+            while i < n && chars[i] != '\n' {
+                output.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        // Multi-line comment: preserve until */
+        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+            output.push_str("/*");
+            i += 2;
+            while i < n {
+                if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    output.push_str("*/");
+                    i += 2;
+                    break;
+                }
+                output.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        // Parentheses tracking for `for ($i = 0; $i < 10; $i++)`
+        if c == '(' {
+            paren_depth += 1;
+            output.push(c);
+            i += 1;
+            continue;
+        } else if c == ')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            output.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == ';' && paren_depth == 0 {
+            output.push(';');
+            i += 1;
+
+            // Peek ahead to see if there is code on the same line
+            let mut j = i;
+            while j < n && (chars[j] == ' ' || chars[j] == '\t') {
+                j += 1;
+            }
+
+            if j < n {
+                let next = chars[j];
+                let is_line_end = next == '\n' || next == '\r';
+                let is_comment = (next == '/' && j + 1 < n && (chars[j + 1] == '/' || chars[j + 1] == '*')) || next == '#';
+                let is_closing = next == '}' || next == ')';
+
+                if !is_line_end && !is_comment && !is_closing {
+                    // Split statement to new line!
+                    output.push('\n');
+                    i = j; // skip whitespace between statements
+                    continue;
+                }
+            }
+            continue;
+        }
+
+        output.push(c);
+        i += 1;
+    }
+
+    output
 }
 
 /// Separates opening curly braces `{` of function and method declarations onto the next line

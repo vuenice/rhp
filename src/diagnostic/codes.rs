@@ -374,6 +374,22 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("class User { public string $name; }\nisset($user->name);"),
         fix: Some("Remove the redundant isset() check or mark the property/variable as nullable (e.g. '?string')."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0228",
+        title: "Arrow property access forbidden on dict",
+        summary: "Cannot access property on dict via '->'.",
+        explanation: "In RHP, dictionaries ('dict') must not be accessed as object properties via '->'. Use bracket syntax ('$x[\"key\"]') or methods ('$x->get(\"key\")' / '$x->set(\"key\", \"val\")').",
+        example: Some("dict $x = [];\n$val = $x->key;"),
+        fix: Some("Use bracket syntax '$x[\"key\"]' or '$x->get(\"key\")' instead."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0229",
+        title: "Cannot decide variable type",
+        summary: "Cannot decide what is the type of variable.",
+        explanation: "Variables assigned from dynamic or heterogeneous collections such as 'dict' have an undetermined element type. An explicit type annotation is required.",
+        example: Some("dict $x = [];\n$z = $x['new_key'];"),
+        fix: Some("Explicitly declare the variable type, e.g. 'string $z = $x[\"new_key\"];' or 'mixed $z = $x[\"new_key\"];'."),
+    },
 
     // --- 0300 - 0399: OOP & Trait errors ---
     DiagnosticCodeInfo {

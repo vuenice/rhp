@@ -1,20 +1,24 @@
+pub mod auto_assign;
 pub mod autotype;
 pub mod casing;
 pub mod diagnostics;
 pub mod formatter;
+pub mod ref_params;
 pub mod reporter;
 
 use std::fs;
 use std::io;
 use std::path::Path;
 
+pub use auto_assign::auto_assign_collection_calls;
 pub use autotype::add_variable_types;
 pub use casing::{
     apply_casing, check_casing, is_camel_case, is_pascal_case, is_snake_case, is_special_var,
     to_camel_case, to_pascal_case, to_snake_case,
 };
 pub use diagnostics::{run_typecheck, type_error_to_code};
-pub use formatter::format_source;
+pub use formatter::{format_source, split_statements_on_semicolons};
+pub use ref_params::convert_mutated_array_params_to_ref;
 pub use reporter::{Issue, IssueLevel, IssueSpan, LintReport};
 
 /// Lint configuration options.
@@ -62,21 +66,30 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
         // 0. Auto-convert strict comparison operators `===` and `!==` to `==` and `!=`
         let eq_fixed_code = replace_strict_equality_operators(source);
 
-        // 1. Casing transformations (if enabled)
+        // 1. Separate statements with semicolon onto different lines
+        let split_stmts_code = split_statements_on_semicolons(&eq_fixed_code);
+
+        // 2. Auto-assign collection transformations ($x->map(); -> $x = $x->map();)
+        let auto_assigned_code = auto_assign_collection_calls(&split_stmts_code);
+
+        // 3. Convert mutated array parameters to pass-by-reference (&$param)
+        let ref_param_code = convert_mutated_array_params_to_ref(&auto_assigned_code);
+
+        // 4. Casing transformations (if enabled)
         let (cased_code, _) = if options.case_change {
-            apply_casing(&eq_fixed_code, file_name)
+            apply_casing(&ref_param_code, file_name)
         } else {
-            (eq_fixed_code, Vec::new())
+            (ref_param_code, Vec::new())
         };
 
-        // 2. Infer and add variable types
+        // 5. Infer and add variable types
         let typed_code = add_variable_types(&cased_code);
 
-        // 3. Format indentation, operators, and braces
+        // 6. Format indentation, operators, and braces
         let formatted_code = format_source(&typed_code);
         let modified = formatted_code != source;
 
-        // 4. Run typecheck on resulting code and collect issues
+        // 7. Run typecheck on resulting code and collect issues
         let issues = run_typecheck(&formatted_code, file_name);
 
         LintResult {

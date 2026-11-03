@@ -230,6 +230,7 @@ fn collect_nested_stmt(
 struct VarAssignment {
     offset: usize,
     inferred_type: Option<String>,
+    references_self: bool,
 }
 
 /// Analyze statements in a local scope to identify candidates for variable typing.
@@ -256,6 +257,7 @@ fn collect_scope_edits(
                     already_typed_vars.insert(var_name);
                 } else if let Some(init_expr) = init {
                     let ty = infer_expression_type_name(init_expr, type_info, &known_types);
+                    let refs_self = expr_references_variable(init_expr, &var_name);
                     if let Some(ref t) = ty {
                         known_types.insert(var_name.clone(), t.clone());
                     }
@@ -265,6 +267,7 @@ fn collect_scope_edits(
                         .push(VarAssignment {
                             offset: var.span.start,
                             inferred_type: ty,
+                            references_self: refs_self,
                         });
                 }
             }
@@ -273,6 +276,7 @@ fn collect_scope_edits(
                     if let ExprKind::Variable(var) = &target.kind {
                         let var_name = var.name.to_string();
                         let ty = infer_expression_type_name(value, type_info, &known_types);
+                        let refs_self = expr_references_variable(value, &var_name);
                         if let Some(ref t) = ty {
                             known_types.insert(var_name.clone(), t.clone());
                         }
@@ -282,6 +286,7 @@ fn collect_scope_edits(
                             .push(VarAssignment {
                                 offset: var.span.start,
                                 inferred_type: ty,
+                                references_self: refs_self,
                             });
                     }
                 }
@@ -302,6 +307,11 @@ fn collect_scope_edits(
         }
 
         let first = &var_assigns[0];
+        // If the assignment references itself (e.g. $z = Arr::list($z)->map();), it is an update of an existing var, not a declaration
+        if first.references_self {
+            continue;
+        }
+
         let initial_type = match &first.inferred_type {
             Some(t) => t,
             None => continue, // Cannot infer type
@@ -570,3 +580,55 @@ fn rhp_type_to_syntax_name(ty: &RhpType) -> Option<String> {
         _ => None,
     }
 }
+
+/// Recursively checks if an expression references a variable by name.
+fn expr_references_variable(expr: &Expr<'_>, var_name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(v) => v.name == var_name,
+        ExprKind::ArrayIndex { array, index } => {
+            expr_references_variable(array, var_name)
+                || index
+                    .as_ref()
+                    .is_some_and(|idx| expr_references_variable(idx, var_name))
+        }
+        ExprKind::PropertyFetch { object, .. } => expr_references_variable(object, var_name),
+        ExprKind::Unary { expr, .. } => expr_references_variable(expr, var_name),
+        ExprKind::Binary { left, right, .. } => {
+            expr_references_variable(left, var_name) || expr_references_variable(right, var_name)
+        }
+        ExprKind::Ternary {
+            condition,
+            if_true,
+            if_false,
+        } => {
+            expr_references_variable(condition, var_name)
+                || if_true
+                    .as_ref()
+                    .is_some_and(|t| expr_references_variable(t, var_name))
+                || expr_references_variable(if_false, var_name)
+        }
+        ExprKind::Call { callee, args } => {
+            expr_references_variable(callee, var_name)
+                || args
+                    .iter()
+                    .any(|a| expr_references_variable(&a.value, var_name))
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_references_variable(object, var_name)
+                || args
+                    .iter()
+                    .any(|a| expr_references_variable(&a.value, var_name))
+        }
+        ExprKind::StaticCall { args, .. } => args
+            .iter()
+            .any(|a| expr_references_variable(&a.value, var_name)),
+        ExprKind::Array(elements) => elements.iter().any(|el| {
+            el.key
+                .as_ref()
+                .is_some_and(|k| expr_references_variable(k, var_name))
+                || expr_references_variable(&el.value, var_name)
+        }),
+        _ => false,
+    }
+}
+

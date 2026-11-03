@@ -21,9 +21,10 @@ Inspired by [Carthage Software Mago](https://github.com/carthage-software/mago),
 
 1. **4-Space Indentation:** All blocks, class bodies, functions, match arms, and array literals use exactly 4 spaces per nesting level. Tab characters (`\t`) are automatically converted.
 2. **K&R / 1TBS Brace Style:** Opening curly braces stay on the same line for control structures (`if`, `while`, `for`, `match`) and functions, while class declarations align according to the PSR-12 standard.
-3. **Operator Spacing:** Strict single spacing surrounding binary operators (`$a + $b`, `$x === $y`, `$x => $y`).
-4. **Clean Commas:** Consistent comma placement across multi-line array literals and function parameter lists for clean git diffs.
-5. **Verbatim Literal Preservation:** Single-quoted, double-quoted, heredoc/nowdoc strings, and inline/docblock comments are preserved with byte-exact precision.
+3. **Operator Spacing:** Strict single spacing surrounding binary operators (`$a + $b`, `$x == $y`, `$x => $y`).
+4. **Statement Semicolon Splitting:** Statements with semicolons on the same line (`$x->map();Arr::list($z)->map();` or `$a = 1;$b = 2;`) are automatically split onto separate lines, while cleanly preserving `for (...)` loop clauses, string literals, and inline comments.
+5. **Clean Parameter & Comma Spacing:** Function declarations normalize commas with single-space padding between parameters (`myFunction(array &$x, list &$y, dict &$z)`), as do array literals and argument lists.
+6. **Verbatim Literal Preservation:** Single-quoted, double-quoted, heredoc/nowdoc strings, and inline/docblock comments are preserved with byte-exact precision.
 
 ---
 

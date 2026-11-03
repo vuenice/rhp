@@ -20,6 +20,7 @@ const { Content, headings } = await render(doc);
   section={doc.data.section}
   slug={doc.id}
   headings={headings}
+  keywords={doc.data.keywords}
 >
   <Content />
 </DocsLayout>

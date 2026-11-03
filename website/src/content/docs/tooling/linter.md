@@ -14,10 +14,12 @@ rhp run lint [PATH] [OPTIONS]
 ```
 
 By default, running `rhp run lint` executes in fix-and-report mode:
-1. **PER-CS Code Formatting:** Enforces standard 4-space indentation, normalized brace positioning, and operator spacing while preserving comments, docblocks, and string literals verbatim.
-2. **Automated Type Inference:** Automatically prepends optimal type annotations before untyped variables, class properties, and parameter defaults wherever statically determinable.
-3. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
-4. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
+1. **PER-CS Code Formatting & Semicolon Splitting:** Enforces standard 4-space indentation, normalized brace positioning, parameter comma spacing, and separates statements ending with semicolons onto distinct lines while preserving comments, docblocks, and string literals verbatim.
+2. **Automated Copy-by-Reference for Mutated Arrays:** Automatically updates function and method array parameters (`array`, `list`, `dict`, `hashMap`, `set`) to copy-by-reference (`&$param`) whenever the array is mutated inside the function, updating callers in the same file.
+3. **Auto-Assignment of Collection Calls:** Automatically assigns pure, unassigned collection transformations (such as `$x->map();` and `Arr::list($z)->map();`) back to the target variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
+4. **Automated Type Inference:** Automatically prepends optimal type annotations before untyped variables, class properties, and parameter defaults wherever statically determinable.
+5. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
+6. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
 
 ---
 
@@ -145,6 +147,87 @@ class ServiceConfig {
 
 - **Existing Types Preserved:** If the developer already wrote an explicit type annotation (e.g. `int $count = "not an int";`), the linter **never overwrites** the author's declared type. Instead, the static type checker emits a type mismatch diagnostic for the developer to resolve.
 - **Ambiguous or Dynamic Variables:** When a variable is initialized to a dynamic expression whose type cannot be statically resolved, or when a variable is reassigned to incompatible types within the same scope, the linter leaves the variable untyped without error ("whenever not possible, no issue").
+
+---
+
+## Automated Copy-by-Reference for Mutated Arrays
+
+In standard PHP and RHP, arrays, lists, and dictionaries are value types with copy-on-write semantics. If a function mutates an array parameter without an explicit reference symbol (`&`), only the local function frame's copy is modified, while the caller's array remains untouched.
+
+To eliminate bugs caused by omitted references, `rhp run lint` automatically detects when an array parameter is mutated inside a function or method body and updates the parameter to **copy-by-reference** (`&$param`):
+
+```php
+// BEFORE LINTING:
+function myFunction(array $x,list $y,dict $z) {
+    $x->map();
+    Arr::list($z)->map();
+    $y[0] = 10;
+}
+
+// AFTER 'rhp run lint':
+function myFunction(array &$x, list &$y, dict &$z)
+{
+    $x = $x->map();
+    $z = Arr::list($z)->map();
+    $y[0] = 10;
+}
+```
+
+### What Counts as an Array Mutation?
+
+The linter inspects the function AST for:
+- **Subscript Writes & Appends:** `$x[$idx] = $val;`, `$y[] = $item;`, `$z['key'] = $val;`
+- **Compound Assignment on Indices:** `$x[0] += 5;`, `$z['counter']++;`
+- **Unset Statements:** `unset($x[0]);`, `unset($z['temp']);`
+- **Mutating PHP Array Functions:** Passing the array to `array_push($x, ...)`, `array_pop($x)`, `sort($x)`, `asort($x)`, `shuffle($x)`, etc.
+- **Pass-by-Reference Call Arguments:** Passing the array or an element as a reference to another function (`otherFunc(&$x)`).
+- **In-Place Reassignments & Updates:** Assigning the result of collection transformations back to the variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
+
+### Call-Site Synchronization
+
+Because RHP strictly enforces explicit reference passing at both declaration and call sites (`myFunction(&$arr)`), `rhp run lint` also scans caller invocations within the same file and adds `&` when variable arguments are passed to reference parameters:
+
+```php
+// BEFORE:
+$my_list = [10, 20, 30];
+myFunction($my_list, $records, $config);
+
+// AFTER 'rhp run lint':
+$my_list = [10, 20, 30];
+myFunction(&$my_list, &$records, &$config);
+```
+
+Non-mutated arrays (read-only arrays) and scalar parameters (e.g. `int $count`) are preserved as value parameters.
+
+---
+
+## Auto-Assignment of Collection Calls
+
+In RHP, collection helper methods (`Arr::list()->map()`, `$list->filter()`, `$dict->sort()`, etc.) are pure and immutable by design: they return a brand-new transformed collection without mutating the original receiver in place.
+
+Developers frequently invoke methods like `$x->map()` or `Arr::list($z)->map()` without assigning the output value, intending to update the variable. `rhp run lint` automatically detects these unassigned statements and assigns the result back to the target variable:
+
+```php
+// BEFORE LINTING (single line, unassigned):
+$x->map();Arr::list($z)->map();
+
+// AFTER 'rhp run lint':
+$x = $x->map();
+$z = Arr::list($z)->map();
+```
+
+### Supported Method Targets
+
+1. **Variables (`$var->method()`):** Chained transformation methods on variables (`map`, `filter`, `reduce`, `sort`, `reverse`, `unique`, `chunk`, `flatten`, `concat`, `slice`, `take`, `skip`, etc.) are converted to `$var = $var->method();`.
+2. **Facade Wrappers (`Arr::*($var)->method()`):** Chained calls on `Arr::list($var)`, `Arr::dict($var)`, `Arr::set($var)`, or `Arr::hashMap($var)` are converted to `$var = Arr::list($var)->method();`.
+3. **Chained Pipelines:** Method chains like `Arr::list($z)->map()->filter()` are assigned to `$z = Arr::list($z)->map()->filter();`.
+4. **Preserves Existing Assignments:** If the statement is already assigned (`$out = $x->map();`), returned (`return $x->map();`), or used inside an expression/condition (`if ($x->map())`), it is left untouched.
+
+### Formatting Side-Effects
+
+As demonstrated in the example above:
+- **Statement Semicolon Splitting:** Statements with semicolons sharing a line are split onto separate lines.
+- **Parameter Spacing:** Function declarations normalize commas with single-space padding between parameters (`myFunction(array &$x, list &$y, dict &$z)`).
 
 ---
 

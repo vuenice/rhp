@@ -818,6 +818,8 @@ pub fn resolve_builtin_fluent_method(
                 Some(reduced)
             }
             "find" | "first" | "last" => Some(sub.element_type().clone().into_nullable()),
+            "get" => Some(sub.element_type().clone()),
+            "set" | "put" => Some(RhpType::Collection(sub.clone())),
             "count" | "length" | "size" | "len" => Some(RhpType::Int),
             "check" | "contains" | "isEmpty" | "isNotEmpty" | "hasKey" | "hasValue" => Some(RhpType::Bool),
             "keys" => Some(RhpType::Array(Box::new(RhpType::Mixed))),

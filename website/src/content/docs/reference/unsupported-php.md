@@ -1,13 +1,14 @@
 ---
-title: "Unsupported PHP"
-description: "Exhaustive guide to PHP features deliberately omitted from RHP, their modern replacements, step-by-step code migration examples, and architectural advantages over PHP."
+title: "Deprecated PHP Features"
+description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting), architectural rationale, modern RHP replacements, and migration guide."
 section: "Reference"
 order: 5
+keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
 ---
 
-# Unsupported PHP Features
+# Deprecated PHP Features
 
-This document details legacy PHP features that RHP deliberately does **not** support, why each was rejected, what modern replacements exist in RHP, which code to change during migration, and why the RHP architecture is fundamentally superior to traditional PHP.
+This document details legacy PHP features that are deprecated and deliberately **not supported** in RHP, why each was rejected, what modern replacements exist in RHP, which code to change during migration, and why the RHP architecture is fundamentally superior to traditional PHP.
 
 > [!IMPORTANT]
 > **RHP is not PHP-compatible.** Running unmodified PHP or Laravel applications is explicitly out of scope. The `rhp migrate` tool automatically rewrites common idiomatic patterns and flags incompatible constructs for manual review.
@@ -928,6 +929,129 @@ if (!File::exists($configPath)) {
 
 ---
 
+## 9. Error Reporting Configuration (`error_reporting()`)
+
+**Not supported / Deprecated:** `error_reporting()`, `set_error_handler()`, `restore_error_handler()`, `@` error suppression operator, `E_ALL`, `E_NOTICE`, `E_WARNING`, `E_DEPRECATED`, `E_STRICT`, `E_USER_*` error level bitmasks.
+
+### What Was Bad About It in PHP
+
+- **Process-global mutable state in concurrent runtimes:** In PHP, `error_reporting()` modifies the runtime error filtering bitmask globally for the process or worker thread. In RHP's concurrent, zero-bootstrap architecture where asynchronous tasks execute inside worker pools (Tokio fibers) across long-running daemon processes, dynamically mutating global error bitmasks causes severe race conditions, cross-request state bleeding, and unpredictable error masking across concurrent requests.
+- **Silent bug masking & production outages:** Traditional PHP code heavily relies on `error_reporting(0)` or `error_reporting(E_ALL & ~E_NOTICE)` to suppress warnings, notices, and deprecations. Suppressing warnings allows undefined array keys, uninitialized variables, null dereferences, and implicit type conversion bugs to silently pass through execution. Instead of halting immediately at the source of defect, invalid data propagates deeper into business logic, resulting in corrupted database records or financial calculation bugs.
+- **The hazardous `@` error-suppression operator:** PHP's `@` operator dynamically disables error reporting for a single expression by toggling the engine's error reporting level to 0 and restoring it afterwards. This introduces runtime CPU overhead (allocating opcode handlers and modifying engine state) while dangerously masking fatal or unexpected errors (such as file permission denials, socket timeouts, or database disconnections occurring within the suppressed expression).
+- **Conflation of compiler diagnostics with runtime logging:** PHP's integer bitmask system conflates three distinct concerns: compiler/type diagnostics, runtime unrecoverable panics/exceptions, and operational logging. In modern engineering practices, syntax and type issues are compile-time errors, operational events belong in structured loggers with OpenTelemetry integration, and unexpected failures belong in typed exception handlers.
+- **Impediment to compiler optimizations:** When an engine must support dynamic runtime error level changes and custom procedural warning callbacks (`set_error_handler`), the compiler cannot aggressively optimize type assertions, inline array lookups, or eliminate dead code branches.
+
+---
+
+### What Replaces It in RHP
+
+1. **Compiler-Enforced Strict Diagnostics:**
+   Undeclared variables, missing array keys, and invalid types are detected at build time via `rhp run lint` and `rhp run build`. There are no silent runtime notices or warnings that can be ignored.
+2. **Declarative Logging Configuration (`rhp.toml`):**
+   Logging thresholds are declared statically in configuration files (e.g. `[logging] level = "warn"`) or overridden via environment variables (`RHP_LOG_LEVEL=info`). Infrastructure concerns are completely decoupled from application business logic.
+3. **Structured `Log` Facade with OpenTelemetry:**
+   Diagnostic and operational messages are emitted using the type-safe `Log` facade (`Log::debug()`, `Log::info()`, `Log::warning()`, `Log::error()`) with structured contextual key-value dictionaries and automatic OpenTelemetry span propagation.
+4. **Deterministic Typed Exceptions & `Result` Types:**
+   Runtime operations that may fail (such as file I/O or network requests) either throw typed exceptions (`FileNotFoundException`, `IOException`) that unwind the stack safely or return explicit `Result<T, E>` / `Option<T>` types.
+5. **Null-Safe Operators Instead of `@` Suppression:**
+   Instead of silencing undefined access with `@`, RHP provides idiomatic language constructs: null coalescing (`??`), null-safe chaining (`?->`), and dictionary methods (`$dict->get('key', $default)`).
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Configuring Error and Logging Thresholds
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Procedural mutation of global error bitmask at runtime
+error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+```
+
+**After (Modern RHP):**
+```toml
+# In RHP: Statically declared in rhp.toml (or via RHP_LOG_LEVEL env)
+[logging]
+level = "info" # "debug" | "info" | "warn" | "error"
+format = "json" # "json" | "pretty"
+tracing = true
+```
+```php
+// In RHP application code: Use structured logging
+Log::info("Application started", [
+    'environment' => App::environment(),
+    'version' => App::version(),
+]);
+```
+
+#### Example B: Suppressing Errors on Risky Operations
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Using @ suppression to swallow filesystem or parse warnings
+$contents = @file_get_contents('/tmp/config.json');
+if ($contents === false) {
+    $contents = '{}';
+}
+
+$data = @json_decode($contents, true);
+$apiKey = @$data['api_key'] ?? 'default_key';
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: Explicit Result handling or safe facade lookups
+$contents = File::tryRead('/tmp/config.json')->unwrapOr('{}');
+$data = Json::decode($contents);
+$apiKey = $data->get('api_key', 'default_key');
+```
+
+#### Example C: Custom Error Handling and Exception Translation
+
+**Before (Legacy PHP):**
+```php
+// In PHP: Procedural global error handler converting warnings to exceptions
+set_error_handler(function(int $severity, string $message, string $file, int $line): bool {
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+    throw new ErrorException($message, 0, $severity, $file, $line);
+});
+```
+
+**After (Modern RHP):**
+```php
+// In RHP: All runtime failures are native typed exceptions by default.
+// Centralized error handling is registered cleanly via application middleware:
+App::onError(function(Throwable $e, Request $req): Response {
+    Log::error("Unhandled exception: " . $e->getMessage(), [
+        'exception' => $e::class,
+        'path' => $req->path(),
+    ]);
+
+    return Response::json([
+        'error' => 'Internal server error',
+        'code' => 500,
+    ], 500);
+});
+```
+
+---
+
+### Why RHP Is Better Than PHP
+
+| Feature Dimension | Legacy PHP `error_reporting()` | RHP Declarative Architecture | Why RHP Wins |
+| :--- | :--- | :--- | :--- |
+| **Concurrency & Thread Safety** | Modifies process-global bitmask; corrupts concurrent requests | Pure configuration + worker-isolated context | **Zero race conditions**; worker threads never cross-contaminate error levels |
+| **Code Reliability & Bug Detection** | Bitmasks mask undefined variables and type errors | Strict compile-time checks + explicit exceptions | Eliminates silent data corruption; bugs caught at compile time |
+| **Performance Overhead** | Dynamic error level checks and `@` opcode handler overhead | Direct compiled execution; zero runtime bitmask queries | **Measurably faster execution**; JIT compiler can optimize paths freely |
+| **Modern Observability** | Raw text logs or unformatted stdout dumps | Structured JSON logging + OpenTelemetry tracing | Production-ready logs with correlation IDs, traces, and span attributes |
+| **Safe Error Suppression** | `@` operator indiscriminately swallows fatal errors | Idiomatic `??`, `?->`, and `Result` types | Explicit, localized, and safe handling of optional or fallible values |
+
+---
+
 ## Comprehensive Feature Matrix
 
 | Legacy PHP Feature | Status in RHP | Primary Architectural Reason | Recommended RHP Replacement | Key Win Over PHP |
@@ -941,6 +1065,7 @@ if (!File::exists($configPath)) {
 | **Directive Statements** (`declare(strict_types=1);`, `declare(ticks=1);`) | ❌ **Rejected** | Redundant per-file boilerplate; caller-dependent type semantics; ticks cripple JIT optimization | Universal compiler-enforced strict typing; Tokio fiber runtime & OpenTelemetry | Zero per-file boilerplate; strict typing enforced across entire project; uncompromised JIT compilation |
 | **Classic `list()` Destructuring** (`list($a, $b) = $array`) | ❌ **Rejected** | Lexical keyword collision with `list` collection type; archaic pseudo-function syntax | Square-bracket destructuring `[$a, $b] = $array;`, dedicated `list` collection type | Clean grammar; `list` keyword dedicated to high-performance sequential collections; unified syntax |
 | **`die()` Language Construct** (`die()`) | ❌ **Rejected** | Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw text with `200 OK` | Typed exceptions (`throw new ...`), `abort(status, msg)`, `Response::json(...)`, `Sys::exit($code)` | Zero worker crashes; structured HTTP error payloads; guaranteed `finally` and `defer` resource cleanup |
+| **Error Reporting Configuration** (`error_reporting()`, `set_error_handler()`, `@`) | ❌ **Rejected / Deprecated** | Process-global mutable error bitmask causes race conditions in concurrent workers; masks silent bugs | Compile-time checks, `rhp.toml` logging, structured `Log` facade, `try-catch` | Thread-safe; zero silent production bugs; native OpenTelemetry tracing integration |
 
 ---
 
@@ -962,6 +1087,7 @@ rhp migrate ./app --write
 - **Directive Statements:** Strips redundant `declare(strict_types=1);`, `declare(ticks=1);`, and `declare(encoding=...);` statements automatically.
 - **Classic `list()` Destructuring:** Automatically converts `list($a, $b) = $expr` to modern square-bracket destructuring `[$a, $b] = $expr`.
 - **`die()` Calls:** Simple `die("message")` or `die()` statements in web requests are converted to `abort(500, "message")` or `throw new RuntimeException("message")`, and in CLI scripts to `Sys::exit(1)`.
+- **Error Reporting Statements:** Strips legacy `error_reporting(...)` and `ini_set('display_errors', ...)` calls; rewrites `@` error suppression on dictionary/array lookups and property accesses to modern null-coalescing `??` or null-safe `?->` operators.
 
 ### What `rhp migrate` Flags for Manual Review
 
@@ -973,4 +1099,6 @@ rhp migrate ./app --write
 - **Legacy PHP Format Data:** Calls consuming serialized PHP string data (`O:4:...`) are flagged to use the migration reader `unserialize_php($payload)` during transition or to migrate cache stores to the versioned RHP binary format.
 - **Tick Callbacks:** Any usage of `register_tick_function()` combined with `declare(ticks=1)` is flagged to be migrated to Tokio asynchronous event handlers or OpenTelemetry tracing spans.
 - **Complex Control-Flow `die()` Statements:** Usages of `... or die(...)` guards or expressions where `die()` return values are conditionally evaluated are flagged for refactoring into typed exceptions or explicit `abort()` handlers.
+- **Custom Error Handlers (`set_error_handler`):** Flags custom procedural `set_error_handler()` and `restore_error_handler()` calls to be refactored into centralized application error middleware or `App::onError()`.
+
 

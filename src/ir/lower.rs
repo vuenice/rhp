@@ -1572,7 +1572,34 @@ impl<'a> IrLowerer<'a> {
                             Some(r) => r,
                             None => b.alloc_temp(inferred_ty, expr.span)?,
                         };
-                        self.lower_expr(b, left, Some(dst))?;
+                        if matches!(&left.kind, ExprKind::ArrayIndex { .. }) {
+                            let mut curr_expr = left;
+                            let mut indices = Vec::new();
+                            while let ExprKind::ArrayIndex { array, index } = &curr_expr.kind {
+                                if let Some(idx) = index {
+                                    indices.push((**idx).clone());
+                                }
+                                curr_expr = array;
+                            }
+                            indices.reverse();
+                            let mut curr = (**curr_expr).clone();
+                            for (i, idx) in indices.into_iter().enumerate() {
+                                let is_nullsafe = i > 0;
+                                let span = curr.span.merge(idx.span);
+                                curr = Expr::new(
+                                    ExprKind::MethodCall {
+                                        object: Box::new(curr),
+                                        method: Ident::new("get", span),
+                                        args: vec![Argument::new(idx, span)],
+                                        is_nullsafe,
+                                    },
+                                    span,
+                                );
+                            }
+                            self.lower_expr(b, &curr, Some(dst))?;
+                        } else {
+                            self.lower_expr(b, left, Some(dst))?;
+                        }
                         let not_null_jump =
                             b.emit(OpCode::JumpIfNotNull { cond: dst, target: 0 }, expr.span);
                         self.lower_expr(b, right, Some(dst))?;

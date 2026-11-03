@@ -663,5 +663,162 @@ $val = $obj
     assert!(formatted_multi.contains("->getName();"), "Line 2 should have semicolon: {}", formatted_multi);
 }
 
+#[test]
+fn test_unassigned_collection_calls_auto_assigned_and_statements_split() {
+    // User request:
+    // $x->map();Arr::list($z)->map();
+    // without any output value assignment should become:
+    // $x = $x->map();
+    // $z = Arr::list($z)->map();
+    let code = "$x->map();Arr::list($z)->map();";
+    let res = lint_source(code, "test.rhp");
 
+    assert!(
+        res.formatted_content.contains("$x = $x->map();"),
+        "Expected $x = $x->map():\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains("$z = Arr::list($z)->map();"),
+        "Expected $z = Arr::list($z)->map():\n{}",
+        res.formatted_content
+    );
 
+    // Statements with semicolon should be on different lines
+    let lines: Vec<&str> = res.formatted_content.lines().collect();
+    assert!(
+        lines.iter().any(|l| l.trim() == "$x = $x->map();"),
+        "Expected '$x = $x->map();' on its own line in:\n{}",
+        res.formatted_content
+    );
+    assert!(
+        lines.iter().any(|l| l.trim() == "$z = Arr::list($z)->map();"),
+        "Expected '$z = Arr::list($z)->map();' on its own line in:\n{}",
+        res.formatted_content
+    );
+}
+
+#[test]
+fn test_mutated_array_parameters_converted_to_copy_by_reference_and_comma_spacing() {
+    // User request:
+    // myFunction(array $x,list $y,dict $z)
+    // should become
+    // myFunction(array &$x, list &$y, dict &$z)
+    let code = r#"
+function myFunction(array $x,list $y,dict $z) {
+    $x[0] = 1;
+    $y[] = 2;
+    $z['key'] = 'val';
+}
+"#;
+
+    let res = lint_source(code, "test.rhp");
+    assert!(
+        res.formatted_content.contains("function myFunction(array &$x, list &$y, dict &$z)"),
+        "Expected 'function myFunction(array &$x, list &$y, dict &$z)', got:\n{}",
+        res.formatted_content
+    );
+}
+
+#[test]
+fn test_combined_user_request_array_mutation_and_auto_assign() {
+    // Both features combined:
+    // 1. $x->map();Arr::list($z)->map(); are auto-assigned to $x and $z on separate lines
+    // 2. $x and $z are mutated by the assignments, so parameters become copy-by-reference
+    // 3. $y is mutated via index assignment
+    // 4. Space added between parameters and statements on different lines
+    let code = r#"
+function myFunction(array $x,list $y,dict $z) {
+    $x->map();Arr::list($z)->map();
+    $y[0] = 100;
+}
+"#;
+
+    let res = lint_source(code, "test.rhp");
+    assert!(
+        res.formatted_content.contains("function myFunction(array &$x, list &$y, dict &$z)"),
+        "Expected signature with reference params and space between commas:\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains("$x = $x->map();"),
+        "Expected $x = $x->map():\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains("$z = Arr::list($z)->map();"),
+        "Expected $z = Arr::list($z)->map():\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains("$y[0] = 100;"),
+        "Expected $y[0] = 100:\n{}",
+        res.formatted_content
+    );
+}
+
+#[test]
+fn test_non_mutated_arrays_and_scalars_remain_unchanged() {
+    let code = r#"
+function process(array $x, list $y, int $count): void {
+    $x[] = 'modified';
+    echo $y[0];
+    $count = $count + 1;
+}
+"#;
+
+    let res = lint_source(code, "test.rhp");
+    // $x is mutated array -> becomes array &$x
+    // $y is read-only array -> remains list $y
+    // $count is scalar -> remains int $count
+    assert!(
+        res.formatted_content.contains("function process(array &$x, list $y, int $count): void"),
+        "Got:\n{}",
+        res.formatted_content
+    );
+}
+
+#[test]
+fn test_call_sites_updated_with_references_when_variables_passed() {
+    let code = r#"
+function appendVal(array $arr): void {
+    $arr[] = 42;
+}
+
+$myList = [1, 2, 3];
+appendVal($myList);
+"#;
+
+    let res = lint_source(code, "test.rhp");
+    assert!(
+        res.formatted_content.contains("function appendVal(array &$arr): void"),
+        "Got:\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains("appendVal(&$my_list);"),
+        "Got:\n{}",
+        res.formatted_content
+    );
+}
+
+#[test]
+fn test_semicolon_splitting_does_not_split_for_loop_or_strings() {
+    let code = r#"
+for ($i = 0; $i < 10; $i++) {
+    $msg = "one;two;three";
+}
+"#;
+
+    let res = lint_source(code, "test.rhp");
+    assert!(
+        res.formatted_content.contains("for ($i = 0; $i < 10; $i++) {"),
+        "For loop header must not be split on semicolons:\n{}",
+        res.formatted_content
+    );
+    assert!(
+        res.formatted_content.contains(r#"$msg = "one;two;three";"#),
+        "String with semicolons must not be split:\n{}",
+        res.formatted_content
+    );
+}
