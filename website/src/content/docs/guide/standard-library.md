@@ -701,6 +701,11 @@ fwrite($stream, "buffered data");
 rewind($stream);
 $data = fread($stream, 1024);
 fclose($stream); // Automatically removes temporary file from disk
+
+// 8. Canonical path resolution & traversal (realpath, dirname)
+string|false $real = File::realpath("./config/../app.php"); // Canonical absolute path
+string|false $missing = realpath("/non/existent/path");      // false
+string $parent = File::dirname("/var/www/html/index.php", 2); // "/var/www"
 ```
 
 

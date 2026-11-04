@@ -141,6 +141,9 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `tempnam($dir, $prefix)` | `phpFun::tempnam($dir, $prefix)` | `File::tempnam($dir, $prefix)` |
 | `tmpfile()` | `phpFun::tmpfile()` | `File::tmpfile()` (auto-deleted on close) |
 | `sys_get_temp_dir()` | `phpFun::sys_get_temp_dir()` | `File::sysGetTempDir()` |
+| `realpath($path)` | `phpFun::realpath($path)` | `File::realpath($path)` |
+| `dirname($path, $levels = 1)` | `phpFun::dirname(...)` | `File::dirname($path, $levels)` |
+| `basename($path)` | `phpFun::basename($path)` | `File::basename($path)` |
 | `fwrite($stream, $data)` | `phpFun::fwrite($stream, $data)` | `File::writeStream($stream, $data)` |
 | `fread($stream, $len)` | `phpFun::fread($stream, $len)` | `File::readStream($stream, $len)` |
 | `clearstatcache(...)` | `phpFun::clearstatcache(...)` | `Sys::clearstatcache(...)` |

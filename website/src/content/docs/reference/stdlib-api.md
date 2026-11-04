@@ -611,7 +611,8 @@ File::type(string $path): string;                   // Get file type: "file", "d
 File::size(string $path): int;                      // Get file size in bytes
 File::name(string $path): string;                   // Get filename without extension (file stem)
 File::basename(string $path): string;               // Get trailing name component with extension
-File::dirname(string $path): string;                // Get directory name
+File::dirname(string $path, int $levels = 1): string; // Get directory name (supports traversal levels)
+File::realpath(string $path): string|false;         // Canonicalize absolute path (alias: realPath, canonicalize)
 File::info(string $path): dict;                     // Normalized pathinfo dict with dirname, basename, extension, filename
 File::modifiedAt(string $path): int;                // File modification Unix timestamp (throws if missing)
 File::isReadable(string $path): bool;               // Check if file is readable
@@ -771,6 +772,18 @@ string $workspace = File::createTempDirectory(null, "build_"); // "/tmp/build_a9
 string $publicTmp = File::createTempDirectory("/tmp", "export_", "0755");
 ```
 
+### Canonical Path Resolution (`File::realpath`, `File::realPath`, `File::canonicalize`, procedural `realpath`)
+
+Resolves symbolic links, relative segments (`.` and `..`), and canonicalizes absolute pathnames. Returns the canonical absolute path as a `string`, or `false` if the target path or any intermediate component does not exist.
+
+```php
+string|false $real = File::realpath("./src/../Cargo.toml"); // "/home/user/project/Cargo.toml"
+string|false $missing = realpath("/invalid/non_existent_path"); // false
+
+// Resolving parent directories with optional traversal levels
+string $parent = File::dirname("/var/www/html/index.php", 2); // "/var/www"
+```
+
 ---
 
 ## `AFile` Facade API (Asynchronous Tokio Filesystem)
@@ -788,6 +801,7 @@ AFile::mimeType(string $path): Future;               // Resolves to string|false
 AFile::guessExtension(string $path): Future;         // Resolves to ?string (guessed extension)
 AFile::extension(string $path): Future;              // Resolves to string (file extension)
 AFile::type(string $path): Future;                   // Resolves to string ("file" | "dir")
+AFile::realpath(string $path): Future;               // Resolves to string|false (canonicalized path)
 AFile::mkdir(string $path, string $mode = "0755", bool $recursive = false): Future; // Resolves to bool
 AFile::chmod(string $path, ?string $mode = null): Future; // Resolves to bool|string
 AFile::sysGetTempDir(): Future;                      // Resolves to string (system temp directory)
