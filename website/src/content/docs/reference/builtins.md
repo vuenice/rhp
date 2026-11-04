@@ -46,6 +46,32 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | Legacy Function Call | Lowered Expression | Target Facade Implementation |
 | :--- | :--- | :--- |
 | `array_merge($a, $b)` | `phpFun::array_merge($a, $b)` | `Arr::merge($a, $b)` |
+| `array_diff($a, ...$b)` | `phpFun::array_diff($a, ...$b)` | `Arr::diff($a, ...$b)` |
+| `array_diff_key($a, ...$b)` | `phpFun::array_diff_key($a, ...$b)` | `Arr::diffKey($a, ...$b)` |
+| `array_intersect($a, ...$b)` | `phpFun::array_intersect($a, ...$b)` | `Arr::intersect($a, ...$b)` |
+| `array_intersect_key($a, ...$b)` | `phpFun::array_intersect_key($a, ...$b)` | `Arr::intersectKey($a, ...$b)` |
+| `array_column($arr, $col, $idx)` | `phpFun::array_column(...)` | `Arr::column($arr, $col, $idx)` |
+| `array_chunk($arr, $size)` | `phpFun::array_chunk($arr, $size)` | `Arr::chunk($arr, $size)` |
+| `array_flip($arr)` | `phpFun::array_flip($arr)` | `Arr::flip($arr)` |
+| `array_combine($keys, $vals)` | `phpFun::array_combine($keys, $vals)` | `Arr::combine($keys, $vals)` |
+| `array_count_values($arr)` | `phpFun::array_count_values($arr)` | `Arr::countValues($arr)` |
+| `array_rand($arr, $num)` | `phpFun::array_rand($arr, $num)` | `Arr::randomKey($arr, $num)` |
+| `shuffle($arr)` | `phpFun::shuffle($arr)` | `Arr::shuffle($arr)` |
+| `natsort($arr)` | `phpFun::natsort($arr)` | `Arr::natsort($arr)` |
+| `natcasesort($arr)` | `phpFun::natcasesort($arr)` | `Arr::natcasesort($arr)` |
+| `asort($arr)` | `phpFun::asort($arr)` | `Arr::asort($arr)` |
+| `ksort($arr)` | `phpFun::ksort($arr)` | `Arr::ksort($arr)` |
+| `usort($arr, $cb)` | `phpFun::usort($arr, $cb)` | `Arr::usort($arr, $cb)` |
+| `uasort($arr, $cb)` | `phpFun::uasort($arr, $cb)` | `Arr::uasort($arr, $cb)` |
+| `uksort($arr, $cb)` | `phpFun::uksort($arr, $cb)` | `Arr::uksort($arr, $cb)` |
+| `array_key_exists($k, $arr)` | `phpFun::array_key_exists($k, $arr)` | `Arr::has($arr, $k)` |
+| `in_array($needle, $haystack)` | `phpFun::in_array($needle, $haystack)` | `Arr::contains($haystack, $needle)` |
+| `array_keys($arr)` | `phpFun::array_keys($arr)` | `Arr::keys($arr)` |
+| `array_values($arr)` | `phpFun::array_values($arr)` | `Arr::values($arr)` |
+| `array_slice($arr, $off, $len)` | `phpFun::array_slice(...)` | `Arr::slice($arr, $off, $len)` |
+| `array_reverse($arr)` | `phpFun::array_reverse($arr)` | `Arr::reverse($arr)` |
+| `strnatcmp($s1, $s2)` | `phpFun::strnatcmp($s1, $s2)` | `Str::natCompare($s1, $s2)` |
+| `strnatcasecmp($s1, $s2)` | `phpFun::strnatcasecmp($s1, $s2)` | `Str::natCaseCompare($s1, $s2)` |
 | `strlen($str)` | `phpFun::strlen($str)` | `Str::byteLength($str)` |
 | `strpos($h, $n, $off)` | `phpFun::strpos($h, $n, $off)` | `Str::find($h, $n, $off)` |
 | `strcmp($s1, $s2)` | `phpFun::strcmp($s1, $s2)` | `Str::strcmp($s1, $s2)` |
@@ -127,6 +153,13 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 > - **Human Inspection (`Debug::dump`, `Debug::dd`):** Pretty-prints to console or debug bar.
 > - **String Formatting (`Debug::format`):** Returns the diagnostic representation as a string (the `var_export($x, true)` use case). `var_export` is dropped because RHP does not export executable PHP source code.
 > - **Data Persistence (`Json::*`, `Bin::*`):** Uses Rust `serde` for readable JSON text or compact, ultra-fast binary cache serialization, with mandatory typed properties automatically deriving `Serialize` without `__set_state` boilerplate.
+
+> **Procedural PHP Calls are Pure Compile-Time Syntactic Sugar:**
+> Standard procedural PHP functions (`natsort($list)`, `array_diff($a, $b)`, `shuffle($items)`, `strnatcmp($s1, $s2)`, etc.) are **not** separate procedural runtime libraries. During compilation, the Pratt parser recognizes them from `LEGACY_PHP_FUNCTIONS` and rewrites them into static facade invocations via `phpFun::*` lowering (`Arr::natsort($list)`, `Arr::diff($a, $b)`, `Arr::shuffle($items)`, `Str::natCompare($s1, $s2)`).
+>
+> In accordance with RHP's immutable collection contract:
+> 1. Procedural calls **never mutate arguments in place**. Calling `natsort($list)` or `shuffle($list)` returns a brand-new instance of the respective subtype (`list`, `dict`, `set`).
+> 2. Fluent instance chaining (`$list->natsort()`), procedural calls (`natsort($list)`), and static facade methods (`Arr::natsort($list)`) share the exact same underlying native Rust implementation.
 
 ---
 
