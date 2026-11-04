@@ -1308,6 +1308,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     // File helpers
     LegacyPhpFunctionMapping {
+        php_name: "realpath",
+        rhp_facade: "File",
+        rhp_method: "realpath",
+        rhp_signature: "File::realpath(string $path): string|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "dirname",
+        rhp_facade: "File",
+        rhp_method: "dirname",
+        rhp_signature: "File::dirname(string $path, int $levels = 1): string",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "basename",
         rhp_facade: "File",
         rhp_method: "basename",
