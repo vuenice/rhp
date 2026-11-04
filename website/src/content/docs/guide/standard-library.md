@@ -426,6 +426,89 @@ bool $isAssoc = Arr::isAssoc(Arr::dict(['k' => 'v']));  // true
 bool $isList  = Arr::isList(Arr::list([1, 2, 3]));       // true
 ```
 
+#### Natural Order Sorting & Standard Array Operations
+
+RHP provides complete natural order sorting and PHP array compatibility functions across `list`, `dict`, and `set`. All operations follow **pure immutable semantics** (returning a brand-new collection of the respective subtype) and can be executed via three interchangeable styles:
+
+1. **Fluent instance method**: `$col->natsort()`
+2. **Procedural PHP call**: `natsort($col)` (rewritten at compile time via `phpFun::*` lowering)
+3. **Static facade call**: `Arr::natsort($col)`
+
+```php
+// 1. Natural Order Sorting (natsort & natcasesort)
+// Standard lexicographical sorting orders "img10.png" before "img2.png".
+// Natural order comparison handles numeric chunks intelligently:
+list $files = Arr::list(['img10.png', 'img1.png', 'img2.png', 'img20.png']);
+
+list $sorted = $files->natsort();
+// Result: ['img1.png', 'img2.png', 'img10.png', 'img20.png']
+
+// Case-insensitive natural order sorting:
+list $mixed = Arr::list(['IMG10.png', 'img1.png', 'img2.png']);
+list $caseSorted = $mixed->natcasesort(); // Also: $mixed->sortNaturalCase()
+// Result: ['img1.png', 'img2.png', 'IMG10.png']
+
+// Natural sorting on dict preserves key-value associations:
+dict $items = Arr::dict(['a' => 'item10', 'b' => 'item1', 'c' => 'item2']);
+dict $sortedDict = $items->natsort();
+// Result: ['b' => 'item1', 'c' => 'item2', 'a' => 'item10']
+
+// Procedural syntactic sugar (returns new instance, zero in-place mutation):
+list $viaPhp = natsort($files);
+list $viaFacade = Arr::natsort($files);
+
+// 2. High-Performance Natural String Comparison (Str::natCompare)
+int $cmp1 = strnatcmp('img2.png', 'img10.png');     // -1 (img2 < img10)
+int $cmp2 = strnatcasecmp('IMG10.png', 'img2.png'); //  1 (IMG10 > img2)
+int $cmp3 = Str::natCompare('a1', 'a1');            //  0 (equal)
+
+// 3. Collection Differences & Intersections (array_diff, array_intersect)
+list $l1 = Arr::list([1, 2, 3, 4, 5]);
+list $l2 = Arr::list([2, 4]);
+list $diff = $l1->diff($l2);                        // [1, 3, 5] (array_diff)
+list $inter = $l1->intersect($l2);                  // [2, 4]    (array_intersect)
+
+dict $d1 = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3]);
+dict $d2 = Arr::dict(['b' => 20, 'c' => 3]);
+dict $diffVal = $d1->diff($d2);                     // ['a' => 1, 'b' => 2] (compares values)
+dict $diffKey = $d1->diffKey($d2);                  // ['a' => 1] (array_diff_key: compares keys)
+dict $interKey = $d1->intersectKey($d2);            // ['b' => 2, 'c' => 3] (array_intersect_key)
+
+// 4. Data Restructuring: Column, Flip, and Combine
+list $records = Arr::list([
+    Arr::dict(['id' => 101, 'name' => 'Alice', 'role' => 'dev']),
+    Arr::dict(['id' => 102, 'name' => 'Bob',   'role' => 'ops']),
+]);
+
+// array_column(): pluck column or re-index by key column
+list $names = $records->column('name');             // ['Alice', 'Bob']
+dict $keyedById = $records->column('name', 'id');   // ['101' => 'Alice', '102' => 'Bob']
+
+// array_flip(): swaps keys and values
+dict $flipped = Arr::dict(['admin' => 1, 'guest' => 2])->flip(); // ['1' => 'admin', '2' => 'guest']
+
+// array_combine(): constructs dictionary from keys and values
+list $keys = Arr::list(['red', 'green', 'blue']);
+list $vals = Arr::list(['#f00', '#0f0', '#00f']);
+dict $colors = Arr::combine($keys, $vals);          // ['red' => '#f00', 'green' => '#0f0', 'blue' => '#00f']
+
+// 5. Value Frequency Counting (array_count_values)
+list $votes = Arr::list(['yes', 'no', 'yes', 'yes', 'abstain', 'no']);
+dict $counts = $votes->countValues();               // ['yes' => 3, 'no' => 2, 'abstain' => 1]
+
+// 6. Shuffling & Random Sampling (shuffle & array_rand)
+list $deck = Arr::list([1, 2, 3, 4, 5]);
+list $shuffled = $deck->shuffle();                  // Returns randomly permuted list
+
+// array_rand(): returns random key or array of keys
+int $singleKey = $deck->randomKey();                // E.g. 2 (random index)
+list $multiKeys = $deck->randomKey(3);              // E.g. [0, 2, 4]
+
+// random(): returns random value or collection of random values
+int $randVal = $deck->random();                     // E.g. 3
+list $subset = $deck->random(2);                    // List of 2 random elements
+```
+
 ---
 
 ### 6. Collection Type Boundaries & Permissive `array` Acceptance

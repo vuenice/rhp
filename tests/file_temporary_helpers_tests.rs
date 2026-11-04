@@ -227,3 +227,87 @@ fn test_afile_temp_helpers() {
         panic!("expected array return value, got {:?}", res);
     }
 }
+
+#[test]
+fn test_realpath() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        // 1. Procedural realpath
+        $p1 = realpath(".");
+        $p2 = realpath("./tests/../src");
+        $bad1 = realpath("/non_existent_path_rhp_xyz_12345");
+
+        // 2. File facade realpath & aliases
+        $f1 = File::realpath(".");
+        $f2 = File::realPath("./tests/../src");
+        $f3 = File::canonicalize("./tests/../src");
+        $bad2 = File::realpath("/non_existent_path_rhp_xyz_12345");
+
+        // 3. AFile async realpath
+        $afut1 = AFile::realpath(".");
+        $ares1 = $afut1->wait();
+        $afut2 = AFile::realpath("/non_existent_path_rhp_xyz_12345");
+        $ares2 = $afut2->wait();
+
+        return [
+            $p1, $p2, $bad1,
+            $f1, $f2, $f3, $bad2,
+            $ares1, $ares2
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(a) | PhpValue::List(a) = res {
+        let b = a.borrow();
+        let cwd = std::fs::canonicalize(".").expect("cwd canonicalize");
+        let cwd_str = cwd.to_string_lossy().to_string();
+        let src_path = std::fs::canonicalize("src").expect("src canonicalize");
+        let src_str = src_path.to_string_lossy().to_string();
+
+        // Procedural
+        assert_eq!(b[0], PhpValue::string(&cwd_str));
+        assert_eq!(b[1], PhpValue::string(&src_str));
+        assert_eq!(b[2], PhpValue::Bool(false));
+
+        // Facade
+        assert_eq!(b[3], PhpValue::string(&cwd_str));
+        assert_eq!(b[4], PhpValue::string(&src_str));
+        assert_eq!(b[5], PhpValue::string(&src_str));
+        assert_eq!(b[6], PhpValue::Bool(false));
+
+        // Async
+        assert_eq!(b[7], PhpValue::string(&cwd_str));
+        assert_eq!(b[8], PhpValue::Bool(false));
+    } else {
+        panic!("expected array return value, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_dirname_levels() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        $d1 = dirname("/a/b/c");
+        $d2 = dirname("/a/b/c", 1);
+        $d3 = dirname("/a/b/c", 2);
+        $fd1 = File::dirname("/a/b/c");
+        $fd2 = File::dirname("/a/b/c", 2);
+
+        return [$d1, $d2, $d3, $fd1, $fd2];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(a) | PhpValue::List(a) = res {
+        let b = a.borrow();
+        assert_eq!(b[0], PhpValue::string("/a/b"));
+        assert_eq!(b[1], PhpValue::string("/a/b"));
+        assert_eq!(b[2], PhpValue::string("/a"));
+        assert_eq!(b[3], PhpValue::string("/a/b"));
+        assert_eq!(b[4], PhpValue::string("/a"));
+    } else {
+        panic!("expected array return value, got {:?}", res);
+    }
+}
+

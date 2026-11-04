@@ -490,6 +490,30 @@ pub fn resolve_facade_static_call(
             "tmpfile" | "createTempStream" | "tempStream" => {
                 Ok(RhpType::Mixed)
             }
+            "realpath" | "realPath" | "canonicalize" => {
+                check_arg_type(
+                    &format!("File::{}", method),
+                    "$path",
+                    1,
+                    arg_types.first(),
+                    &RhpType::String,
+                    call_span,
+                    hierarchy,
+                )?;
+                Ok(RhpType::Mixed)
+            }
+            "dirname" => {
+                check_arg_type(
+                    &format!("File::{}", method),
+                    "$path",
+                    1,
+                    arg_types.first(),
+                    &RhpType::String,
+                    call_span,
+                    hierarchy,
+                )?;
+                Ok(RhpType::String)
+            }
             "writeStream" | "write_stream" => Ok(RhpType::Mixed),
             "readStream" | "read_stream" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
@@ -507,6 +531,9 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Future(Box::new(RhpType::String)))
             }
             "tempnam" | "createTempFile" | "tempFile" | "createTempDirectory" | "tempDirectory" | "createTempDir" => {
+                Ok(RhpType::Future(Box::new(RhpType::Mixed)))
+            }
+            "realpath" | "realPath" | "canonicalize" => {
                 Ok(RhpType::Future(Box::new(RhpType::Mixed)))
             }
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),

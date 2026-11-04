@@ -3539,6 +3539,7 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             record_fiber_io_start(IoKind::FileExists { path: path.clone() });
             let res = match std::fs::canonicalize(&path) {
                 Ok(p) => {
+                    #[allow(unused_mut)]
                     let mut s = p.to_string_lossy().to_string();
                     #[cfg(windows)]
                     {
@@ -4197,6 +4198,7 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
             rt.spawn(async move {
                 let res = match tokio::fs::canonicalize(&path).await {
                     Ok(p) => {
+                        #[allow(unused_mut)]
                         let mut s = p.to_string_lossy().to_string();
                         #[cfg(windows)]
                         {
