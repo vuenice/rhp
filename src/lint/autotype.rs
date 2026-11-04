@@ -447,7 +447,11 @@ pub fn infer_expression_type_name(
                     },
                     "Str" => match method.name {
                         "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => Some("bool".to_string()),
-                        "length" => Some("int".to_string()),
+                        "length" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" | "countOccurrences"
+                        | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
+                        | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
+                        | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
+                        | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some("int".to_string()),
                         "find" | "indexOf" => Some("?int".to_string()),
                         _ => Some("string".to_string()),
                     },
@@ -477,6 +481,25 @@ pub fn infer_expression_type_name(
                         _ => Some("string".to_string()),
                     },
                     "Compress" => Some("string".to_string()),
+                    "Uniq" => match method.name {
+                        "isValid" | "is_valid" => Some("bool".to_string()),
+                        "version" => Some("int".to_string()),
+                        "parse" => Some("dict".to_string()),
+                        _ => Some("string".to_string()),
+                    },
+                    "Csv" => match method.name {
+                        "generate" | "formatRow" | "stringify" => Some("string".to_string()),
+                        "close" | "feof" | "eof" | "rewind" | "writeFile" => Some("bool".to_string()),
+                        "parse" | "readFile" | "parseRow" | "str_getcsv" => Some("list".to_string()),
+                        _ => None,
+                    },
+                    "Sys" => match method.name {
+                        "os" | "version" => Some("string".to_string()),
+                        "timestamp" => Some("int".to_string()),
+                        "disk_free_space" | "diskFreeSpace" | "diskfreespace" | "disk_total_space" | "diskTotalSpace" => Some("float".to_string()),
+                        "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" => Some("void".to_string()),
+                        _ => None,
+                    },
                     "Int" => Some("int".to_string()),
                     "Float" => Some("float".to_string()),
                     _ => None,

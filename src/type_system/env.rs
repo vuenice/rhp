@@ -330,7 +330,11 @@ pub fn resolve_facade_static_call(
             "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Ok(RhpType::Bool),
             "utf8" => Ok(RhpType::String),
             "bytes" => Ok(RhpType::Bytes),
-            "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" => Ok(RhpType::Int),
+            "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len"
+            | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
+            | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
+            | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
+            | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Ok(RhpType::Int),
             "mbSubstr" | "mb_substr" => Ok(RhpType::String),
             "convertEncoding" => Ok(RhpType::Bytes),
             "detectEncoding" => Ok(RhpType::Nullable(Box::new(RhpType::String))),
@@ -474,6 +478,20 @@ pub fn resolve_facade_static_call(
             "info" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::String)))),
             "modifiedAt" | "modified_at" => Ok(RhpType::Int),
             "chmod" | "parseMode" | "parse_mode" => Ok(RhpType::Mixed),
+            "clearstatcache" | "clearStatCache" => Ok(RhpType::Void),
+            "diskFreeSpace" | "disk_free_space" | "diskfreespace" | "diskTotalSpace" | "disk_total_space" => {
+                Ok(RhpType::Union(vec![RhpType::Float, RhpType::Bool]))
+            }
+            "sysGetTempDir" | "sys_get_temp_dir" => Ok(RhpType::String),
+            "tempDir" => Ok(RhpType::Mixed),
+            "tempnam" | "createTempFile" | "tempFile" | "createTempDirectory" | "tempDirectory" | "createTempDir" => {
+                Ok(RhpType::Mixed)
+            }
+            "tmpfile" | "createTempStream" | "tempStream" => {
+                Ok(RhpType::Mixed)
+            }
+            "writeStream" | "write_stream" => Ok(RhpType::Mixed),
+            "readStream" | "read_stream" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
 
@@ -485,6 +503,12 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Future(Box::new(RhpType::Bool)))
             }
             "size" => Ok(RhpType::Future(Box::new(RhpType::Int))),
+            "sysGetTempDir" | "sys_get_temp_dir" | "tempDir" => {
+                Ok(RhpType::Future(Box::new(RhpType::String)))
+            }
+            "tempnam" | "createTempFile" | "tempFile" | "createTempDirectory" | "tempDirectory" | "createTempDir" => {
+                Ok(RhpType::Future(Box::new(RhpType::Mixed)))
+            }
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
         },
 
@@ -602,6 +626,16 @@ pub fn resolve_facade_static_call(
             "zlib" | "unzlib" | "gzip" | "gunzip" => Ok(RhpType::String),
             _ => Ok(RhpType::String),
         },
+        "Uniq" => match method {
+            "uniqid" | "id" | "uuid4" | "v4" | "uuid5" | "v5" | "uuid7" | "v7" | "uuid3" | "v3"
+            | "uuid" | "nil" | "max" => Ok(RhpType::String),
+            "isValid" | "is_valid" => Ok(RhpType::Bool),
+            "version" => Ok(RhpType::Union(vec![RhpType::Int, RhpType::Null])),
+            "parse" => Ok(RhpType::Collection(CollectionSubtype::Dict(
+                Box::new(RhpType::Mixed),
+            ))),
+            _ => Ok(RhpType::Mixed),
+        },
         "Crypt" => match method {
             "hash" | "hashHmac" | "hash_hmac" | "opensslEncrypt" | "openssl_encrypt"
             | "randomBytes" | "random_bytes" | "randomHex" | "random_hex"
@@ -657,11 +691,16 @@ pub fn resolve_facade_static_call(
         },
         "Log" => Ok(RhpType::Void),
         "Sys" => match method {
-            "print" | "echo" | "dd" | "dump" => Ok(RhpType::Void),
+            "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" | "registerShutdownFunction" | "register_shutdown_function" => Ok(RhpType::Void),
             "print_r" => Ok(RhpType::Mixed),
             "env" => Ok(RhpType::Mixed),
             "os" | "version" => Ok(RhpType::String),
             "timestamp" => Ok(RhpType::Int),
+            "setErrorHandler" | "set_error_handler" | "setExceptionHandler" | "set_exception_handler" => Ok(RhpType::Mixed),
+            "restoreErrorHandler" | "restore_error_handler" | "restoreExceptionHandler" | "restore_exception_handler" | "triggerError" | "trigger_error" => Ok(RhpType::Bool),
+            "disk_free_space" | "diskFreeSpace" | "diskfreespace" | "disk_total_space" | "diskTotalSpace" => {
+                Ok(RhpType::Union(vec![RhpType::Float, RhpType::Bool]))
+            }
             _ => Ok(RhpType::Mixed),
         },
         "Glob" => match method {
@@ -731,6 +770,32 @@ pub fn resolve_facade_static_call(
             "classExists" | "class_exists" | "functionExists" | "function_exists" => {
                 Ok(RhpType::Bool)
             }
+            _ => Ok(RhpType::Mixed),
+        },
+        "Validate" => match method {
+            "null" | "int" | "integer" | "bool" | "boolean" | "float" | "double" | "real"
+            | "numeric" | "scalar" | "resource" | "isA" | "is_a" | "instanceof" => Ok(RhpType::Bool),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Debug" => match method {
+            "dump" => Ok(RhpType::Void),
+            "dd" => Ok(RhpType::Never),
+            "format" | "type" => Ok(RhpType::String),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Csv" => match method {
+            "fgetcsv" | "readRow" => Ok(RhpType::Union(vec![
+                RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed))),
+                RhpType::Bool,
+            ])),
+            "fputcsv" | "writeRow" => Ok(RhpType::Union(vec![RhpType::Int, RhpType::Bool])),
+            "parse" | "readFile" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
+                RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String))),
+            )))),
+            "parseRow" | "str_getcsv" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
+            "generate" | "formatRow" | "stringify" => Ok(RhpType::String),
+            "writeFile" | "close" | "feof" | "eof" | "rewind" => Ok(RhpType::Bool),
+            "open" | "memory" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
         "Carbon" => match method {
@@ -822,8 +887,12 @@ pub fn resolve_builtin_fluent_method(
             | "ksort" | "asort" | "diff" | "diffKey" | "diffKeys" | "intersect"
             | "intersectKey" | "intersectKeys" | "array_diff" | "array_diff_key"
             | "array_intersect" | "array_intersect_key" | "chunk" | "array_chunk"
-            | "flip" | "array_flip" => Some(RhpType::Collection(sub.clone())),
-            "column" | "array_column" | "combine" | "array_combine" => Some(RhpType::Dynamic),
+            | "flip" | "array_flip" | "shuffle"
+            | "natsort" | "natSort" | "sortNatural"
+            | "natcasesort" | "natCaseSort" | "sortNaturalCase" => Some(RhpType::Collection(sub.clone())),
+            "column" | "array_column" | "combine" | "array_combine" | "countValues"
+            | "count_values" | "array_count_values" | "countBy" | "randomKey" | "randomKeys"
+            | "randKey" | "array_rand" | "random" => Some(RhpType::Dynamic),
             "reduce" => {
                 let reduced = arg_types
                     .first()
@@ -876,8 +945,12 @@ pub fn resolve_builtin_fluent_method(
             | "ksort" | "asort" | "diff" | "diffKey" | "diffKeys" | "intersect"
             | "intersectKey" | "intersectKeys" | "array_diff" | "array_diff_key"
             | "array_intersect" | "array_intersect_key" | "chunk" | "array_chunk"
-            | "flip" | "array_flip" => Some(RhpType::Array(inner.clone())),
-            "column" | "array_column" | "combine" | "array_combine" => Some(RhpType::Dynamic),
+            | "flip" | "array_flip" | "shuffle"
+            | "natsort" | "natSort" | "sortNatural"
+            | "natcasesort" | "natCaseSort" | "sortNaturalCase" => Some(RhpType::Array(inner.clone())),
+            "column" | "array_column" | "combine" | "array_combine" | "countValues"
+            | "count_values" | "array_count_values" | "countBy" | "randomKey" | "randomKeys"
+            | "randKey" | "array_rand" | "random" => Some(RhpType::Dynamic),
             "reduce" => {
                 let reduced = arg_types
                     .first()
@@ -912,7 +985,11 @@ pub fn resolve_builtin_fluent_method(
         RhpType::String => match method {
             "trim" | "ltrim" | "rtrim" | "upper" | "toUpper" | "lower" | "toLower" | "slug"
             | "replace" | "substr" | "reverse" | "repeat" | "utf8" | "mbSubstr" | "mb_substr" => Some(RhpType::String),
-            "length" | "byteLength" | "bytesCount" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" => Some(RhpType::Int),
+            "length" | "byteLength" | "bytesCount" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len"
+            | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
+            | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
+            | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
+            | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some(RhpType::Int),
             "find" | "indexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
             "check" | "compare" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
@@ -928,7 +1005,11 @@ pub fn resolve_builtin_fluent_method(
 
         // Fluent bytes helper methods (`$bytes->len()`, `$bytes->slice()`, `$bytes->decode()`, `$bytes->convert()`)
         RhpType::Bytes => match method {
-            "len" | "length" => Some(RhpType::Int),
+            "len" | "length"
+            | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
+            | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
+            | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
+            | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some(RhpType::Int),
             "slice" => Some(RhpType::Bytes),
             "decode" => Some(RhpType::String),
             "convert" => Some(RhpType::Bytes),

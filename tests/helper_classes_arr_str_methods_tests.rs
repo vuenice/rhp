@@ -714,3 +714,142 @@ fn test_str_digit_alpha_alnum_helpers() {
         panic!("expected array/list result");
     }
 }
+
+#[test]
+fn test_str_binary_and_case_comparison_helpers() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        // 1. Static Str::strcmp (binary-safe, case-sensitive)
+        $c1 = Str::strcmp("apple", "apple");
+        $c2 = Str::strcmp("apple", "banana");
+        $c3 = Str::strcmp("banana", "apple");
+        $c4 = Str::strcmp("Apple", "apple");
+        $c5 = Str::strcmp("apple\0one", "apple\0one");
+        $c6 = Str::strcmp("apple\0one", "apple\0two");
+        $c7 = Str::strcmp("apple\0two", "apple\0one");
+
+        // 2. Static Str::strcasecmp (binary-safe, case-insensitive)
+        $ci1 = Str::strcasecmp("apple", "APPLE");
+        $ci2 = Str::strcasecmp("Apple", "banana");
+        $ci3 = Str::strcasecmp("BANANA", "apple");
+        $ci4 = Str::strcasecmp("apple\0ONE", "APPLE\0one");
+        $ci5 = Str::strcasecmp("apple\0ONE", "APPLE\0two");
+
+        // 3. Static Str::strncmp (binary-safe prefix comparison)
+        $nc1 = Str::strncmp("hello123", "hello456", 5);
+        $nc2 = Str::strncmp("hello123", "hello456", 6);
+        $nc3 = Str::strncmp("hello456", "hello123", 6);
+        $nc4 = Str::strncmp("hello", "world", 0);
+        $nc5 = Str::strncmp("abc\0one", "abc\0two", 4);
+        $nc6 = Str::strncmp("abc\0one", "abc\0two", 5);
+
+        // 4. Static Str::strncasecmp (binary-safe, case-insensitive prefix comparison)
+        $nci1 = Str::strncasecmp("HELLO123", "hello456", 5);
+        $nci2 = Str::strncasecmp("HELLO123", "hello456", 6);
+        $nci3 = Str::strncasecmp("ABC\0ONE", "abc\0two", 4);
+        $nci4 = Str::strncasecmp("ABC\0ONE", "abc\0two", 5);
+
+        // 5. Fluent instance method calls
+        $u_c1 = "hello"->strcmp("hello");
+        $u_c2 = "hello"->strcmp("HELLO");
+        $u_ci1 = "hello"->strcasecmp("HELLO");
+        $u_nc1 = "prefix_A"->strncmp("prefix_B", 6);
+        $u_nci1 = "PREFIX_A"->strncasecmp("prefix_B", 6);
+
+        // 6. Aliases
+        $alias_cmp = Str::cmp("abc", "abc");
+        $alias_casecmp = Str::casecmp("abc", "ABC");
+        $alias_ncmp = Str::ncmp("abc1", "abc2", 3);
+        $alias_ncasecmp = Str::ncasecmp("ABC1", "abc2", 3);
+
+        // 7. Legacy procedural PHP functions
+        $legacy_strcmp = strcmp("foo", "foo");
+        $legacy_strcasecmp = strcasecmp("foo", "FOO");
+        $legacy_strncmp = strncmp("foobar", "foobaz", 5);
+        $legacy_strncasecmp = strncasecmp("FOOBAR", "foobaz", 5);
+
+        return [
+            $c1, $c2, $c3, $c4, $c5, $c6, $c7,
+            $ci1, $ci2, $ci3, $ci4, $ci5,
+            $nc1, $nc2, $nc3, $nc4, $nc5, $nc6,
+            $nci1, $nci2, $nci3, $nci4,
+            $u_c1, $u_c2, $u_ci1, $u_nc1, $u_nci1,
+            $alias_cmp, $alias_casecmp, $alias_ncmp, $alias_ncasecmp,
+            $legacy_strcmp, $legacy_strcasecmp, $legacy_strncmp, $legacy_strncasecmp,
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        // 1. strcmp
+        assert_eq!(b[0], PhpValue::Int(0));
+        assert_eq!(b[1], PhpValue::Int(-1));
+        assert_eq!(b[2], PhpValue::Int(1));
+        assert_eq!(b[3], PhpValue::Int(-1));
+        assert_eq!(b[4], PhpValue::Int(0));
+        assert_eq!(b[5], PhpValue::Int(-1));
+        assert_eq!(b[6], PhpValue::Int(1));
+
+        // 2. strcasecmp
+        assert_eq!(b[7], PhpValue::Int(0));
+        assert_eq!(b[8], PhpValue::Int(-1));
+        assert_eq!(b[9], PhpValue::Int(1));
+        assert_eq!(b[10], PhpValue::Int(0));
+        assert_eq!(b[11], PhpValue::Int(-1));
+
+        // 3. strncmp
+        assert_eq!(b[12], PhpValue::Int(0));
+        assert_eq!(b[13], PhpValue::Int(-1));
+        assert_eq!(b[14], PhpValue::Int(1));
+        assert_eq!(b[15], PhpValue::Int(0));
+        assert_eq!(b[16], PhpValue::Int(0));
+        assert_eq!(b[17], PhpValue::Int(-1));
+
+        // 4. strncasecmp
+        assert_eq!(b[18], PhpValue::Int(0));
+        assert_eq!(b[19], PhpValue::Int(-1));
+        assert_eq!(b[20], PhpValue::Int(0));
+        assert_eq!(b[21], PhpValue::Int(-1));
+
+        // 5. fluent calls
+        assert_eq!(b[22], PhpValue::Int(0));
+        assert_eq!(b[23], PhpValue::Int(1));
+        assert_eq!(b[24], PhpValue::Int(0));
+        assert_eq!(b[25], PhpValue::Int(0));
+        assert_eq!(b[26], PhpValue::Int(0));
+
+        // 6. aliases
+        assert_eq!(b[27], PhpValue::Int(0));
+        assert_eq!(b[28], PhpValue::Int(0));
+        assert_eq!(b[29], PhpValue::Int(0));
+        assert_eq!(b[30], PhpValue::Int(0));
+
+        // 7. legacy
+        assert_eq!(b[31], PhpValue::Int(0));
+        assert_eq!(b[32], PhpValue::Int(0));
+        assert_eq!(b[33], PhpValue::Int(0));
+        assert_eq!(b[34], PhpValue::Int(0));
+    } else {
+        panic!("expected array/list result");
+    }
+}
+
+#[test]
+fn test_strncmp_negative_length_rejected() {
+    clear_runtime_closure_macros();
+
+    let res = run_source("Str::strncmp('a', 'b', -1);");
+    assert!(res.is_err(), "strncmp with negative length must return error");
+
+    let res2 = run_source("strncmp('a', 'b', -5);");
+    assert!(res2.is_err(), "legacy strncmp with negative length must return error");
+
+    let res3 = run_source("Str::strncasecmp('a', 'b', -1);");
+    assert!(res3.is_err(), "strncasecmp with negative length must return error");
+
+    let res4 = run_source("strncasecmp('a', 'b', -5);");
+    assert!(res4.is_err(), "legacy strncasecmp with negative length must return error");
+}
+

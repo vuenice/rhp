@@ -411,7 +411,11 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                     },
                     "Str" => match method.name {
                         "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
-                        "length" => RhpType::Int,
+                        "length" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" | "countOccurrences"
+                        | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
+                        | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
+                        | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
+                        | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => RhpType::Int,
                         "find" | "indexOf" => RhpType::Nullable(Box::new(RhpType::Int)),
                         _ => RhpType::String,
                     },
@@ -441,6 +445,28 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::String,
                     },
                     "Compress" => RhpType::String,
+                    "Uniq" => match method.name {
+                        "isValid" | "is_valid" => RhpType::Bool,
+                        "version" => RhpType::Union(vec![RhpType::Int, RhpType::Null]),
+                        "parse" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+                        _ => RhpType::String,
+                    },
+                    "Csv" => match method.name {
+                        "generate" | "formatRow" | "stringify" => RhpType::String,
+                        "close" | "feof" | "eof" | "rewind" | "writeFile" => RhpType::Bool,
+                        "parse" | "readFile" => RhpType::Collection(CollectionSubtype::List(Box::new(
+                            RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String))),
+                        ))),
+                        "parseRow" | "str_getcsv" => RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String))),
+                        _ => RhpType::Dynamic,
+                    },
+                    "Sys" => match method.name {
+                        "os" | "version" => RhpType::String,
+                        "timestamp" => RhpType::Int,
+                        "disk_free_space" | "diskFreeSpace" | "diskfreespace" | "disk_total_space" | "diskTotalSpace" => RhpType::Union(vec![RhpType::Float, RhpType::Bool]),
+                        "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" => RhpType::Void,
+                        _ => RhpType::Dynamic,
+                    },
                     "Int" => RhpType::Int,
                     "Float" => RhpType::Float,
                     _ => RhpType::Dynamic,

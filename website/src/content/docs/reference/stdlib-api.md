@@ -59,6 +59,37 @@ Arr::product(mixed $array): int|float;                         // Computes produ
 Arr::fill(int $start, int $count, mixed $value): array;        // Fills array with count entries of value
 Arr::fillKeys(array $keys, mixed $value): dict;                // Fills array using keys with value
 Arr::pad(array $array, int $size, mixed $value): array;        // Pads array to size with value
+Arr::column(mixed $array, ?string $columnKey, ?string $indexKey = null): list|dict; // array_column()
+Arr::flip(mixed $array): dict;                                 // array_flip(): swaps keys and values
+Arr::combine(mixed $keys, mixed $values): dict;                // array_combine(): creates dict from keys and values
+Arr::countValues(mixed $array): dict;                          // array_count_values(): counts frequency of each value
+
+// Sorting (Pure Immutable: Returns New Collection of Respective Subtype)
+Arr::sort(mixed $items): list|dict;                            // Ascending sort (preserves dict keys)
+Arr::asort(mixed $items): list|dict;                           // Procedural alias for Arr::sort()
+Arr::ksort(mixed $dict): dict;                                 // Sorts dictionary by key ascending
+Arr::sortKeys(mixed $dict): dict;                              // Alias for ksort()
+Arr::sortKeysDesc(mixed $dict): dict;                          // Sorts dictionary by key descending
+Arr::usort(mixed $items, callable $cmp): list|dict;            // User comparator sort
+Arr::uasort(mixed $items, callable $cmp): list|dict;           // User comparator sort preserving keys
+Arr::uksort(mixed $dict, callable $cmp): dict;                 // User comparator sort on dictionary keys
+Arr::natsort(mixed $items): list|dict|set;                     // Natural order sorting ('img1.png', 'img2.png', 'img10.png')
+Arr::sortNatural(mixed $items): list|dict|set;                 // Alias for natsort()
+Arr::natcasesort(mixed $items): list|dict|set;                 // Case-insensitive natural order sorting
+Arr::sortNaturalCase(mixed $items): list|dict|set;             // Alias for natcasesort()
+
+// Set-Like Difference & Intersection
+Arr::diff(mixed $collection, mixed ...$others): list|dict|set; // array_diff(): values not in other collections
+Arr::diffKey(mixed $collection, mixed ...$others): list|dict;  // array_diff_key(): keys not in other collections
+Arr::diffKeys(mixed $collection, mixed ...$others): list|dict; // Alias for diffKey()
+Arr::intersect(mixed $collection, mixed ...$others): list|dict|set; // array_intersect(): values present in all collections
+Arr::intersectKey(mixed $collection, mixed ...$others): list|dict;  // array_intersect_key(): keys present in all collections
+Arr::intersectKeys(mixed $collection, mixed ...$others): list|dict; // Alias for intersectKey()
+
+// Randomization & Shuffling
+Arr::shuffle(mixed $collection): list|dict|set;                // Returns randomly shuffled collection of same subtype
+Arr::randomKey(mixed $collection, int $num = 1): mixed;        // array_rand(): picks 1 or $num random keys/indices
+Arr::random(mixed $collection, ?int $num = null): mixed;       // Picks 1 random value or collection of $num random values
 
 // Generators & Utilities
 Arr::range(int $start, int $end, int $step = 1): list;
@@ -71,7 +102,6 @@ Arr::values(mixed $collection): list;
 Arr::merge(mixed ...$arrays): list|dict;
 Arr::unique(mixed $items): set;
 Arr::reverse(mixed $target): list|dict;
-Arr::sort(mixed $items): list;
 
 // Static Cross-Collection Comparison (also available via Array::)
 Arr::compareJson(mixed $a, mixed $b): bool;                   // Canonical JSON stringification and comparison across collection types
@@ -120,8 +150,23 @@ $list->chunk(int $size): list;
 $list->flatten(): list;
 $list->unique(): list;
 $list->reverse(): list;
-$list->sort(?callable $comparator = null): list;
+$list->sort(?callable $comparator = null): list; // Also: asort(), usort(), uasort()
 $list->sortBy(string|callable $key): list;
+$list->natsort(): list;                 // Natural order sorting ('img1.png', 'img2.png', 'img10.png')
+$list->sortNatural(): list;             // Alias for natsort()
+$list->natcasesort(): list;             // Case-insensitive natural order sorting
+$list->sortNaturalCase(): list;         // Alias for natcasesort()
+$list->diff(mixed ...$others): list;    // array_diff()
+$list->diffKey(mixed ...$others): list; // array_diff_key()
+$list->intersect(mixed ...$others): list; // array_intersect()
+$list->intersectKey(mixed ...$others): list; // array_intersect_key()
+$list->column(?string $col, ?string $indexKey = null): list|dict; // array_column()
+$list->flip(): dict;                    // array_flip(): values become keys, indices become values
+$list->combine(mixed $values): dict;    // array_combine(): $list items become keys
+$list->countValues(): dict;             // array_count_values()
+$list->shuffle(): list;                 // Returns randomly shuffled list
+$list->randomKey(int $num = 1): int|list; // array_rand(): returns 1 index or list of indices
+$list->random(?int $num = null): mixed|list; // Returns 1 random item or list of $num random items
 $list->concat(mixed $other): list;      // Also: merge()
 $list->pluck(string $key): list;
 $list->partition(callable $fn): list;
@@ -182,10 +227,15 @@ $dict->firstKey(): ?string;                                     // First key in 
 $dict->lastKey(): ?string;                                      // Last key in insertion order
 
 // Ordering, Slicing & Chunking
-$dict->sortKeys(): dict;                                        // Sorts keys ascending (natural ordering)
+$dict->sortKeys(): dict;                                        // Sorts keys ascending (also: ksort())
 $dict->sortKeysDesc(): dict;                                    // Sorts keys descending
-$dict->sort(?callable $comparator = null): dict;                // Sorts by values ascending
+$dict->sortKeysBy(callable $fn): dict;                          // Custom comparator key sort (also: uksort())
+$dict->sort(?callable $comparator = null): dict;                // Sorts by values ascending (also: asort(), uasort(), usort())
 $dict->sortBy(string|callable $key): dict;                      // Sorts by custom closure or subkey
+$dict->natsort(): dict;                                         // Natural order sorting by values (preserves keys)
+$dict->sortNatural(): dict;                                     // Alias for natsort()
+$dict->natcasesort(): dict;                                     // Case-insensitive natural order sorting by values
+$dict->sortNaturalCase(): dict;                                 // Alias for natcasesort()
 $dict->reverse(): dict;                                         // Reverses key-value insertion order
 $dict->chunk(int $size): list;                                  // Chunks dictionary into list of dictionaries
 $dict->take(int $limit): dict;                                  // Takes first (or last if negative) N entries
@@ -200,12 +250,20 @@ $dict->reject(callable $fn): dict;                              // Drops entries
 $dict->reduce(callable $fn, mixed $initial = null): mixed;      // fn($carry, $val) => $newCarry
 $dict->each(callable $fn): dict;                                // fn($val, $key) (short-circuit on false)
 $dict->pluck(string $valueKey, ?string $keyBy = null): dict|list;
+$dict->column(?string $columnKey, ?string $indexKey = null): dict; // array_column()
+$dict->combine(mixed $values): dict;                            // array_combine(): dict values become keys
+$dict->countValues(): dict;                                     // array_count_values()
+$dict->shuffle(): dict;                                         // Returns dictionary with shuffled entries
+$dict->randomKey(int $num = 1): string|list;                    // array_rand(): returns 1 key or list of keys
+$dict->random(?int $num = null): mixed|dict;                    // Returns 1 random value or dict of $num random entries
 
 // Set-Like Differences & Intersections
-$dict->diff(dict|array $other): dict;                           // Entries whose values are not in $other
-$dict->diffKeys(dict|array $other): dict;                       // Entries whose keys are not in $other
-$dict->intersect(dict|array $other): dict;                      // Entries whose values exist in $other
-$dict->intersectKeys(dict|array $other): dict;                  // Entries whose keys exist in $other
+$dict->diff(dict|array ...$others): dict;                       // array_diff(): entries whose values are not in $others
+$dict->diffKeys(dict|array ...$others): dict;                   // array_diff_key(): entries whose keys are not in $others
+$dict->diffKey(dict|array ...$others): dict;                    // Alias for diffKeys()
+$dict->intersect(dict|array ...$others): dict;                  // array_intersect(): entries whose values exist in all $others
+$dict->intersectKeys(dict|array ...$others): dict;              // array_intersect_key(): entries whose keys exist in all $others
+$dict->intersectKey(dict|array ...$others): dict;               // Alias for intersectKeys()
 
 // Aggregations & Serialization
 $dict->sum(): int|float;
@@ -246,9 +304,17 @@ $set->values(): list;                   // Alias for all()
 $set->toJson(): string;                 // JSON array representation "[...]"
 
 // Mathematical Set Algebra
-$set->diff(set|array $other): set;      // Relative complement (elements in $this not in $other)
-$set->intersect(set|array $other): set; // Intersection (elements present in both)
-$set->union(set|array $other): set;     // Set union (elements present in either)
+$set->diff(set|array ...$others): set;  // Relative complement (elements in $this not in $others)
+$set->intersect(set|array ...$others): set; // Intersection (elements present in both)
+$set->union(set|array ...$others): set; // Set union (elements present in either)
+
+// Natural Sorting & Randomization
+$set->natsort(): set;                   // Returns new Set (immutable copy)
+$set->natcasesort(): set;               // Returns new Set (immutable copy)
+$set->countValues(): dict;              // array_count_values()
+$set->shuffle(): set;                   // Returns new Set with shuffled elements
+$set->randomKey(int $num = 1): mixed|set; // array_rand(): picks 1 or $num random values
+$set->random(?int $num = null): mixed|set; // Picks 1 random value or Set of $num random values
 
 // Higher-Order Transforms & Side Effects
 $set->map(callable $fn): set;           // fn($item) => mapped item (deduplicated)
@@ -371,6 +437,12 @@ Str::split(string $delimiter, string $string): list;
 Str::replace(string $search, string $replace, string $subject): string;
 Str::find(string $haystack, string $needle, int $offset = 0): ?int;
 Str::compare(mixed $a, mixed $b, bool $caseInsensitive = false): bool; // String coercion comparison (optional case-insensitive)
+Str::natCompare(string $string1, string $string2): int;                    // Natural order string comparison (strnatcmp, < 0, 0, > 0)
+Str::natCaseCompare(string $string1, string $string2): int;                // Case-insensitive natural order string comparison (strnatcasecmp)
+Str::strcmp(string $string1, string $string2): int;                        // Binary-safe string comparison (< 0, 0, > 0)
+Str::strcasecmp(string $string1, string $string2): int;                    // Binary-safe case-insensitive string comparison
+Str::strncmp(string $string1, string $string2, int $length): int;          // Binary-safe string comparison of first n characters
+Str::strncasecmp(string $string1, string $string2, int $length): int;      // Binary-safe case-insensitive comparison of first n characters
 Str::digit(mixed $value): bool;                                        // Checks if string contains only digits [0-9]
 Str::alpha(mixed $value): bool;                                        // Checks if string contains only alphabetic characters [a-zA-Z]
 Str::alnum(mixed $value): bool;                                        // Checks if string contains only alphanumeric characters [a-zA-Z0-9]
@@ -410,6 +482,10 @@ $str->bytes(): list;
 $str->isUtf8(): bool;
 $str->isEmpty(): bool;
 $str->compare(mixed $other, bool $caseInsensitive = false): bool;
+$str->strcmp(string $other): int;
+$str->strcasecmp(string $other): int;
+$str->strncmp(string $other, int $length): int;
+$str->strncasecmp(string $other, int $length): int;
 $str->digit(): bool;
 $str->alpha(): bool;
 $str->alnum(): bool;
@@ -542,6 +618,12 @@ File::isReadable(string $path): bool;               // Check if file is readable
 File::isWritable(string $path): bool;               // Check if file is writable
 File::isFile(string $path): bool;                   // Check if path is a regular file
 File::isDirectory(string $path): bool;              // Check if path is a directory
+File::sysGetTempDir(): string;                       // Get system temporary directory (alias: sys_get_temp_dir)
+File::tempnam(?string $dir = null, ?string $prefix = null): string|false; // Create unique temporary file (alias: createTempFile, tempFile)
+File::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): string|false; // Create temporary directory (alias: tempDirectory, createTempDir)
+File::tmpfile(): resource|false;                     // Create temporary file opened in w+b mode (auto-deleted on close)
+File::writeStream(resource $stream, string $data, ?int $length = null): int|false; // Write data to stream resource (alias: fwrite)
+File::readStream(resource $stream, int $length): string|false; // Read bytes from stream resource (alias: fread)
 File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request (UploadedFile)
 
 // UploadedFile instance methods ($file = File::fromRequest('avatar')):
@@ -622,6 +704,72 @@ File::chmod(string $path, ?string $mode = null): mixed
 - When `$mode` is supplied: sets the permission bitmask for `$path` using string format (`"0755"` or `"rwxr-xr-x"`). Returns `true` on success, or `false` if `parseMode` fails or permissions cannot be set.
 - When `$mode` is omitted or `null`: inspects the current file permissions and returns an octal string representation (e.g. `"0755"`).
 
+### Temporary Files & Directories (`File::tempnam`, `File::tmpfile`, `File::sysGetTempDir`, `File::createTempDirectory`)
+
+RHP provides safe, high-performance temporary file and directory creation with cross-platform compatibility and automatic resource cleanup.
+
+#### `File::sysGetTempDir(): string` (or procedural `sys_get_temp_dir()`)
+
+Returns the normalized directory path used by the operating system for temporary files (e.g. `"/tmp"` on Linux/macOS or `C:\Users\...\AppData\Local\Temp` on Windows) without a trailing slash.
+
+```php
+string $tmpDir = File::sysGetTempDir(); // "/tmp"
+string $dir = sys_get_temp_dir();       // Identical procedural helper
+```
+
+#### `File::tempnam(?string $dir = null, ?string $prefix = null): string|false` (or procedural `tempnam()`)
+
+Creates a unique temporary file with restricted permissions (`0600` on Unix) and returns its absolute path.
+- If `$dir` is omitted, empty, or does not exist, it automatically falls back to `sys_get_temp_dir()`.
+- The filename begins with `$prefix` (defaults to `"tmp"`).
+- Aliases: `File::createTempFile()`, `File::tempFile()`.
+
+```php
+// Create unique temp file in system temp dir
+string $path = File::tempnam(null, "cache_"); // "/tmp/cache_5f8a12c0.tmp"
+
+// Procedural tempnam with custom directory and prefix
+string $logTmp = tempnam("/var/log/app", "worker_");
+
+// File exists immediately and is ready for use
+File::write($path, "payload");
+```
+
+#### `File::tmpfile(): resource|false` (or procedural `tmpfile()`)
+
+Creates a temporary file with a unique name in read-write (`w+b`) mode and returns an active stream resource handle.
+- The file is **automatically deleted** from disk when closed via `fclose($stream)` (or `File::close($stream)`), or when the script terminates.
+- Aliases: `File::createTempStream()`, `File::tempStream()`.
+
+```php
+// Create temporary read/write stream
+$stream = tmpfile(); // or File::tmpfile()
+
+// Write and rewind
+fwrite($stream, "temporary buffered data");
+rewind($stream);
+
+// Read back from stream
+$content = fread($stream, 1024); // "temporary buffered data"
+
+// Closing stream immediately removes the file from disk
+fclose($stream);
+```
+
+#### `File::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): string|false`
+
+Creates a unique temporary directory with secure permissions.
+- Accepts standard string permissions (e.g. `"0700"`, `"0755"` or `"rwxr-xr-x"`). Integer modes return `false`.
+- If `$dir` is omitted or does not exist, falls back to `sys_get_temp_dir()`.
+- Aliases: `File::tempDirectory()`, `File::createTempDir()`.
+
+```php
+// Create temp directory with default "0700" mode
+string $workspace = File::createTempDirectory(null, "build_"); // "/tmp/build_a9f1b2.dir"
+
+// Create with explicit permission string
+string $publicTmp = File::createTempDirectory("/tmp", "export_", "0755");
+```
 
 ---
 
@@ -642,6 +790,9 @@ AFile::extension(string $path): Future;              // Resolves to string (file
 AFile::type(string $path): Future;                   // Resolves to string ("file" | "dir")
 AFile::mkdir(string $path, string $mode = "0755", bool $recursive = false): Future; // Resolves to bool
 AFile::chmod(string $path, ?string $mode = null): Future; // Resolves to bool|string
+AFile::sysGetTempDir(): Future;                      // Resolves to string (system temp directory)
+AFile::tempnam(?string $dir = null, ?string $prefix = null): Future; // Resolves to string|false
+AFile::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): Future; // Resolves to string|false
 ```
 
 ---
@@ -765,6 +916,9 @@ Sys::env(string $key, mixed $default = null): mixed;
 Sys::os(): string;                               // Host OS name (e.g. "linux")
 Sys::version(): string;                          // RHP engine version
 Sys::timestamp(): int;                           // Current Unix epoch in seconds
+Sys::clearstatcache(bool $clear_realpath_cache = false, string $filename = ""): void; // Clear stat and realpath cache
+Sys::disk_free_space(string $directory): float|bool; // Free disk space in bytes (or false on failure)
+Sys::disk_total_space(string $directory): float|bool; // Total disk space in bytes (or false on failure)
 Sys::dd(mixed ...$vars): void;                   // Dump variables and terminate
 
 // NOTE: There is NO Sys::println function. Only echo and print exist in RHP.
@@ -857,6 +1011,45 @@ Bin::size(bytes $data): int;
 > If source code literal generation is ever genuinely needed for compiler or code-generation tooling, RHP reserves `Code::literal($x)` for future release.
 
 ---
+
+## `Validate` Facade API
+
+```php
+Validate::null(mixed $value): bool;       // Returns true if value === null
+Validate::int(mixed $value): bool;        // Returns true if value is integer (i32 or RustInt)
+Validate::bool(mixed $value): bool;       // Returns true if value is boolean
+Validate::float(mixed $value): bool;      // Returns true if value is float (f32 or RustFloat)
+Validate::numeric(mixed $value): bool;    // Returns true if value is number or valid numeric string
+Validate::scalar(mixed $value): bool;     // Returns true if value is int, float, bool, or string
+Validate::resource(mixed $value): bool;   // Returns true if value is an open stream or system resource
+```
+
+---
+
+## `Csv` Facade API
+
+The `Csv` facade provides high-performance, stream-oriented reading, writing, and parsing of comma-separated values (CSV) conforming to RFC 4180. It supports stream processing for large files, multi-line quoted fields, custom delimiters and enclosures, and in-memory streams.
+
+```php
+// Stream processing methods (fgetcsv & fputcsv)
+Csv::fgetcsv(resource $stream, ?int $length = null, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array|false;
+Csv::fputcsv(resource $stream, array $fields, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n"): int|false;
+
+// Stream lifecycle & control
+Csv::open(string $path, string $mode = "r"): resource|false;
+Csv::close(resource $stream): bool;
+Csv::feof(resource $stream): bool;
+Csv::rewind(resource $stream): bool;
+Csv::memory(?string $initialData = ""): resource;
+
+// Batch string & file helpers
+Csv::parse(string $content, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array;
+Csv::parseRow(string $line, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array;
+Csv::generate(array $rows, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n"): string;
+Csv::formatRow(array $fields, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n"): string;
+Csv::readFile(string $path, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array;
+Csv::writeFile(string $path, array $rows, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n"): bool;
+```
 
 ## `Glob` Facade API
 
@@ -1250,5 +1443,39 @@ Log::debug(string $message, array|dict $context = []): void;
 Log::history(): list; // Returns list of log entries with timestamps, levels, and messages
 Log::clear(): void;
 ```
+
+---
+
+### `Uniq` Helper Class API
+
+The `Uniq` static facade provides high-performance unique identifier generation, including PHP-compatible `uniqid()` (down to microsecond precision with Combined LCG entropy) and modern RFC-compliant UUIDs (v4, v5, v7, v3):
+
+```php
+// PHP-compatible microsecond unique ID (Default: 13-char hex; With entropy: 23-char string)
+Uniq::uniqid(?string $prefix = "", bool $more_entropy = false): string;
+Uniq::id(?string $prefix = "", bool $more_entropy = false): string; // Alias
+
+// Modern RFC 4122 / RFC 9562 UUID Generators
+Uniq::uuid4(): string;                                             // Version 4 random UUID
+Uniq::v4(): string;                                                // Alias for uuid4
+Uniq::uuid(): string;                                              // Alias for uuid4
+
+Uniq::uuid5(string $namespace, string $name): string;              // Version 5 SHA-1 name-based UUID ('dns', 'url', 'oid', 'x500', 'nil', or custom UUID)
+Uniq::v5(string $namespace, string $name): string;                 // Alias for uuid5
+
+Uniq::uuid7(?int $timestamp_ms = null): string;                    // Version 7 Unix Epoch millisecond time-ordered UUID
+Uniq::v7(?int $timestamp_ms = null): string;                       // Alias for uuid7
+
+Uniq::uuid3(string $namespace, string $name): string;              // Version 3 MD5 name-based UUID
+Uniq::v3(string $namespace, string $name): string;                 // Alias for uuid3
+
+// Inspection, validation, and parsing helpers
+Uniq::isValid(string $uuid): bool;                                 // Returns true if valid 36-char hyphenated or 32-char hex UUID
+Uniq::version(string $uuid): ?int;                                 // Returns UUID version integer (1..8) or null
+Uniq::parse(string $uuid): dict;                                   // Parses UUID into dict ['hex', 'version', 'variant', 'timestamp_ms']
+Uniq::nil(): string;                                               // Returns "00000000-0000-0000-0000-000000000000"
+Uniq::max(): string;                                               // Returns "ffffffff-ffff-ffff-ffff-ffffffffffff"
+```
+
 
 

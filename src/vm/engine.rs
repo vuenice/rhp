@@ -24,8 +24,8 @@ use crate::vm::exception::{
 };
 use crate::vm::facade::{
     arr_get_dot, arr_has_dot, dispatch_facade_call, extract_array_elements, extract_dict_elements,
-    extract_dict_map, flatten_elements, get_item_column, get_runtime_closure_macro, php_value_to_json,
-    register_runtime_closure_macro,
+    extract_dict_map, flatten_elements, get_item_column, get_runtime_closure_macro,
+    php_value_natural_cmp, php_value_to_json, random_usize, register_runtime_closure_macro, shuffle_slice,
 };
 use crate::vm::parent_process::FrozenValue;
 use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
@@ -141,6 +141,20 @@ pub struct CallFrame {
 ///   chunk's `ExceptionHandler` table when `Throw` or `ThrowMatchError` is executed.
 /// - **Post-Response Defer Queue:** Collects `defer { ... }` and `Future::defer(...)` hooks and
 ///   executes them in LIFO order after the main script payload completes.
+/// User-registered shutdown callback hook (`register_shutdown_function`).
+#[derive(Debug, Clone)]
+pub struct ShutdownHook {
+    pub callback: PhpValue,
+    pub args: Vec<PhpValue>,
+}
+
+/// User-registered error handler callback (`set_error_handler`).
+#[derive(Debug, Clone)]
+pub struct ErrorHandlerEntry {
+    pub callback: PhpValue,
+    pub error_levels: i32,
+}
+
 pub struct VM {
     module: IrModule,
     jit_enabled: bool,
@@ -162,6 +176,18 @@ pub struct VM {
     output_buffer: String,
     /// Post-response / post-execution deferred function hooks (`OpCode::Defer`).
     defer_queue: Vec<FunctionId>,
+    /// Registered shutdown function callbacks (`register_shutdown_function`).
+    pub shutdown_hooks: Vec<ShutdownHook>,
+    /// Active error handler callbacks stack (`set_error_handler` / `restore_error_handler`).
+    pub error_handlers: Vec<ErrorHandlerEntry>,
+    /// Active exception handler callbacks stack (`set_exception_handler` / `restore_exception_handler`).
+    pub exception_handlers: Vec<PhpValue>,
+    /// Live instantiated user class instances for running `__destruct` at shutdown.
+    pub live_objects: Vec<std::rc::Weak<RefCell<VmObject>>>,
+    /// When true, process::exit() is suppressed on exit() signal, returning RuntimeError instead (useful for tests and embedding).
+    pub suppress_process_exit: bool,
+    /// Instance-level exit hook to intercept exit() and die() without depending on global state.
+    pub exit_hook: Option<std::sync::Arc<dyn Fn(i32) + Send + Sync>>,
     /// Optional nominal type hierarchy for `instanceof` and `AssertType` subtype checks.
     type_hierarchy: Option<TypeHierarchy>,
     /// Maximum allowed call frame depth.
@@ -208,6 +234,12 @@ impl VM {
             class_constants: HashMap::new(),
             output_buffer: String::new(),
             defer_queue: Vec::new(),
+            shutdown_hooks: Vec::new(),
+            error_handlers: Vec::new(),
+            exception_handlers: Vec::new(),
+            live_objects: Vec::new(),
+            suppress_process_exit: false,
+            exit_hook: None,
             type_hierarchy: None,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH,
             jit_engine,
@@ -218,6 +250,12 @@ impl VM {
             source_files,
             exception_ignore_args: true,
         }
+    }
+
+    /// Attach an instance-level exit hook to intercept exit() and die() calls on this VM instance.
+    pub fn with_exit_hook(mut self, hook: impl Fn(i32) + Send + Sync + 'static) -> Self {
+        self.exit_hook = Some(std::sync::Arc::new(hook));
+        self
     }
 
     /// Attach a source file path to this VM instance for stack trace and __FILE__ resolution.
@@ -464,6 +502,8 @@ impl VM {
         self.arg_buffer.clear();
         self.upvalue_buffer.clear();
         self.defer_queue.clear();
+        self.shutdown_hooks.clear();
+        self.live_objects.clear();
         self.output_buffer.clear();
         crate::vm::facade::clear_request_context();
         self.arena.drop_request()
@@ -545,6 +585,162 @@ impl VM {
     #[inline]
     pub fn output(&self) -> &str {
         &self.output_buffer
+    }
+
+    /// Register a user-level shutdown callback function (`register_shutdown_function`).
+    pub fn register_shutdown_function(&mut self, callback: PhpValue, args: Vec<PhpValue>) {
+        self.shutdown_hooks.push(ShutdownHook { callback, args });
+    }
+
+    /// Register a user-level error handler callback function (`set_error_handler`).
+    pub fn set_error_handler(&mut self, callback: PhpValue, error_levels: Option<i32>) -> PhpValue {
+        if callback.is_null() {
+            return self.error_handlers.pop().map(|e| e.callback).unwrap_or(PhpValue::Null);
+        }
+        let prev = self.error_handlers.last().map(|e| e.callback.clone()).unwrap_or(PhpValue::Null);
+        let levels = error_levels.unwrap_or(32767); // E_ALL
+        self.error_handlers.push(ErrorHandlerEntry {
+            callback,
+            error_levels: levels,
+        });
+        prev
+    }
+
+    /// Restore the previously defined error handler callback function (`restore_error_handler`).
+    pub fn restore_error_handler(&mut self) -> bool {
+        self.error_handlers.pop();
+        true
+    }
+
+    /// Register a user-level exception handler callback function (`set_exception_handler`).
+    pub fn set_exception_handler(&mut self, callback: PhpValue) -> PhpValue {
+        if callback.is_null() {
+            return self.exception_handlers.pop().unwrap_or(PhpValue::Null);
+        }
+        let prev = self.exception_handlers.last().cloned().unwrap_or(PhpValue::Null);
+        self.exception_handlers.push(callback);
+        prev
+    }
+
+    /// Restore the previously defined exception handler callback function (`restore_exception_handler`).
+    pub fn restore_exception_handler(&mut self) -> bool {
+        self.exception_handlers.pop();
+        true
+    }
+
+    /// Trigger a user-level error, warning, or notice (`trigger_error`).
+    pub fn trigger_error(
+        &mut self,
+        message: &str,
+        error_level: Option<i32>,
+        span: Span,
+    ) -> Result<bool, RuntimeError> {
+        let level = error_level.unwrap_or(1024); // E_USER_NOTICE
+        let file = self.file_path.clone().unwrap_or_else(|| "<anonymous>".to_string());
+        let line = span.line;
+
+        if let Some(entry) = self.error_handlers.last().cloned() {
+            if (entry.error_levels & level) != 0 {
+                let args = vec![
+                    PhpValue::Int(level),
+                    PhpValue::string(message),
+                    PhpValue::string(&file),
+                    PhpValue::Int(line as i32),
+                ];
+                let res = self.invoke_callable_sync(&entry.callback, args, span)?;
+                if !matches!(res, PhpValue::Bool(false)) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        if level == 256 {
+            // E_USER_ERROR is fatal
+            return Err(self.make_error(
+                RuntimeErrorKind::Custom {
+                    message: format!("Fatal error: {}", message),
+                },
+                span,
+            ));
+        }
+
+        let prefix = match level {
+            512 => "Warning",
+            1024 => "Notice",
+            8192 | 16384 => "Deprecated",
+            _ => "Error",
+        };
+        self.output_buffer.push_str(&format!("\n{}: {} in {} on line {}\n", prefix, message, file, line));
+        Ok(true)
+    }
+
+    /// Track a newly instantiated object for shutdown destructor cleanup.
+    pub fn track_live_object(&mut self, val: &PhpValue) {
+        if let PhpValue::Object(o) = val {
+            self.live_objects.push(Rc::downgrade(o));
+        }
+    }
+
+    /// Execute all registered shutdown functions (FIFO) and deferred hooks (LIFO).
+    pub fn run_shutdown_functions(&mut self) {
+        let hooks = std::mem::take(&mut self.shutdown_hooks);
+        for hook in hooks {
+            let _ = self.invoke_callable_sync(&hook.callback, hook.args, Span::default());
+        }
+
+        let deferred = std::mem::take(&mut self.defer_queue);
+        for func_id in deferred.into_iter().rev() {
+            let _ = self.invoke_compiled_function_sync(func_id, Vec::new(), Span::default());
+        }
+    }
+
+    /// Execute destructors (`__destruct`) on all live user class objects in LIFO order.
+    pub fn run_destructors(&mut self) {
+        let mut passes = 0;
+        while !self.live_objects.is_empty() && passes < 10 {
+            passes += 1;
+            let objects = std::mem::take(&mut self.live_objects);
+            for weak_ref in objects.into_iter().rev() {
+                if let Some(obj_rc) = weak_ref.upgrade() {
+                    let (should_run, class_name) = {
+                        let mut b = obj_rc.borrow_mut();
+                        if b.is_destructed {
+                            (false, String::new())
+                        } else {
+                            b.is_destructed = true;
+                            (true, b.class_name.clone())
+                        }
+                    };
+
+                    if should_run {
+                        if let Some(destruct_id) = self.resolve_method_id(&class_name, "__destruct") {
+                            let depth_before = self.frames.len();
+                            if self
+                                .push_compiled_call_frame(
+                                    destruct_id,
+                                    Some(PhpValue::Object(obj_rc.clone())),
+                                    &[],
+                                    &[],
+                                    None,
+                                    Some(class_name),
+                                    Span::default(),
+                                )
+                                .is_ok()
+                            {
+                                let _ = self.dispatch_loop(depth_before);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flush all output streams (stdout, stderr).
+    pub fn flush_buffers(&mut self) {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
     }
 
     /// Read the value of a top-level `<main>` variable by name (`"$ans"` or `"ans"`) after execution.
@@ -787,15 +983,71 @@ impl VM {
             ref_bindings: Vec::new(),
         });
 
-        let main_result = self.dispatch_loop(0)?;
+        let main_result = self.dispatch_loop(0);
 
-        // Execute post-response defer hooks in LIFO order
-        let deferred = std::mem::take(&mut self.defer_queue);
-        for func_id in deferred.into_iter().rev() {
-            self.invoke_compiled_function_sync(func_id, Vec::new(), Span::default())?;
+        match main_result {
+            Ok(val) => {
+                self.run_shutdown_functions();
+                self.run_destructors();
+                self.flush_buffers();
+                Ok(val)
+            }
+            Err(err) if matches!(err.kind, RuntimeErrorKind::Die(_)) => {
+                let exit_code = match err.kind {
+                    RuntimeErrorKind::Die(code) => code,
+                    _ => unreachable!(),
+                };
+                if let Some(ref hook) = self.exit_hook {
+                    hook(exit_code);
+                    return Err(err);
+                }
+                if let Ok(guard) = crate::vm::facade::EXIT_HOOK.lock() {
+                    if let Some(ref hook) = *guard {
+                        hook(exit_code);
+                        return Err(err);
+                    }
+                }
+                if self.suppress_process_exit {
+                    return Err(err);
+                }
+                std::process::exit(exit_code);
+            }
+            Err(err) if matches!(err.kind, RuntimeErrorKind::Exit(_)) => {
+                let exit_code = match err.kind {
+                    RuntimeErrorKind::Exit(code) => code,
+                    _ => unreachable!(),
+                };
+                self.run_shutdown_functions();
+                self.run_destructors();
+                self.flush_buffers();
+
+                if let Some(ref hook) = self.exit_hook {
+                    hook(exit_code);
+                    return Err(err);
+                }
+                if let Ok(guard) = crate::vm::facade::EXIT_HOOK.lock() {
+                    if let Some(ref hook) = *guard {
+                        hook(exit_code);
+                        return Err(err);
+                    }
+                }
+                if self.suppress_process_exit {
+                    return Err(err);
+                }
+                if !self.output_buffer.is_empty() {
+                    print!("{}", self.output_buffer);
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                }
+                std::process::exit(exit_code);
+            }
+            Err(err) => {
+                self.run_shutdown_functions();
+                self.run_destructors();
+                self.flush_buffers();
+                Err(err)
+            }
         }
-
-        Ok(main_result)
     }
 
     /// Run the bytecode program inside an isolated local execution fiber, tracking
@@ -1867,6 +2119,49 @@ impl VM {
                         }
                     }
 
+                    if (clean_fn.eq_ignore_ascii_case("set_error_handler")
+                        || clean_fn.eq_ignore_ascii_case("restore_error_handler")
+                        || clean_fn.eq_ignore_ascii_case("set_exception_handler")
+                        || clean_fn.eq_ignore_ascii_case("restore_exception_handler")
+                        || clean_fn.eq_ignore_ascii_case("trigger_error"))
+                        && !self.module.function_index.contains_key(&fn_name)
+                    {
+                        if clean_fn.eq_ignore_ascii_case("set_error_handler") {
+                            let cb = staged.first().map(|a| a.value.clone()).unwrap_or(PhpValue::Null);
+                            let levels = staged.get(1).and_then(|a| match &a.value {
+                                PhpValue::Int(i) => Some(*i),
+                                PhpValue::RustInt { value, .. } => Some(*value as i32),
+                                _ => None,
+                            });
+                            let prev = self.set_error_handler(cb, levels);
+                            self.registers[base_reg + dst.index()] = prev;
+                            continue;
+                        } else if clean_fn.eq_ignore_ascii_case("restore_error_handler") {
+                            let res = self.restore_error_handler();
+                            self.registers[base_reg + dst.index()] = PhpValue::Bool(res);
+                            continue;
+                        } else if clean_fn.eq_ignore_ascii_case("set_exception_handler") {
+                            let cb = staged.first().map(|a| a.value.clone()).unwrap_or(PhpValue::Null);
+                            let prev = self.set_exception_handler(cb);
+                            self.registers[base_reg + dst.index()] = prev;
+                            continue;
+                        } else if clean_fn.eq_ignore_ascii_case("restore_exception_handler") {
+                            let res = self.restore_exception_handler();
+                            self.registers[base_reg + dst.index()] = PhpValue::Bool(res);
+                            continue;
+                        } else if clean_fn.eq_ignore_ascii_case("trigger_error") {
+                            let msg = staged.first().map(|a| a.value.to_php_string()).unwrap_or_default();
+                            let level = staged.get(1).and_then(|a| match &a.value {
+                                PhpValue::Int(i) => Some(*i),
+                                PhpValue::RustInt { value, .. } => Some(*value as i32),
+                                _ => None,
+                            });
+                            let res = self.trigger_error(&msg, level, span)?;
+                            self.registers[base_reg + dst.index()] = PhpValue::Bool(res);
+                            continue;
+                        }
+                    }
+
                     let target_id = self
                         .module
                         .function_index
@@ -2018,6 +2313,9 @@ impl VM {
                     let res = match self.exec_facade_call(&facade_name, &method_name, &flat_args, span) {
                         Ok(v) => v,
                         Err(err) => {
+                            if matches!(err.kind, RuntimeErrorKind::Exit(_) | RuntimeErrorKind::Die(_)) {
+                                return Err(err);
+                            }
                             let (cls, msg) = match &err.kind {
                                 RuntimeErrorKind::UncaughtException { class, message } => (class.clone(), message.clone()),
                                 RuntimeErrorKind::Custom { message } => ("Exception".to_string(), message.clone()),
@@ -2821,13 +3119,34 @@ impl VM {
                 }
 
                 OpCode::Instanceof { dst, object, class } => {
-                    let target_cls = {
+                    let raw_cls = {
                         let chunk = self.chunk_for_func(func_id);
                         chunk
                             .get_string_constant(class)
                             .unwrap_or_default()
                             .to_string()
                     };
+                    let target_cls = raw_cls.strip_prefix('\\').unwrap_or(&raw_cls).to_string();
+                    let obj_val = &self.registers[base_reg + object.index()];
+                    let is_inst = match obj_val {
+                        PhpValue::Object(obj_rc) => {
+                            let actual_cls = &obj_rc.borrow().class_name;
+                            self.is_class_instance_of(actual_cls, &target_cls)
+                        }
+                        PhpValue::Future(_) => target_cls == "Future",
+                        PhpValue::Closure(_) => target_cls == "Closure",
+                        _ => false,
+                    };
+                    self.registers[base_reg + dst.index()] = PhpValue::Bool(is_inst);
+                }
+
+                OpCode::InstanceofDynamic { dst, object, class } => {
+                    let raw_cls = match &self.registers[base_reg + class.index()] {
+                        PhpValue::String(s) => s.as_str().to_string(),
+                        PhpValue::Object(obj_rc) => obj_rc.borrow().class_name.clone(),
+                        _ => String::new(),
+                    };
+                    let target_cls = raw_cls.strip_prefix('\\').unwrap_or(&raw_cls).to_string();
                     let obj_val = &self.registers[base_reg + object.index()];
                     let is_inst = match obj_val {
                         PhpValue::Object(obj_rc) => {
@@ -3384,6 +3703,31 @@ impl VM {
                 let depth_before = self.frames.len();
                 self.push_compiled_call_frame(target_id, None, &staged, &[], None, None, span)?;
                 self.dispatch_loop(depth_before)
+            }
+            PhpValue::Array(arr) | PhpValue::List(arr) => {
+                let items = arr.borrow();
+                if items.len() >= 2 {
+                    let method_name = items[1].to_php_string();
+                    match &items[0] {
+                        PhpValue::Object(o) => {
+                            let obj = PhpValue::Object(o.clone());
+                            drop(items);
+                            return self.invoke_method_sync(obj, &method_name, args, span);
+                        }
+                        PhpValue::String(cls) => {
+                            let cls_str = cls.to_string();
+                            drop(items);
+                            return self.invoke_static_method_sync(&cls_str, &method_name, args, span);
+                        }
+                        _ => {}
+                    }
+                }
+                Err(self.make_error(
+                    RuntimeErrorKind::NotCallable {
+                        type_name: self.runtime_type_label(callable),
+                    },
+                    span,
+                ))
             }
             other => Err(self.make_error(
                 RuntimeErrorKind::NotCallable {
@@ -4153,6 +4497,186 @@ impl VM {
                     }
                     return Ok(PhpValue::Null);
                 }
+                "exit" => {
+                    let mut exit_code = 0;
+                    if let Some(arg) = args.first() {
+                        match arg {
+                            PhpValue::String(s) => {
+                                self.output_buffer.push_str(s);
+                                exit_code = 0;
+                            }
+                            PhpValue::Int(i) => exit_code = *i,
+                            PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                            _ => exit_code = 0,
+                        }
+                    }
+                    return Err(self.make_error(RuntimeErrorKind::Exit(exit_code), span));
+                }
+                "die" => {
+                    if !self.output_buffer.is_empty() {
+                        print!("{}", self.output_buffer);
+                        self.output_buffer.clear();
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                    if let Some(ref hook) = self.exit_hook {
+                        let mut exit_code = 0;
+                        if let Some(arg) = args.first() {
+                            match arg {
+                                PhpValue::String(s) => {
+                                    print!("{}", s.as_str());
+                                    use std::io::Write;
+                                    let _ = std::io::stdout().flush();
+                                    exit_code = 0;
+                                }
+                                PhpValue::Int(i) => exit_code = *i,
+                                PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                                _ => exit_code = 0,
+                            }
+                        }
+                        hook(exit_code);
+                        return Err(self.make_error(RuntimeErrorKind::Die(exit_code), span));
+                    }
+                    return crate::vm::facade::execute_process_exit(args)
+                        .map_err(|e| self.make_error(e, span));
+                }
+                "registerShutdownFunction" | "register_shutdown_function" => {
+                    if let Some(callback) = args.first() {
+                        let cb_args = if args.len() > 1 {
+                            args[1..].to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        self.register_shutdown_function(callback.clone(), cb_args);
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                "setErrorHandler" | "set_error_handler" => {
+                    let callback = args.first().cloned().unwrap_or(PhpValue::Null);
+                    let error_levels = args.get(1).and_then(|v| match v {
+                        PhpValue::Int(i) => Some(*i),
+                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        _ => None,
+                    });
+                    let prev = self.set_error_handler(callback, error_levels);
+                    return Ok(prev);
+                }
+                "restoreErrorHandler" | "restore_error_handler" => {
+                    let res = self.restore_error_handler();
+                    return Ok(PhpValue::Bool(res));
+                }
+                "setExceptionHandler" | "set_exception_handler" => {
+                    let callback = args.first().cloned().unwrap_or(PhpValue::Null);
+                    let prev = self.set_exception_handler(callback);
+                    return Ok(prev);
+                }
+                "restoreExceptionHandler" | "restore_exception_handler" => {
+                    let res = self.restore_exception_handler();
+                    return Ok(PhpValue::Bool(res));
+                }
+                "triggerError" | "trigger_error" => {
+                    let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let level = args.get(1).and_then(|v| match v {
+                        PhpValue::Int(i) => Some(*i),
+                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        _ => None,
+                    });
+                    let res = self.trigger_error(&msg, level, span)?;
+                    return Ok(PhpValue::Bool(res));
+                }
+                _ => {}
+            }
+        }
+
+        if facade == "phpFun" {
+            match method {
+                "exit" => {
+                    let mut exit_code = 0;
+                    if let Some(arg) = args.first() {
+                        match arg {
+                            PhpValue::String(s) => {
+                                self.output_buffer.push_str(s);
+                                exit_code = 0;
+                            }
+                            PhpValue::Int(i) => exit_code = *i,
+                            PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                            _ => exit_code = 0,
+                        }
+                    }
+                    return Err(self.make_error(RuntimeErrorKind::Exit(exit_code), span));
+                }
+                "die" => {
+                    if !self.output_buffer.is_empty() {
+                        print!("{}", self.output_buffer);
+                        self.output_buffer.clear();
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                    }
+                    if let Some(ref hook) = self.exit_hook {
+                        let mut exit_code = 0;
+                        if let Some(arg) = args.first() {
+                            match arg {
+                                PhpValue::String(s) => {
+                                    print!("{}", s.as_str());
+                                    use std::io::Write;
+                                    let _ = std::io::stdout().flush();
+                                    exit_code = 0;
+                                }
+                                PhpValue::Int(i) => exit_code = *i,
+                                PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                                _ => exit_code = 0,
+                            }
+                        }
+                        hook(exit_code);
+                        return Err(self.make_error(RuntimeErrorKind::Die(exit_code), span));
+                    }
+                    return crate::vm::facade::execute_process_exit(args)
+                        .map_err(|e| self.make_error(e, span));
+                }
+                "register_shutdown_function" | "registerShutdownFunction" => {
+                    if let Some(callback) = args.first() {
+                        let cb_args = if args.len() > 1 {
+                            args[1..].to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        self.register_shutdown_function(callback.clone(), cb_args);
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                "set_error_handler" | "setErrorHandler" => {
+                    let callback = args.first().cloned().unwrap_or(PhpValue::Null);
+                    let error_levels = args.get(1).and_then(|v| match v {
+                        PhpValue::Int(i) => Some(*i),
+                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        _ => None,
+                    });
+                    let prev = self.set_error_handler(callback, error_levels);
+                    return Ok(prev);
+                }
+                "restore_error_handler" | "restoreErrorHandler" => {
+                    let res = self.restore_error_handler();
+                    return Ok(PhpValue::Bool(res));
+                }
+                "set_exception_handler" | "setExceptionHandler" => {
+                    let callback = args.first().cloned().unwrap_or(PhpValue::Null);
+                    let prev = self.set_exception_handler(callback);
+                    return Ok(prev);
+                }
+                "restore_exception_handler" | "restoreExceptionHandler" => {
+                    let res = self.restore_exception_handler();
+                    return Ok(PhpValue::Bool(res));
+                }
+                "trigger_error" | "triggerError" => {
+                    let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let level = args.get(1).and_then(|v| match v {
+                        PhpValue::Int(i) => Some(*i),
+                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        _ => None,
+                    });
+                    let res = self.trigger_error(&msg, level, span)?;
+                    return Ok(PhpValue::Bool(res));
+                }
                 _ => {}
             }
         }
@@ -4251,6 +4775,16 @@ impl VM {
                         return self.exec_fluent_value_method(arr, "asort", &[], span);
                     }
                 }
+                "natsort" | "natSort" | "sortNatural" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "natsort", &[], span);
+                    }
+                }
+                "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "natcasesort", &[], span);
+                    }
+                }
                 "ksort" => {
                     if let Some(arr) = args.first() {
                         return self.exec_fluent_value_method(arr, "ksort", &[], span);
@@ -4294,6 +4828,26 @@ impl VM {
                 "combine" | "array_combine" => {
                     if let Some(arr) = args.first() {
                         return self.exec_fluent_value_method(arr, "combine", &args[1..], span);
+                    }
+                }
+                "countValues" | "count_values" | "array_count_values" | "countBy" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "countValues", &args[1..], span);
+                    }
+                }
+                "shuffle" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "shuffle", &[], span);
+                    }
+                }
+                "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "randomKey", &args[1..], span);
+                    }
+                }
+                "random" => {
+                    if let Some(arr) = args.first() {
+                        return self.exec_fluent_value_method(arr, "random", &args[1..], span);
                     }
                 }
                 _ => {
@@ -4737,6 +5291,32 @@ impl VM {
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
+                    "natsort" | "natSort" | "sortNatural" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        entries.sort_by(|(_, a), (_, b)| php_value_natural_cmp(a, b, false));
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        entries.sort_by(|(_, a), (_, b)| php_value_natural_cmp(a, b, true));
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
                     "sortBy" => {
                         let mut entries: Vec<(String, PhpValue)> = dict
                             .borrow()
@@ -4924,6 +5504,101 @@ impl VM {
                             map.insert(k.to_php_string(), v);
                         }
                         Ok(PhpValue::dict_from_map(map))
+                    }
+                    "countValues" | "count_values" | "array_count_values" | "countBy" => {
+                        let mut counts = IndexMap::new();
+                        for v in dict.borrow().values() {
+                            let key = if let Some(PhpValue::Closure(cb)) = args.first() {
+                                self.invoke_closure_sync(cb, vec![v.clone()], span)?.to_php_string()
+                            } else if let Some(prop) = args.first() {
+                                let prop_str = prop.to_php_string();
+                                get_item_column(v, &prop_str).unwrap_or(PhpValue::Null).to_php_string()
+                            } else {
+                                v.to_php_string()
+                            };
+                            let entry = counts.entry(key).or_insert(0i32);
+                            *entry += 1;
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, cnt) in counts {
+                            out.insert(k, PhpValue::Int(cnt));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "shuffle" => {
+                        let mut entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        shuffle_slice(&mut entries);
+                        let mut out = IndexMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+                        let keys: Vec<String> = dict.borrow().keys().cloned().collect();
+                        if keys.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as usize;
+                        if num < 1 || num > keys.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        if num == 1 {
+                            let idx = random_usize(keys.len());
+                            Ok(PhpValue::string(keys[idx].clone()))
+                        } else {
+                            let mut indices: Vec<usize> = (0..keys.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(num);
+                            indices.sort();
+                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::string(keys[i].clone())).collect();
+                            Ok(PhpValue::list(picked))
+                        }
+                    }
+                    "random" => {
+                        let entries: Vec<(String, PhpValue)> = dict
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if entries.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num_opt = args.first().and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                        match num_opt {
+                            None => {
+                                let idx = random_usize(entries.len());
+                                Ok(entries[idx].1.clone())
+                            }
+                            Some(num) => {
+                                let n = num as usize;
+                                if n < 1 || n > entries.len() {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ValueError {
+                                            message: format!("Arr::random(): requested {} elements, but array contains only {}", n, entries.len()),
+                                        },
+                                        span,
+                                    ));
+                                }
+                                let mut indices: Vec<usize> = (0..entries.len()).collect();
+                                shuffle_slice(&mut indices);
+                                indices.truncate(n);
+                                let mut map = IndexMap::new();
+                                for i in indices {
+                                    map.insert(entries[i].0.clone(), entries[i].1.clone());
+                                }
+                                Ok(PhpValue::dict_from_map(map))
+                            }
+                        }
                     }
                     "diff" | "array_diff" => {
                         let mut exclude = HashSet::new();
@@ -5275,6 +5950,9 @@ impl VM {
                         }
                         Ok(PhpValue::set_from_hash_set(out))
                     }
+                    "natsort" | "natSort" | "sortNatural" | "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                        Ok(PhpValue::set_from_hash_set(set.borrow().clone()))
+                    }
                     "diff" | "array_diff" => {
                         let mut exclude = HashSet::new();
                         for arg in args {
@@ -5371,6 +6049,83 @@ impl VM {
                             map.insert(k.to_php_string(), v);
                         }
                         Ok(PhpValue::dict_from_map(map))
+                    }
+                    "countValues" | "count_values" | "array_count_values" | "countBy" => {
+                        let mut counts = IndexMap::new();
+                        for item in set.borrow().iter() {
+                            let key = if let Some(PhpValue::Closure(cb)) = args.first() {
+                                self.invoke_closure_sync(cb, vec![item.clone()], span)?.to_php_string()
+                            } else if let Some(prop) = args.first() {
+                                let prop_str = prop.to_php_string();
+                                get_item_column(item, &prop_str).unwrap_or(PhpValue::Null).to_php_string()
+                            } else {
+                                item.to_php_string()
+                            };
+                            let entry = counts.entry(key).or_insert(0i32);
+                            *entry += 1;
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, cnt) in counts {
+                            out.insert(k, PhpValue::Int(cnt));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "shuffle" => {
+                        Ok(PhpValue::set_from_hash_set(set.borrow().clone()))
+                    }
+                    "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if items.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as usize;
+                        if num < 1 || num > items.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        if num == 1 {
+                            let idx = random_usize(items.len());
+                            Ok(items[idx].clone())
+                        } else {
+                            let mut indices: Vec<usize> = (0..items.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(num);
+                            let picked: HashSet<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                            Ok(PhpValue::set_from_hash_set(picked))
+                        }
+                    }
+                    "random" => {
+                        let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
+                        if items.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num_opt = args.first().and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                        match num_opt {
+                            None => {
+                                let idx = random_usize(items.len());
+                                Ok(items[idx].clone())
+                            }
+                            Some(num) => {
+                                let n = num as usize;
+                                if n < 1 || n > items.len() {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ValueError {
+                                            message: format!("Arr::random(): requested {} elements, but set contains only {}", n, items.len()),
+                                        },
+                                        span,
+                                    ));
+                                }
+                                let mut indices: Vec<usize> = (0..items.len()).collect();
+                                shuffle_slice(&mut indices);
+                                indices.truncate(n);
+                                let picked: HashSet<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                                Ok(PhpValue::set_from_hash_set(picked))
+                            }
+                        }
                     }
                     "union" => {
                         let mut out = set.borrow().clone();
@@ -5643,6 +6398,103 @@ impl VM {
                             }
                         }
                         Ok(PhpValue::hash_map_from_map(merged))
+                    }
+                    "natsort" | "natSort" | "sortNatural" | "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                        Ok(PhpValue::hash_map_from_map(map.borrow().clone()))
+                    }
+                    "countValues" | "count_values" | "array_count_values" | "countBy" => {
+                        let mut counts = IndexMap::new();
+                        for v in map.borrow().values() {
+                            let key = if let Some(PhpValue::Closure(cb)) = args.first() {
+                                self.invoke_closure_sync(cb, vec![v.clone()], span)?.to_php_string()
+                            } else if let Some(prop) = args.first() {
+                                let prop_str = prop.to_php_string();
+                                get_item_column(v, &prop_str).unwrap_or(PhpValue::Null).to_php_string()
+                            } else {
+                                v.to_php_string()
+                            };
+                            let entry = counts.entry(key).or_insert(0i32);
+                            *entry += 1;
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, cnt) in counts {
+                            out.insert(k, PhpValue::Int(cnt));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "shuffle" => {
+                        let mut entries: Vec<(PhpValue, PhpValue)> = map
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        shuffle_slice(&mut entries);
+                        let mut out = HashMap::new();
+                        for (k, v) in entries {
+                            out.insert(k, v);
+                        }
+                        Ok(PhpValue::hash_map_from_map(out))
+                    }
+                    "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+                        let keys: Vec<PhpValue> = map.borrow().keys().cloned().collect();
+                        if keys.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as usize;
+                        if num < 1 || num > keys.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        if num == 1 {
+                            let idx = random_usize(keys.len());
+                            Ok(keys[idx].clone())
+                        } else {
+                            let mut indices: Vec<usize> = (0..keys.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(num);
+                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| keys[i].clone()).collect();
+                            Ok(PhpValue::list(picked))
+                        }
+                    }
+                    "random" => {
+                        let entries: Vec<(PhpValue, PhpValue)> = map
+                            .borrow()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if entries.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num_opt = args.first().and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                        match num_opt {
+                            None => {
+                                let idx = random_usize(entries.len());
+                                Ok(entries[idx].1.clone())
+                            }
+                            Some(num) => {
+                                let n = num as usize;
+                                if n < 1 || n > entries.len() {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ValueError {
+                                            message: format!("Arr::random(): requested {} elements, but array contains only {}", n, entries.len()),
+                                        },
+                                        span,
+                                    ));
+                                }
+                                let mut indices: Vec<usize> = (0..entries.len()).collect();
+                                shuffle_slice(&mut indices);
+                                indices.truncate(n);
+                                let mut out = HashMap::new();
+                                for i in indices {
+                                    out.insert(entries[i].0.clone(), entries[i].1.clone());
+                                }
+                                Ok(PhpValue::hash_map_from_map(out))
+                            }
+                        }
                     }
                     "first" => Ok(map.borrow().values().next().cloned().unwrap_or(PhpValue::Null)),
                     "each" | "forEach" => {
@@ -6150,6 +7002,16 @@ impl VM {
                         }
                         Ok(PhpValue::list(sorted))
                     }
+                    "natsort" | "natSort" | "sortNatural" => {
+                        let mut sorted = items;
+                        sorted.sort_by(|a, b| php_value_natural_cmp(a, b, false));
+                        Ok(PhpValue::list(sorted))
+                    }
+                    "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                        let mut sorted = items;
+                        sorted.sort_by(|a, b| php_value_natural_cmp(a, b, true));
+                        Ok(PhpValue::list(sorted))
+                    }
                     "sortBy" => {
                         let mut sorted = items;
                         if let Some(PhpValue::Closure(cb)) = args.first() {
@@ -6286,6 +7148,84 @@ impl VM {
                             map.insert(k.to_php_string(), v);
                         }
                         Ok(PhpValue::dict_from_map(map))
+                    }
+                    "countValues" | "count_values" | "array_count_values" | "countBy" => {
+                        let mut counts = IndexMap::new();
+                        for v in items {
+                            let key = if let Some(PhpValue::Closure(cb)) = args.first() {
+                                self.invoke_closure_sync(cb, vec![v.clone()], span)?.to_php_string()
+                            } else if let Some(prop) = args.first() {
+                                let prop_str = prop.to_php_string();
+                                get_item_column(&v, &prop_str).unwrap_or(PhpValue::Null).to_php_string()
+                            } else {
+                                v.to_php_string()
+                            };
+                            let entry = counts.entry(key).or_insert(0i32);
+                            *entry += 1;
+                        }
+                        let mut out = IndexMap::new();
+                        for (k, cnt) in counts {
+                            out.insert(k, PhpValue::Int(cnt));
+                        }
+                        Ok(PhpValue::dict_from_map(out))
+                    }
+                    "shuffle" => {
+                        let mut shuffled = items;
+                        shuffle_slice(&mut shuffled);
+                        Ok(PhpValue::list(shuffled))
+                    }
+                    "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+                        if items.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num = args.first().and_then(|v| v.to_i64()).unwrap_or(1) as usize;
+                        if num < 1 || num > items.len() {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::ValueError {
+                                    message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                        if num == 1 {
+                            let idx = random_usize(items.len());
+                            Ok(PhpValue::Int(idx as i32))
+                        } else {
+                            let mut indices: Vec<usize> = (0..items.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(num);
+                            indices.sort();
+                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::Int(i as i32)).collect();
+                            Ok(PhpValue::list(picked))
+                        }
+                    }
+                    "random" => {
+                        if items.is_empty() {
+                            return Ok(PhpValue::Null);
+                        }
+                        let num_opt = args.first().and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                        match num_opt {
+                            None => {
+                                let idx = random_usize(items.len());
+                                Ok(items[idx].clone())
+                            }
+                            Some(num) => {
+                                let n = num as usize;
+                                if n < 1 || n > items.len() {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::ValueError {
+                                            message: format!("Arr::random(): requested {} elements, but array contains only {}", n, items.len()),
+                                        },
+                                        span,
+                                    ));
+                                }
+                                let mut indices: Vec<usize> = (0..items.len()).collect();
+                                shuffle_slice(&mut indices);
+                                indices.truncate(n);
+                                let picked: Vec<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                                Ok(PhpValue::list(picked))
+                            }
+                        }
                     }
                     "partition" => {
                         let mut matching = Vec::new();
@@ -6826,6 +7766,84 @@ impl VM {
                         s1 == s2
                     };
                     Ok(PhpValue::Bool(eq))
+                }
+                "strcmp" | "cmp" | "compareBinary" | "binaryCompare" => {
+                    let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strcmp".to_string(),
+                        passed: 1,
+                        expected: 2,
+                    }, span))?;
+                    let b1 = s.as_bytes();
+                    let b2 = match other {
+                        PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
+                        val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
+                    };
+                    Ok(PhpValue::Int(crate::vm::facade::binary_strcmp(b1, &b2)))
+                }
+                "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase" => {
+                    let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strcasecmp".to_string(),
+                        passed: 1,
+                        expected: 2,
+                    }, span))?;
+                    let b1 = s.as_bytes();
+                    let b2 = match other {
+                        PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
+                        val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
+                    };
+                    Ok(PhpValue::Int(crate::vm::facade::binary_strcasecmp(b1, &b2)))
+                }
+                "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN" => {
+                    let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strncmp".to_string(),
+                        passed: 1,
+                        expected: 3,
+                    }, span))?;
+                    let len_val = args.get(1).ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strncmp".to_string(),
+                        passed: 2,
+                        expected: 3,
+                    }, span))?;
+                    let len_i64 = len_val.to_i64().ok_or_else(|| self.make_error(RuntimeErrorKind::TypeError {
+                        message: format!("Str::strncmp(): Argument #3 ($length) must be of type int, got {}", len_val.type_name()),
+                    }, span))?;
+                    if len_i64 < 0 {
+                        return Err(self.make_error(RuntimeErrorKind::ValueError {
+                            message: "Str::strncmp(): Argument #3 ($length) must be greater than or equal to 0".to_string(),
+                        }, span));
+                    }
+                    let b1 = s.as_bytes();
+                    let b2 = match other {
+                        PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
+                        val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
+                    };
+                    Ok(PhpValue::Int(crate::vm::facade::binary_strncmp(b1, &b2, len_i64 as usize)))
+                }
+                "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => {
+                    let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strncasecmp".to_string(),
+                        passed: 1,
+                        expected: 3,
+                    }, span))?;
+                    let len_val = args.get(1).ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
+                        callable: "Str::strncasecmp".to_string(),
+                        passed: 2,
+                        expected: 3,
+                    }, span))?;
+                    let len_i64 = len_val.to_i64().ok_or_else(|| self.make_error(RuntimeErrorKind::TypeError {
+                        message: format!("Str::strncasecmp(): Argument #3 ($length) must be of type int, got {}", len_val.type_name()),
+                    }, span))?;
+                    if len_i64 < 0 {
+                        return Err(self.make_error(RuntimeErrorKind::ValueError {
+                            message: "Str::strncasecmp(): Argument #3 ($length) must be greater than or equal to 0".to_string(),
+                        }, span));
+                    }
+                    let b1 = s.as_bytes();
+                    let b2 = match other {
+                        PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
+                        val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
+                    };
+                    Ok(PhpValue::Int(crate::vm::facade::binary_strncasecmp(b1, &b2, len_i64 as usize)))
                 }
                 "digit" | "isDigit" | "is_digit" => {
                     let b = s.as_bytes();
@@ -8099,11 +9117,15 @@ impl VM {
         if self.is_class_instance_of(clean_name, "Throwable") {
             self.init_throwable_for_object(&mut obj, span);
             if !self.module.class_index.contains_key(clean_name) {
-                return Ok(PhpValue::object(obj));
+                let instance = PhpValue::object(obj);
+                self.track_live_object(&instance);
+                return Ok(instance);
             }
         } else if clean_name == "stdClass" {
             if !self.module.class_index.contains_key(clean_name) {
-                return Ok(PhpValue::object(obj));
+                let instance = PhpValue::object(obj);
+                self.track_live_object(&instance);
+                return Ok(instance);
             }
         }
 
@@ -8119,7 +9141,9 @@ impl VM {
             if !self.module.class_index.contains_key(clean_name) {
                 obj.set_property("items", PhpValue::list(vec![]));
                 obj.set_property("cursor", PhpValue::Int(0));
-                return Ok(PhpValue::object(obj));
+                let instance = PhpValue::object(obj);
+                self.track_live_object(&instance);
+                return Ok(instance);
             }
         }
 
@@ -8188,7 +9212,9 @@ impl VM {
             }
         }
 
-        Ok(PhpValue::object(obj))
+        let instance = PhpValue::object(obj);
+        self.track_live_object(&instance);
+        Ok(instance)
     }
 
     fn exec_enum_static_method(
@@ -8627,6 +9653,9 @@ impl VM {
                 ) {
                     Ok(v) => v,
                     Err(err) => {
+                        if matches!(err.kind, RuntimeErrorKind::Exit(_) | RuntimeErrorKind::Die(_)) {
+                            return Err(err);
+                        }
                         let (cls, msg) = match &err.kind {
                             RuntimeErrorKind::DivisionByZero => (
                                 "DivisionByZeroError".to_string(),
@@ -8795,6 +9824,20 @@ impl VM {
             }
             other => ("Exception".to_string(), other.to_php_string()),
         };
+
+        if let Some(handler) = self.exception_handlers.last().cloned() {
+            let res = self.invoke_callable_sync(&handler, vec![exc_val], span);
+            if let Err(handler_err) = res {
+                return Err(handler_err);
+            }
+            return Err(self.make_error(
+                RuntimeErrorKind::UncaughtExceptionHandled {
+                    class: exc_class,
+                    message: exc_msg,
+                },
+                span,
+            ));
+        }
 
         Err(self.make_error(
             RuntimeErrorKind::UncaughtException {

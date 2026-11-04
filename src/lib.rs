@@ -90,7 +90,8 @@ pub use jit::{
     NativeSlot, TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_NULL, TAG_OTHER,
 };
 pub use vm::{
-    append_log, clear_log_history, clear_request_context, clear_rust_modules, clear_runtime_closure_macros, clear_tier2_plugins,
+    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_rust_modules, clear_runtime_closure_macros, clear_tier2_plugins,
+    set_exit_hook,
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats,
     deserialize_response, dispatch_facade_call, enter_fiber, eval_expr, execute,
     execute_isolated_request, extract_array_elements, extract_dict_elements, extract_dict_map,

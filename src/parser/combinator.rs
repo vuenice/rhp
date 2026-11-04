@@ -354,8 +354,12 @@ impl<'s> CombinatorStream<'s> {
             Some(spanned) => {
                 if let Token::Ident(name) = spanned.token {
                     Ok(Ident::new(name, spanned.span))
-                } else if spanned.token.is_keyword() || spanned.token.is_type() || spanned.token.is_magic_constant() {
-                    // Allow keywords and magic constants in identifier positions (e.g., method names like ->match(), ->class)
+                } else if spanned.token.is_keyword()
+                    || spanned.token.is_type()
+                    || spanned.token.is_magic_constant()
+                    || matches!(spanned.token, Token::Null | Token::True | Token::False)
+                {
+                    // Allow keywords, type names, boolean/null literals, and magic constants in identifier positions (e.g., method names like ->match(), ->null(), Validate::null(), ->class)
                     Ok(Ident::new(spanned.token.as_str(), spanned.span))
                 } else {
                     Err(ParseError::new(

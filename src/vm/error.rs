@@ -123,6 +123,9 @@ pub enum RuntimeErrorKind {
     #[error("UncaughtException ({class}): {message}")]
     UncaughtException { class: String, message: String },
 
+    #[error("UncaughtExceptionHandled ({class}): {message}")]
+    UncaughtExceptionHandled { class: String, message: String },
+
     #[error("UnhandledMatchError: Unhandled match value '{subject}'")]
     UnhandledMatchError { subject: String },
 
@@ -190,6 +193,12 @@ pub enum RuntimeErrorKind {
 
     #[error("TypeError: {message}")]
     TypeError { message: String },
+
+    #[error("Exit({0})")]
+    Exit(i32),
+
+    #[error("Die({0})")]
+    Die(i32),
 
     #[error("RuntimeError: {message}")]
     Custom { message: String },

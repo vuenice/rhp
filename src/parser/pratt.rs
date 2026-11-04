@@ -1288,7 +1288,7 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            Token::Exit | Token::Die => {
+            Token::Exit => {
                 let mut args = Vec::new();
                 let mut end_span = spanned.span;
                 if self.matches(&Token::OpenParen) {
@@ -1310,6 +1310,28 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
+            Token::Die => {
+                let mut args = Vec::new();
+                let mut end_span = spanned.span;
+                if self.matches(&Token::OpenParen) {
+                    if !self.check(&Token::CloseParen) {
+                        let arg_expr = self.parse_expr_lowest()?;
+                        let span = arg_expr.span;
+                        args.push(Argument::new(arg_expr, span));
+                    }
+                    let close_paren = self.expect(Token::CloseParen)?;
+                    end_span = close_paren.span;
+                }
+                let full_span = spanned.span.merge(end_span);
+                Ok(Expr::static_call(
+                    "Sys",
+                    "die",
+                    args,
+                    spanned.span,
+                    full_span,
+                ))
+            }
+
             token if token.is_type() => {
                 let type_name = token.as_str();
                 Ok(Expr::new(
@@ -1318,6 +1340,22 @@ impl<'s> CombinatorStream<'s> {
                         value: type_name.to_string(),
                     }),
                     spanned.span,
+                ))
+            }
+
+            Token::Instanceof => {
+                self.expect(Token::OpenParen)?;
+                let obj = self.parse_expr_lowest()?;
+                self.expect(Token::Comma)?;
+                let class_expr = self.parse_expr_lowest()?;
+                let close_tok = self.expect(Token::CloseParen)?;
+                let span = spanned.span.merge(close_tok.span);
+                Ok(Expr::new(
+                    ExprKind::Instanceof {
+                        expr: Box::new(obj),
+                        class: Box::new(class_expr),
+                    },
+                    span,
                 ))
             }
 
@@ -1376,10 +1414,32 @@ impl<'s> CombinatorStream<'s> {
                     let callee_name = raw_name.strip_prefix('\\').unwrap_or(raw_name);
                     let callee_span = callee_ident.span;
 
+                    if callee_name.eq_ignore_ascii_case("gettype") || callee_name == "get_debug_type" {
+                        return Ok(Expr::static_call("Debug", "type", args, callee_span, span));
+                    }
+
+                    if (callee_name == "is_a" || callee_name == "instanceof") && args.len() >= 2 {
+                        let obj = args[0].value.clone();
+                        let class_expr = args[1].value.clone();
+                        return Ok(Expr::new(
+                            ExprKind::Instanceof {
+                                expr: Box::new(obj),
+                                class: Box::new(class_expr),
+                            },
+                            span,
+                        ));
+                    }
+
                     let call_node = if is_reserved_intrinsic(callee_name) {
                         // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
                         let method = match callee_name {
                             "println" => "print",
+                            "register_shutdown_function" => "registerShutdownFunction",
+                            "set_error_handler" => "setErrorHandler",
+                            "restore_error_handler" => "restoreErrorHandler",
+                            "set_exception_handler" => "setExceptionHandler",
+                            "restore_exception_handler" => "restoreExceptionHandler",
+                            "trigger_error" => "triggerError",
                             other => other,
                         };
                         Expr::static_call("Sys", method, args, callee_span, span)

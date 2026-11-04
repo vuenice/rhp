@@ -465,6 +465,13 @@ pub enum OpCode {
         class: ConstantId,
     },
 
+    /// Check `dst = object instanceof dynamic_class_reg`.
+    InstanceofDynamic {
+        dst: Reg,
+        object: Reg,
+        class: Reg,
+    },
+
     // =========================================================================
     // 8. Global Scope, Exceptions, Concurrency, Generators, & Output
     // =========================================================================
@@ -750,6 +757,9 @@ impl fmt::Display for OpCode {
             } => write!(f, "GET_CLASS_CONST {}, {}::{}", dst, class, const_name),
             OpCode::Instanceof { dst, object, class } => {
                 write!(f, "INSTANCEOF      {}, {}, {}", dst, object, class)
+            }
+            OpCode::InstanceofDynamic { dst, object, class } => {
+                write!(f, "INSTANCEOF_DYN  {}, {}, {}", dst, object, class)
             }
             OpCode::LoadGlobal { dst, name } => write!(f, "LOAD_GLOBAL     {}, {}", dst, name),
             OpCode::StoreGlobal { name, src } => write!(f, "STORE_GLOBAL    {}, {}", name, src),

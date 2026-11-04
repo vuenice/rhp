@@ -545,3 +545,495 @@ fn test_array_helpers_column_chunk_flip_combine() {
         panic!("expected result dict");
     }
 }
+
+#[test]
+fn test_array_count_values_on_list_dict_set() {
+    let code = r#"
+        // 1. List
+        $list = Arr::list(['apple', 'banana', 'apple', 'orange', 'banana', 'apple']);
+        $list_cnt_fluent = $list->countValues();
+        $list_cnt_proc = array_count_values($list);
+        $list_cnt_arr = Arr::countValues($list);
+
+        // 2. Dict (counts frequencies of values)
+        $dict = Arr::dict(['a' => 'cat', 'b' => 'dog', 'c' => 'cat', 'd' => 'bird', 'e' => 'dog']);
+        $dict_cnt_fluent = $dict->countValues();
+        $dict_cnt_proc = array_count_values($dict);
+        $dict_cnt_arr = Arr::countValues($dict);
+
+        // 3. Set (each unique element has frequency 1)
+        $set = Arr::set(['red', 'green', 'blue']);
+        $set_cnt_fluent = $set->countValues();
+        $set_cnt_proc = array_count_values($set);
+        $set_cnt_arr = Arr::countValues($set);
+
+        return Arr::dict([
+            'list_fluent' => $list_cnt_fluent,
+            'list_proc' => $list_cnt_proc,
+            'list_arr' => $list_cnt_arr,
+
+            'dict_fluent' => $dict_cnt_fluent,
+            'dict_proc' => $dict_cnt_proc,
+            'dict_arr' => $dict_cnt_arr,
+
+            'set_fluent' => $set_cnt_fluent,
+            'set_proc' => $set_cnt_proc,
+            'set_arr' => $set_cnt_arr,
+        ]);
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Dict(dict) = res {
+        let d = dict.borrow();
+
+        // Verify List results
+        for key in &["list_fluent", "list_proc", "list_arr"] {
+            if let PhpValue::Dict(sub_d) = d.get(*key).unwrap() {
+                let b = sub_d.borrow();
+                assert_eq!(b.get("apple"), Some(&PhpValue::Int(3)));
+                assert_eq!(b.get("banana"), Some(&PhpValue::Int(2)));
+                assert_eq!(b.get("orange"), Some(&PhpValue::Int(1)));
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+
+        // Verify Dict results
+        for key in &["dict_fluent", "dict_proc", "dict_arr"] {
+            if let PhpValue::Dict(sub_d) = d.get(*key).unwrap() {
+                let b = sub_d.borrow();
+                assert_eq!(b.get("cat"), Some(&PhpValue::Int(2)));
+                assert_eq!(b.get("dog"), Some(&PhpValue::Int(2)));
+                assert_eq!(b.get("bird"), Some(&PhpValue::Int(1)));
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+
+        // Verify Set results
+        for key in &["set_fluent", "set_proc", "set_arr"] {
+            if let PhpValue::Dict(sub_d) = d.get(*key).unwrap() {
+                let b = sub_d.borrow();
+                assert_eq!(b.get("red"), Some(&PhpValue::Int(1)));
+                assert_eq!(b.get("green"), Some(&PhpValue::Int(1)));
+                assert_eq!(b.get("blue"), Some(&PhpValue::Int(1)));
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+    } else {
+        panic!("expected result dict");
+    }
+}
+
+#[test]
+fn test_shuffle_on_list_dict_set() {
+    let code = r#"
+        // 1. List
+        $l = Arr::list([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        $shuffled_l1 = $l->shuffle();
+        $shuffled_l2 = shuffle($l);
+        $shuffled_l3 = Arr::shuffle($l);
+
+        // 2. Dict
+        $d = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4, 'e' => 5]);
+        $shuffled_d1 = $d->shuffle();
+        $shuffled_d2 = shuffle($d);
+        $shuffled_d3 = Arr::shuffle($d);
+
+        // 3. Set
+        $s = Arr::set([10, 20, 30, 40, 50]);
+        $shuffled_s1 = $s->shuffle();
+        $shuffled_s2 = shuffle($s);
+        $shuffled_s3 = Arr::shuffle($s);
+
+        return Arr::dict([
+            'orig_l' => $l,
+            'shuffled_l1' => $shuffled_l1,
+            'shuffled_l2' => $shuffled_l2,
+            'shuffled_l3' => $shuffled_l3,
+
+            'orig_d' => $d,
+            'shuffled_d1' => $shuffled_d1,
+            'shuffled_d2' => $shuffled_d2,
+            'shuffled_d3' => $shuffled_d3,
+
+            'orig_s' => $s,
+            'shuffled_s1' => $shuffled_s1,
+            'shuffled_s2' => $shuffled_s2,
+            'shuffled_s3' => $shuffled_s3,
+        ]);
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Dict(dict) = res {
+        let d = dict.borrow();
+
+        // 1. Verify original list is unchanged
+        if let PhpValue::List(orig) = d.get("orig_l").unwrap() {
+            assert_eq!(
+                orig.borrow().as_slice(),
+                &[
+                    PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3), PhpValue::Int(4), PhpValue::Int(5),
+                    PhpValue::Int(6), PhpValue::Int(7), PhpValue::Int(8), PhpValue::Int(9), PhpValue::Int(10)
+                ]
+            );
+        } else {
+            panic!("expected orig_l to be list");
+        }
+
+        // Shuffled lists contain all elements 1..10
+        for key in &["shuffled_l1", "shuffled_l2", "shuffled_l3"] {
+            if let PhpValue::List(shuf) = d.get(*key).unwrap() {
+                let b = shuf.borrow();
+                assert_eq!(b.len(), 10);
+                for i in 1..=10 {
+                    assert!(b.contains(&PhpValue::Int(i)));
+                }
+            } else {
+                panic!("expected list for {}", key);
+            }
+        }
+
+        // 2. Dict: original is intact
+        if let PhpValue::Dict(orig_d) = d.get("orig_d").unwrap() {
+            let b = orig_d.borrow();
+            let keys: Vec<String> = b.keys().cloned().collect();
+            assert_eq!(keys, vec!["a", "b", "c", "d", "e"]);
+        }
+
+        for key in &["shuffled_d1", "shuffled_d2", "shuffled_d3"] {
+            if let PhpValue::Dict(shuf_d) = d.get(*key).unwrap() {
+                let b = shuf_d.borrow();
+                assert_eq!(b.len(), 5);
+                assert_eq!(b.get("a"), Some(&PhpValue::Int(1)));
+                assert_eq!(b.get("b"), Some(&PhpValue::Int(2)));
+                assert_eq!(b.get("c"), Some(&PhpValue::Int(3)));
+                assert_eq!(b.get("d"), Some(&PhpValue::Int(4)));
+                assert_eq!(b.get("e"), Some(&PhpValue::Int(5)));
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+
+        // 3. Set
+        for key in &["shuffled_s1", "shuffled_s2", "shuffled_s3"] {
+            if let PhpValue::Set(shuf_s) = d.get(*key).unwrap() {
+                let b = shuf_s.borrow();
+                assert_eq!(b.len(), 5);
+                for val in &[10, 20, 30, 40, 50] {
+                    assert!(b.contains(&PhpValue::Int(*val)));
+                }
+            } else {
+                panic!("expected set for {}", key);
+            }
+        }
+    } else {
+        panic!("expected result dict");
+    }
+}
+
+#[test]
+fn test_array_rand_on_list_dict_set() {
+    let code = r#"
+        // 1. List
+        $l = Arr::list(['apple', 'banana', 'cherry', 'date']);
+        $rand_key1 = $l->randomKey();
+        $rand_key2 = array_rand($l);
+        $rand_key3 = Arr::randomKey($l);
+        $rand_keys_multi = array_rand($l, 2);
+        $rand_val = $l->random();
+        $rand_vals = $l->random(2);
+
+        // 2. Dict
+        $d = Arr::dict(['x' => 10, 'y' => 20, 'z' => 30]);
+        $rand_dict_key1 = $d->randomKey();
+        $rand_dict_key2 = array_rand($d);
+        $rand_dict_key3 = Arr::randomKey($d);
+        $rand_dict_keys_multi = array_rand($d, 2);
+        $rand_dict_val = $d->random();
+        $rand_dict_subset = $d->random(2);
+
+        // 3. Set
+        $s = Arr::set(['alpha', 'beta', 'gamma', 'delta']);
+        $rand_set_item1 = $s->randomKey();
+        $rand_set_item2 = array_rand($s);
+        $rand_set_items_multi = array_rand($s, 2);
+
+        return Arr::dict([
+            'rand_key1' => $rand_key1,
+            'rand_key2' => $rand_key2,
+            'rand_key3' => $rand_key3,
+            'rand_keys_multi' => $rand_keys_multi,
+            'rand_val' => $rand_val,
+            'rand_vals' => $rand_vals,
+
+            'rand_dict_key1' => $rand_dict_key1,
+            'rand_dict_key2' => $rand_dict_key2,
+            'rand_dict_key3' => $rand_dict_key3,
+            'rand_dict_keys_multi' => $rand_dict_keys_multi,
+            'rand_dict_val' => $rand_dict_val,
+            'rand_dict_subset' => $rand_dict_subset,
+
+            'rand_set_item1' => $rand_set_item1,
+            'rand_set_item2' => $rand_set_item2,
+            'rand_set_items_multi' => $rand_set_items_multi,
+        ]);
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Dict(dict) = res {
+        let d = dict.borrow();
+
+        // 1. List checks: randomKey returns integer index 0..3
+        for key in &["rand_key1", "rand_key2", "rand_key3"] {
+            if let Some(PhpValue::Int(idx)) = d.get(*key) {
+                assert!(*idx >= 0 && *idx <= 3, "index out of range: {}", idx);
+            } else {
+                panic!("expected int index for {}", key);
+            }
+        }
+
+        // Multiple keys from list: returns list of 2 distinct indices
+        if let PhpValue::List(indices) = d.get("rand_keys_multi").unwrap() {
+            let b = indices.borrow();
+            assert_eq!(b.len(), 2);
+            assert_ne!(b[0], b[1]);
+        } else {
+            panic!("expected list for rand_keys_multi");
+        }
+
+        // random() returns a valid element from list
+        let valid_l = [
+            PhpValue::string("apple"),
+            PhpValue::string("banana"),
+            PhpValue::string("cherry"),
+            PhpValue::string("date"),
+        ];
+        assert!(valid_l.contains(d.get("rand_val").unwrap()));
+
+        if let PhpValue::List(vals) = d.get("rand_vals").unwrap() {
+            let b = vals.borrow();
+            assert_eq!(b.len(), 2);
+            assert_ne!(b[0], b[1]);
+        } else {
+            panic!("expected list for rand_vals");
+        }
+
+        // 2. Dict checks: randomKey returns string key from 'x', 'y', 'z'
+        let valid_keys = [
+            PhpValue::string("x"),
+            PhpValue::string("y"),
+            PhpValue::string("z"),
+        ];
+        for key in &["rand_dict_key1", "rand_dict_key2", "rand_dict_key3"] {
+            assert!(valid_keys.contains(d.get(*key).unwrap()));
+        }
+
+        if let PhpValue::List(keys) = d.get("rand_dict_keys_multi").unwrap() {
+            let b = keys.borrow();
+            assert_eq!(b.len(), 2);
+            assert_ne!(b[0], b[1]);
+            assert!(valid_keys.contains(&b[0]));
+            assert!(valid_keys.contains(&b[1]));
+        } else {
+            panic!("expected list for rand_dict_keys_multi");
+        }
+
+        // random() on dict returns a value (10, 20, or 30)
+        let valid_vals = [PhpValue::Int(10), PhpValue::Int(20), PhpValue::Int(30)];
+        assert!(valid_vals.contains(d.get("rand_dict_val").unwrap()));
+
+        if let PhpValue::Dict(sub_d) = d.get("rand_dict_subset").unwrap() {
+            assert_eq!(sub_d.borrow().len(), 2);
+        } else {
+            panic!("expected dict for rand_dict_subset");
+        }
+
+        // 3. Set checks
+        let valid_set_items = [
+            PhpValue::string("alpha"),
+            PhpValue::string("beta"),
+            PhpValue::string("gamma"),
+            PhpValue::string("delta"),
+        ];
+        assert!(valid_set_items.contains(d.get("rand_set_item1").unwrap()));
+        assert!(valid_set_items.contains(d.get("rand_set_item2").unwrap()));
+
+        if let PhpValue::Set(sub_s) = d.get("rand_set_items_multi").unwrap() {
+            assert_eq!(sub_s.borrow().len(), 2);
+        } else {
+            panic!("expected set for rand_set_items_multi");
+        }
+    } else {
+        panic!("expected result dict");
+    }
+}
+
+#[test]
+fn test_natsort_and_natcasesort_on_list_dict_set() {
+    let code = r#"
+        // 1. List natural order sorting
+        $files = Arr::list(['img10.png', 'img1.png', 'img2.png', 'img20.png']);
+        $nat_fluent = $files->natsort();
+        $nat_alias = $files->sortNatural();
+        $nat_proc = natsort($files);
+        $nat_facade = Arr::natsort($files);
+        $nat_facade_alias = Arr::sortNatural($files);
+
+        // Case-insensitive natural order sorting
+        $files_case = Arr::list(['IMG10.png', 'img1.png', 'img2.png', 'img20.png']);
+        $natcase_fluent = $files_case->natcasesort();
+        $natcase_alias = $files_case->sortNaturalCase();
+        $natcase_proc = natcasesort($files_case);
+        $natcase_facade = Arr::natcasesort($files_case);
+        $natcase_facade_alias = Arr::sortNaturalCase($files_case);
+
+        // 2. Dict natural order sorting (sorts by value)
+        $d = Arr::dict(['x' => 'img10.png', 'y' => 'img1.png', 'z' => 'img2.png']);
+        $d_nat_fluent = $d->natsort();
+        $d_nat_proc = natsort($d);
+        $d_nat_facade = Arr::natsort($d);
+
+        $d_case = Arr::dict(['x' => 'IMG10.png', 'y' => 'img1.png', 'z' => 'img2.png']);
+        $d_natcase_fluent = $d_case->natcasesort();
+        $d_natcase_proc = natcasesort($d_case);
+        $d_natcase_facade = Arr::natcasesort($d_case);
+
+        // 3. Set natural sorting (returns new immutable Set)
+        $s = Arr::set(['img10.png', 'img1.png', 'img2.png']);
+        $s_nat_fluent = $s->natsort();
+        $s_nat_proc = natsort($s);
+        $s_nat_facade = Arr::natsort($s);
+        $s_natcase_fluent = $s->natcasesort();
+
+        // 4. strnatcmp and strnatcasecmp
+        $cmp1 = strnatcmp('img2.png', 'img10.png');
+        $cmp2 = strnatcmp('img10.png', 'img2.png');
+        $cmp3 = strnatcmp('img1.png', 'img1.png');
+        $cmp_case = strnatcasecmp('IMG10.png', 'img2.png');
+        $cmp_facade1 = Str::natCompare('img2.png', 'img10.png');
+        $cmp_facade2 = Str::natCaseCompare('IMG10.png', 'img10.png');
+
+        return Arr::dict([
+            'nat_fluent' => $nat_fluent,
+            'nat_alias' => $nat_alias,
+            'nat_proc' => $nat_proc,
+            'nat_facade' => $nat_facade,
+            'nat_facade_alias' => $nat_facade_alias,
+
+            'natcase_fluent' => $natcase_fluent,
+            'natcase_alias' => $natcase_alias,
+            'natcase_proc' => $natcase_proc,
+            'natcase_facade' => $natcase_facade,
+            'natcase_facade_alias' => $natcase_facade_alias,
+
+            'd_nat_fluent' => $d_nat_fluent,
+            'd_nat_proc' => $d_nat_proc,
+            'd_nat_facade' => $d_nat_facade,
+
+            'd_natcase_fluent' => $d_natcase_fluent,
+            'd_natcase_proc' => $d_natcase_proc,
+            'd_natcase_facade' => $d_natcase_facade,
+
+            's_nat_fluent' => $s_nat_fluent,
+            's_nat_proc' => $s_nat_proc,
+            's_nat_facade' => $s_nat_facade,
+            's_natcase_fluent' => $s_natcase_fluent,
+
+            'cmp1' => $cmp1,
+            'cmp2' => $cmp2,
+            'cmp3' => $cmp3,
+            'cmp_case' => $cmp_case,
+            'cmp_facade1' => $cmp_facade1,
+            'cmp_facade2' => $cmp_facade2,
+        ]);
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Dict(dict) = res {
+        let d = dict.borrow();
+
+        let expected_nat = vec![
+            PhpValue::string("img1.png"),
+            PhpValue::string("img2.png"),
+            PhpValue::string("img10.png"),
+            PhpValue::string("img20.png"),
+        ];
+
+        for key in &["nat_fluent", "nat_alias", "nat_proc", "nat_facade", "nat_facade_alias"] {
+            if let PhpValue::List(l) = d.get(*key).unwrap() {
+                assert_eq!(l.borrow().as_slice(), expected_nat.as_slice(), "Mismatch on key {}", key);
+            } else {
+                panic!("expected list for {}", key);
+            }
+        }
+
+        let expected_natcase = vec![
+            PhpValue::string("img1.png"),
+            PhpValue::string("img2.png"),
+            PhpValue::string("IMG10.png"),
+            PhpValue::string("img20.png"),
+        ];
+
+        for key in &["natcase_fluent", "natcase_alias", "natcase_proc", "natcase_facade", "natcase_facade_alias"] {
+            if let PhpValue::List(l) = d.get(*key).unwrap() {
+                assert_eq!(l.borrow().as_slice(), expected_natcase.as_slice(), "Mismatch on key {}", key);
+            } else {
+                panic!("expected list for {}", key);
+            }
+        }
+
+        // Dict natural order checks: entries sorted by value
+        for key in &["d_nat_fluent", "d_nat_proc", "d_nat_facade"] {
+            if let PhpValue::Dict(sub_d) = d.get(*key).unwrap() {
+                let entries: Vec<(String, PhpValue)> = sub_d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                assert_eq!(entries, vec![
+                    ("y".to_string(), PhpValue::string("img1.png")),
+                    ("z".to_string(), PhpValue::string("img2.png")),
+                    ("x".to_string(), PhpValue::string("img10.png")),
+                ], "Mismatch on dict key {}", key);
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+
+        for key in &["d_natcase_fluent", "d_natcase_proc", "d_natcase_facade"] {
+            if let PhpValue::Dict(sub_d) = d.get(*key).unwrap() {
+                let entries: Vec<(String, PhpValue)> = sub_d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                assert_eq!(entries, vec![
+                    ("y".to_string(), PhpValue::string("img1.png")),
+                    ("z".to_string(), PhpValue::string("img2.png")),
+                    ("x".to_string(), PhpValue::string("IMG10.png")),
+                ], "Mismatch on dict case key {}", key);
+            } else {
+                panic!("expected dict for {}", key);
+            }
+        }
+
+        // Set natural order checks: returns Set with same elements
+        for key in &["s_nat_fluent", "s_nat_proc", "s_nat_facade", "s_natcase_fluent"] {
+            if let PhpValue::Set(s) = d.get(*key).unwrap() {
+                let b = s.borrow();
+                assert_eq!(b.len(), 3);
+                assert!(b.contains(&PhpValue::string("img10.png")));
+                assert!(b.contains(&PhpValue::string("img1.png")));
+                assert!(b.contains(&PhpValue::string("img2.png")));
+            } else {
+                panic!("expected set for {}", key);
+            }
+        }
+
+        // strnatcmp / strnatcasecmp checks
+        assert_eq!(d.get("cmp1"), Some(&PhpValue::Int(-1)));
+        assert_eq!(d.get("cmp2"), Some(&PhpValue::Int(1)));
+        assert_eq!(d.get("cmp3"), Some(&PhpValue::Int(0)));
+        assert_eq!(d.get("cmp_case"), Some(&PhpValue::Int(1)));
+        assert_eq!(d.get("cmp_facade1"), Some(&PhpValue::Int(-1)));
+        assert_eq!(d.get("cmp_facade2"), Some(&PhpValue::Int(0)));
+    } else {
+        panic!("expected result dict");
+    }
+}
+
+

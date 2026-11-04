@@ -423,6 +423,8 @@ pub struct VmObject {
     pub throwable: Option<Box<Throwable>>,
     /// Class from which this receiver was forwarded via __forward(), for typo diagnostics.
     pub forwarded_from: Option<String>,
+    /// Indicates whether __destruct() has already been executed for this object.
+    pub is_destructed: bool,
 }
 
 impl VmObject {
@@ -437,6 +439,7 @@ impl VmObject {
             weak_target: None,
             throwable: None,
             forwarded_from: None,
+            is_destructed: false,
         }
     }
 
@@ -451,6 +454,7 @@ impl VmObject {
             weak_target: None,
             throwable: None,
             forwarded_from: None,
+            is_destructed: false,
         }
     }
 
@@ -466,6 +470,7 @@ impl VmObject {
             weak_target: Some(Rc::downgrade(target)),
             throwable: None,
             forwarded_from: None,
+            is_destructed: false,
         }
     }
 

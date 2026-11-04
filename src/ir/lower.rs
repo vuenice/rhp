@@ -1464,7 +1464,25 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
-                let const_id = b.intern_string(ident.name);
+                let const_id = match ident.name {
+                    "E_ERROR" => b.intern_int(1),
+                    "E_WARNING" => b.intern_int(2),
+                    "E_PARSE" => b.intern_int(4),
+                    "E_NOTICE" => b.intern_int(8),
+                    "E_CORE_ERROR" => b.intern_int(16),
+                    "E_CORE_WARNING" => b.intern_int(32),
+                    "E_COMPILE_ERROR" => b.intern_int(64),
+                    "E_COMPILE_WARNING" => b.intern_int(128),
+                    "E_USER_ERROR" => b.intern_int(256),
+                    "E_USER_WARNING" => b.intern_int(512),
+                    "E_USER_NOTICE" => b.intern_int(1024),
+                    "E_STRICT" => b.intern_int(2048),
+                    "E_RECOVERABLE_ERROR" => b.intern_int(4096),
+                    "E_DEPRECATED" => b.intern_int(8192),
+                    "E_USER_DEPRECATED" => b.intern_int(16384),
+                    "E_ALL" => b.intern_int(32767),
+                    other => b.intern_string(other),
+                };
                 b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
                 Ok(dst)
             }
@@ -2500,21 +2518,40 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(RhpType::Bool, expr.span)?,
                 };
-                let class_name = match &class.kind {
+                let static_class_name = match &class.kind {
                     ExprKind::Ident(id) => {
-                        self.resolve_class_name(id.name, b.enclosing_class.as_deref())
+                        Some(self.resolve_class_name(id.name, b.enclosing_class.as_deref()))
                     }
-                    _ => "<dynamic>".to_string(),
+                    ExprKind::ClassConstFetch { class: cls, const_name } if const_name.name == "class" => {
+                        Some(self.resolve_class_name(cls.name, b.enclosing_class.as_deref()))
+                    }
+                    ExprKind::Literal(Literal::String { value, .. }) => {
+                        Some(self.resolve_class_name(value, b.enclosing_class.as_deref()))
+                    }
+                    _ => None,
                 };
-                let class_const = b.intern_string(&class_name);
-                b.emit(
-                    OpCode::Instanceof {
-                        dst,
-                        object: obj_reg,
-                        class: class_const,
-                    },
-                    expr.span,
-                );
+
+                if let Some(class_name) = static_class_name {
+                    let class_const = b.intern_string(&class_name);
+                    b.emit(
+                        OpCode::Instanceof {
+                            dst,
+                            object: obj_reg,
+                            class: class_const,
+                        },
+                        expr.span,
+                    );
+                } else {
+                    let class_reg = self.lower_expr(b, class, None)?;
+                    b.emit(
+                        OpCode::InstanceofDynamic {
+                            dst,
+                            object: obj_reg,
+                            class: class_reg,
+                        },
+                        expr.span,
+                    );
+                }
                 Ok(dst)
             }
 

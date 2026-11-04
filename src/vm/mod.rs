@@ -14,6 +14,7 @@
 pub mod arena;
 pub mod carbon;
 pub mod crypto;
+pub mod csv;
 pub mod decimal;
 pub mod encoding;
 pub mod engine;
@@ -27,6 +28,7 @@ pub mod memory;
 pub mod mime;
 pub mod parent_process;
 pub mod rust_loader;
+pub mod uniq;
 pub mod url_helper;
 pub mod value;
 pub mod worker;
@@ -57,8 +59,9 @@ pub use facade::{
     extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
     has_runtime_closure_macro, has_tier2_plugin, init_cookie_data, init_request_params, init_session_data,
     parse_json_value, php_value_is_empty, register_runtime_closure_macro, register_tier2_plugin, register_tier2_plugin_handler,
-    set_exit_hook, FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
+    set_exit_hook, clear_stat_cache, stat_cache_cleared_count, get_disk_space, DiskSpaceMetric, FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
 };
+pub use uniq::dispatch_uniq;
 pub use fiber::{
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, enter_fiber,
     get_fiber_local, is_current_fiber, record_fiber_io_finish, record_fiber_io_start,

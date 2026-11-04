@@ -311,6 +311,9 @@ pub fn dispatch_facade_call(
 
     let result = match facade {
         "Bool" => dispatch_bool(method, args),
+        "Validate" => dispatch_validate(method, args),
+        "Debug" => dispatch_debug(method, args),
+        "Csv" => crate::vm::csv::dispatch_csv(method, args),
         "Str" => dispatch_str(method, args),
         "Arr" | "Array" => dispatch_arr(method, args),
         "Future" => dispatch_future(method, args),
@@ -342,6 +345,7 @@ pub fn dispatch_facade_call(
         "Carbon" => dispatch_carbon(method, args),
         "Ip" => dispatch_ip(method, args),
         "Compress" => dispatch_compress(method, args),
+        "Uniq" => crate::vm::uniq::dispatch_uniq(method, args),
         _ => {
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
@@ -585,6 +589,52 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 s1 == s2
             };
             Ok(PhpValue::Bool(eq))
+        }
+        "strcmp" | "cmp" | "compareBinary" | "binaryCompare" => {
+            let s1 = get_arg_bytes(args, 0, "Str::strcmp")?;
+            let s2 = get_arg_bytes(args, 1, "Str::strcmp")?;
+            Ok(PhpValue::Int(binary_strcmp(&s1, &s2)))
+        }
+        "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase" => {
+            let s1 = get_arg_bytes(args, 0, "Str::strcasecmp")?;
+            let s2 = get_arg_bytes(args, 1, "Str::strcasecmp")?;
+            Ok(PhpValue::Int(binary_strcasecmp(&s1, &s2)))
+        }
+        "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN" => {
+            let s1 = get_arg_bytes(args, 0, "Str::strncmp")?;
+            let s2 = get_arg_bytes(args, 1, "Str::strncmp")?;
+            let len_val = args.get(2).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::strncmp".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let len_i64 = len_val.to_i64().ok_or_else(|| RuntimeErrorKind::TypeError {
+                message: format!("Str::strncmp(): Argument #3 ($length) must be of type int, got {}", len_val.type_name()),
+            })?;
+            if len_i64 < 0 {
+                return Err(RuntimeErrorKind::ValueError {
+                    message: "Str::strncmp(): Argument #3 ($length) must be greater than or equal to 0".to_string(),
+                });
+            }
+            Ok(PhpValue::Int(binary_strncmp(&s1, &s2, len_i64 as usize)))
+        }
+        "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => {
+            let s1 = get_arg_bytes(args, 0, "Str::strncasecmp")?;
+            let s2 = get_arg_bytes(args, 1, "Str::strncasecmp")?;
+            let len_val = args.get(2).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::strncasecmp".to_string(),
+                passed: args.len(),
+                expected: 3,
+            })?;
+            let len_i64 = len_val.to_i64().ok_or_else(|| RuntimeErrorKind::TypeError {
+                message: format!("Str::strncasecmp(): Argument #3 ($length) must be of type int, got {}", len_val.type_name()),
+            })?;
+            if len_i64 < 0 {
+                return Err(RuntimeErrorKind::ValueError {
+                    message: "Str::strncasecmp(): Argument #3 ($length) must be greater than or equal to 0".to_string(),
+                });
+            }
+            Ok(PhpValue::Int(binary_strncasecmp(&s1, &s2, len_i64 as usize)))
         }
         "check" => {
             let target = match args.first() {
@@ -1027,6 +1077,28 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let s = get_arg_str(args, 0, "Str::reverse")?;
             let rev: String = s.chars().rev().collect();
             Ok(PhpValue::string(rev))
+        }
+        "natCompare" | "strnatcmp" => {
+            let s1 = get_arg_str(args, 0, "Str::natCompare")?;
+            let s2 = get_arg_str(args, 1, "Str::natCompare")?;
+            let ord = natural_cmp(&s1, &s2, false);
+            let res = match ord {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            };
+            Ok(PhpValue::Int(res))
+        }
+        "natCaseCompare" | "strnatcasecmp" => {
+            let s1 = get_arg_str(args, 0, "Str::natCaseCompare")?;
+            let s2 = get_arg_str(args, 1, "Str::natCaseCompare")?;
+            let ord = natural_cmp(&s1, &s2, true);
+            let res = match ord {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            };
+            Ok(PhpValue::Int(res))
         }
         "format" => {
             Ok(PhpValue::string(crate::vm::format::format_sys_args(args)))
@@ -1590,6 +1662,46 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
             }
         }
+        "natsort" | "natSort" | "sortNatural" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    entries.sort_by(|(_, a), (_, b)| php_value_natural_cmp(a, b, false));
+                    let mut out = IndexMap::new();
+                    for (k, v) in entries {
+                        out.insert(k, v);
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let mut items = extract_array_elements(target);
+                    items.sort_by(|a, b| php_value_natural_cmp(a, b, false));
+                    Ok(PhpValue::list(items))
+                }
+            }
+        }
+        "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    entries.sort_by(|(_, a), (_, b)| php_value_natural_cmp(a, b, true));
+                    let mut out = IndexMap::new();
+                    for (k, v) in entries {
+                        out.insert(k, v);
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => Ok(PhpValue::set_from_hash_set(s.borrow().clone())),
+                _ => {
+                    let mut items = extract_array_elements(target);
+                    items.sort_by(|a, b| php_value_natural_cmp(a, b, true));
+                    Ok(PhpValue::list(items))
+                }
+            }
+        }
         "flip" | "array_flip" => {
             let target = args.first().unwrap_or(&PhpValue::Null);
             match target {
@@ -1631,6 +1743,203 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 map.insert(k.to_php_string(), v);
             }
             Ok(PhpValue::dict_from_map(map))
+        }
+        "countValues" | "count_values" | "array_count_values" | "countBy" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let items: Vec<PhpValue> = match target {
+                PhpValue::Dict(d) => d.borrow().values().cloned().collect(),
+                PhpValue::HashMap(m) => m.borrow().values().cloned().collect(),
+                PhpValue::Set(s) => s.borrow().iter().cloned().collect(),
+                _ => extract_array_elements(target),
+            };
+            let mut counts = IndexMap::new();
+            for item in items {
+                let key = item.to_php_string();
+                let entry = counts.entry(key).or_insert(0i32);
+                *entry += 1;
+            }
+            let mut out = IndexMap::new();
+            for (k, v) in counts {
+                out.insert(k, PhpValue::Int(v));
+            }
+            Ok(PhpValue::dict_from_map(out))
+        }
+        "shuffle" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            match target {
+                PhpValue::Dict(d) => {
+                    let mut entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    shuffle_slice(&mut entries);
+                    let mut out = IndexMap::new();
+                    for (k, v) in entries {
+                        out.insert(k, v);
+                    }
+                    Ok(PhpValue::dict_from_map(out))
+                }
+                PhpValue::Set(s) => {
+                    Ok(PhpValue::set_from_hash_set(s.borrow().clone()))
+                }
+                _ => {
+                    let mut items = extract_array_elements(target);
+                    shuffle_slice(&mut items);
+                    Ok(PhpValue::list(items))
+                }
+            }
+        }
+        "randomKey" | "randomKeys" | "randKey" | "array_rand" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let num = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1) as usize;
+            match target {
+                PhpValue::Dict(d) => {
+                    let keys: Vec<String> = d.borrow().keys().cloned().collect();
+                    if keys.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    if num < 1 || num > keys.len() {
+                        return Err(RuntimeErrorKind::ValueError {
+                            message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                        });
+                    }
+                    if num == 1 {
+                        let idx = random_usize(keys.len());
+                        Ok(PhpValue::string(keys[idx].clone()))
+                    } else {
+                        let mut indices: Vec<usize> = (0..keys.len()).collect();
+                        shuffle_slice(&mut indices);
+                        indices.truncate(num);
+                        indices.sort();
+                        let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::string(keys[i].clone())).collect();
+                        Ok(PhpValue::list(picked))
+                    }
+                }
+                PhpValue::Set(s) => {
+                    let items: Vec<PhpValue> = s.borrow().iter().cloned().collect();
+                    if items.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    if num < 1 || num > items.len() {
+                        return Err(RuntimeErrorKind::ValueError {
+                            message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                        });
+                    }
+                    if num == 1 {
+                        let idx = random_usize(items.len());
+                        Ok(items[idx].clone())
+                    } else {
+                        let mut indices: Vec<usize> = (0..items.len()).collect();
+                        shuffle_slice(&mut indices);
+                        indices.truncate(num);
+                        let picked: HashSet<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                        Ok(PhpValue::set_from_hash_set(picked))
+                    }
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    if items.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    if num < 1 || num > items.len() {
+                        return Err(RuntimeErrorKind::ValueError {
+                            message: "array_rand(): Argument #2 ($num) must be between 1 and the number of elements or greater in array".to_string(),
+                        });
+                    }
+                    if num == 1 {
+                        let idx = random_usize(items.len());
+                        Ok(PhpValue::Int(idx as i32))
+                    } else {
+                        let mut indices: Vec<usize> = (0..items.len()).collect();
+                        shuffle_slice(&mut indices);
+                        indices.truncate(num);
+                        indices.sort();
+                        let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::Int(i as i32)).collect();
+                        Ok(PhpValue::list(picked))
+                    }
+                }
+            }
+        }
+        "random" => {
+            let target = args.first().unwrap_or(&PhpValue::Null);
+            let num_opt = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+            match target {
+                PhpValue::Dict(d) => {
+                    let entries: Vec<(String, PhpValue)> = d.borrow().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    if entries.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    match num_opt {
+                        None => {
+                            let idx = random_usize(entries.len());
+                            Ok(entries[idx].1.clone())
+                        }
+                        Some(num) => {
+                            let n = num as usize;
+                            if n < 1 || n > entries.len() {
+                                return Err(RuntimeErrorKind::ValueError {
+                                    message: format!("Arr::random(): requested {} elements, but array contains only {}", n, entries.len()),
+                                });
+                            }
+                            let mut indices: Vec<usize> = (0..entries.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(n);
+                            let mut map = IndexMap::new();
+                            for i in indices {
+                                map.insert(entries[i].0.clone(), entries[i].1.clone());
+                            }
+                            Ok(PhpValue::dict_from_map(map))
+                        }
+                    }
+                }
+                PhpValue::Set(s) => {
+                    let items: Vec<PhpValue> = s.borrow().iter().cloned().collect();
+                    if items.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    match num_opt {
+                        None => {
+                            let idx = random_usize(items.len());
+                            Ok(items[idx].clone())
+                        }
+                        Some(num) => {
+                            let n = num as usize;
+                            if n < 1 || n > items.len() {
+                                return Err(RuntimeErrorKind::ValueError {
+                                    message: format!("Arr::random(): requested {} elements, but set contains only {}", n, items.len()),
+                                });
+                            }
+                            let mut indices: Vec<usize> = (0..items.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(n);
+                            let picked: HashSet<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                            Ok(PhpValue::set_from_hash_set(picked))
+                        }
+                    }
+                }
+                _ => {
+                    let items = extract_array_elements(target);
+                    if items.is_empty() {
+                        return Ok(PhpValue::Null);
+                    }
+                    match num_opt {
+                        None => {
+                            let idx = random_usize(items.len());
+                            Ok(items[idx].clone())
+                        }
+                        Some(num) => {
+                            let n = num as usize;
+                            if n < 1 || n > items.len() {
+                                return Err(RuntimeErrorKind::ValueError {
+                                    message: format!("Arr::random(): requested {} elements, but array contains only {}", n, items.len()),
+                                });
+                            }
+                            let mut indices: Vec<usize> = (0..items.len()).collect();
+                            shuffle_slice(&mut indices);
+                            indices.truncate(n);
+                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| items[i].clone()).collect();
+                            Ok(PhpValue::list(picked))
+                        }
+                    }
+                }
+            }
         }
         "diff" | "array_diff" => {
             let target = args.first().unwrap_or(&PhpValue::Null);
@@ -2206,8 +2515,8 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
 // Sys Facade
 // =========================================================================
 
-type ExitHook = Box<dyn Fn(i32) + Send + Sync>;
-static EXIT_HOOK: std::sync::Mutex<Option<ExitHook>> = std::sync::Mutex::new(None);
+pub type ExitHook = Box<dyn Fn(i32) + Send + Sync>;
+pub static EXIT_HOOK: std::sync::Mutex<Option<ExitHook>> = std::sync::Mutex::new(None);
 
 /// Set a custom hook to intercept `exit()` and `die()` calls during testing.
 pub fn set_exit_hook<F>(hook: F)
@@ -2241,6 +2550,30 @@ pub fn php_value_is_empty(val: &PhpValue) -> bool {
     }
 }
 
+pub fn execute_exit_signal(args: &[PhpValue]) -> FacadeResult {
+    let mut exit_code = 0;
+    if let Some(arg) = args.first() {
+        match arg {
+            PhpValue::String(s) => {
+                use std::io::Write;
+                print!("{}", s.as_str());
+                let _ = std::io::stdout().flush();
+                exit_code = 0;
+            }
+            PhpValue::Int(i) => {
+                exit_code = *i;
+            }
+            PhpValue::RustInt { value, .. } => {
+                exit_code = *value as i32;
+            }
+            _ => {
+                exit_code = 0;
+            }
+        }
+    }
+    Err(RuntimeErrorKind::Exit(exit_code))
+}
+
 pub fn execute_process_exit(args: &[PhpValue]) -> FacadeResult {
     let mut exit_code = 0;
     if let Some(arg) = args.first() {
@@ -2266,11 +2599,107 @@ pub fn execute_process_exit(args: &[PhpValue]) -> FacadeResult {
     if let Ok(guard) = EXIT_HOOK.lock() {
         if let Some(ref hook) = *guard {
             hook(exit_code);
-            return Ok(PhpValue::Int(exit_code));
+            return Err(RuntimeErrorKind::Die(exit_code));
         }
     }
 
     std::process::exit(exit_code);
+}
+
+static STAT_CACHE_CLEARED_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Clear filesystem stat cache and realpath cache.
+pub fn clear_stat_cache(_clear_realpath: bool, _filename: Option<&str>) {
+    STAT_CACHE_CLEARED_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Query how many times stat cache clearing was invoked.
+pub fn stat_cache_cleared_count() -> usize {
+    STAT_CACHE_CLEARED_COUNT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskSpaceMetric {
+    Free,
+    Total,
+}
+
+pub fn get_disk_space(path: &str, metric: DiskSpaceMetric) -> FacadeResult {
+    record_fiber_io_start(IoKind::FileExists {
+        path: path.to_string(),
+    });
+    let res = get_disk_space_impl(path, metric);
+    record_fiber_io_finish();
+    res
+}
+
+fn get_disk_space_impl(path: &str, metric: DiskSpaceMetric) -> FacadeResult {
+    if path.is_empty() {
+        return Ok(PhpValue::Bool(false));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let c_path = match CString::new(path) {
+            Ok(c) => c,
+            Err(_) => return Ok(PhpValue::Bool(false)),
+        };
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+        if ret != 0 {
+            return Ok(PhpValue::Bool(false));
+        }
+        let block_size = if stat.f_frsize > 0 {
+            stat.f_frsize as f64
+        } else {
+            stat.f_bsize as f64
+        };
+        let bytes = match metric {
+            DiskSpaceMetric::Free => (stat.f_bavail as f64) * block_size,
+            DiskSpaceMetric::Total => (stat.f_blocks as f64) * block_size,
+        };
+        Ok(PhpValue::Float(bytes as f32))
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let mut wide: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().collect();
+        wide.push(0);
+        let mut free_bytes_available: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut total_free_bytes: u64 = 0;
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lpDirectoryName: *const u16,
+                lpFreeBytesAvailableToCaller: *mut u64,
+                lpTotalNumberOfBytes: *mut u64,
+                lpTotalNumberOfFreeBytes: *mut u64,
+            ) -> i32;
+        }
+        let ret = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_bytes_available,
+                &mut total_bytes,
+                &mut total_free_bytes,
+            )
+        };
+        if ret == 0 {
+            return Ok(PhpValue::Bool(false));
+        }
+        let bytes = match metric {
+            DiskSpaceMetric::Free => free_bytes_available as f64,
+            DiskSpaceMetric::Total => total_bytes as f64,
+        };
+        Ok(PhpValue::Float(bytes as f32))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        Ok(PhpValue::Bool(false))
+    }
 }
 
 fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
@@ -2283,7 +2712,26 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
             let is_emp = php_value_is_empty(args.first().unwrap_or(&PhpValue::Null));
             Ok(PhpValue::Bool(is_emp))
         }
-        "exit" | "die" => execute_process_exit(args),
+        "exit" => execute_exit_signal(args),
+        "die" => execute_process_exit(args),
+        "register_shutdown_function" | "registerShutdownFunction" => Ok(PhpValue::Null),
+        "set_error_handler" | "setErrorHandler" | "set_exception_handler" | "setExceptionHandler" => Ok(PhpValue::Null),
+        "restore_error_handler" | "restoreErrorHandler" | "restore_exception_handler" | "restoreExceptionHandler" => Ok(PhpValue::Bool(true)),
+        "trigger_error" | "triggerError" => Ok(PhpValue::Bool(true)),
+        "clearstatcache" | "clearStatCache" => {
+            let clear_realpath_cache = args.first().map(|v| v.is_truthy()).unwrap_or(false);
+            let filename = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            clear_stat_cache(clear_realpath_cache, filename.as_deref());
+            Ok(PhpValue::Null)
+        }
+        "disk_free_space" | "diskFreeSpace" | "diskfreespace" => {
+            let path = get_arg_str(args, 0, "Sys::disk_free_space")?;
+            get_disk_space(&path, DiskSpaceMetric::Free)
+        }
+        "disk_total_space" | "diskTotalSpace" => {
+            let path = get_arg_str(args, 0, "Sys::disk_total_space")?;
+            get_disk_space(&path, DiskSpaceMetric::Total)
+        }
         "env" => {
             let key = get_arg_str(args, 0, "Sys::env")?;
             match std::env::var(&key) {
@@ -2449,6 +2897,182 @@ pub fn parse_file_mode(val: &PhpValue) -> Option<u32> {
         PhpValue::String(s) => parse_file_mode_str(&s.to_str_lossy()),
         _ => None,
     }
+}
+
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Return the directory used for temporary files without a trailing slash.
+pub fn get_system_temp_dir() -> String {
+    let p = std::env::temp_dir();
+    let mut s = p.to_string_lossy().to_string();
+    if s.len() > 1 && (s.ends_with('/') || s.ends_with('\\')) {
+        s.pop();
+    }
+    s
+}
+
+pub fn sanitize_temp_prefix(prefix: Option<&str>) -> String {
+    match prefix {
+        Some(p) if !p.is_empty() => {
+            let sanitized: String = p
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if sanitized.is_empty() {
+                "tmp".to_string()
+            } else {
+                sanitized
+            }
+        }
+        _ => "tmp".to_string(),
+    }
+}
+
+pub fn create_unique_temp_file_handle(
+    dir: Option<&str>,
+    prefix: Option<&str>,
+) -> Result<(std::fs::File, std::path::PathBuf), std::io::Error> {
+    let clean_prefix = sanitize_temp_prefix(prefix);
+    let sys_tmp = std::path::PathBuf::from(get_system_temp_dir());
+
+    let target_dir = match dir {
+        Some(d) if !d.is_empty() && std::path::Path::new(d).is_dir() => {
+            std::path::PathBuf::from(d)
+        }
+        _ => sys_tmp.clone(),
+    };
+
+    let try_create_in_dir = |base: &std::path::Path| -> Result<(std::fs::File, std::path::PathBuf), std::io::Error> {
+        let pid = std::process::id();
+        for _ in 0..200 {
+            let count = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let filename = format!("{}{:x}{:x}{:04x}.tmp", clean_prefix, pid, now, count & 0xffff);
+            let file_path = base.join(filename);
+
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+
+            match options.open(&file_path) {
+                Ok(file) => return Ok((file, file_path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Could not generate unique temporary file",
+        ))
+    };
+
+    match try_create_in_dir(&target_dir) {
+        Ok(res) => Ok(res),
+        Err(err) => {
+            if target_dir != sys_tmp {
+                try_create_in_dir(&sys_tmp)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+pub fn create_unique_temp_file_path(dir: Option<&str>, prefix: Option<&str>) -> Option<String> {
+    match create_unique_temp_file_handle(dir, prefix) {
+        Ok((file, path)) => {
+            drop(file);
+            Some(path.to_string_lossy().to_string())
+        }
+        Err(_) => None,
+    }
+}
+
+pub fn create_unique_temp_dir_with_mode(
+    dir: Option<&str>,
+    prefix: Option<&str>,
+    mode: u32,
+) -> Option<String> {
+    let clean_prefix = sanitize_temp_prefix(prefix);
+    let sys_tmp = std::path::PathBuf::from(get_system_temp_dir());
+
+    let target_dir = match dir {
+        Some(d) if !d.is_empty() && std::path::Path::new(d).is_dir() => {
+            std::path::PathBuf::from(d)
+        }
+        _ => sys_tmp.clone(),
+    };
+
+    let try_create_in_dir = |base: &std::path::Path| -> Result<std::path::PathBuf, std::io::Error> {
+        let pid = std::process::id();
+        for _ in 0..200 {
+            let count = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let dirname = format!("{}{:x}{:x}{:04x}.dir", clean_prefix, pid, now, count & 0xffff);
+            let dir_path = base.join(dirname);
+
+            match std::fs::create_dir(&dir_path) {
+                Ok(_) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(mode));
+                    }
+                    return Ok(dir_path);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Could not generate unique temporary directory",
+        ))
+    };
+
+    let result = match try_create_in_dir(&target_dir) {
+        Ok(p) => Some(p),
+        Err(_) => {
+            if target_dir != sys_tmp {
+                try_create_in_dir(&sys_tmp).ok()
+            } else {
+                None
+            }
+        }
+    };
+
+    result.map(|p| p.to_string_lossy().to_string())
+}
+
+pub fn create_unique_temp_dir(
+    dir: Option<&str>,
+    prefix: Option<&str>,
+    mode_val: Option<&PhpValue>,
+) -> Option<String> {
+    let mode: u32 = if let Some(mv) = mode_val {
+        if mv.is_null() {
+            0o700
+        } else {
+            match parse_file_mode(mv) {
+                Some(m) => m,
+                None => return None,
+            }
+        }
+    } else {
+        0o700
+    };
+
+    create_unique_temp_dir_with_mode(dir, prefix, mode)
 }
 
 fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
@@ -2898,11 +3522,38 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "dirname" => {
             let path = get_arg_str(args, 0, "File::dirname")?;
-            let dir = std::path::Path::new(&path)
-                .parent()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let levels = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+            let mut p = std::path::Path::new(&path);
+            for _ in 0..levels {
+                if let Some(parent) = p.parent() {
+                    p = parent;
+                } else {
+                    break;
+                }
+            }
+            let dir = p.to_str().unwrap_or("");
             Ok(PhpValue::string(dir))
+        }
+        "realpath" | "realPath" | "canonicalize" => {
+            let path = get_arg_str(args, 0, "File::realpath")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let res = match std::fs::canonicalize(&path) {
+                Ok(p) => {
+                    let mut s = p.to_string_lossy().to_string();
+                    #[cfg(windows)]
+                    {
+                        if s.starts_with(r"\\?\UNC\") {
+                            s = format!(r"\\{}", &s[8..]);
+                        } else if s.starts_with(r"\\?\") {
+                            s = s[4..].to_string();
+                        }
+                    }
+                    Ok(PhpValue::string(s))
+                }
+                Err(_) => Ok(PhpValue::Bool(false)),
+            };
+            record_fiber_io_finish();
+            res
         }
         "isFile" | "is_file" => {
             let path = get_arg_str(args, 0, "File::isFile")?;
@@ -3020,6 +3671,111 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             let client_mime = args.get(2).map(|v| v.to_php_string());
             let obj = create_uploaded_file_object(&path, client_name.as_deref(), client_mime.as_deref());
             Ok(PhpValue::object(obj))
+        }
+        "open" => {
+            let path = get_arg_str(args, 0, "File::open")?;
+            let mode = args.get(1).map(|v| v.to_php_string()).unwrap_or_else(|| "r".to_string());
+            crate::vm::csv::open_stream(&path, &mode)
+        }
+        "close" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::close".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            crate::vm::csv::close_stream(val)
+        }
+        "eof" | "feof" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::eof".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            crate::vm::csv::feof_stream(val)
+        }
+        "rewind" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::rewind".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            crate::vm::csv::rewind_stream(val)
+        }
+        "clearstatcache" | "clearStatCache" => dispatch_sys("clearstatcache", args),
+        "diskFreeSpace" | "disk_free_space" | "diskfreespace" => dispatch_sys("disk_free_space", args),
+        "diskTotalSpace" | "disk_total_space" => dispatch_sys("disk_total_space", args),
+        "sysGetTempDir" | "sys_get_temp_dir" | "getTempDir" => {
+            Ok(PhpValue::string(get_system_temp_dir()))
+        }
+        "tempDir" => {
+            if args.is_empty() {
+                Ok(PhpValue::string(get_system_temp_dir()))
+            } else {
+                let dir = args.get(0).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+                let prefix = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+                let mode_val = args.get(2);
+                match create_unique_temp_dir(dir.as_deref(), prefix.as_deref(), mode_val) {
+                    Some(path) => Ok(PhpValue::string(path)),
+                    None => Ok(PhpValue::Bool(false)),
+                }
+            }
+        }
+        "createTempDirectory" | "tempDirectory" | "createTempDir" => {
+            let dir = args.get(0).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let prefix = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let mode_val = args.get(2);
+            match create_unique_temp_dir(dir.as_deref(), prefix.as_deref(), mode_val) {
+                Some(path) => Ok(PhpValue::string(path)),
+                None => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "tempnam" | "createTempFile" | "tempFile" => {
+            let dir = args.get(0).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let prefix = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            match create_unique_temp_file_path(dir.as_deref(), prefix.as_deref()) {
+                Some(path) => Ok(PhpValue::string(path)),
+                None => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "tmpfile" | "createTempStream" | "tempStream" => {
+            crate::vm::csv::create_tmpfile_stream()
+        }
+        "writeStream" | "write_stream" | "fwrite" => {
+            let stream_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::writeStream".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let data_val = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::writeStream".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let bytes = match data_val {
+                PhpValue::String(s) => s.as_bytes().to_vec(),
+                other => other.to_php_string().into_bytes(),
+            };
+            let length = args.get(2).and_then(|v| v.to_i64()).map(|l| l.max(0) as usize);
+            let slice = if let Some(len) = length {
+                if len < bytes.len() { &bytes[..len] } else { &bytes[..] }
+            } else {
+                &bytes[..]
+            };
+            crate::vm::csv::write_stream(stream_val, slice)
+        }
+        "readStream" | "read_stream" | "fread" => {
+            let stream_val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::readStream".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let len_val = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "File::readStream".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let length = len_val.to_i64().unwrap_or(0).max(0) as usize;
+            crate::vm::csv::read_stream(stream_val, length)
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "File".to_string(),
@@ -3371,6 +4127,90 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
                     }
                 }
                 let _ = tx.send(Ok(FrozenValue::Bool(ok)));
+            });
+            record_fiber_io_finish();
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "sysGetTempDir" | "sys_get_temp_dir" | "tempDir" => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let _ = tx.send(Ok(FrozenValue::String(get_system_temp_dir())));
+            });
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "createTempDirectory" | "tempDirectory" | "createTempDir" => {
+            let dir = args.get(0).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let prefix = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let mode = if let Some(mode_val) = args.get(2) {
+                if mode_val.is_null() {
+                    0o700
+                } else {
+                    match parse_file_mode(mode_val) {
+                        Some(m) => m,
+                        None => {
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let _ = tx.send(Ok(FrozenValue::Bool(false)));
+                            return Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                                VmFuture::pending(rx),
+                            ))));
+                        }
+                    }
+                }
+            } else {
+                0o700
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match create_unique_temp_dir_with_mode(dir.as_deref(), prefix.as_deref(), mode) {
+                    Some(p) => Ok(FrozenValue::String(p)),
+                    None => Ok(FrozenValue::Bool(false)),
+                };
+                let _ = tx.send(res);
+            });
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "tempnam" | "createTempFile" | "tempFile" => {
+            let dir = args.get(0).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let prefix = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match create_unique_temp_file_path(dir.as_deref(), prefix.as_deref()) {
+                    Some(p) => Ok(FrozenValue::String(p)),
+                    None => Ok(FrozenValue::Bool(false)),
+                };
+                let _ = tx.send(res);
+            });
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::pending(rx),
+            ))))
+        }
+        "realpath" | "realPath" | "canonicalize" => {
+            let path = get_arg_str(args, 0, "AFile::realpath")?;
+            record_fiber_io_start(IoKind::FileExists { path: path.clone() });
+            let (tx, rx) = std::sync::mpsc::channel();
+            rt.spawn(async move {
+                let res = match tokio::fs::canonicalize(&path).await {
+                    Ok(p) => {
+                        let mut s = p.to_string_lossy().to_string();
+                        #[cfg(windows)]
+                        {
+                            if s.starts_with(r"\\?\UNC\") {
+                                s = format!(r"\\{}", &s[8..]);
+                            } else if s.starts_with(r"\\?\") {
+                                s = s[4..].to_string();
+                            }
+                        }
+                        Ok(FrozenValue::String(s))
+                    }
+                    Err(_) => Ok(FrozenValue::Bool(false)),
+                };
+                let _ = tx.send(res);
             });
             record_fiber_io_finish();
             Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
@@ -5292,6 +6132,9 @@ fn dispatch_glob(method: &str, args: &[PhpValue]) -> FacadeResult {
 fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
     // Canonical bridging from legacy PHP function calls
     match method {
+        "exit" => dispatch_sys("exit", args),
+        "die" => dispatch_sys("die", args),
+        "register_shutdown_function" => dispatch_sys("registerShutdownFunction", args),
         "array_merge" => dispatch_arr("merge", args),
         "count" => dispatch_arr("count", args),
         "array_keys" => dispatch_arr("keys", args),
@@ -5304,8 +6147,13 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "array_chunk" => dispatch_arr("chunk", args),
         "array_flip" => dispatch_arr("flip", args),
         "array_combine" => dispatch_arr("combine", args),
+        "array_count_values" => dispatch_arr("countValues", args),
+        "shuffle" => dispatch_arr("shuffle", args),
+        "array_rand" => dispatch_arr("randomKey", args),
         "ksort" => dispatch_arr("ksort", args),
         "asort" => dispatch_arr("asort", args),
+        "natsort" => dispatch_arr("natsort", args),
+        "natcasesort" => dispatch_arr("natcasesort", args),
         "usort" => dispatch_arr("usort", args),
         "uasort" => dispatch_arr("uasort", args),
         "uksort" => dispatch_arr("uksort", args),
@@ -5324,6 +6172,12 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         }
         "strlen" => dispatch_str("length", args),
+        "strcmp" => dispatch_str("strcmp", args),
+        "strcasecmp" => dispatch_str("strcasecmp", args),
+        "strncmp" => dispatch_str("strncmp", args),
+        "strncasecmp" => dispatch_str("strncasecmp", args),
+        "strnatcmp" => dispatch_str("natCompare", args),
+        "strnatcasecmp" => dispatch_str("natCaseCompare", args),
         "str_contains" => dispatch_str("contains", args),
         "implode" => dispatch_str("join", args),
         "explode" => dispatch_str("split", args),
@@ -5381,6 +6235,29 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "class_exists" => dispatch_reflect("classExists", args),
         "function_exists" => dispatch_reflect("functionExists", args),
+        "is_null" => dispatch_validate("null", args),
+        "is_int" | "is_integer" | "is_long" => dispatch_validate("int", args),
+        "is_bool" | "is_boolean" => dispatch_validate("bool", args),
+        "is_float" | "is_double" | "is_real" => dispatch_validate("float", args),
+        "is_numeric" => dispatch_validate("numeric", args),
+        "is_scalar" => dispatch_validate("scalar", args),
+        "is_resource" => dispatch_validate("resource", args),
+        "is_a" => dispatch_validate("isA", args),
+        "gettype" | "getType" | "get_debug_type" => dispatch_debug("type", args),
+        "var_dump" | "dump" => dispatch_debug("dump", args),
+        "print_r" | "var_export" => dispatch_debug("format", args),
+        "fgetcsv" => crate::vm::csv::dispatch_csv("fgetcsv", args),
+        "fputcsv" => crate::vm::csv::dispatch_csv("fputcsv", args),
+        "str_getcsv" => crate::vm::csv::dispatch_csv("parseRow", args),
+        "fopen" => dispatch_file("open", args),
+        "fclose" => dispatch_file("close", args),
+        "feof" => dispatch_file("eof", args),
+        "rewind" => dispatch_file("rewind", args),
+        "tempnam" => dispatch_file("tempnam", args),
+        "tmpfile" => dispatch_file("tmpfile", args),
+        "sys_get_temp_dir" => dispatch_file("sysGetTempDir", args),
+        "fwrite" => dispatch_file("writeStream", args),
+        "fread" => dispatch_file("readStream", args),
         "collect" => {
             let items = args.first().cloned().unwrap_or_else(|| PhpValue::list(vec![]));
             let mut obj = VmObject::new("Collection");
@@ -5439,9 +6316,14 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
             Ok(PhpValue::string(base))
         }
+        "dirname" => dispatch_file("dirname", args),
+        "realpath" => dispatch_file("realpath", args),
         "filemtime" => dispatch_file("modifiedAt", args),
         "is_readable" => dispatch_file("isReadable", args),
         "is_writable" => dispatch_file("isWritable", args),
+        "clearstatcache" => dispatch_sys("clearstatcache", args),
+        "disk_free_space" | "diskfreespace" => dispatch_sys("disk_free_space", args),
+        "disk_total_space" => dispatch_sys("disk_total_space", args),
         "abs" => {
             let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "abs".to_string(),
@@ -5536,6 +6418,7 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "gzuncompress" => dispatch_compress("unzlib", args),
         "gzencode" => dispatch_compress("gzip", args),
         "gzdecode" => dispatch_compress("gunzip", args),
+        "uniqid" => crate::vm::uniq::dispatch_uniq("uniqid", args),
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),
@@ -5616,6 +6499,10 @@ pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
     crate::vm::carbon::dispatch_carbon(method, args)
 }
 
+pub fn dispatch_uniq(method: &str, args: &[PhpValue]) -> FacadeResult {
+    crate::vm::uniq::dispatch_uniq(method, args)
+}
+
 // =========================================================================
 // Helpers
 // =========================================================================
@@ -5628,6 +6515,66 @@ pub(crate) fn get_arg_str(args: &[PhpValue], index: usize, callable: &str) -> Re
             passed: args.len(),
             expected: index + 1,
         })
+}
+
+pub(crate) fn get_arg_bytes<'a>(
+    args: &'a [PhpValue],
+    index: usize,
+    callable: &str,
+) -> Result<std::borrow::Cow<'a, [u8]>, RuntimeErrorKind> {
+    let val = args.get(index).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+        callable: callable.to_string(),
+        passed: args.len(),
+        expected: index + 1,
+    })?;
+    match val {
+        PhpValue::String(s) => Ok(std::borrow::Cow::Borrowed(s.as_bytes())),
+        other => Ok(std::borrow::Cow::Owned(other.to_php_string().into_bytes())),
+    }
+}
+
+#[inline]
+pub fn binary_strcmp(s1: &[u8], s2: &[u8]) -> i32 {
+    match s1.cmp(s2) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+#[inline]
+pub fn binary_strcasecmp(s1: &[u8], s2: &[u8]) -> i32 {
+    let min_len = s1.len().min(s2.len());
+    for i in 0..min_len {
+        let b1 = s1[i].to_ascii_lowercase();
+        let b2 = s2[i].to_ascii_lowercase();
+        if b1 != b2 {
+            return if b1 < b2 { -1 } else { 1 };
+        }
+    }
+    match s1.len().cmp(&s2.len()) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+#[inline]
+pub fn binary_strncmp(s1: &[u8], s2: &[u8], length: usize) -> i32 {
+    let sub1 = &s1[..length.min(s1.len())];
+    let sub2 = &s2[..length.min(s2.len())];
+    match sub1.cmp(sub2) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+#[inline]
+pub fn binary_strncasecmp(s1: &[u8], s2: &[u8], length: usize) -> i32 {
+    let sub1 = &s1[..length.min(s1.len())];
+    let sub2 = &s2[..length.min(s2.len())];
+    binary_strcasecmp(sub1, sub2)
 }
 
 pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
@@ -5722,6 +6669,102 @@ pub fn extract_dict_map(val: &PhpValue) -> IndexMap<String, PhpValue> {
         }
         _ => IndexMap::new(),
     }
+}
+
+pub fn random_usize(max: usize) -> usize {
+    if max <= 1 {
+        return 0;
+    }
+    if let Ok(bytes) = crypto::random_bytes(8) {
+        let n = u64::from_ne_bytes(bytes.try_into().unwrap_or([0; 8]));
+        (n as usize) % max
+    } else {
+        0
+    }
+}
+
+pub fn shuffle_slice<T>(slice: &mut [T]) {
+    let len = slice.len();
+    if len <= 1 {
+        return;
+    }
+    for i in (1..len).rev() {
+        let j = random_usize(i + 1);
+        slice.swap(i, j);
+    }
+}
+
+pub fn natural_cmp(s1: &str, s2: &str, case_insensitive: bool) -> std::cmp::Ordering {
+    let mut chars1 = s1.chars().peekable();
+    let mut chars2 = s2.chars().peekable();
+
+    loop {
+        match (chars1.peek(), chars2.peek()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(&c1), Some(&c2)) => {
+                if c1.is_ascii_digit() && c2.is_ascii_digit() {
+                    let mut num1 = String::new();
+                    while let Some(&d) = chars1.peek() {
+                        if d.is_ascii_digit() {
+                            num1.push(d);
+                            chars1.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let mut num2 = String::new();
+                    while let Some(&d) = chars2.peek() {
+                        if d.is_ascii_digit() {
+                            num2.push(d);
+                            chars2.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let sig1 = num1.trim_start_matches('0');
+                    let sig2 = num2.trim_start_matches('0');
+
+                    if sig1.len() != sig2.len() {
+                        return sig1.len().cmp(&sig2.len());
+                    }
+                    if sig1 != sig2 {
+                        return sig1.cmp(sig2);
+                    }
+                    if num1.len() != num2.len() {
+                        return num1.len().cmp(&num2.len());
+                    }
+                } else {
+                    let cmp1 = if case_insensitive {
+                        c1.to_lowercase().to_string()
+                    } else {
+                        c1.to_string()
+                    };
+                    let cmp2 = if case_insensitive {
+                        c2.to_lowercase().to_string()
+                    } else {
+                        c2.to_string()
+                    };
+
+                    if cmp1 != cmp2 {
+                        return cmp1.cmp(&cmp2);
+                    }
+
+                    chars1.next();
+                    chars2.next();
+                }
+            }
+        }
+    }
+}
+
+pub fn php_value_natural_cmp(a: &PhpValue, b: &PhpValue, case_insensitive: bool) -> std::cmp::Ordering {
+    let s1 = a.to_php_string();
+    let s2 = b.to_php_string();
+    natural_cmp(&s1, &s2, case_insensitive)
 }
 
 pub fn get_item_column(item: &PhpValue, key: &str) -> Option<PhpValue> {
@@ -6561,6 +7604,212 @@ fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Compress".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Validate Facade
+// =========================================================================
+
+fn is_numeric_str(s: &str) -> bool {
+    let trimmed = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    if trimmed.is_empty() {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    let len = bytes.len();
+
+    // Optional leading sign '+' or '-'
+    if i < len && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+
+    if i >= len {
+        return false;
+    }
+
+    let mut has_digits = false;
+
+    // Digits before decimal point
+    while i < len && bytes[i].is_ascii_digit() {
+        has_digits = true;
+        i += 1;
+    }
+
+    // Optional decimal point
+    if i < len && bytes[i] == b'.' {
+        i += 1;
+        // Digits after decimal point
+        while i < len && bytes[i].is_ascii_digit() {
+            has_digits = true;
+            i += 1;
+        }
+    }
+
+    // Must have at least one digit (rejects "." or "+" or "-.")
+    if !has_digits {
+        return false;
+    }
+
+    // Optional exponent [eE][+-]?[0-9]+
+    if i < len && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        if i < len && (bytes[i] == b'+' || bytes[i] == b'-') {
+            i += 1;
+        }
+        let mut has_exp_digits = false;
+        while i < len && bytes[i].is_ascii_digit() {
+            has_exp_digits = true;
+            i += 1;
+        }
+        if !has_exp_digits {
+            return false;
+        }
+    }
+
+    // Must have consumed all characters
+    i == len
+}
+
+pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
+    let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+        callable: format!("Validate::{}", method),
+        passed: args.len(),
+        expected: 1,
+    })?;
+
+    match method {
+        "null" => Ok(PhpValue::Bool(val.is_null())),
+        "int" | "integer" => Ok(PhpValue::Bool(matches!(
+            val,
+            PhpValue::Int(_) | PhpValue::RustInt { .. }
+        ))),
+        "bool" | "boolean" => Ok(PhpValue::Bool(matches!(val, PhpValue::Bool(_)))),
+        "float" | "double" | "real" => Ok(PhpValue::Bool(matches!(
+            val,
+            PhpValue::Float(_) | PhpValue::RustFloat { .. }
+        ))),
+        "numeric" => {
+            let res = match val {
+                PhpValue::Int(_) | PhpValue::RustInt { .. } => true,
+                PhpValue::Float(f) => !f.is_nan() && !f.is_infinite(),
+                PhpValue::RustFloat { value, .. } => !value.is_nan() && !value.is_infinite(),
+                PhpValue::String(s) => match s {
+                    crate::vm::value::StrValue::Utf8 { s, .. } => is_numeric_str(s),
+                    crate::vm::value::StrValue::Bytes(b) => match std::str::from_utf8(b) {
+                        Ok(utf8_str) => is_numeric_str(utf8_str),
+                        Err(_) => false,
+                    },
+                },
+                _ => false,
+            };
+            Ok(PhpValue::Bool(res))
+        }
+        "scalar" => {
+            let res = matches!(
+                val,
+                PhpValue::Int(_)
+                    | PhpValue::Float(_)
+                    | PhpValue::RustInt { .. }
+                    | PhpValue::RustFloat { .. }
+                    | PhpValue::Bool(_)
+                    | PhpValue::String(_)
+            );
+            Ok(PhpValue::Bool(res))
+        }
+        "resource" => Ok(PhpValue::Bool(matches!(val, PhpValue::Resource(_)))),
+        "isA" | "is_a" | "instanceof" => {
+            let class_arg = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Validate::isA".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let raw_cls = class_arg.to_php_string();
+            let target_cls = raw_cls.strip_prefix('\\').unwrap_or(&raw_cls);
+            let res = match val {
+                PhpValue::Object(o) => {
+                    let actual = &o.borrow().class_name;
+                    let actual_clean = actual.strip_prefix('\\').unwrap_or(actual);
+                    actual_clean == target_cls || actual_clean.eq_ignore_ascii_case(target_cls)
+                }
+                _ => false,
+            };
+            Ok(PhpValue::Bool(res))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Validate".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Debug Facade
+// =========================================================================
+
+pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "dump" => {
+            for arg in args {
+                println!("{}", arg.to_print_r());
+            }
+            Ok(PhpValue::Null)
+        }
+        "dd" => {
+            for arg in args {
+                println!("{}", arg.to_print_r());
+            }
+            std::process::exit(1);
+        }
+        "format" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Debug::format".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            Ok(PhpValue::string(val.to_print_r()))
+        }
+        "type" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Debug::type".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let type_str = match val {
+                PhpValue::Null => "null".to_string(),
+                PhpValue::Bool(_) => "bool".to_string(),
+                PhpValue::Int(_) => "int".to_string(),
+                PhpValue::Float(_) => "float".to_string(),
+                PhpValue::RustInt { kind, .. } => kind.as_str().to_string(),
+                PhpValue::RustFloat { kind, .. } => kind.as_str().to_string(),
+                PhpValue::String(s) => match s {
+                    crate::vm::value::StrValue::Utf8 { .. } => "string".to_string(),
+                    crate::vm::value::StrValue::Bytes(_) => "bytes".to_string(),
+                },
+                PhpValue::Array(_) => "array".to_string(),
+                PhpValue::List(_) => "Arr::list".to_string(),
+                PhpValue::Dict(_) => "Arr::dict".to_string(),
+                PhpValue::Set(_) => "Arr::set".to_string(),
+                PhpValue::HashMap(_) => "Arr::hashMap".to_string(),
+                PhpValue::Object(obj) => {
+                    let cls = obj.borrow().class_name.clone();
+                    if cls.is_empty() {
+                        "object".to_string()
+                    } else {
+                        cls
+                    }
+                }
+                PhpValue::Closure(_) => "Closure".to_string(),
+                PhpValue::Future(_) => "Future".to_string(),
+                PhpValue::Resource(_) => "resource".to_string(),
+            };
+            Ok(PhpValue::string(type_str))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Debug".to_string(),
             method: method.to_string(),
         }),
     }

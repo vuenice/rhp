@@ -368,8 +368,9 @@ $response = HTTP::withHeaders(['Authorization' => 'Bearer token'])
 
 High-level file I/O interface supporting both synchronous fibers and non-blocking asynchronous execution models:
 
-- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`, `File::mkdir()`, `File::makeDirectory()`, `File::parseMode()`, `File::chmod()`.
-- **String Permission Formats:** Functions accepting octal-format file permissions (`File::mkdir`, `File::chmod`, procedural `mkdir`) strictly require string format (`"0755"`, `"0o755"`, or symbolic `"rwxr-xr-x"`). Non-string arguments (integers) or invalid modes return `false`. Permission strings are validated via `File::parseMode($mode)`. If `parseMode` fails or directory creation fails, `File::mkdir` returns `false`.
+- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`, `File::mkdir()`, `File::makeDirectory()`, `File::parseMode()`, `File::chmod()`, `File::tempnam()`, `File::tmpfile()`, `File::sysGetTempDir()`, `File::createTempDirectory()`.
+- **String Permission Formats:** Functions accepting octal-format file permissions (`File::mkdir`, `File::chmod`, `File::createTempDirectory`, procedural `mkdir`) strictly require string format (`"0755"`, `"0o755"`, or symbolic `"rwxr-xr-x"`). Non-string arguments (integers) or invalid modes return `false`. Permission strings are validated via `File::parseMode($mode)`. If `parseMode` fails or directory creation fails, `File::mkdir` returns `false`.
+- **Temporary File & Directory Creation:** `File::tempnam()` creates unique temporary files with `0600` permissions and returns their path (with fallback to `sys_get_temp_dir()`). `File::tmpfile()` creates auto-deleting read/write temporary streams (`fclose` removes file from disk). `File::createTempDirectory()` securely creates isolated temporary directories.
 - **Execution Models:** Standard call `File::read('app.log')` blocks the local fiber transparently. Using `Future::run(fn() => File::read(...))` or the `AFile` facade spawns a background task for non-blocking concurrent execution.
 
 ### 5. Session Facade

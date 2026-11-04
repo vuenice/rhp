@@ -619,6 +619,20 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
             process::exit(0);
         }
         Err(e) => {
+            if let rhp::ExecutionError::Runtime(ref rt_err) = e {
+                if let rhp::RuntimeErrorKind::Exit(code) | rhp::RuntimeErrorKind::Die(code) = rt_err.kind {
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                    let _ = std::io::stderr().flush();
+                    process::exit(code);
+                }
+                if let rhp::RuntimeErrorKind::UncaughtExceptionHandled { .. } = rt_err.kind {
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                    let _ = std::io::stderr().flush();
+                    process::exit(255);
+                }
+            }
             eprintln!("Runtime error: {}", e);
             process::exit(1);
         }

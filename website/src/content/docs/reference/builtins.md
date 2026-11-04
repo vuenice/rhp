@@ -48,6 +48,10 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `array_merge($a, $b)` | `phpFun::array_merge($a, $b)` | `Arr::merge($a, $b)` |
 | `strlen($str)` | `phpFun::strlen($str)` | `Str::byteLength($str)` |
 | `strpos($h, $n, $off)` | `phpFun::strpos($h, $n, $off)` | `Str::find($h, $n, $off)` |
+| `strcmp($s1, $s2)` | `phpFun::strcmp($s1, $s2)` | `Str::strcmp($s1, $s2)` |
+| `strcasecmp($s1, $s2)` | `phpFun::strcasecmp($s1, $s2)` | `Str::strcasecmp($s1, $s2)` |
+| `strncmp($s1, $s2, $len)` | `phpFun::strncmp($s1, $s2, $len)` | `Str::strncmp($s1, $s2, $len)` |
+| `strncasecmp($s1, $s2, $len)` | `phpFun::strncasecmp($s1, $s2, $len)` | `Str::strncasecmp($s1, $s2, $len)` |
 | `implode($glue, $arr)` | `phpFun::implode($glue, $arr)` | `Arr::implode($glue, $arr)` |
 | `ctype_digit($str)` | `phpFun::ctype_digit($str)` | `Str::digit($str)` |
 | `ctype_alpha($str)` | `phpFun::ctype_alpha($str)` | `Str::alpha($str)` |
@@ -90,6 +94,33 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `json_decode($json)` | `phpFun::json_decode(...)` | `Json::decode($json)` |
 | `serialize($val)` | `phpFun::serialize(...)` | `Bin::encode($val)` |
 | `unserialize($bytes)` | `phpFun::unserialize(...)` | `Bin::decode($bytes)` |
+| `is_null($val)` | `phpFun::is_null($val)` | `Validate::null($val)` |
+| `is_int($val)` | `phpFun::is_int($val)` | `Validate::int($val)` |
+| `is_bool($val)` | `phpFun::is_bool($val)` | `Validate::bool($val)` |
+| `is_float($val)` | `phpFun::is_float($val)` | `Validate::float($val)` |
+| `is_numeric($val)` | `phpFun::is_numeric($val)` | `Validate::numeric($val)` |
+| `is_scalar($val)` | `phpFun::is_scalar($val)` | `Validate::scalar($val)` |
+| `is_resource($val)` | `phpFun::is_resource($val)` | `Validate::resource($val)` |
+| `is_a($val, $class)` | `phpFun::is_a($val, $class)` | `$val instanceof $class` |
+| `gettype($val)` | `phpFun::gettype($val)` | `Debug::type($val)` |
+| `getType($val)` | `phpFun::getType($val)` | `Debug::type($val)` |
+| `get_debug_type($val)` | `phpFun::get_debug_type($val)` | `Debug::type($val)` |
+| `fgetcsv($stream)` | `phpFun::fgetcsv(...)` | `Csv::fgetcsv($stream)` |
+| `fputcsv($stream, $fields)` | `phpFun::fputcsv(...)` | `Csv::fputcsv($stream, $fields)` |
+| `str_getcsv($str)` | `phpFun::str_getcsv(...)` | `Csv::parseRow($str)` |
+| `fopen($path, $mode)` | `phpFun::fopen(...)` | `File::open($path, $mode)` |
+| `fclose($stream)` | `phpFun::fclose(...)` | `File::close($stream)` |
+| `feof($stream)` | `phpFun::feof(...)` | `File::eof($stream)` |
+| `rewind($stream)` | `phpFun::rewind(...)` | `File::rewind($stream)` |
+| `tempnam($dir, $prefix)` | `phpFun::tempnam($dir, $prefix)` | `File::tempnam($dir, $prefix)` |
+| `tmpfile()` | `phpFun::tmpfile()` | `File::tmpfile()` (auto-deleted on close) |
+| `sys_get_temp_dir()` | `phpFun::sys_get_temp_dir()` | `File::sysGetTempDir()` |
+| `fwrite($stream, $data)` | `phpFun::fwrite($stream, $data)` | `File::writeStream($stream, $data)` |
+| `fread($stream, $len)` | `phpFun::fread($stream, $len)` | `File::readStream($stream, $len)` |
+| `clearstatcache(...)` | `phpFun::clearstatcache(...)` | `Sys::clearstatcache(...)` |
+| `disk_free_space($path)` | `phpFun::disk_free_space(...)` | `Sys::disk_free_space($path)` |
+| `disk_total_space($path)` | `phpFun::disk_total_space(...)` | `Sys::disk_total_space($path)` |
+| `uniqid($prefix, $entropy)` | `phpFun::uniqid(...)` | `Uniq::uniqid($prefix, $entropy)` |
 
 > **Architectural Separation: Inspection vs. String Formatting vs. Persistence:**
 > RHP deliberately decouples what PHP historically conflated under `var_dump`, `print_r`, and `var_export`:

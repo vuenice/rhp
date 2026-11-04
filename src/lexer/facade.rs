@@ -169,7 +169,7 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "Sys",
-        "System environment, output, and debugging intrinsics facade (env, echo, print, dd, os, version, timestamp)",
+        "System environment, output, and debugging intrinsics facade (env, echo, print, dd, os, version, timestamp, clearstatcache, disk_free_space, disk_total_space)",
     ),
     FacadeInfo::native(
         "Glob",
@@ -215,13 +215,31 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Compress",
         "Static data compression and decompression facade (zlib, unzlib, gzip, gunzip)",
     ),
+    FacadeInfo::native(
+        "Validate",
+        "Static type inspection and validation facade (null, int, integer, bool, boolean, float, numeric, scalar)",
+    ),
+    FacadeInfo::native(
+        "Csv",
+        "Static CSV stream processing, parsing, generation, and file handling facade (fgetcsv, fputcsv, parse, generate, open, close, memory)",
+    ),
+    FacadeInfo::native(
+        "Uniq",
+        "Static unique identifier facade (uniqid, uuid4, uuid5, uuid7, uuid3, isValid, version, parse, nil, max)",
+    ),
+    FacadeInfo::native(
+        "Debug",
+        "Runtime diagnostics, value inspection, and type reflection facade (type, dump, dd, format)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
 /// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`, `Sys::print_r()`, `Sys::dump()`, `Sys::isset()`, `Sys::empty()`, `Sys::exit()`).
 pub static RESERVED_INTRINSICS: &[&str] = &[
     "env", "print", "println", "echo", "dd", "print_r", "var_dump", "dump", "isset", "empty",
-    "exit", "die",
+    "exit", "die", "register_shutdown_function",
+    "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler",
+    "trigger_error",
 ];
 
 /// Returns true if the given function name is a reserved global helper intrinsic (`env`, `print`, `dd`, `print_r`, `var_dump`, `dump`).
@@ -383,6 +401,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "Arr::asort(array $array): array",
     },
     LegacyPhpFunctionMapping {
+        php_name: "natsort",
+        rhp_facade: "Arr",
+        rhp_method: "natsort",
+        rhp_signature: "Arr::natsort(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "natcasesort",
+        rhp_facade: "Arr",
+        rhp_method: "natcasesort",
+        rhp_signature: "Arr::natcasesort(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "array_diff",
         rhp_facade: "Arr",
         rhp_method: "diff",
@@ -431,6 +461,24 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "Arr::combine(array $keys, array $values): array",
     },
     LegacyPhpFunctionMapping {
+        php_name: "array_count_values",
+        rhp_facade: "Arr",
+        rhp_method: "countValues",
+        rhp_signature: "Arr::countValues(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "shuffle",
+        rhp_facade: "Arr",
+        rhp_method: "shuffle",
+        rhp_signature: "Arr::shuffle(array $array): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "array_rand",
+        rhp_facade: "Arr",
+        rhp_method: "randomKey",
+        rhp_signature: "Arr::randomKey(array $array, int $num = 1): int|string|array",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "implode",
         rhp_facade: "Str",
         rhp_method: "join",
@@ -466,6 +514,42 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "Str",
         rhp_method: "length",
         rhp_signature: "Str::length(string $string): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strnatcmp",
+        rhp_facade: "Str",
+        rhp_method: "natCompare",
+        rhp_signature: "Str::natCompare(string $string1, string $string2): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strnatcasecmp",
+        rhp_facade: "Str",
+        rhp_method: "natCaseCompare",
+        rhp_signature: "Str::natCaseCompare(string $string1, string $string2): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strcmp",
+        rhp_facade: "Str",
+        rhp_method: "strcmp",
+        rhp_signature: "Str::strcmp(string $string1, string $string2): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strcasecmp",
+        rhp_facade: "Str",
+        rhp_method: "strcasecmp",
+        rhp_signature: "Str::strcasecmp(string $string1, string $string2): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strncmp",
+        rhp_facade: "Str",
+        rhp_method: "strncmp",
+        rhp_signature: "Str::strncmp(string $string1, string $string2, int $length): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "strncasecmp",
+        rhp_facade: "Str",
+        rhp_method: "strncasecmp",
+        rhp_signature: "Str::strncasecmp(string $string1, string $string2, int $length): int",
     },
     LegacyPhpFunctionMapping {
         php_name: "str_contains",
@@ -632,6 +716,30 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     // System & Type functions -> Sys::* / Glob::*
     LegacyPhpFunctionMapping {
+        php_name: "clearstatcache",
+        rhp_facade: "Sys",
+        rhp_method: "clearstatcache",
+        rhp_signature: "Sys::clearstatcache(bool $clear_realpath_cache = false, string $filename = \"\"): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "disk_free_space",
+        rhp_facade: "Sys",
+        rhp_method: "disk_free_space",
+        rhp_signature: "Sys::disk_free_space(string $directory): float|bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "diskfreespace",
+        rhp_facade: "Sys",
+        rhp_method: "disk_free_space",
+        rhp_signature: "Sys::disk_free_space(string $directory): float|bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "disk_total_space",
+        rhp_facade: "Sys",
+        rhp_method: "disk_total_space",
+        rhp_signature: "Sys::disk_total_space(string $directory): float|bool",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "getenv",
         rhp_facade: "Sys",
         rhp_method: "env",
@@ -676,8 +784,44 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     LegacyPhpFunctionMapping {
         php_name: "die",
         rhp_facade: "Sys",
-        rhp_method: "exit",
-        rhp_signature: "Sys::exit(mixed $status = 0): void",
+        rhp_method: "die",
+        rhp_signature: "Sys::die(mixed $status = 0): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "register_shutdown_function",
+        rhp_facade: "Sys",
+        rhp_method: "registerShutdownFunction",
+        rhp_signature: "Sys::registerShutdownFunction(callable $callback, mixed ...$args): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "set_error_handler",
+        rhp_facade: "Sys",
+        rhp_method: "setErrorHandler",
+        rhp_signature: "Sys::setErrorHandler(?callable $callback, int $error_levels = E_ALL): ?callable",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "restore_error_handler",
+        rhp_facade: "Sys",
+        rhp_method: "restoreErrorHandler",
+        rhp_signature: "Sys::restoreErrorHandler(): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "set_exception_handler",
+        rhp_facade: "Sys",
+        rhp_method: "setExceptionHandler",
+        rhp_signature: "Sys::setExceptionHandler(?callable $callback): ?callable",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "restore_exception_handler",
+        rhp_facade: "Sys",
+        rhp_method: "restoreExceptionHandler",
+        rhp_signature: "Sys::restoreExceptionHandler(): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "trigger_error",
+        rhp_facade: "Sys",
+        rhp_method: "triggerError",
+        rhp_signature: "Sys::triggerError(string $message, int $error_level = E_USER_NOTICE): bool",
     },
     LegacyPhpFunctionMapping {
         php_name: "get_class",
@@ -745,6 +889,176 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "phpFun",
         rhp_method: "collect",
         rhp_signature: "phpFun::collect(mixed $items = null): object",
+    },
+    // Type validation functions -> Validate::*
+    LegacyPhpFunctionMapping {
+        php_name: "is_null",
+        rhp_facade: "Validate",
+        rhp_method: "null",
+        rhp_signature: "Validate::null(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_int",
+        rhp_facade: "Validate",
+        rhp_method: "int",
+        rhp_signature: "Validate::int(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_integer",
+        rhp_facade: "Validate",
+        rhp_method: "int",
+        rhp_signature: "Validate::int(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_long",
+        rhp_facade: "Validate",
+        rhp_method: "int",
+        rhp_signature: "Validate::int(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_bool",
+        rhp_facade: "Validate",
+        rhp_method: "bool",
+        rhp_signature: "Validate::bool(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_boolean",
+        rhp_facade: "Validate",
+        rhp_method: "bool",
+        rhp_signature: "Validate::bool(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_float",
+        rhp_facade: "Validate",
+        rhp_method: "float",
+        rhp_signature: "Validate::float(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_double",
+        rhp_facade: "Validate",
+        rhp_method: "float",
+        rhp_signature: "Validate::float(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_real",
+        rhp_facade: "Validate",
+        rhp_method: "float",
+        rhp_signature: "Validate::float(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_numeric",
+        rhp_facade: "Validate",
+        rhp_method: "numeric",
+        rhp_signature: "Validate::numeric(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_scalar",
+        rhp_facade: "Validate",
+        rhp_method: "scalar",
+        rhp_signature: "Validate::scalar(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_resource",
+        rhp_facade: "Validate",
+        rhp_method: "resource",
+        rhp_signature: "Validate::resource(mixed $value): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "is_a",
+        rhp_facade: "Validate",
+        rhp_method: "isA",
+        rhp_signature: "Validate::isA(mixed $object_or_class, string $class, bool $allow_string = false): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "gettype",
+        rhp_facade: "Debug",
+        rhp_method: "type",
+        rhp_signature: "Debug::type(mixed $value): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "getType",
+        rhp_facade: "Debug",
+        rhp_method: "type",
+        rhp_signature: "Debug::type(mixed $value): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "get_debug_type",
+        rhp_facade: "Debug",
+        rhp_method: "type",
+        rhp_signature: "Debug::type(mixed $value): string",
+    },
+    // CSV stream and string processing functions -> Csv::*
+    LegacyPhpFunctionMapping {
+        php_name: "fgetcsv",
+        rhp_facade: "Csv",
+        rhp_method: "fgetcsv",
+        rhp_signature: "Csv::fgetcsv(resource $stream, ?int $length = null, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "fputcsv",
+        rhp_facade: "Csv",
+        rhp_method: "fputcsv",
+        rhp_signature: "Csv::fputcsv(resource $stream, array $fields, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\", string $eol = \"\\n\"): int|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "str_getcsv",
+        rhp_facade: "Csv",
+        rhp_method: "parseRow",
+        rhp_signature: "Csv::parseRow(string $string, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "fopen",
+        rhp_facade: "File",
+        rhp_method: "open",
+        rhp_signature: "File::open(string $filename, string $mode): resource|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "fclose",
+        rhp_facade: "File",
+        rhp_method: "close",
+        rhp_signature: "File::close(resource $stream): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "feof",
+        rhp_facade: "File",
+        rhp_method: "eof",
+        rhp_signature: "File::eof(resource $stream): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rewind",
+        rhp_facade: "File",
+        rhp_method: "rewind",
+        rhp_signature: "File::rewind(resource $stream): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "tempnam",
+        rhp_facade: "File",
+        rhp_method: "tempnam",
+        rhp_signature: "File::tempnam(?string $dir = null, ?string $prefix = null): string|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "tmpfile",
+        rhp_facade: "File",
+        rhp_method: "tmpfile",
+        rhp_signature: "File::tmpfile(): resource|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "sys_get_temp_dir",
+        rhp_facade: "File",
+        rhp_method: "sysGetTempDir",
+        rhp_signature: "File::sysGetTempDir(): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "fwrite",
+        rhp_facade: "File",
+        rhp_method: "writeStream",
+        rhp_signature: "File::writeStream(resource $stream, string $data, ?int $length = null): int|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "fread",
+        rhp_facade: "File",
+        rhp_method: "readStream",
+        rhp_signature: "File::readStream(resource $stream, int $length): string|false",
     },
     // Crypt functions -> Crypt::*
     LegacyPhpFunctionMapping {
@@ -1068,6 +1382,13 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "gunzip",
         rhp_signature: "Compress::gunzip(string $data): string",
     },
+    // Uniq functions -> Uniq::*
+    LegacyPhpFunctionMapping {
+        php_name: "uniqid",
+        rhp_facade: "Uniq",
+        rhp_method: "uniqid",
+        rhp_signature: "Uniq::uniqid(string $prefix = '', bool $more_entropy = false): string",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function
@@ -1198,6 +1519,10 @@ impl FacadeRegistry {
             "html" => "Html",
             "url" => "Url",
             "carbon" => "Carbon",
+            "validate" => "Validate",
+            "csv" => "Csv",
+            "uniq" => "Uniq",
+            "debug" => "Debug",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -1258,7 +1583,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         name.to_ascii_lowercase().as_str(),
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
-            | "adb" | "afile" | "ahttp" | "crypt" | "html"
+            | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
     )
 }
 
