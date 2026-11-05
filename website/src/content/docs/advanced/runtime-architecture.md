@@ -1,159 +1,183 @@
 ---
-title: "Runtime & Process Architecture"
-description: "Deep dive into the RHP host runtime: supervisor process, pre-forked worker pool, socket ownership, Tokio/sqlx post-fork init, hot reload, and rhpm."
+title: "RHPM: Runtime Process & Coroutine Architecture"
+description: "Comprehensive guide to RHPM: Swoole-grade 3-tier hybrid process model, corosensei stackful coroutines, Reactor threads, Manager supervisor, and zero-overhead memory arenas."
 section: "Advanced"
 order: 2
 ---
 
-## What the Runtime Layer Owns
+## Overview: The Swoole-Grade Hybrid Concurrency Model
 
-The **Runtime Layer** (`rhpm` + built-in host server) owns **everything about processes, I/O, sockets, and lifecycle**. It bridges pure language code to operating system facilities without dictating high-level application structure.
+RHP replaces naive single-threaded request handling and heavy fork-per-request models with **RHPM (RHP Process Manager)**: an enterprise-grade hybrid **Multi-Process + Multi-Thread + Stackful Coroutine** architecture inspired by Swoole, RoadRunner, and Erlang/BEAM.
+
+```text
+                  [ Incoming HTTP Requests ]
+                             │
+                             ▼
+  Master Process ──► [ Reactor Threads (OS Threads) ]  <-- Non-blocking I/O multiplexing & HTTP framing
+                             │
+                             ▼ (Least-Loaded IPC Dispatch)
+  Manager Process ──► [ Worker Processes (OS Processes) ]
+                             │
+                             ▼
+                 [ Coroutines (corosensei Fibers) ]   <-- 1 Stackful Fiber per active request
+                             │
+                             ├─► Standard I/O (DB, File, Http) ──► Transparent fiber suspend & Tokio resume
+                             └─► Async I/O (ADB, AFile, AHttp)  ──► Dispatched to dedicated Task Workers
+```
+
+Instead of forcing PHP-family code into single-threaded asynchronous callback hell or spawning expensive OS processes per request, RHPM combines three complementary tiers:
+1. **Master Process (Reactor OS Threads):** High-speed non-blocking socket multiplexing and HTTP protocol framing.
+2. **Manager Process (Supervisor & Orchestrator):** Lifecycle management, worker health monitoring, automatic restart on crash, and zero-downtime rolling recycling.
+3. **Worker Processes (Tokio LocalSet + Stackful Fibers):** Each worker runs a single-threaded Tokio event loop hosting thousands of lightweight `corosensei` stackful fibers simultaneously.
+4. **Task Worker Pool (Dedicated Background Workers):** Heavy computation, background telemetry, and deferred jobs are isolated from the latency-sensitive HTTP request path.
+
+---
+
+## 1. Master Process & Reactor Threads (Tier 1)
+
+The Master Process owns the primary listening sockets (`SO_REUSEPORT`) and manages $N$ **Reactor OS Threads** (defaulting to the host's logical CPU count).
+
+### Responsibilities:
+- **TCP & TLS Multiplexing:** Accepts client connections using epoll/kqueue event loops.
+- **HTTP/1.1 & HTTP/2 Framing:** Decodes incoming byte streams into structured request envelopes (`method`, `uri`, `headers`, `body`).
+- **Least-Loaded Load Balancing:** Routes requests across healthy Worker processes via low-latency IPC channels using an $O(N)$ least-pending dispatch algorithm.
+- **Overload Admission & Load Shedding:** When the queue reaches capacity (`max_queued_requests = 8192`), the Reactor immediately sheds load with `503 Service Unavailable` before worker memory is exhausted.
+- **Client Response Flushing:** Receives completed response buffers from Workers and flushes them directly to the client socket without blocking.
+
+---
+
+## 2. Manager Process: Supervision & Zero-Downtime Reload (Tier 2)
+
+The Manager Process acts as the cluster supervisor, keeping workers healthy without being on the request data path:
+
+- **Fault Containment & Auto-Respawn:** Monitors worker OS processes via `SIGCHLD`. If a worker terminates abnormally (e.g., segfault in a native C extension or Out-Of-Memory abort), the Manager immediately forks a clean replacement. Concurrent workers are 100% unaffected.
+- **Proactive Rolling Recycling:** Workers track total requests handled and resident memory footprint (RSS). When reaching configured thresholds (`max_requests_per_worker = 10000` or `max_worker_rss_bytes = 256MB`), the worker gracefully drains active fibers and exits cleanly, prompting the Manager to spawn a pristine successor.
+- **Zero-Downtime Hot Code Reload:** Upon code modification or `SIGUSR1`, the Manager spawns fresh workers with the updated application state and signals older workers to drain in-flight requests before exiting.
+
+---
+
+## 3. Worker Processes & `corosensei` Stackful Coroutines (Tier 3)
+
+Every Worker process runs a single-threaded Tokio `current_thread` runtime with a `LocalSet`. Every incoming HTTP request is wrapped in an independent **Stackful Fiber** powered by [`corosensei`].
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                    LAYER 2: RUNTIME (rhpm & Host Server)               │
+│                        WORKER PROCESS (OS Process)                     │
 │                                                                        │
-│  - Master Supervisor Process           - Pre-forked Worker Pool        │
-│  - Socket Binding (SO_REUSEPORT)       - HTTP Accept & Parsing Loop    │
-│  - Post-Fork Tokio / sqlx Init         - Request Dispatch & Arenas     │
-│  - Future::defer Flush Execution       - Worker Respawn & Hot Reload   │
+│  Tokio LocalSet Event Loop                                             │
+│  ┌───────────────────────┐  ┌───────────────────────┐                  │
+│  │ Fiber 1 (Req #1001)   │  │ Fiber 2 (Req #1002)   │   ... (Up to    │
+│  │ - 128 KB Stack        │  │ - 128 KB Stack        │        2048     │
+│  │ - Running PHP Route   │  │ - Suspended on DB     │       Fibers)   │
+│  └───────────┬───────────┘  └───────────▲───────────┘                  │
+│              │                          │                              │
+│              ▼ suspend()                │ resume()                     │
+│  ┌──────────────────────────────────────┴───────────────────────────┐  │
+│  │                     Tokio Async I/O Futures                      │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│  Request Memory Arena Pool                                             │
+│  [ Warm Arena 1 ]  [ Warm Arena 2 ] ──► Instantaneous O(1) Slab Reset  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
----
+### Transparent Fiber Suspension vs. Async Helpers
 
-## 1. Master Supervisor Process
+RHP completely eliminates the "function coloring" problem of `async`/`await`:
 
-The runtime entry point (`rhp run dev`, `rhp run build`, or `rhpm`) starts as a lightweight, persistent master supervisor process:
+1. **Standard Facades (`DB::*`, `File::*`, `Http::*`):**
+   - Written synchronously in application code: `$user = DB::table('users')->find(42);`
+   - Under the hood, the helper invokes `fiber_yield_io()`, which suspends the current `corosensei` stackful fiber and registers a Tokio async future.
+   - The OS thread continues executing other fibers.
+   - When Tokio completes the I/O operation, the fiber resumes at the exact instruction pointer with zero mental overhead for developers.
 
-1. **Loads Configuration:** Parses `rhp.toml` for port assignments, worker limits, timeouts, and file-watching rules.
-2. **Evaluates Application Boot Phase:** Runs top-level statements and service registrations in `index.rhp` once, pre-compiling bytecode and freezing immutable definitions into an immutable state (`Arc<EngineState>`).
-3. **Binds TCP Socket:** Binds the server socket (`SO_REUSEPORT` or shared file descriptor) before workers are spawned.
-4. **Enforces the POSIX Fork / Threading Invariant:**
-   > **The Rule:** The master process remains strictly single-threaded during the boot phase.
-   > Under POSIX, `fork()` copies *only* the calling thread. If the parent process were to initialize a multi-threaded Tokio runtime, spawn background worker threads, or open database pools prior to forking, child processes would instantly deadlock on inherited mutexes. The runtime enforces this at startup—any boot code accessing `DB::*` or async threads raises a fatal `BootPhaseViolation`.
-
----
-
-## 2. Pre-Forked Worker Pool
-
-Rather than incurring the heavy cost of fork-per-request (copy-on-write page faults and lost JIT caches), the master supervisor pre-forks $N$ persistent worker processes at startup:
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                   RHP SUPERVISOR (Master Process)                      │
-│ - Reads rhp.toml (port, workers, timeouts, watch rules)                │
-│ - Executes index.rhp Boot Phase (Sync, strictly single-threaded)       │
-│ - Binds shared TCP listening socket                                    │
-│ - File watcher (hot reloading) & process supervisor (SIGCHLD / respawn)│
-└───────────────────┬────────────────────────────────┬───────────────────┘
-                    │ fork() (Pre-forked pool at boot)│ fork()
-                    ▼                                ▼
-       ┌────────────────────────┐       ┌────────────────────────┐
-       │    WORKER PROCESS 1    │       │    WORKER PROCESS 2    │
-       │                        │       │                        │
-       │ Post-fork init:        │       │ Post-fork init:        │
-       │ - Starts Tokio/Async   │       │ - Starts Tokio/Async   │
-       │ - Inits DB Pool (sqlx) │       │ - Inits DB Pool (sqlx) │
-       │                        │       │                        │
-       │ Request Loop:          │       │ Request Loop:          │
-       │ - Accepts connections  │       │ - Accepts connections  │
-       │ - RequestArena (O(1))  │       │ - RequestArena (O(1))  │
-       │ - Executes defer queue │       │ - Executes defer queue │
-       └────────────────────────┘       └────────────────────────┘
-```
-
-### Fault Isolation & Automatic Worker Respawn
-Each worker runs in its own kernel-isolated virtual memory address space:
-- If a worker process encounters an unrecoverable failure (e.g. native segfault, unexpected abort, or memory cap kill), the master supervisor catches `SIGCHLD`.
-- The supervisor logs the crash telemetry and immediately forks a clean replacement worker.
-- Other concurrent workers and in-flight client connections are 100% unaffected.
+2. **Non-Pausing Facades (`ADB::*`, `AFile::*`, `AHttp::*`):**
+   - Used when the current HTTP request does not need to wait for the result (e.g. fire-and-forget metrics, asynchronous audit logging).
+   - Enqueues the task to the **Task Worker Pool** immediately without pausing the calling fiber.
 
 ---
 
-## 3. Post-Fork Worker Initialization
+## 4. Dedicated Task Worker Pool
 
-Immediately following the `fork()` syscall, each worker executes its isolated startup sequence:
+For heavy computation, PDF rendering, bulk emails, or asynchronous database writes, RHPM provides a dedicated **Task Worker Pool**:
 
-1. **Spins up Tokio Runtime:** Instantiates a multi-threaded or current-thread Tokio asynchronous event loop inside the child process.
-2. **Initializes Database Pools:** Creates native connection pools (`sqlx`, Redis, PostgreSQL, SQLite) without cross-process locking or IPC bottlenecks.
-3. **Enters the Request Accept Loop:** Attaches to the shared socket descriptor and begins serving incoming HTTP requests.
-
----
-
-## 4. HTTP Accept Loop & Request-Scoped Bump Arenas
-
-When an incoming connection arrives:
-
-1. **HTTP Parsing:** The worker reads and parses incoming HTTP wire headers into a `RawRequest` tuple (method, URI, headers, body bytes).
-2. **Dedicated Bump Arena (`RequestArena`):** The worker initializes a pre-allocated bump allocation chunk. Every object, array, or string created during request processing is allocated sequentially using an 8-byte aligned bump pointer.
-3. **Execution:** Dispatches the request through application routes and handlers.
-4. **Instant $O(1)$ Teardown:** When the response is sent, the entire request arena's bump pointer is reset to 0 in a single step ($O(1)$). This eliminates tracing garbage collection sweeps and guarantees zero memory leaks across requests.
-
----
-
-## 5. `Future::defer` Post-Response Flush Execution
-
-A crucial responsibility of the runtime is managing the execution lifecycle of deferred tasks:
+- **Decoupled Latency:** Runs as separate OS processes/threads. Heavy CPU bursts or disk writes never steal CPU cycles from the latency-critical HTTP request loop.
+- **Non-blocking Dispatch:** Enqueue jobs via `TaskQueueSender` without blocking the HTTP worker fiber.
 
 ```php
-Route::post('/orders', function(Request $req): Response {
-    $order = Order::create($req->json());
-
-    // Queued to run AFTER response is delivered to the client
-    Future::defer(function() use ($order) {
-        Analytics::track('order.created', $order->id);
-        Log::info("Order {$order->id} completed");
-    });
-
-    return Response::json(['status' => 'created']);
-});
+// Fired into the background Task Worker pool without pausing the HTTP response:
+AFile::write('/var/log/audit.log', $auditEntry);
+ADB::table('analytics')->insert(['event' => 'page_view', 'ip' => $ip]);
 ```
 
-### Execution Lifecycle:
-1. **Response Flush First:** The runtime writes the HTTP response status, headers, and body bytes to the client socket and flushes immediately.
-2. **Deferred Queue Drain:** Once the client receives its response, the worker sequentially executes all callbacks registered in `Future::defer`.
-3. **Arena Reset:** After all deferred tasks finish, the request arena is dropped and reset.
-4. **Shutdown Draining:** On receiving `SIGTERM` / `SIGQUIT`, workers stop accepting new connections, finish all active requests, drain their pending deferred queues, and exit cleanly without dropping background jobs.
+---
+
+## 5. Request-Scoped Arena Allocation & `ArenaPool`
+
+RHP bypasses traditional garbage collector pauses through **$O(1)$ Bump Arenas**:
+
+1. **Warm Slab Acquisition:** At the start of a request, the worker acquires a pre-allocated `RequestArena` from the thread-local `ArenaPool`.
+2. **Zero GC Allocation:** Memory for strings, arrays, and request objects is bumped sequentially on 8-byte aligned memory slabs.
+3. **Instantaneous $O(1)$ Teardown:** Once the HTTP response is flushed to the client and post-response `Future::defer` hooks finish, the arena executes `drop_request()`:
+   - External OS handles (uncommitted DB transactions, open file descriptors) in the DropList are cleaned up.
+   - Pointers reset to `0` in a single CPU instruction.
+   - Pre-allocated virtual memory chunks remain hot in cache and return to the `ArenaPool` for the next request.
+
+### Singleton vs. Request State
+- **`singleton` Classes & Global State:** Persist in shared immutable `Arc<EngineState>` across requests.
+- **Request State:** Superglobals (`$_GET`, `$_POST`, `$_SERVER`), local variables, and standard static variables belong exclusively to the request arena and are cleared on reset.
 
 ---
 
-## 6. Development Mode Hot Reloading
+## 6. High-Throughput Non-Blocking Log Ring Buffer
 
-In development mode (`rhp run dev` or `rhp dev`):
-- The master process integrates a file watcher powered by the `notify` crate, monitoring `*.rhp` and `rhp.toml` files.
-- When changes are detected on disk, the master:
-  1. Re-executes the boot phase in memory.
-  2. Forks fresh worker processes with the updated code.
-  3. Sends `SIGQUIT` to older workers, allowing them to drain in-flight requests gracefully before exiting.
-  4. Achieves sub-millisecond, zero-downtime hot reloading.
+To prevent slow disk I/O from stalling HTTP workers:
+- Each Worker process logs into a bounded non-blocking `LogRingBuffer` (`std::sync::mpsc::sync_channel`).
+- `Debug` and `Info` records are enqueued without blocking.
+- `Warn` and `Error` records trigger an immediate wake-up signal to the log drainer.
+- The Master **`LogCollector`** receives batches asynchronously and performs vectorized writes to stdout or configured file sinks.
 
 ---
 
-## 7. `rhpm` Multi-Process & Sidecar Management
+## 7. Configuration Reference (`rhp.toml`)
 
-In large-scale production deployments, `rhpm` acts as the cluster and process manager:
-- **Multiple Service Instances:** Scales worker pools across multiple host cores or CPU affinity masks.
-- **Sidecar Isolation:** Routes heavy, slow, or memory-intensive endpoints (e.g. bulk CSV exports, image processing, heavy AI embeddings) to dedicated sidecar worker pools, preventing them from monopolizing the primary HTTP request workers.
-- **Queue Worker Daemons:** Manages long-running background CLI consumers and scheduler cron processes.
-
----
-
-## 8. Runtime Configuration (`rhp.toml`)
-
-All runtime options are managed declaratively in `rhp.toml` rather than hardcoded in PHP scripts:
+All RHPM tuning parameters can be customized declaratively:
 
 ```toml
 [server]
 host = "127.0.0.1"
 port = 8080
-workers = "auto" # "auto" detects available CPU cores, or integer (e.g. 8)
+reactors = "auto"          # Logical CPU count for Master Reactor threads
+workers = "auto"           # Physical CPU core count for Worker processes
+task_workers = 2           # Dedicated background Task Workers
 
 [limits]
-max_arena_mb = 32 # Terminates requests exceeding memory limit
-timeout_ms = 5000 # Kills runaway requests exceeding 5s deadline
+max_requests_per_worker = 10000  # Graceful worker recycling threshold
+max_worker_rss_mb = 256          # Maximum resident set size before recycle
+max_active_fibers = 2048         # Concurrency admission limit per worker
+max_queued_requests = 8192       # Master queue capacity before 503 load shedding
+arena_memory_cap_mb = 16         # Per-request bump memory ceiling
+io_timeout_secs = 30             # Per-request wall-clock I/O deadline
+fiber_stack_kb = 128             # corosensei stack size per fiber
 
-[dev]
-hot_reload = true
-watch = ["src/", "index.rhp"]
+[logging]
+log_ring_size = 4096             # Per-worker non-blocking ring buffer slots
+flush_interval_ms = 5            # Master log collector batch interval
+```
+
+---
+
+## 8. CLI Commands
+
+RHPM is embedded directly into the single unified `rhp` binary:
+
+```bash
+# Start the production RHPM server
+rhp serve --port 8080 --host 0.0.0.0
+
+# Start in development mode with hot reload
+rhp dev
+
+# Inspect active fibers and runtime status
+rhp status --dump
 ```
