@@ -184,7 +184,6 @@ impl TypeChecker {
                         false,
                         false,
                         false,
-                        false,
                     )?;
                     self.result.functions.insert(func_name.clone(), sig.clone());
                     if func_name != func.name.name {
@@ -575,7 +574,6 @@ impl TypeChecker {
         is_static: bool,
         is_abstract: bool,
         is_final: bool,
-        is_open: bool,
         is_override: bool,
     ) -> Result<FunctionSignature, TypeError> {
         let is_lifecycle_magic =
@@ -683,7 +681,6 @@ impl TypeChecker {
             is_static,
             is_abstract,
             is_final,
-            is_open,
             is_override,
             visibility,
             span: func.span,
@@ -707,7 +704,6 @@ impl TypeChecker {
                 m.is_static,
                 true,
                 m.is_final,
-                true,
                 false,
             )?;
             methods.insert(m.function.name.name.to_string(), sig);
@@ -746,7 +742,6 @@ impl TypeChecker {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
-                        m.is_open,
                         m.is_override,
                     )?;
                     methods.insert(m.function.name.name.to_string(), sig);
@@ -809,8 +804,6 @@ impl TypeChecker {
             is_readonly: false,
             is_static_only: false,
             is_shared: false,
-            is_open: false,
-            is_sealed: false,
             extends: None,
             implements: Vec::new(),
             traits,
@@ -853,7 +846,6 @@ impl TypeChecker {
                 m.is_abstract,
                 m.is_final,
                 false,
-                false,
             )?;
             methods.insert(m.function.name.name.to_string(), sig);
         }
@@ -872,7 +864,6 @@ impl TypeChecker {
                     is_static: true,
                     is_abstract: false,
                     is_final: false,
-                    is_open: false,
                     is_override: false,
                     visibility: Visibility::Public,
                     span: enm.span,
@@ -900,7 +891,6 @@ impl TypeChecker {
                         is_static: true,
                         is_abstract: false,
                         is_final: false,
-                        is_open: false,
                         is_override: false,
                         visibility: Visibility::Public,
                         span: enm.span,
@@ -925,7 +915,6 @@ impl TypeChecker {
                         is_static: true,
                         is_abstract: false,
                         is_final: false,
-                        is_open: false,
                         is_override: false,
                         visibility: Visibility::Public,
                         span: enm.span,
@@ -1016,7 +1005,6 @@ impl TypeChecker {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
-                        m.is_open,
                         m.is_override,
                     )?;
 
@@ -1119,8 +1107,6 @@ impl TypeChecker {
             is_readonly: cls.modifiers.is_readonly,
             is_static_only: cls.modifiers.is_static_only,
             is_shared: cls.modifiers.is_shared,
-            is_open: cls.modifiers.is_open,
-            is_sealed: cls.modifiers.is_sealed,
             extends: cls.extends.as_ref().map(|e| self.resolve_class_name(e.name, None)),
             implements: cls.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             traits,
@@ -1561,18 +1547,6 @@ impl TypeChecker {
                         ));
                     }
 
-                    if parent_info.is_sealed {
-                        return Err(TypeError::new(
-                            TypeErrorKind::MethodOverrideContractViolation {
-                                class_name: class_name.clone(),
-                                parent_name: parent_name.clone(),
-                                method_name: "<class>".to_string(),
-                                reason: format!("cannot extend sealed class '{}'", parent_name),
-                            },
-                            class_info.span,
-                        ));
-                    }
-
                     for (method_name, child_sig) in &class_info.methods {
                         if method_name == "__construct" || method_name == "__destruct" {
                             continue;
@@ -1589,7 +1563,7 @@ impl TypeChecker {
                                     parent_name: parent_name.clone(),
                                     method_name: method_name.clone(),
                                     reason: format!(
-                                        "method '{}::{}()' has 'override' or '#[Override]' modifier but no matching parent or interface method was found",
+                                        "method '{}::{}()' has '#[Override]' attribute but no matching parent or interface method was found",
                                         class_name, method_name
                                     ),
                                 },
@@ -1620,6 +1594,29 @@ impl TypeChecker {
                                 parent_name,
                                 false,
                             )?;
+                        }
+                    }
+                }
+            } else {
+                for (method_name, child_sig) in &class_info.methods {
+                    if child_sig.is_override {
+                        let iface_method = class_info
+                            .implements
+                            .iter()
+                            .find_map(|iface| hierarchy.lookup_method(iface, method_name));
+                        if iface_method.is_none() {
+                            return Err(TypeError::new(
+                                TypeErrorKind::MethodOverrideContractViolation {
+                                    class_name: class_name.clone(),
+                                    parent_name: String::new(),
+                                    method_name: method_name.clone(),
+                                    reason: format!(
+                                        "method '{}::{}()' has '#[Override]' attribute but no matching parent or interface method was found",
+                                        class_name, method_name
+                                    ),
+                                },
+                                child_sig.span,
+                            ));
                         }
                     }
                 }

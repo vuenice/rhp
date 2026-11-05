@@ -1011,7 +1011,6 @@ impl<'a> IrLowerer<'a> {
                     false,
                     false,
                     false,
-                    false,
                 )?;
                 self.module
                     .function_index
@@ -1192,7 +1191,6 @@ impl<'a> IrLowerer<'a> {
                     is_static: false,
                     is_abstract: false,
                     is_final: false,
-                    is_open: false,
                     is_override: false,
                     is_closure: true,
                     closure_category: Some(ClosureCategory::PureNonCapturing),
@@ -3425,7 +3423,6 @@ impl<'a> IrLowerer<'a> {
         is_static: bool,
         is_abstract: bool,
         is_final: bool,
-        is_open: bool,
         is_override: bool,
     ) -> Result<FunctionId, IrError> {
         let return_type = func
@@ -3564,7 +3561,6 @@ impl<'a> IrLowerer<'a> {
             is_static,
             is_abstract,
             is_final,
-            is_open,
             is_override,
             is_closure: false,
             closure_category: None,
@@ -3732,7 +3728,6 @@ impl<'a> IrLowerer<'a> {
             is_static: false,
             is_abstract: false,
             is_final: false,
-            is_open: false,
             is_override: false,
             is_closure: true,
             closure_category: Some(category),
@@ -3865,7 +3860,6 @@ impl<'a> IrLowerer<'a> {
             is_static,
             is_abstract: false,
             is_final: false,
-            is_open: false,
             is_override: false,
             is_closure: true,
             closure_category: Some(category),
@@ -4010,7 +4004,6 @@ impl<'a> IrLowerer<'a> {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
-                        m.is_open,
                         m.is_override,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
@@ -4142,7 +4135,6 @@ impl<'a> IrLowerer<'a> {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
-                        m.is_open,
                         m.is_override,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
@@ -4338,7 +4330,6 @@ impl<'a> IrLowerer<'a> {
                 m.is_static,
                 true,
                 m.is_final,
-                true,
                 false,
             )?;
             self.module.function_index.insert(method_key, func_id);
@@ -4404,7 +4395,6 @@ impl<'a> IrLowerer<'a> {
                 m.is_static,
                 m.is_abstract,
                 m.is_final,
-                false,
                 false,
             )?;
             self.module.function_index.insert(method_key, func_id);

@@ -103,13 +103,7 @@ pub enum IrErrorKind {
         method_name: String,
     },
 
-    #[error("Fatal Error: Class '{class_name}' cannot extend sealed class '{parent_name}'.")]
-    CannotExtendSealedClass {
-        class_name: String,
-        parent_name: String,
-    },
-
-    #[error("Fatal Error: Method '{class_name}::{method_name}()' has '#[Override]' or 'override' modifier but no matching parent or interface method was found.")]
+    #[error("Fatal Error: Method '{class_name}::{method_name}()' has '#[Override]' attribute but no matching parent or interface method was found.")]
     MethodDoesNotOverride {
         class_name: String,
         method_name: String,

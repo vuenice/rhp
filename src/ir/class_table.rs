@@ -45,8 +45,6 @@ pub struct ClassInfo {
     pub is_readonly: bool,
     pub is_shared: bool,
     pub is_static_only: bool,
-    pub is_open: bool,
-    pub is_sealed: bool,
     pub is_trait: bool,
     pub is_interface: bool,
 
@@ -88,8 +86,6 @@ impl ClassInfo {
             is_readonly: false,
             is_shared: false,
             is_static_only: false,
-            is_open: false,
-            is_sealed: false,
             is_trait: false,
             is_interface: false,
             own_methods: HashMap::new(),
@@ -400,16 +396,6 @@ impl ClassTable {
                 if self.classes[p_idx].is_final {
                     return Err(IrError::new(
                         IrErrorKind::CannotExtendFinalClass {
-                            class_name: class_name.to_string(),
-                            parent_name: self.classes[p_idx].name.to_string(),
-                        },
-                        span,
-                    ));
-                }
-
-                if self.classes[p_idx].is_sealed {
-                    return Err(IrError::new(
-                        IrErrorKind::CannotExtendSealedClass {
                             class_name: class_name.to_string(),
                             parent_name: self.classes[p_idx].name.to_string(),
                         },
@@ -755,7 +741,6 @@ impl ClassTable {
         };
 
         if self.classes[base_id.index()].is_final
-            || self.classes[base_id.index()].is_sealed
             || self.classes[base_id.index()].final_methods.contains(method_name)
         {
             return false;

@@ -91,6 +91,112 @@ class AuditLog implements Loggable {
 
 ---
 
+## VM Table Reduction & Compile-Time Static Dispatch
+
+In traditional PHP runtimes, dynamic method dispatch on objects traverses runtime hash tables (`zend_function_entry`), causing cache misses, dynamic lookups, and branch mispredictions.
+
+RHP drastically minimizes dynamic virtual method table (vtable) lookups and memory overhead by enforcing static dispatch at compile time—using **100% standard PHP syntax**:
+
+### 1. Direct Static Dispatch via `final`
+
+When a class or method is declared `final`, the compiler knows with mathematical certainty that it can never be extended or overridden:
+
+```php
+final class OrderCalculator {
+    public function calculateTotal(int $price, int $quantity): int {
+        return $price * $quantity;
+    }
+}
+
+$calc = new OrderCalculator();
+// Statically dispatched via OpCode::MethodCallDirect (Zero vtable overhead)
+$total = $calc->calculateTotal(100, 2);
+```
+
+* **No Virtual Method Slot:** The compiler emits `OpCode::MethodCallDirect` pointing directly to the compiled function address, completely bypassing vtable lookups.
+* **Extending Final Class is a Compile Error:** Attempting `class SubCalculator extends OrderCalculator` fails instantly at compile time with a fatal contract violation.
+
+### 2. Whole-Program Class Hierarchy Analysis (CHA)
+
+PHP classes are **open and extensible by default** without requiring non-standard keywords:
+
+```php
+class UserService {
+    public function findUser(int $id): string {
+        return "user_" . string($id);
+    }
+}
+```
+
+* If no subclass in the compiled program overrides `findUser()`, RHP's **Class Hierarchy Analysis (CHA)** automatically devirtualizes every call `$service->findUser($id)` to direct static execution (`MethodCallDirect`).
+* If a derived subclass does override the method, only those specific calls use nominal vtable dispatch.
+
+### 3. Contract Enforcement via PHP 8.3 `#[\Override]`
+
+To prevent silent typos and broken inheritance hierarchies, RHP fully enforces the standard PHP 8.3 `#[\Override]` and `#[Override]` attribute at compile time:
+
+```php
+class BaseLogger {
+    public function log(string $msg): void {
+        print($msg);
+    }
+}
+
+class FileLogger extends BaseLogger {
+    #[\Override]
+    public function log(string $msg): void {
+        Log::info($msg);
+    }
+
+    #[\Override]
+    public function nonExistent(): void {
+        // Compile Error: Method FileLogger::nonExistent() has '#[Override]' attribute 
+        // but no matching parent or interface method was found.
+    }
+}
+```
+
+* **Zero Runtime Overhead:** Attribute checks happen entirely during semantic type checking. The compiled bytecode contains no attribute reflection bloat.
+* **Namespace Flexibility:** Both `#[\Override]` (fully-qualified) and `#[Override]` (imported/unqualified) are recognized.
+
+### 4. Trait Conflict Resolution (`insteadof` & `as`)
+
+Unlike runtime languages that rely on ambiguous method resolution orders (MRO), RHP enforces explicit trait composition:
+
+```php
+trait LogA {
+    public function dump(): string { return "A"; }
+}
+
+trait LogB {
+    public function dump(): string { return "B"; }
+}
+
+class Service {
+    use LogA, LogB {
+        LogA::dump insteadof LogB;
+        LogB::dump as dumpFromB;
+    }
+}
+```
+
+* **Compile-Time Conflict Detection:** If two traits provide the same method and no resolution is specified, RHP refuses to compile with `TraitMethodCollision`.
+* **Explicit Resolution:** Conflicts are cleanly resolved via standard PHP `insteadof`, aliased via `as`, or overridden by declaring the method directly on the class.
+
+### 5. 100% PHP Syntax & Identifier Compatibility
+
+RHP does not reserve non-standard keywords like `open` or `sealed`. Words such as `open`, `sealed`, and `override` remain valid identifiers in user-land code:
+
+```php
+class FileManager {
+    public function open(): bool { return true; }
+    public function sealed(): bool { return false; }
+    public function override(): void {}
+}
+```
+
+---
+
 ## Anonymous Classes
 
 RHP fully supports anonymous classes via the `new class` expression syntax. Anonymous classes are ideal for lightweight, one-off objects such as mock services in unit tests, local strategy objects, disposable observers, and custom implementations of interfaces or abstract classes without creating a separate named file.

@@ -123,7 +123,6 @@ pub struct CompiledFunction {
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_final: bool,
-    pub is_open: bool,
     pub is_override: bool,
     pub is_closure: bool,
     pub closure_category: Option<ClosureCategory>,
@@ -311,8 +310,6 @@ impl IrModule {
             info.is_readonly = cls.modifiers.is_readonly;
             info.is_shared = cls.modifiers.is_shared;
             info.is_static_only = cls.modifiers.is_static_only;
-            info.is_open = cls.modifiers.is_open;
-            info.is_sealed = cls.modifiers.is_sealed;
             info.is_trait = cls.is_trait;
             info.is_interface = false;
             info.own_props = cls.properties.clone();

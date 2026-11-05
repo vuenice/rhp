@@ -1,16 +1,17 @@
 use rhp::{compile_source, run_source_with_vm, PhpValue};
 
 #[test]
-fn test_open_class_and_override_keyword() {
+fn test_attribute_override_standard_syntax() {
     let source = r#"
-        open class Animal {
+        class Animal {
             public function speak(): string {
                 return "sound";
             }
         }
 
         class Dog extends Animal {
-            override public function speak(): string {
+            #[Override]
+            public function speak(): string {
                 return "woof";
             }
         }
@@ -21,15 +22,11 @@ fn test_open_class_and_override_keyword() {
 
     let (vm, _) = run_source_with_vm(source).expect("Execution must succeed");
     assert_eq!(vm.get_main_variable("$res"), Some(&PhpValue::string("woof")));
-
-    let animal_info = vm.module().class_table.get_by_name("Animal").expect("Animal class exists");
-    assert!(animal_info.is_open);
 }
 
 #[test]
-fn test_attribute_open_and_override() {
+fn test_attribute_root_override_with_leading_backslash() {
     let source = r#"
-        #[Open]
         class Vehicle {
             public function drive(): string {
                 return "vroom";
@@ -37,7 +34,7 @@ fn test_attribute_open_and_override() {
         }
 
         class Car extends Vehicle {
-            #[Override]
+            #[\Override]
             public function drive(): string {
                 return "zoom";
             }
@@ -49,9 +46,6 @@ fn test_attribute_open_and_override() {
 
     let (vm, _) = run_source_with_vm(source).expect("Execution must succeed");
     assert_eq!(vm.get_main_variable("$res"), Some(&PhpValue::string("zoom")));
-
-    let vehicle_info = vm.module().class_table.get_by_name("Vehicle").expect("Vehicle class exists");
-    assert!(vehicle_info.is_open);
 }
 
 #[test]
@@ -64,7 +58,8 @@ fn test_invalid_override_without_parent_method_rejected() {
         }
 
         class MyService extends BaseService {
-            override public function nonExistent(): int {
+            #[Override]
+            public function nonExistent(): int {
                 return 20;
             }
         }
@@ -73,20 +68,38 @@ fn test_invalid_override_without_parent_method_rejected() {
     let err = compile_source(source);
     assert!(
         err.is_err(),
-        "Compilation must fail when 'override' is placed on a method not declared in parent"
+        "Compilation must fail when #[Override] is placed on a method not declared in parent or interface"
     );
 }
 
 #[test]
-fn test_sealed_class_extension_forbidden() {
+fn test_root_class_invalid_override_rejected() {
     let source = r#"
-        sealed class ClosedClass {
+        class StandaloneService {
+            #[Override]
+            public function orphanedMethod(): int {
+                return 42;
+            }
+        }
+    "#;
+
+    let err = compile_source(source);
+    assert!(
+        err.is_err(),
+        "Compilation must fail when #[Override] is placed on a method in a root class without matching interface"
+    );
+}
+
+#[test]
+fn test_final_class_extension_forbidden() {
+    let source = r#"
+        final class ClosedClass {
             public function secret(): int {
                 return 42;
             }
         }
 
-        class HackerClass extends ClosedClass {
+        class SubClass extends ClosedClass {
             public function secret(): int {
                 return 99;
             }
@@ -96,7 +109,7 @@ fn test_sealed_class_extension_forbidden() {
     let err = compile_source(source);
     assert!(
         err.is_err(),
-        "Compilation must fail when extending a sealed class"
+        "Compilation must fail when extending a final class"
     );
 }
 
@@ -125,6 +138,35 @@ fn test_trait_method_collision_detected_and_enforced() {
         err.is_err(),
         "Compilation must fail on trait method collision without class resolution"
     );
+}
+
+#[test]
+fn test_trait_method_collision_resolved_by_insteadof() {
+    let source = r#"
+        trait TraitA {
+            public function sharedMethod(): string {
+                return "A";
+            }
+        }
+
+        trait TraitB {
+            public function sharedMethod(): string {
+                return "B";
+            }
+        }
+
+        class ResolvedClass {
+            use TraitA, TraitB {
+                TraitA::sharedMethod insteadof TraitB;
+            }
+        }
+
+        $obj = new ResolvedClass();
+        $res = $obj->sharedMethod();
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Execution must succeed when resolved with insteadof");
+    assert_eq!(vm.get_main_variable("$res"), Some(&PhpValue::string("A")));
 }
 
 #[test]
@@ -159,11 +201,30 @@ fn test_trait_method_collision_resolved_by_class_override() {
 }
 
 #[test]
-fn test_sealed_class_devirtualization_guarantee() {
+fn test_final_class_and_cha_devirtualization_guarantee() {
     let source = r#"
-        sealed class StaticGuaranteedModel {
+        final class GuaranteedFinalModel {
             public function compute(): int {
                 return 100;
+            }
+        }
+
+        class OpenModelWithoutOverrides {
+            public function calculate(): int {
+                return 200;
+            }
+        }
+
+        class BaseWithOverride {
+            public function run(): int {
+                return 1;
+            }
+        }
+
+        class ChildOverride extends BaseWithOverride {
+            #[Override]
+            public function run(): int {
+                return 2;
             }
         }
     "#;
@@ -171,6 +232,42 @@ fn test_sealed_class_devirtualization_guarantee() {
     let module = compile_source(source).expect("Compilation must succeed");
     let class_table = &module.class_table;
 
-    // Sealed class methods are guaranteed never overridden
-    assert!(!class_table.is_method_overridden("StaticGuaranteedModel", "compute"));
+    // 1. Final class methods are guaranteed never overridden -> statically devirtualized
+    assert!(!class_table.is_method_overridden("GuaranteedFinalModel", "compute"));
+
+    // 2. Open class without overrides in whole program -> CHA devirtualizes it statically
+    assert!(!class_table.is_method_overridden("OpenModelWithoutOverrides", "calculate"));
+
+    // 3. Open class with actual subclass override -> recognized by CHA as virtual
+    assert!(class_table.is_method_overridden("BaseWithOverride", "run"));
+}
+
+#[test]
+fn test_non_reserved_identifiers_open_sealed_override() {
+    // Proves 100% PHP compatibility: open, sealed, and override are NOT reserved keywords
+    let source = r#"
+        class ResourceHandler {
+            public function open(): string {
+                return "opened";
+            }
+
+            public function sealed(): string {
+                return "sealed_box";
+            }
+
+            public function override(): string {
+                return "override_flag";
+            }
+        }
+
+        $handler = new ResourceHandler();
+        $r1 = $handler->open();
+        $r2 = $handler->sealed();
+        $r3 = $handler->override();
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("open, sealed, override must be valid method names in standard PHP");
+    assert_eq!(vm.get_main_variable("$r1"), Some(&PhpValue::string("opened")));
+    assert_eq!(vm.get_main_variable("$r2"), Some(&PhpValue::string("sealed_box")));
+    assert_eq!(vm.get_main_variable("$r3"), Some(&PhpValue::string("override_flag")));
 }

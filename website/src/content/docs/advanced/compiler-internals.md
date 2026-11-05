@@ -357,10 +357,28 @@ $$\text{Class's Own Methods} > \text{Trait Methods} > \text{Parent Methods}$$
    * `call_static_slot: Option<MethodId>` for dynamic static method invocation (`__callStatic`).
    * `constructor_slot: Option<MethodId>` for fast zero-overhead instantiation (`__construct`).
 
-### 7.2 Whole-Program Class Hierarchy Analysis (CHA)
-During bytecode lowering, RHP performs whole-program Class Hierarchy Analysis via `ClassTable::is_method_overridden()`:
-* If a class declares a method and no derived subclass overrides it, calls targeting that method are automatically **devirtualized** into direct specialized function calls (`OpCode::CallFunction`).
-* If multiple subclasses provide distinct implementations, the call dispatches through the dense slot vtable with $O(1)$ array indexing.
+### 7.2 Whole-Program Class Hierarchy Analysis (CHA) & VM Table Reduction
+
+Traditional PHP runtimes dispatch method calls by looking up function entry hash tables on every invocation. RHP eliminates this overhead by performing whole-program Class Hierarchy Analysis via `ClassTable::is_method_overridden()`:
+
+1. **`final` Class & Method Devirtualization:**
+   - Any method declared `final` or inside a `final class` can never be overridden.
+   - The IR lowerer devirtualizes the call into direct static execution (`OpCode::MethodCallDirect`), pointing directly to the target method's compiled index without touching the object vtable.
+
+2. **Open Classes Devirtualized via Whole-Program CHA:**
+   - Classes are open and extensible by default (standard PHP).
+   - If no derived subclass in the compiled program unit overrides a given method, `is_method_overridden()` returns `false`, devirtualizing the call directly to `MethodCallDirect`.
+   - Vtable indirection ($O(1)$ dense slot array) is reserved strictly for polymorphic call-sites where active subclass overrides exist.
+
+3. **Compile-Time Contract Enforcement via `#[\Override]`:**
+   - Methods annotated with `#[\Override]` or `#[Override]` are validated during semantic type checking against ancestor classes and implemented interfaces.
+   - If no matching parent method exists, compilation fails immediately, preventing subtle inheritance drift without runtime reflection cost.
+
+4. **Trait Precedence & Explicit Conflict Resolution:**
+   - Trait collisions must be explicitly adapted using standard PHP `insteadof` or `as`, or resolved by declaring the method on the class. Unresolved collisions fail at compile time (`TraitMethodCollision`).
+
+5. **100% PHP Syntax & Identifier Compatibility:**
+   - Non-standard keywords are avoided: words like `open`, `sealed`, and `override` remain valid identifiers in user code.
 
 ### 7.3 Escape Analysis for `::class` and DI Containers
 When `ClassName::class` is referenced in user code:
