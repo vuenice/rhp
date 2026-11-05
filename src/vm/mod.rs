@@ -64,9 +64,9 @@ pub use facade::{
 };
 pub use uniq::dispatch_uniq;
 pub use fiber::{
-    current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, enter_fiber,
+    current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, dispatch_blocking_native, enter_fiber,
     get_fiber_local, is_current_fiber, record_fiber_io_finish, record_fiber_io_start,
-    record_fiber_yield, set_fiber_local, with_current_fiber, Fiber, FiberContext, FiberId,
+    record_fiber_yield, set_fiber_local, suspend_for_io, with_current_fiber, Fiber, FiberContext, FiberId,
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, IoKind, IoWaitInfo,
     SchedulerStats,
 };
@@ -84,9 +84,11 @@ pub use mime::{
 };
 pub use parent_process::{EngineState, FrozenValue, ParentProcess};
 pub use rust_loader::{
-    clear_rust_modules, extract_pub_functions, infer_facade_name, load_and_register_rust_file,
-    resolve_rust_file_path, to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry,
-    RustLogStore,
+    clear_blocking_native_functions, clear_rust_modules, extract_blocking_functions,
+    extract_pub_functions, extract_rust_functions, get_in_process_native_function, infer_facade_name,
+    is_native_function_blocking, load_and_register_rust_file, register_blocking_native_function,
+    register_in_process_native_function, resolve_rust_file_path, sanitize_rust_source_for_rustc,
+    to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry, RustLogStore,
 };
 pub use value::{FutureState, PhpValue, VmClosure, VmFuture, VmObject};
 pub use worker::{

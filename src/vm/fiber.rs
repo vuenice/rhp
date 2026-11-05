@@ -21,8 +21,7 @@ use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
-use crate::lexer::span::Span;
-use crate::vm::error::{RuntimeError, RuntimeErrorKind};
+use crate::vm::error::RuntimeError;
 use crate::vm::value::PhpValue;
 
 /// Monotonically increasing atomic counter for unique fiber IDs.
@@ -74,12 +73,14 @@ pub enum IoKind {
     HttpPost { url: String },
     /// Cooperative timer sleep (`Future::delayed()`).
     Timer { milliseconds: u64 },
+    /// Blocking native / FFI function execution (`#[blocking]`).
+    NativeBlocking { extension: String, function: String },
     /// Custom plugin / Tier 2 I/O operation.
     Custom { category: String, operation: String },
 }
 
 impl IoKind {
-    /// General category string of this I/O operation (`"File"`, `"DB"`, `"HTTP"`, `"Timer"`, `"Custom"`).
+    /// General category string of this I/O operation (`"File"`, `"DB"`, `"HTTP"`, `"Timer"`, `"NativeBlocking"`, `"Custom"`).
     pub fn category(&self) -> &'static str {
         match self {
             Self::FileRead { .. }
@@ -89,6 +90,7 @@ impl IoKind {
             Self::DbTable { .. } | Self::DbQuery { .. } | Self::DbFind { .. } => "DB",
             Self::HttpGet { .. } | Self::HttpPost { .. } => "HTTP",
             Self::Timer { .. } => "Timer",
+            Self::NativeBlocking { .. } => "NativeBlocking",
             Self::Custom { .. } => "Custom",
         }
     }
@@ -106,8 +108,14 @@ impl IoKind {
             Self::HttpGet { url } => format!("HTTP::get({})", url),
             Self::HttpPost { url } => format!("HTTP::post({})", url),
             Self::Timer { milliseconds } => format!("Timer::sleep({}ms)", milliseconds),
+            Self::NativeBlocking { extension, function } => format!("{}::{}[blocking]", extension, function),
             Self::Custom { category, operation } => format!("{}::{}", category, operation),
         }
+    }
+
+    /// Returns true if this I/O kind is a blocking native / FFI call.
+    pub fn is_native_blocking(&self) -> bool {
+        matches!(self, Self::NativeBlocking { .. })
     }
 }
 
@@ -301,6 +309,11 @@ impl FiberContext {
         self.locals.shift_remove(key)
     }
 
+    /// Retrieve all fiber-local variables.
+    pub fn all(&self) -> &IndexMap<String, PhpValue> {
+        &self.locals
+    }
+
     /// Clear all fiber-local variables.
     pub fn clear(&mut self) {
         self.locals.clear();
@@ -485,6 +498,16 @@ impl Fiber {
         self.state = FiberState::Failed(msg);
         self.last_state_change = now;
     }
+
+    /// Suspend this fiber waiting for an I/O or blocking native operation.
+    pub fn suspend_for_io(&mut self, kind: IoKind) {
+        self.record_io_start(kind);
+    }
+
+    /// Resume this fiber after an I/O operation completes.
+    pub fn resume_from_io(&mut self) {
+        self.record_io_finish();
+    }
 }
 
 // =========================================================================
@@ -572,8 +595,11 @@ pub fn current_fiber_stats() -> Option<FiberStats> {
 /// Execute a closure with mutable access to the current thread's active fiber.
 pub fn with_current_fiber<R>(f: impl FnOnce(&mut Fiber) -> R) -> Option<R> {
     CURRENT_FIBER.with(|cell| {
-        let mut borrow = cell.borrow_mut();
-        borrow.as_mut().map(f)
+        if let Ok(mut borrow) = cell.try_borrow_mut() {
+            borrow.as_mut().map(f)
+        } else {
+            None
+        }
     })
 }
 
@@ -596,6 +622,64 @@ pub fn record_fiber_yield() {
     with_current_fiber(|fiber| {
         fiber.record_yield();
     });
+}
+
+/// Suspend the currently executing fiber while awaiting an I/O or native blocking operation.
+///
+/// Transitions the fiber to [`FiberState::WaitingIo`], notifies any active [`FiberYielder`]
+/// with [`YieldReason::IoWait`], executes the waiting closure, and restores [`FiberState::Running`]
+/// upon completion, updating fiber I/O wait metrics.
+pub fn suspend_for_io<F, R>(kind: IoKind, wait_fn: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    record_fiber_io_start(kind.clone());
+    CURRENT_YIELDER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if let Some(yielder) = borrow.as_mut() {
+            yielder.suspend(YieldReason::IoWait(kind));
+        }
+    });
+
+    let result = wait_fn();
+
+    record_fiber_io_finish();
+    result
+}
+
+/// Dispatch a blocking native/FFI task into `tokio::task::spawn_blocking` and suspend the calling
+/// fiber via [`suspend_for_io`] until the blocking thread completes.
+pub fn dispatch_blocking_native<F, R>(
+    extension: &str,
+    function: &str,
+    task: F,
+) -> Result<R, RuntimeError>
+where
+    F: FnOnce() -> Result<R, RuntimeError> + Send + 'static,
+    R: Send + 'static,
+{
+    let kind = IoKind::NativeBlocking {
+        extension: extension.to_string(),
+        function: function.to_string(),
+    };
+
+    let rt = crate::vm::facade::tokio_runtime();
+    let _guard = rt.enter();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    tokio::task::spawn_blocking(move || {
+        let res = task();
+        let _ = tx.send(res);
+    });
+
+    suspend_for_io(kind, || {
+        rx.recv().unwrap_or_else(|_| {
+            Err(RuntimeError::custom(format!(
+                "Blocking native task thread for {}::{} disconnected",
+                extension, function
+            )))
+        })
+    })
 }
 
 /// Retrieve a fiber-local variable from the active fiber.
@@ -823,23 +907,22 @@ impl FiberScheduler {
 
         // Run one cooperative quantum/step within the fiber scope guard
         let guard = enter_fiber(fiber);
-        let step_res = {
-            let active_ref = CURRENT_FIBER.with(|cell| {
-                // Safely borrow mutable fiber reference
-                let mut borrow = cell.borrow_mut();
+        let mut task_fiber = CURRENT_FIBER.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| Fiber::new("unnamed"))
+        });
+        let step_res = task(&mut task_fiber);
+        CURRENT_FIBER.with(|cell| {
+            if let Ok(mut borrow) = cell.try_borrow_mut() {
                 if let Some(f) = borrow.as_mut() {
-                    task(f)
-                } else {
-                    FiberStepResult::Error(RuntimeError::new(
-                        RuntimeErrorKind::Custom {
-                            message: "Fiber lost from thread-local storage".to_string(),
-                        },
-                        Span::default(),
-                    ))
+                    for (k, v) in task_fiber.context.all() {
+                        f.context.set(k.clone(), v.clone());
+                    }
                 }
-            });
-            active_ref
-        };
+            }
+        });
 
         let mut fiber = guard.extract();
 

@@ -124,3 +124,24 @@ $lib->def("int SHA256(const char* d, size_t n, unsigned char* md);");
 // Invoke directly from RHP
 $hash = $lib->SHA256("password", 8);
 ```
+
+---
+
+## Blocking Native Extensions Escape Hatch (`#[blocking]`)
+
+Synchronous C/Rust libraries (e.g. image processing with `libvips`/`gd`, password hashing with `argon2id`, or synchronous DNS) can block the worker OS thread and pause all 2,000 fibers.
+
+To prevent thread starvation, annotate native functions with `#[blocking]` or modules with `#![blocking]`:
+
+```rust
+// HeavyImage.rs
+#[blocking]
+pub fn resize(img: &str, w: i32, h: i32) -> String {
+    // Automatically offloaded to tokio::task::spawn_blocking
+    format!("resized_{}_{}x{}", img, w, h)
+}
+```
+
+When invoked, the VM automatically suspends the calling fiber via `suspend_for_io`, hands execution off to Tokio's blocking thread pool, and resumes the fiber once computation completes—leaving the worker OS thread completely free to service other requests.
+
+See the dedicated [Blocking Native/FFI Extensions Escape Hatch](/docs/advanced/blocking-native-ffi) guide for deep architectural details, `FrozenValue` cross-thread safety, and OpenTelemetry fiber tracking.

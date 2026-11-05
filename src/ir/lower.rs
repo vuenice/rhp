@@ -1002,6 +1002,10 @@ impl<'a> IrLowerer<'a> {
                 } else {
                     func.name.name.to_string()
                 };
+                let is_blocking = func.attributes.iter().any(|a| {
+                    let n = a.name.name.strip_prefix('\\').unwrap_or(a.name.name);
+                    n.eq_ignore_ascii_case("blocking")
+                });
                 let func_id = self.compile_function_decl(
                     func,
                     &func_name,
@@ -1011,6 +1015,7 @@ impl<'a> IrLowerer<'a> {
                     false,
                     false,
                     false,
+                    is_blocking,
                 )?;
                 self.module
                     .function_index
@@ -1188,6 +1193,7 @@ impl<'a> IrLowerer<'a> {
                     return_type: RhpType::Void,
                     upvalues: Vec::new(),
                     is_async: false,
+                    is_blocking: false,
                     is_static: false,
                     is_abstract: false,
                     is_final: false,
@@ -3424,6 +3430,7 @@ impl<'a> IrLowerer<'a> {
         is_abstract: bool,
         is_final: bool,
         is_override: bool,
+        is_blocking: bool,
     ) -> Result<FunctionId, IrError> {
         let return_type = func
             .return_type
@@ -3558,6 +3565,7 @@ impl<'a> IrLowerer<'a> {
             return_type,
             upvalues: Vec::new(),
             is_async: func.is_async,
+            is_blocking,
             is_static,
             is_abstract,
             is_final,
@@ -3725,6 +3733,7 @@ impl<'a> IrLowerer<'a> {
             return_type,
             upvalues: upvalues.clone(),
             is_async: false,
+            is_blocking: false,
             is_static: false,
             is_abstract: false,
             is_final: false,
@@ -3857,6 +3866,7 @@ impl<'a> IrLowerer<'a> {
             return_type,
             upvalues: upvalues.to_vec(),
             is_async: false,
+            is_blocking: false,
             is_static,
             is_abstract: false,
             is_final: false,
@@ -3996,6 +4006,10 @@ impl<'a> IrLowerer<'a> {
                     }
 
                     let method_key = format!("{}::{}", class_name, m.function.name.name);
+                    let is_blocking = m.attributes.iter().chain(&m.function.attributes).any(|a| {
+                        let n = a.name.name.strip_prefix('\\').unwrap_or(a.name.name);
+                        n.eq_ignore_ascii_case("blocking")
+                    });
                     let func_id = self.compile_function_decl(
                         &m.function,
                         &method_key,
@@ -4005,6 +4019,7 @@ impl<'a> IrLowerer<'a> {
                         m.is_abstract,
                         m.is_final,
                         m.is_override,
+                        is_blocking,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
                     methods.insert(m.function.name.name.to_string(), func_id);
@@ -4127,6 +4142,10 @@ impl<'a> IrLowerer<'a> {
                 }
                 ClassMemberKind::Method(m) => {
                     let method_key = format!("{}::{}", trait_name, m.function.name.name);
+                    let is_blocking = m.attributes.iter().chain(&m.function.attributes).any(|a| {
+                        let n = a.name.name.strip_prefix('\\').unwrap_or(a.name.name);
+                        n.eq_ignore_ascii_case("blocking")
+                    });
                     let func_id = self.compile_function_decl(
                         &m.function,
                         &method_key,
@@ -4136,6 +4155,7 @@ impl<'a> IrLowerer<'a> {
                         m.is_abstract,
                         m.is_final,
                         m.is_override,
+                        is_blocking,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
                     methods.insert(m.function.name.name.to_string(), func_id);
@@ -4322,6 +4342,10 @@ impl<'a> IrLowerer<'a> {
         let mut methods = HashMap::new();
         for m in &iface.methods {
             let method_key = format!("{}::{}", iface_name, m.function.name.name);
+            let is_blocking = m.attributes.iter().chain(&m.function.attributes).any(|a| {
+                let n = a.name.name.strip_prefix('\\').unwrap_or(a.name.name);
+                n.eq_ignore_ascii_case("blocking")
+            });
             let func_id = self.compile_function_decl(
                 &m.function,
                 &method_key,
@@ -4331,6 +4355,7 @@ impl<'a> IrLowerer<'a> {
                 true,
                 m.is_final,
                 false,
+                is_blocking,
             )?;
             self.module.function_index.insert(method_key, func_id);
             methods.insert(m.function.name.name.to_string(), func_id);
@@ -4387,6 +4412,10 @@ impl<'a> IrLowerer<'a> {
         let mut methods = HashMap::new();
         for m in &enm.methods {
             let method_key = format!("{}::{}", enum_name, m.function.name.name);
+            let is_blocking = m.attributes.iter().chain(&m.function.attributes).any(|a| {
+                let n = a.name.name.strip_prefix('\\').unwrap_or(a.name.name);
+                n.eq_ignore_ascii_case("blocking")
+            });
             let func_id = self.compile_function_decl(
                 &m.function,
                 &method_key,
@@ -4396,6 +4425,7 @@ impl<'a> IrLowerer<'a> {
                 m.is_abstract,
                 m.is_final,
                 false,
+                is_blocking,
             )?;
             self.module.function_index.insert(method_key, func_id);
             methods.insert(m.function.name.name.to_string(), func_id);

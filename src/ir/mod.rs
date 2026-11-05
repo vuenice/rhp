@@ -120,6 +120,7 @@ pub struct CompiledFunction {
     pub return_type: RhpType,
     pub upvalues: Vec<String>,
     pub is_async: bool,
+    pub is_blocking: bool,
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_final: bool,

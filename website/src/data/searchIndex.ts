@@ -229,6 +229,13 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["ffi", "rust", "interop", "native", "c abi", "crates", "plugins", "rust file import", "import", "rs", "cache", "log", "helper class"]
   },
   {
+    title: "Blocking Native/FFI Extensions Escape Hatch",
+    section: "Advanced",
+    description: "Handling synchronous C/Rust libraries (libvips, argon2id, synchronous DNS) with #[blocking], tokio::task::spawn_blocking offloading, and fiber suspend_for_io.",
+    url: "/docs/advanced/blocking-native-ffi",
+    keywords: ["blocking", "#[blocking]", "ffi", "native", "tokio", "spawn_blocking", "fiber", "suspend_for_io", "escape hatch", "libvips", "argon2", "argon2id", "frozenvalue", "io_breakdown", "nativeblocking"]
+  },
+  {
     title: "Compiler & VM Internals",
     section: "Advanced",
     description: "Logos lexer, custom Pratt parser & combinators, strongly-typed AST, register bytecode VM engine, PhpValue, and Cranelift JIT.",

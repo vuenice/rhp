@@ -72,6 +72,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Runtime & Process Architecture", "advanced/runtime-architecture"),
       item("Language Layer & Semantics", "advanced/language-layer"),
       item("FFI & Rust Native Interop", "advanced/ffi-interop"),
+      item("Blocking Native FFI Escape Hatch", "advanced/blocking-native-ffi"),
       item("Compiler & VM Internals", "advanced/compiler-internals"),
       item("Pure Closure Optimization", "advanced/pure-closure-optimization"),
       item("Safe Addition & Arithmetic Semantics", "advanced/safe-addition-semantics"),

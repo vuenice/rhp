@@ -29,6 +29,7 @@ use crate::vm::facade::{
     append_log, parse_json_value, php_value_to_json, register_tier2_plugin_handler,
     Tier2PluginHandler,
 };
+use crate::vm::fiber::dispatch_blocking_native;
 use crate::vm::parent_process::FrozenValue;
 use crate::vm::value::PhpValue;
 
@@ -298,8 +299,17 @@ pub struct LoadedRustModule {
     pub cache_store: Option<Arc<RustCacheStore>>,
     pub log_store: Option<Arc<RustLogStore>>,
     pub custom_functions: HashSet<String>,
+    pub blocking_functions: HashSet<String>,
     pub dl_handle: Option<RawDlHandle>,
     pub call_fn: Option<RhpNativeCallFn>,
+}
+
+impl LoadedRustModule {
+    /// Check if a method on this loaded module is annotated with `#[blocking]`.
+    pub fn is_blocking(&self, method: &str) -> bool {
+        self.blocking_functions.contains(method)
+            || is_native_function_blocking(&self.name, method)
+    }
 }
 
 unsafe impl Send for LoadedRustModule {}
@@ -311,8 +321,97 @@ fn get_loaded_modules() -> &'static RwLock<HashMap<String, Arc<LoadedRustModule>
     LOADED_MODULES.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// Remove all loaded Rust modules (for testing and dev hot reload).
+/// Global registry for native/FFI functions explicitly registered as blocking.
+static BLOCKING_NATIVE_FUNCTIONS: OnceLock<RwLock<HashSet<(String, String)>>> = OnceLock::new();
+
+fn get_blocking_registry() -> &'static RwLock<HashSet<(String, String)>> {
+    BLOCKING_NATIVE_FUNCTIONS.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+/// Mark a native/FFI function as blocking (`#[blocking]`).
+pub fn register_blocking_native_function(extension: &str, function: &str) {
+    if let Ok(mut g) = get_blocking_registry().write() {
+        g.insert((extension.to_string(), function.to_string()));
+    }
+}
+
+/// Check if a native/FFI function is marked as blocking (`#[blocking]`).
+pub fn is_native_function_blocking(extension: &str, function: &str) -> bool {
+    if let Ok(guard) = get_loaded_modules().read() {
+        if let Some(module) = guard.get(extension) {
+            if module.blocking_functions.contains(function) {
+                return true;
+            }
+        }
+    }
+    if let Ok(g) = get_blocking_registry().read() {
+        if g.contains(&(extension.to_string(), function.to_string())) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Clear all registered blocking native functions.
+pub fn clear_blocking_native_functions() {
+    if let Ok(mut g) = get_blocking_registry().write() {
+        g.clear();
+    }
+}
+
+/// In-process native execution callback.
+pub type InProcessNativeHandler =
+    Arc<dyn Fn(&[FrozenValue]) -> Result<FrozenValue, RuntimeError> + Send + Sync>;
+
+static IN_PROCESS_NATIVE_FUNCTIONS: OnceLock<
+    RwLock<HashMap<(String, String), (InProcessNativeHandler, bool)>>,
+> = OnceLock::new();
+
+fn get_in_process_registry(
+) -> &'static RwLock<HashMap<(String, String), (InProcessNativeHandler, bool)>> {
+    IN_PROCESS_NATIVE_FUNCTIONS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Register an in-process native function with optional `#[blocking]` behavior.
+pub fn register_in_process_native_function(
+    facade: &str,
+    method: &str,
+    is_blocking: bool,
+    handler: impl Fn(&[FrozenValue]) -> Result<FrozenValue, RuntimeError> + Send + Sync + 'static,
+) {
+    register_tier2_facade(
+        facade.to_string(),
+        format!("Native extension '{}'", facade),
+        true,
+    );
+    if let Ok(mut g) = get_in_process_registry().write() {
+        g.insert(
+            (facade.to_string(), method.to_string()),
+            (Arc::new(handler), is_blocking),
+        );
+    }
+    if is_blocking {
+        register_blocking_native_function(facade, method);
+    }
+}
+
+/// Retrieve a registered in-process native function.
+pub fn get_in_process_native_function(
+    facade: &str,
+    method: &str,
+) -> Option<(InProcessNativeHandler, bool)> {
+    get_in_process_registry()
+        .read()
+        .ok()
+        .and_then(|g| g.get(&(facade.to_string(), method.to_string())).cloned())
+}
+
+/// Remove all loaded Rust modules and native registrations (for testing and dev hot reload).
 pub fn clear_rust_modules() {
+    clear_blocking_native_functions();
+    if let Ok(mut g) = get_in_process_registry().write() {
+        g.clear();
+    }
     if let Ok(mut guard) = get_loaded_modules().write() {
         #[cfg(unix)]
         for module in guard.values() {
@@ -419,28 +518,101 @@ pub fn resolve_rust_file_path(path_str: &str, base_dir: Option<&Path>) -> Result
     ))
 }
 
-/// Parse function names from a `.rs` file (matches `pub fn <name>`).
-pub fn extract_pub_functions(source: &str) -> HashSet<String> {
+/// Parse public functions and detect `#[blocking]` attribute annotations from a `.rs` file.
+pub fn extract_rust_functions(source: &str) -> (HashSet<String>, HashSet<String>) {
     let mut functions = HashSet::new();
+    let mut blocking_functions = HashSet::new();
+
+    // Check for file/module-level blocking attribute `#![blocking]`
+    let module_level_blocking = source.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("#![blocking]")
+            || t.starts_with("#![Blocking]")
+            || t.starts_with("#![rhp::blocking]")
+    });
+
+    let mut pending_blocking = module_level_blocking;
+
     for line in source.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("pub fn ") {
-            if let Some(ident) = rest.split('(').next() {
-                let name = ident.trim().trim_start_matches("r#");
-                if !name.is_empty() {
-                    functions.insert(name.to_string());
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Line comment without attribute
+        if trimmed.starts_with("//") && !trimmed.contains("#[") {
+            continue;
+        }
+
+        let has_blocking_attr = trimmed.contains("#[blocking]")
+            || trimmed.contains("#[Blocking]")
+            || trimmed.contains("#[rhp::blocking]")
+            || trimmed.contains("#[blocking ]")
+            || trimmed.contains("#[ blocking ]")
+            || trimmed.contains("#[blocking()]");
+
+        if has_blocking_attr {
+            pending_blocking = true;
+        }
+
+        let fn_ident = if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+            rest.split('(').next()
+        } else if let Some(rest) = trimmed.strip_prefix("pub extern \"C\" fn ") {
+            rest.split('(').next()
+        } else if let Some(rest) = trimmed.strip_prefix("pub unsafe extern \"C\" fn ") {
+            rest.split('(').next()
+        } else if let Some(rest) = trimmed.strip_prefix("pub unsafe fn ") {
+            rest.split('(').next()
+        } else if let Some(idx) = trimmed.find("pub fn ") {
+            trimmed[idx + 7..].split('(').next()
+        } else if let Some(idx) = trimmed.find("pub extern \"C\" fn ") {
+            trimmed[idx + 18..].split('(').next()
+        } else {
+            None
+        };
+
+        if let Some(ident) = fn_ident {
+            let name = ident.trim().trim_start_matches("r#");
+            if !name.is_empty() {
+                functions.insert(name.to_string());
+                if pending_blocking || module_level_blocking {
+                    blocking_functions.insert(name.to_string());
                 }
             }
-        } else if let Some(rest) = trimmed.strip_prefix("pub extern \"C\" fn ") {
-            if let Some(ident) = rest.split('(').next() {
-                let name = ident.trim().trim_start_matches("r#");
-                if !name.is_empty() {
-                    functions.insert(name.to_string());
-                }
+            pending_blocking = module_level_blocking;
+        } else if !trimmed.starts_with("#[")
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with("/*")
+            && !trimmed.starts_with('*')
+        {
+            if !has_blocking_attr {
+                pending_blocking = module_level_blocking;
             }
         }
     }
-    functions
+
+    (functions, blocking_functions)
+}
+
+/// Parse function names from a `.rs` file (matches `pub fn <name>`).
+pub fn extract_pub_functions(source: &str) -> HashSet<String> {
+    extract_rust_functions(source).0
+}
+
+/// Extract function names annotated with `#[blocking]` from a `.rs` file.
+pub fn extract_blocking_functions(source: &str) -> HashSet<String> {
+    extract_rust_functions(source).1
+}
+
+/// Sanitize `#[blocking]` annotations from Rust source code so `rustc` will not reject them
+/// as unknown attributes when compiling dynamic libraries (`cdylib`).
+pub fn sanitize_rust_source_for_rustc(source: &str) -> String {
+    let re = regex::Regex::new(r"(?i)#\[\s*(?:rhp::)?blocking(?:\([^)]*\))?\s*\]").unwrap();
+    let res = re.replace_all(source, "/* #[blocking] */");
+    let re_inner =
+        regex::Regex::new(r"(?i)#!\s*\[\s*(?:rhp::)?blocking(?:\([^)]*\))?\s*\]").unwrap();
+    re_inner.replace_all(&res, "/* #![blocking] */").into_owned()
 }
 
 // =========================================================================
@@ -490,10 +662,19 @@ fn try_compile_cdylib(
         }
     }
 
-    // 3. Prepare wrapper source
-    let abs_rs_path = match rs_path.canonicalize() {
+    // 3. Prepare wrapper source with sanitized code
+    let sanitized_source = sanitize_rust_source_for_rustc(source);
+    let target_rs_path = if sanitized_source != source {
+        let clean_path = cache_dir.join(format!("{}_{}_clean.rs", stem, hash));
+        let _ = fs::write(&clean_path, &sanitized_source);
+        clean_path
+    } else {
+        rs_path.to_path_buf()
+    };
+
+    let abs_rs_path = match target_rs_path.canonicalize() {
         Ok(p) => p,
-        Err(_) => rs_path.to_path_buf(),
+        Err(_) => target_rs_path,
     };
     let abs_str = abs_rs_path.to_string_lossy();
 
@@ -506,7 +687,7 @@ fn try_compile_cdylib(
         let mut dispatch_arms = String::new();
         for fn_name in functions {
             dispatch_arms.push_str(&format!(
-                "        \"{name}\" => user_code::{name}(args_json),\n",
+                "        \"{name}\" => format!(\"{{}}\", user_code::{name}(args_json)),\n",
                 name = fn_name
             ));
         }
@@ -610,7 +791,10 @@ pub fn load_and_register_rust_file(
         .and_then(|p| fs::read_to_string(p).ok())
         .unwrap_or_default();
 
-    let custom_fns = extract_pub_functions(&source_content);
+    let (custom_fns, blocking_fns) = extract_rust_functions(&source_content);
+    for bfn in &blocking_fns {
+        register_blocking_native_function(&facade_name, bfn);
+    }
 
     // 3. Attempt native compilation via rustc cdylib if available
     #[cfg(unix)]
@@ -681,6 +865,7 @@ pub fn load_and_register_rust_file(
         cache_store: final_cache.clone(),
         log_store: final_log.clone(),
         custom_functions: custom_fns,
+        blocking_functions: blocking_fns.clone(),
         dl_handle,
         call_fn: rhp_call_fn,
     });
@@ -700,8 +885,33 @@ pub fn load_and_register_rust_file(
     let handler_cache = final_cache;
     let handler_log = final_log;
     let handler_facade = facade_name.clone();
+    let handler_blocking_fns = blocking_fns;
 
     let handler: Tier2PluginHandler = Arc::new(move |method, args, span| {
+        let is_blocking = handler_blocking_fns.contains(method)
+            || is_native_function_blocking(&handler_facade, method);
+
+        // Check if an in-process native function was registered
+        if let Some((in_proc_fn, in_proc_blocking)) =
+            get_in_process_native_function(&handler_facade, method)
+        {
+            let blocking = is_blocking || in_proc_blocking;
+            let frozen_args: Vec<FrozenValue> =
+                args.iter().map(FrozenValue::from_php_value).collect();
+            if blocking {
+                let fn_clone = in_proc_fn.clone();
+                let facade_owned = handler_facade.clone();
+                let method_owned = method.to_string();
+                let frozen_res = dispatch_blocking_native(&facade_owned, &method_owned, move || {
+                    fn_clone(&frozen_args)
+                })?;
+                return Ok(frozen_res.to_php_value());
+            } else {
+                let frozen_res = in_proc_fn(&frozen_args)?;
+                return Ok(frozen_res.to_php_value());
+            }
+        }
+
         // A. If compiled cdylib is loaded, invoke via rhp_call
         if let Some(call_fn) = rhp_call_fn {
             let args_json = format!(
@@ -711,152 +921,83 @@ pub fn load_and_register_rust_file(
                     .collect::<Vec<_>>()
                     .join(",")
             );
-            let c_method = std::ffi::CString::new(method).unwrap_or_default();
-            let c_args = std::ffi::CString::new(args_json).unwrap_or_default();
 
-            let res_ptr = call_fn(c_method.as_ptr(), c_args.as_ptr());
-            if !res_ptr.is_null() {
-                let res_str = unsafe {
-                    std::ffi::CStr::from_ptr(res_ptr)
-                        .to_string_lossy()
-                        .into_owned()
-                };
+            if is_blocking {
+                let c_method_str = method.to_string();
+                let facade_name_str = handler_facade.clone();
+                let c_method_inner = c_method_str.clone();
+                let res_str = dispatch_blocking_native(&facade_name_str, &c_method_str, move || {
+                    let c_method = std::ffi::CString::new(c_method_inner).unwrap_or_default();
+                    let c_args = std::ffi::CString::new(args_json).unwrap_or_default();
+                    let res_ptr = call_fn(c_method.as_ptr(), c_args.as_ptr());
+                    if !res_ptr.is_null() {
+                        let s = unsafe {
+                            std::ffi::CStr::from_ptr(res_ptr)
+                                .to_string_lossy()
+                                .into_owned()
+                        };
+                        Ok(s)
+                    } else {
+                        Ok("null".to_string())
+                    }
+                })?;
+
                 if let Ok(parsed) = parse_json_value(&res_str) {
                     return Ok(parsed);
                 }
                 return Ok(PhpValue::string(res_str));
-            }
-        }
+            } else {
+                let c_method = std::ffi::CString::new(method).unwrap_or_default();
+                let c_args = std::ffi::CString::new(args_json).unwrap_or_default();
 
-        // B. In-process Cache execution
-        if let Some(ref cache) = handler_cache {
-            match method {
-                "get" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let default = args.get(1).cloned();
-                    return Ok(cache.get(&key, default));
-                }
-                "set" | "put" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
-                    let ttl = args.get(2).and_then(|v| match v {
-                        PhpValue::Int(n) if *n > 0 => Some(*n as u64),
-                        PhpValue::RustInt { value, .. } if *value > 0 => Some(*value as u64),
-                        _ => None,
-                    });
-                    return Ok(PhpValue::Bool(cache.set(&key, &val, ttl)));
-                }
-                "has" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    return Ok(PhpValue::Bool(cache.has(&key)));
-                }
-                "delete" | "forget" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    return Ok(PhpValue::Bool(cache.delete(&key)));
-                }
-                "clear" | "flush" => {
-                    return Ok(PhpValue::Bool(cache.clear()));
-                }
-                "increment" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let amt = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(n) => Some(*n as i64),
-                        PhpValue::RustInt { value, .. } => Some(*value as i64),
-                        _ => None,
-                    }).unwrap_or(1);
-                    return Ok(PhpValue::Int(cache.increment(&key, amt) as i32));
-                }
-                "decrement" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let amt = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(n) => Some(*n as i64),
-                        PhpValue::RustInt { value, .. } => Some(*value as i64),
-                        _ => None,
-                    }).unwrap_or(1);
-                    return Ok(PhpValue::Int(cache.decrement(&key, amt) as i32));
-                }
-                "add" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
-                    let ttl = args.get(2).and_then(|v| match v {
-                        PhpValue::Int(n) if *n > 0 => Some(*n as u64),
-                        _ => None,
-                    });
-                    return Ok(PhpValue::Bool(cache.add(&key, &val, ttl)));
-                }
-                "pull" => {
-                    let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let default = args.get(1).cloned();
-                    return Ok(cache.pull(&key, default));
-                }
-                "all" => {
-                    return Ok(PhpValue::dict(cache.all()));
-                }
-                "keys" => {
-                    let keys: Vec<PhpValue> = cache.keys().into_iter().map(PhpValue::string).collect();
-                    return Ok(PhpValue::list(keys));
-                }
-                "count" => {
-                    return Ok(PhpValue::Int(cache.count() as i32));
-                }
-                _ => {}
-            }
-        }
-
-        // C. In-process Log execution
-        if let Some(ref log) = handler_log {
-            match method {
-                "info" | "error" | "warn" | "warning" | "debug" | "notice" | "critical" | "emergency" | "alert" => {
-                    let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let ctx = args.get(1);
-                    let lvl = if method == "warning" { "warn" } else { method };
-                    log.log(lvl, &msg, ctx);
-                    return Ok(PhpValue::Null);
-                }
-                "log" => {
-                    let lvl = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "info".to_string());
-                    let msg = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
-                    let ctx = args.get(2);
-                    log.log(&lvl, &msg, ctx);
-                    return Ok(PhpValue::Null);
-                }
-                "history" => {
-                    let entries = log.history();
-                    let list: Vec<PhpValue> = entries
-                        .into_iter()
-                        .map(|e| {
-                            let mut d = IndexMap::new();
-                            d.insert("level".to_string(), PhpValue::string(e.level));
-                            d.insert("message".to_string(), PhpValue::string(e.message));
-                            d.insert("context".to_string(), e.context.map(|c| c.to_php_value()).unwrap_or(PhpValue::Null));
-                            d.insert("channel".to_string(), PhpValue::string(e.channel));
-                            d.insert("timestamp".to_string(), PhpValue::Int(e.timestamp_ms as i32));
-                            PhpValue::dict(d)
-                        })
-                        .collect();
-                    return Ok(PhpValue::list(list));
-                }
-                "channel" => {
-                    if let Some(ch) = args.first().map(|v| v.to_php_string()) {
-                        log.channel(&ch);
+                let res_ptr = call_fn(c_method.as_ptr(), c_args.as_ptr());
+                if !res_ptr.is_null() {
+                    let res_str = unsafe {
+                        std::ffi::CStr::from_ptr(res_ptr)
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    if let Ok(parsed) = parse_json_value(&res_str) {
+                        return Ok(parsed);
                     }
-                    return Ok(PhpValue::Null);
+                    return Ok(PhpValue::string(res_str));
                 }
-                "clear" => {
-                    log.clear();
-                    return Ok(PhpValue::Null);
-                }
-                _ => {}
             }
         }
 
-        Err(RuntimeError::new(
-            RuntimeErrorKind::UndefinedFacadeMethod {
-                facade: handler_facade.clone(),
-                method: method.to_string(),
-            },
+        // B & C. In-process Cache / Log execution
+        if is_blocking {
+            let method_owned = method.to_string();
+            let facade_name_str = handler_facade.clone();
+            let cache_clone = handler_cache.clone();
+            let log_clone = handler_log.clone();
+            let frozen_args: Vec<FrozenValue> =
+                args.iter().map(FrozenValue::from_php_value).collect();
+            let method_call = method_owned.clone();
+            let facade_call = facade_name_str.clone();
+            let frozen_res = dispatch_blocking_native(&facade_name_str, &method_owned, move || {
+                let thawed_args: Vec<PhpValue> =
+                    frozen_args.iter().map(|f| f.to_php_value()).collect();
+                execute_in_process_cache_or_log(
+                    &method_call,
+                    &thawed_args,
+                    &cache_clone,
+                    &log_clone,
+                    &facade_call,
+                    span,
+                ).map(|val| FrozenValue::from_php_value(&val))
+            })?;
+            return Ok(frozen_res.to_php_value());
+        }
+
+        execute_in_process_cache_or_log(
+            method,
+            args,
+            &handler_cache,
+            &handler_log,
+            &handler_facade,
             span,
-        ))
+        )
     });
 
     register_tier2_plugin_handler(
@@ -867,4 +1008,141 @@ pub fn load_and_register_rust_file(
     );
 
     Ok(facade_name)
+}
+
+fn execute_in_process_cache_or_log(
+    method: &str,
+    args: &[PhpValue],
+    cache: &Option<Arc<RustCacheStore>>,
+    log: &Option<Arc<RustLogStore>>,
+    facade_name: &str,
+    span: crate::lexer::span::Span,
+) -> Result<PhpValue, RuntimeError> {
+    if let Some(cache) = cache {
+        match method {
+            "get" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let default = args.get(1).cloned();
+                return Ok(cache.get(&key, default));
+            }
+            "set" | "put" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                let ttl = args.get(2).and_then(|v| match v {
+                    PhpValue::Int(n) if *n > 0 => Some(*n as u64),
+                    PhpValue::RustInt { value, .. } if *value > 0 => Some(*value as u64),
+                    _ => None,
+                });
+                return Ok(PhpValue::Bool(cache.set(&key, &val, ttl)));
+            }
+            "has" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                return Ok(PhpValue::Bool(cache.has(&key)));
+            }
+            "delete" | "forget" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                return Ok(PhpValue::Bool(cache.delete(&key)));
+            }
+            "clear" | "flush" => {
+                return Ok(PhpValue::Bool(cache.clear()));
+            }
+            "increment" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let amt = args.get(1).and_then(|v| match v {
+                    PhpValue::Int(n) => Some(*n as i64),
+                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                    _ => None,
+                }).unwrap_or(1);
+                return Ok(PhpValue::Int(cache.increment(&key, amt) as i32));
+            }
+            "decrement" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let amt = args.get(1).and_then(|v| match v {
+                    PhpValue::Int(n) => Some(*n as i64),
+                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                    _ => None,
+                }).unwrap_or(1);
+                return Ok(PhpValue::Int(cache.decrement(&key, amt) as i32));
+            }
+            "add" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                let ttl = args.get(2).and_then(|v| match v {
+                    PhpValue::Int(n) if *n > 0 => Some(*n as u64),
+                    _ => None,
+                });
+                return Ok(PhpValue::Bool(cache.add(&key, &val, ttl)));
+            }
+            "pull" => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let default = args.get(1).cloned();
+                return Ok(cache.pull(&key, default));
+            }
+            "all" => {
+                return Ok(PhpValue::dict(cache.all()));
+            }
+            "keys" => {
+                let keys: Vec<PhpValue> = cache.keys().into_iter().map(PhpValue::string).collect();
+                return Ok(PhpValue::list(keys));
+            }
+            "count" => {
+                return Ok(PhpValue::Int(cache.count() as i32));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(log) = log {
+        match method {
+            "info" | "error" | "warn" | "warning" | "debug" | "notice" | "critical" | "emergency" | "alert" => {
+                let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                let ctx = args.get(1);
+                let lvl = if method == "warning" { "warn" } else { method };
+                log.log(lvl, &msg, ctx);
+                return Ok(PhpValue::Null);
+            }
+            "log" => {
+                let lvl = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "info".to_string());
+                let msg = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                let ctx = args.get(2);
+                log.log(&lvl, &msg, ctx);
+                return Ok(PhpValue::Null);
+            }
+            "history" => {
+                let entries = log.history();
+                let list: Vec<PhpValue> = entries
+                    .into_iter()
+                    .map(|e| {
+                        let mut d = IndexMap::new();
+                        d.insert("level".to_string(), PhpValue::string(e.level));
+                        d.insert("message".to_string(), PhpValue::string(e.message));
+                        d.insert("context".to_string(), e.context.map(|c| c.to_php_value()).unwrap_or(PhpValue::Null));
+                        d.insert("channel".to_string(), PhpValue::string(e.channel));
+                        d.insert("timestamp".to_string(), PhpValue::Int(e.timestamp_ms as i32));
+                        PhpValue::dict(d)
+                    })
+                    .collect();
+                return Ok(PhpValue::list(list));
+            }
+            "channel" => {
+                if let Some(ch) = args.first().map(|v| v.to_php_string()) {
+                    log.channel(&ch);
+                }
+                return Ok(PhpValue::Null);
+            }
+            "clear" => {
+                log.clear();
+                return Ok(PhpValue::Null);
+            }
+            _ => {}
+        }
+    }
+
+    Err(RuntimeError::new(
+        RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: facade_name.to_string(),
+            method: method.to_string(),
+        },
+        span,
+    ))
 }

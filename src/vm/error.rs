@@ -215,6 +215,11 @@ impl RuntimeError {
         }
     }
 
+    /// Helper to construct a custom RuntimeError with default span.
+    pub fn custom(message: impl Into<String>) -> Self {
+        Self::new(RuntimeErrorKind::Custom { message: message.into() }, Span::default())
+    }
+
     pub fn with_stack_trace(
         kind: RuntimeErrorKind,
         span: Span,

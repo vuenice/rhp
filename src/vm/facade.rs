@@ -63,6 +63,11 @@ pub trait PluginFacade: Send + Sync {
         true
     }
 
+    /// Whether a specific method on this plugin is blocking and should be dispatched to `tokio::task::spawn_blocking`.
+    fn is_blocking(&self, _method: &str) -> bool {
+        false
+    }
+
     /// Execute a static call on this plugin facade (`Plugin::method(args...)`).
     fn call(&self, method: &str, args: &[PhpValue], span: Span) -> Result<PhpValue, RuntimeError>;
 }
@@ -96,7 +101,24 @@ pub fn register_tier2_plugin(plugin: impl PluginFacade + 'static) {
     let macros = arc.supports_macros();
     let p_clone = Arc::clone(&arc);
     let handler: Tier2PluginHandler = Arc::new(move |method, args, span| {
-        p_clone.call(method, args, span)
+        if p_clone.is_blocking(method) {
+            let p_inner = Arc::clone(&p_clone);
+            let m_str = method.to_string();
+            let f_str = p_inner.name().to_string();
+            let frozen_args: Vec<crate::vm::parent_process::FrozenValue> =
+                args.iter().map(crate::vm::parent_process::FrozenValue::from_php_value).collect();
+            let method_call = m_str.clone();
+            let frozen_res = crate::vm::fiber::dispatch_blocking_native(&f_str, &m_str, move || {
+                let thawed_args: Vec<PhpValue> =
+                    frozen_args.iter().map(|f| f.to_php_value()).collect();
+                p_inner
+                    .call(&method_call, &thawed_args, span)
+                    .map(|val| crate::vm::parent_process::FrozenValue::from_php_value(&val))
+            })?;
+            Ok(frozen_res.to_php_value())
+        } else {
+            p_clone.call(method, args, span)
+        }
     });
     register_tier2_plugin_handler(&name, &desc, macros, handler);
 }
@@ -347,6 +369,26 @@ pub fn dispatch_facade_call(
         "Compress" => dispatch_compress(method, args),
         "Uniq" => crate::vm::uniq::dispatch_uniq(method, args),
         _ => {
+            if let Some((in_proc_fn, is_blocking)) =
+                crate::vm::rust_loader::get_in_process_native_function(facade, method)
+            {
+                let frozen_args: Vec<crate::vm::parent_process::FrozenValue> =
+                    args.iter().map(crate::vm::parent_process::FrozenValue::from_php_value).collect();
+                if is_blocking {
+                    let facade_owned = facade.to_string();
+                    let method_owned = method.to_string();
+                    let frozen_res = crate::vm::fiber::dispatch_blocking_native(
+                        &facade_owned,
+                        &method_owned,
+                        move || in_proc_fn(&frozen_args),
+                    )?;
+                    return Ok(frozen_res.to_php_value());
+                } else {
+                    let frozen_res = in_proc_fn(&frozen_args)?;
+                    return Ok(frozen_res.to_php_value());
+                }
+            }
+
             if let Ok(g) = get_tier2_plugins().read() {
                 if let Some(handler) = g.get(facade) {
                     return handler(method, args, span);
