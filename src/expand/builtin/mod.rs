@@ -16,7 +16,7 @@ pub fn register_builtins(registry: &mut ExpanderRegistry) -> Result<(), Diagnost
 
     // Declarative compile-time metadata & DI attributes
     for name in &[
-        "Singleton", "Route", "Get", "Post", "Put", "Delete", "Patch",
+        "Shared", "Route", "Get", "Post", "Put", "Delete", "Patch",
         "Command", "Listener", "Policy", "Attribute",
     ] {
         registry.register_attribute(Box::new(attributes::DeclarativeExpander::new(name)))?;

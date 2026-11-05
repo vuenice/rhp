@@ -1,0 +1,536 @@
+{
+  "total_files_scanned": 3094,
+  "total_closures": 9462,
+  "pure_total": 9274,
+  "pure_pct": 98.01,
+  "impure_total": 188,
+  "impure_pct": 1.99,
+  "categories": {
+    "Pure_NonCapturing": {
+      "count": 4588,
+      "pct": 48.49,
+      "description": "0 captured variables, no $this. Zero allocation, pure raw Cranelift function pointer."
+    },
+    "Pure_ThisCaptureOnly": {
+      "count": 3528,
+      "pct": 37.29,
+      "description": "Captures only $this by immutable object reference. No mutable outer local variables."
+    },
+    "Pure_ValueCaptureOnly": {
+      "count": 948,
+      "pct": 10.02,
+      "description": "Captures outer variables by immutable value-copy. No $this, no references."
+    },
+    "Pure_ValueAndThisCapture": {
+      "count": 210,
+      "pct": 2.22,
+      "description": "Captures $this and outer variables by value copy. No mutable references."
+    },
+    "Impure_ReferenceCapture": {
+      "count": 188,
+      "pct": 1.99,
+      "description": "Captures outer variables by reference use (&$var). Escaping mutable reference."
+    },
+    "Impure_GlobalAccess": {
+      "count": 0,
+      "pct": 0.0,
+      "description": "Accesses global $var or $GLOBALS."
+    }
+  },
+  "pure_val_capture_counts": {
+    "1": 753,
+    "2": 141,
+    "3": 30,
+    "4": 17,
+    "5": 5,
+    "6": 1,
+    "16": 1
+  },
+  "dir_breakdown": {
+    "tests": {
+      "total": 6607,
+      "pure": 6477,
+      "impure_ref": 130,
+      "non_cap": 2495
+    },
+    "database": {
+      "total": 901,
+      "pure": 899,
+      "impure_ref": 2,
+      "non_cap": 882
+    },
+    "app/Http": {
+      "total": 622,
+      "pure": 618,
+      "impure_ref": 4,
+      "non_cap": 334
+    },
+    "app/Filament": {
+      "total": 319,
+      "pure": 319,
+      "impure_ref": 0,
+      "non_cap": 273
+    },
+    "app/Services": {
+      "total": 298,
+      "pure": 286,
+      "impure_ref": 12,
+      "non_cap": 138
+    },
+    "app/Models": {
+      "total": 165,
+      "pure": 165,
+      "impure_ref": 0,
+      "non_cap": 118
+    },
+    "app/Jobs": {
+      "total": 124,
+      "pure": 108,
+      "impure_ref": 16,
+      "non_cap": 77
+    },
+    "app/Console": {
+      "total": 120,
+      "pure": 103,
+      "impure_ref": 17,
+      "non_cap": 55
+    },
+    "routes": {
+      "total": 91,
+      "pure": 91,
+      "impure_ref": 0,
+      "non_cap": 88
+    },
+    "app/Providers": {
+      "total": 45,
+      "pure": 45,
+      "impure_ref": 0,
+      "non_cap": 40
+    },
+    "app": {
+      "total": 39,
+      "pure": 38,
+      "impure_ref": 1,
+      "non_cap": 19
+    },
+    "app/Repo": {
+      "total": 26,
+      "pure": 25,
+      "impure_ref": 1,
+      "non_cap": 12
+    },
+    "app/Actions": {
+      "total": 17,
+      "pure": 17,
+      "impure_ref": 0,
+      "non_cap": 4
+    },
+    "app/Hostings": {
+      "total": 17,
+      "pure": 16,
+      "impure_ref": 1,
+      "non_cap": 8
+    },
+    "resources": {
+      "total": 15,
+      "pure": 15,
+      "impure_ref": 0,
+      "non_cap": 15
+    },
+    "app/Mcp": {
+      "total": 15,
+      "pure": 15,
+      "impure_ref": 0,
+      "non_cap": 9
+    },
+    "app/Traits": {
+      "total": 11,
+      "pure": 9,
+      "impure_ref": 2,
+      "non_cap": 5
+    },
+    "app/Support": {
+      "total": 7,
+      "pure": 7,
+      "impure_ref": 0,
+      "non_cap": 5
+    },
+    "app/Listeners": {
+      "total": 7,
+      "pure": 7,
+      "impure_ref": 0,
+      "non_cap": 3
+    },
+    "bootstrap": {
+      "total": 4,
+      "pure": 4,
+      "impure_ref": 0,
+      "non_cap": 4
+    },
+    "app/Mail": {
+      "total": 4,
+      "pure": 3,
+      "impure_ref": 1,
+      "non_cap": 0
+    },
+    "app/Rules": {
+      "total": 3,
+      "pure": 3,
+      "impure_ref": 0,
+      "non_cap": 1
+    },
+    "tools": {
+      "total": 2,
+      "pure": 1,
+      "impure_ref": 1,
+      "non_cap": 1
+    },
+    "config": {
+      "total": 1,
+      "pure": 1,
+      "impure_ref": 0,
+      "non_cap": 1
+    },
+    "app/Observers": {
+      "total": 1,
+      "pure": 1,
+      "impure_ref": 0,
+      "non_cap": 1
+    },
+    "app/Facades": {
+      "total": 1,
+      "pure": 1,
+      "impure_ref": 0,
+      "non_cap": 0
+    }
+  },
+  "impure_samples": [
+    {
+      "file": "tests/Feature/DnsRecordValueRedirectTest.php",
+      "line": 16,
+      "ref_uses": [
+        "$failures"
+      ],
+      "val_uses": [],
+      "snippet": "{ $failures [ ] = $message ; }"
+    },
+    {
+      "file": "tests/Feature/HeartbeatSqliteTest.php",
+      "line": 350,
+      "ref_uses": [
+        "$readCount",
+        "$writeCount",
+        "$errors"
+      ],
+      "val_uses": [],
+      "snippet": "{ $readCount += $chunk -> count ( ) ; try { $newConnectId = 9 0"
+    },
+    {
+      "file": "tests/Feature/HeartbeatSqliteTest.php",
+      "line": 499,
+      "ref_uses": [
+        "$seenIds"
+      ],
+      "val_uses": [],
+      "snippet": "{ foreach ( $chunk as $row ) { $seenIds [ ] = $row -> id"
+    },
+    {
+      "file": "tests/Feature/Web/TeamControllerTest.php",
+      "line": 830,
+      "ref_uses": [
+        "$calls"
+      ],
+      "val_uses": [],
+      "snippet": "{ $calls [ ] = $in ; return [ 'cloud_task_id' => 'ct-' . $in ["
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 347,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 438,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 501,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 567,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 635,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 719,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 1433,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 1848,
+      "ref_uses": [
+        "$site"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice",
+        "$createdAt"
+      ],
+      "snippet": "{ $site = Site :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 1943,
+      "ref_uses": [
+        "$site"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice",
+        "$createdAt"
+      ],
+      "snippet": "{ $site = Site :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 2046,
+      "ref_uses": [
+        "$site"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice",
+        "$createdAt"
+      ],
+      "snippet": "{ $site = Site :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 2194,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$stripeProductPrice",
+        "$createdAt"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 2216,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [],
+      "snippet": "{ $connect -> delete ( ) ; }"
+    },
+    {
+      "file": "tests/Feature/Jobs/StartUsageRecordsTest.php",
+      "line": 2245,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [],
+      "snippet": "{ $connect -> restore ( ) ; }"
+    },
+    {
+      "file": "tests/Feature/Jobs/EndUsageRecordsTest.php",
+      "line": 124,
+      "ref_uses": [
+        "$paidConnect"
+      ],
+      "val_uses": [
+        "$team",
+        "$paidPlan",
+        "$deletedAt"
+      ],
+      "snippet": "{ $paidConnect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/EndUsageRecordsTest.php",
+      "line": 135,
+      "ref_uses": [
+        "$freeConnect"
+      ],
+      "val_uses": [
+        "$team",
+        "$freePlan",
+        "$deletedAt",
+        "$user"
+      ],
+      "snippet": "{ $freeConnect = Connect :: factory ( ) -> create ( [ 'user_id' => $user"
+    },
+    {
+      "file": "tests/Feature/Jobs/EndUsageRecordsTest.php",
+      "line": 468,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$user",
+        "$paidPlan"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'user_id' => $user"
+    },
+    {
+      "file": "tests/Feature/Jobs/EndUsageRecordsTest.php",
+      "line": 560,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$team",
+        "$paidPlan"
+      ],
+      "snippet": "{ $connect = Connect :: factory ( ) -> create ( [ 'team_id' => $team"
+    },
+    {
+      "file": "tests/Feature/Jobs/EndUsageRecordsTest.php",
+      "line": 577,
+      "ref_uses": [
+        "$connect"
+      ],
+      "val_uses": [
+        "$freePlan"
+      ],
+      "snippet": "{ $connect -> update ( [ 'stripe_product_price_id' => $freePlan -> id ] ) ; }"
+    },
+    {
+      "file": "tests/Feature/Billing/CancelSubscriptionStripeFlowTest.php",
+      "line": 96,
+      "ref_uses": [
+        "$sent"
+      ],
+      "val_uses": [],
+      "snippet": "{ $data = ( new ReflectionProperty ( $job , 'data' ) ) -> getValue ("
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 125,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 239,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 309,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 391,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 504,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 554,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    },
+    {
+      "file": "tests/Feature/Api/SupportControllerTest.php",
+      "line": 578,
+      "ref_uses": [
+        "$capturedBody"
+      ],
+      "val_uses": [],
+      "snippet": "{ $capturedBody = $request -> data ( ) ; return Http :: response ( ["
+    }
+  ]
+}

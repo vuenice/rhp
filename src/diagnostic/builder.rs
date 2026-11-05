@@ -510,9 +510,13 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::TraitAdaptationError { .. } => "RHP0305",
         TypeErrorKind::StaticFacadeInstantiationForbidden { .. } => "RHP0110",
         TypeErrorKind::StaticFacadeInheritanceForbidden { .. } => "RHP0111",
-        TypeErrorKind::NonStaticSingletonMethodCallForbidden { .. } => "RHP0114",
-        TypeErrorKind::SingletonInstantiationForbidden { .. } => "RHP0113",
-        TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "RHP0115",
+        TypeErrorKind::SharedInstantiationForbidden { .. } => "RHP0113",
+        TypeErrorKind::SharedClassInheritedMutablePropertyForbidden { .. }
+        | TypeErrorKind::SharedClassMutablePropertyForbidden { .. }
+        | TypeErrorKind::SharedClassCapturesScopedService { .. }
+        | TypeErrorKind::SharedFieldClosureCaptureForbidden { .. }
+        | TypeErrorKind::SharedClassMutableStaticForbidden { .. } => "RHP0114",
+        TypeErrorKind::NonSharedExtendsSharedForbidden { .. } => "RHP0115",
         TypeErrorKind::CannotInstantiateAbstractClass { .. } => "RHP0306",
         TypeErrorKind::CannotInstantiateInterface { .. } => "RHP0307",
         TypeErrorKind::CannotInstantiateTrait { .. } => "RHP0308",

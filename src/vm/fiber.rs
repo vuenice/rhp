@@ -491,12 +491,57 @@ impl Fiber {
 // Thread-Local Fiber Management & Scoping
 // =========================================================================
 
+/// Reason a fiber yielded execution cooperatively or due to instruction budgeting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum YieldReason {
+    /// Cooperative preemption triggered by instruction budget / tick exhaustion.
+    CooperativeYield,
+    /// Explicit manual yield by userland code (`Fiber::yield()`).
+    ManualYield,
+    /// Fiber suspended waiting for an asynchronous I/O operation.
+    IoWait(IoKind),
+}
+
+/// Trait interface for custom fiber suspend/reschedule handlers.
+pub trait FiberYielder {
+    fn suspend(&mut self, reason: YieldReason);
+}
+
+impl<F: FnMut(YieldReason)> FiberYielder for F {
+    fn suspend(&mut self, reason: YieldReason) {
+        self(reason);
+    }
+}
+
 thread_local! {
     /// Active fiber currently executing on this OS worker thread.
     static CURRENT_FIBER: RefCell<Option<Fiber>> = const { RefCell::new(None) };
 
     /// Fiber stack allowing safe nested fiber execution (e.g., child fibers, defer hooks).
     static FIBER_STACK: RefCell<Vec<Fiber>> = const { RefCell::new(Vec::new()) };
+
+    /// Optional thread-local yielder callback invoked on instruction budget preemption or cooperative yield.
+    pub static CURRENT_YIELDER: RefCell<Option<Box<dyn FiberYielder + 'static>>> = const { RefCell::new(None) };
+}
+
+/// Set or clear the thread-local cooperative fiber yielder.
+pub fn set_current_yielder(yielder: Option<Box<dyn FiberYielder + 'static>>) {
+    CURRENT_YIELDER.with(|cell| {
+        *cell.borrow_mut() = yielder;
+    });
+}
+
+/// Trigger a cooperative yield event, updating fiber telemetry, notifying any registered yielder,
+/// and yielding the OS thread timeslice.
+pub fn trigger_cooperative_yield(reason: YieldReason) {
+    record_fiber_yield();
+    CURRENT_YIELDER.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if let Some(yielder) = borrow.as_mut() {
+            yielder.suspend(reason);
+        }
+    });
+    std::thread::yield_now();
 }
 
 /// Check if the current worker thread is executing inside a fiber context.

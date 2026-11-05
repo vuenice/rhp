@@ -54,7 +54,9 @@ pub struct AttributeRegistry {
     pub listeners: Vec<DiscoveredListener>,
     /// Discovered policies from `#[Policy]`.
     pub policies: Vec<DiscoveredPolicy>,
-    /// Classes declared with `#[Singleton]` or keyword `singleton`.
+    /// Classes declared with `#[Shared]` or keyword `shared`.
+    pub shared_classes: HashSet<String>,
+    /// Backwards compatibility alias for `shared_classes`.
     pub singletons: HashSet<String>,
     /// Interfaces or classes marked with `#[mockable]` for compile-time mock generation.
     pub mockables: HashSet<String>,
@@ -76,7 +78,8 @@ impl AttributeRegistry {
             self.class_ids.insert(class_name.clone(), class_id);
             class_id += 1;
 
-            if class.is_singleton || class.has_attribute("Singleton") {
+            if class.is_shared || class.has_attribute("Shared") {
+                self.shared_classes.insert(class_name.clone());
                 self.singletons.insert(class_name.clone());
             }
 
@@ -209,10 +212,15 @@ impl AttributeRegistry {
         self.service_providers.push(provider_class.into());
     }
 
-    /// Check if a class is registered as a singleton.
-    pub fn is_singleton(&self, class_name: &str) -> bool {
+    /// Check if a class is registered as a shared class.
+    pub fn is_shared(&self, class_name: &str) -> bool {
         let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
-        self.singletons.contains(clean) || self.singletons.contains(class_name)
+        self.shared_classes.contains(clean) || self.shared_classes.contains(class_name)
+    }
+
+    /// Check if a class is registered as a singleton (alias for is_shared).
+    pub fn is_singleton(&self, class_name: &str) -> bool {
+        self.is_shared(class_name)
     }
 
     /// Check if an interface or class is marked `#[mockable]`.

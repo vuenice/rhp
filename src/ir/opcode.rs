@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::ast::{expr::BinaryOp, types::CastType};
+use crate::ir::ClosureCategory;
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind};
 
@@ -383,13 +384,18 @@ pub enum OpCode {
     Interpolate { dst: Reg, part_count: u16 },
 
     /// Stage an outer register capture (`use ($var)`) for the next `MakeClosure` instruction.
-    CaptureUpvalue { src: Reg, name: ConstantId },
+    CaptureUpvalue {
+        src: Reg,
+        name: ConstantId,
+        is_by_ref: bool,
+    },
 
     /// Instantiate a closure/arrow-function object in `dst` referencing `func_id`.
     MakeClosure {
         dst: Reg,
         func_id: FunctionId,
         upvalue_count: u16,
+        category: ClosureCategory,
     },
 
     // =========================================================================
@@ -706,17 +712,22 @@ impl fmt::Display for OpCode {
             OpCode::Interpolate { dst, part_count } => {
                 write!(f, "INTERPOLATE     {}, parts={}", dst, part_count)
             }
-            OpCode::CaptureUpvalue { src, name } => {
-                write!(f, "CAPTURE_UPVAL   {}, {}", src, name)
+            OpCode::CaptureUpvalue { src, name, is_by_ref } => {
+                if *is_by_ref {
+                    write!(f, "CAPTURE_UPVAL_REF {}, {}", src, name)
+                } else {
+                    write!(f, "CAPTURE_UPVAL   {}, {}", src, name)
+                }
             }
             OpCode::MakeClosure {
                 dst,
                 func_id,
                 upvalue_count,
+                category,
             } => write!(
                 f,
-                "MAKE_CLOSURE    {}, {}, upvals={}",
-                dst, func_id, upvalue_count
+                "MAKE_CLOSURE    {}, {}, upvals={}, cat={:?}",
+                dst, func_id, upvalue_count, category
             ),
             OpCode::NewObject {
                 dst,

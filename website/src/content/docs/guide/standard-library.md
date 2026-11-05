@@ -1105,33 +1105,33 @@ string $dashUrl = Url::to('dashboard'); // "https://example.com/dashboard"
 
 ---
 
-## Carbon Facade & DateTime Manipulation (`Carbon::*`)
+## Time Facade & DateTime Manipulation (`Time::*`)
 
-The `Carbon` facade brings Laravel's beloved fluent date and time manipulation library natively into RHP. Implemented in pure Rust over `chrono`, it provides high-throughput datetime arithmetic, RFC/ISO formatting, period boundary adjustments, and human-readable diffs with zero garbage collection overhead.
+The `Time` facade brings Laravel Carbon-inspired fluent date and time manipulation natively into RHP (with `Carbon` supported as a backward-compatible alias). Implemented in pure Rust over `chrono`, it provides high-throughput datetime arithmetic, RFC/ISO formatting, period boundary adjustments, and human-readable diffs with zero garbage collection overhead.
 
 ### Creating and Parsing Dates
 
 ```php
 // Factory constructors
-Carbon $now = Carbon::now();
-Carbon $today = Carbon::today();         // Today at 00:00:00
-Carbon $yesterday = Carbon::yesterday(); // Yesterday at 00:00:00
-Carbon $tomorrow = Carbon::tomorrow();   // Tomorrow at 00:00:00
+Time $now = Time::now();
+Time $today = Time::today();         // Today at 00:00:00
+Time $yesterday = Time::yesterday(); // Yesterday at 00:00:00
+Time $tomorrow = Time::tomorrow();   // Tomorrow at 00:00:00
 
 // Explicit component constructors
-Carbon $d1 = Carbon::create(2024, 5, 20, 14, 30, 45);
-Carbon $fromTs = Carbon::createFromTimestamp(1716206400);
+Time $d1 = Time::create(2024, 5, 20, 14, 30, 45);
+Time $fromTs = Time::createFromTimestamp(1716206400);
 
 // Parsing ISO 8601, RFC 3339, standard date strings & relative phrases
-Carbon $parsed = Carbon::parse("2024-12-25 08:00:00");
-Carbon $nextWeek = Carbon::parse("+1 week");
-Carbon $firstNext = Carbon::parse("first day of next month");
+Time $parsed = Time::parse("2024-12-25 08:00:00");
+Time $nextWeek = Time::parse("+1 week");
+Time $firstNext = Time::parse("first day of next month");
 ```
 
 ### Output & Formatting
 
 ```php
-Carbon $dt = Carbon::now();
+Time $dt = Time::now();
 
 string $dateTime = $dt->toDateTimeString();       // "2024-05-20 14:30:45"
 string $dateOnly = $dt->toDateString();           // "2024-05-20"
@@ -1141,9 +1141,9 @@ string $iso = $dt->toISOString();                 // "2024-05-20T14:30:45.000000
 string $formatted = $dt->toFormattedDateString(); // "May 20, 2024"
 string $custom = $dt->format("Y/m/d H:i");        // "2024/05/20 14:30"
 
-// Static shortcut: calling formatting methods on Carbon executes on Carbon::now()
-string $currentDate = Carbon::toDateString();
-string $currentDateTime = Carbon::toDateTimeString();
+// Static shortcut: calling formatting methods on Time executes on Time::now()
+string $currentDate = Time::toDateString();
+string $currentDateTime = Time::toDateTimeString();
 
 // String casting & echo automatically format as toDateTimeString()
 echo "Event at: " . $dt; // "Event at: 2024-05-20 14:30:45"
@@ -1162,28 +1162,28 @@ $dt->addMonth();
 $dt->addYear();
 
 // Period boundary adjustment
-$lastDay = Carbon::parse("2024-02-10")->lastOfMonth()->toDateTimeString(); // "2024-02-29 23:59:59"
-$startDay = Carbon::now()->startOfDay()->toDateTimeString();                // "2024-05-20 00:00:00"
-$endDay = Carbon::now()->endOfDay()->toDateTimeString();                    // "2024-05-20 23:59:59"
-$startWeek = Carbon::now()->startOfWeek()->toDateTimeString();
-$endWeek = Carbon::now()->endOfWeek()->toDateTimeString();
-$startMonth = Carbon::now()->startOfMonth()->toDateTimeString();
-$endMonth = Carbon::now()->endOfMonth()->toDateTimeString();
-$startYear = Carbon::now()->startOfYear()->toDateTimeString();
-$endYear = Carbon::now()->endOfYear()->toDateTimeString();
+$lastDay = Time::parse("2024-02-10")->lastOfMonth()->toDateTimeString(); // "2024-02-29 23:59:59"
+$startDay = Time::now()->startOfDay()->toDateTimeString();                // "2024-05-20 00:00:00"
+$endDay = Time::now()->endOfDay()->toDateTimeString();                    // "2024-05-20 23:59:59"
+$startWeek = Time::now()->startOfWeek()->toDateTimeString();
+$endWeek = Time::now()->endOfWeek()->toDateTimeString();
+$startMonth = Time::now()->startOfMonth()->toDateTimeString();
+$endMonth = Time::now()->endOfMonth()->toDateTimeString();
+$startYear = Time::now()->startOfYear()->toDateTimeString();
+$endYear = Time::now()->endOfYear()->toDateTimeString();
 ```
 
 ### Comparisons and Differences
 
 ```php
-Carbon $past = Carbon::parse("2024-05-10 12:00:00");
-Carbon $future = Carbon::parse("2024-05-20 12:00:00");
+Time $past = Time::parse("2024-05-10 12:00:00");
+Time $future = Time::parse("2024-05-20 12:00:00");
 
 bool $isPast = $past->isPast();
 bool $isFuture = $future->isFuture();
-bool $isToday = Carbon::now()->isToday();
-bool $isWeekend = Carbon::now()->isWeekend();
-bool $isLeap = Carbon::parse("2024-01-01")->isLeapYear();
+bool $isToday = Time::now()->isToday();
+bool $isWeekend = Time::now()->isWeekend();
+bool $isLeap = Time::parse("2024-01-01")->isLeapYear();
 
 int $daysDiff = $future->diffInDays($past);     // 10
 int $hoursDiff = $future->diffInHours($past);   // 240
@@ -1195,15 +1195,15 @@ string $forHumansFuture = $future->diffForHumans(); // "in 10 days"
 
 ```php
 // Mock current time in unit test suites
-Carbon::setTestNow("2024-05-15 12:00:00");
+Time::setTestNow("2024-05-15 12:00:00");
 
-if (Carbon::hasTestNow()) {
-    Carbon $mocked = Carbon::now();
+if (Time::hasTestNow()) {
+    Time $mocked = Time::now();
     assert($mocked->toDateString() === "2024-05-15");
 }
 
 // Reset mock fixture
-Carbon::setTestNow(null);
+Time::setTestNow(null);
 ```
 
 ---

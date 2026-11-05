@@ -1,9 +1,9 @@
-//! Carbon - Laravel Carbon / DateTime Facade & Instance Implementation for RHP
+//! Time - Time & DateTime Facade & Instance Implementation for RHP
 //!
 //! Provides full-featured, fluent date/time manipulation modeled after Laravel's Carbon:
-//! - Factory constructors: `Carbon::now()`, `Carbon::today()`, `Carbon::yesterday()`,
-//!   `Carbon::tomorrow()`, `Carbon::parse()`, `Carbon::create()`, `Carbon::createFromTimestamp()`,
-//!   `Carbon::createFromFormat()`, `Carbon::setTestNow()`, `Carbon::hasTestNow()`.
+//! - Factory constructors: `Time::now()`, `Time::today()`, `Time::yesterday()`,
+//!   `Time::tomorrow()`, `Time::parse()`, `Time::create()`, `Time::createFromTimestamp()`,
+//!   `Time::createFromFormat()`, `Time::setTestNow()`, `Time::hasTestNow()`.
 //! - Output & formatting: `toDateTimeString()`, `toDateString()`, `toDatString()`, `toTimeString()`,
 //!   `toISOString()`, `toIso8601String()`, `toRfc2822String()`, `toFormattedDateString()`, `toDayDateTimeString()`, `format()`.
 //! - Fluent modifiers: `addDay()`, `addDays()`, `subDay()`, `subDays()`, `addWeek()`, `addMonth()`,
@@ -104,12 +104,15 @@ pub fn parse_timezone(tz: &str) -> (FixedOffset, String) {
     (offset, canonical.to_string())
 }
 
-/// Representation of a Carbon date-time value.
+/// Representation of a Time / Carbon date-time value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CarbonDate {
     pub dt: DateTime<FixedOffset>,
     pub tz_name: String,
 }
+
+/// Alias for `CarbonDate` matching the `Time` facade.
+pub type TimeDate = CarbonDate;
 
 impl CarbonDate {
     /// Create a new `CarbonDate` from a `DateTime<FixedOffset>` and timezone name.
@@ -1410,14 +1413,14 @@ impl CarbonDate {
     // VmObject Synchronization
     // =========================================================================
 
-    /// Convert `CarbonDate` into a full `VmObject` of class `"Carbon"`.
+    /// Convert `CarbonDate` into a full `VmObject` of class `"Time"`.
     pub fn to_vm_object(&self) -> VmObject {
-        let mut obj = VmObject::new("Carbon");
+        let mut obj = VmObject::new("Time");
         self.sync_properties(&mut obj);
         obj
     }
 
-    /// Synchronize all standard Carbon public properties into the given `VmObject`.
+    /// Synchronize all standard Time public properties into the given `VmObject`.
     pub fn sync_properties(&self, obj: &mut VmObject) {
         let formatted = self.to_date_time_string();
         let iso = self.to_iso_string();
@@ -1445,7 +1448,7 @@ pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
     match val {
         PhpValue::Object(rc) => {
             let obj = rc.borrow();
-            if obj.class_name == "Carbon" {
+            if obj.class_name == "Time" || obj.class_name == "Carbon" {
                 if let Some(ts_val) = obj.get_property("timestamp") {
                     let ts = ts_val.to_i64().unwrap_or(0);
                     let micro = obj.get_property("micro").and_then(|v| v.to_i64()).unwrap_or(0) as u32;
@@ -1462,17 +1465,17 @@ pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
                     return CarbonDate::parse(&formatted.to_php_string(), Some(&tz));
                 }
             }
-            Err("Expected an instance of Carbon".to_string())
+            Err("Expected an instance of Time".to_string())
         }
         PhpValue::String(s) => CarbonDate::parse(s, None),
         PhpValue::Int(n) => Ok(CarbonDate::create_from_timestamp(*n as i64, 0, None)),
         PhpValue::RustInt { value, .. } => Ok(CarbonDate::create_from_timestamp(*value as i64, 0, None)),
-        _ => Err("Invalid value provided for Carbon date conversion".to_string()),
+        _ => Err("Invalid value provided for Time date conversion".to_string()),
     }
 }
 
-/// Get static class constant for `Carbon::*` (e.g. `Carbon::MONDAY`, `Carbon::SUNDAY`).
-pub fn get_carbon_constant(name: &str) -> Option<PhpValue> {
+/// Get static class constant for `Time::*` / `Carbon::*` (e.g. `Time::MONDAY`, `Time::SUNDAY`).
+pub fn get_time_constant(name: &str) -> Option<PhpValue> {
     match name {
         "SUNDAY" => Some(PhpValue::Int(0)),
         "MONDAY" => Some(PhpValue::Int(1)),
@@ -1491,6 +1494,10 @@ pub fn get_carbon_constant(name: &str) -> Option<PhpValue> {
         "SECONDS_PER_MINUTE" => Some(PhpValue::Int(60)),
         _ => None,
     }
+}
+
+pub fn get_carbon_constant(name: &str) -> Option<PhpValue> {
+    get_time_constant(name)
 }
 
 /// Convert standard PHP date format specifiers to chrono format specifiers.
@@ -1578,24 +1585,25 @@ fn parse_flexible_regex(raw: &str, _offset: FixedOffset, tz_name: &str) -> Optio
 }
 
 // =========================================================================
-// Dispatch Static Facade Calls: Carbon::*
+// Dispatch Static Facade Calls: Time::*
 // =========================================================================
 
-pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
+pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
     // Dynamic macro registration
     if method == "macro" {
-        let name = get_arg_str(args, 0, "Carbon::macro")?;
+        let name = get_arg_str(args, 0, "Time::macro")?;
         let closure = match args.get(1) {
             Some(PhpValue::Closure(c)) => c,
             _ => {
                 return Err(RuntimeErrorKind::Custom {
                     message: format!(
-                        "TypeError: Carbon::macro() expects argument 2 to be a Closure, got {}",
+                        "TypeError: Time::macro() expects argument 2 to be a Closure, got {}",
                         args.get(1).map(|v| v.type_name()).unwrap_or("none")
                     ),
                 });
             }
         };
+        register_runtime_closure_macro("Time", &name, (**closure).clone());
         register_runtime_closure_macro("Carbon", &name, (**closure).clone());
         return Ok(PhpValue::Null);
     }
@@ -1605,6 +1613,22 @@ pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
             let tz = args.first().map(|v| v.to_php_string());
             let c = CarbonDate::now(tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
+        }
+        "date" => {
+            let fmt = get_arg_str(args, 0, "Time::date")?;
+            let time_obj = match args.get(1) {
+                None => CarbonDate::now(None),
+                Some(v) if v.is_null() => CarbonDate::now(None),
+                Some(v) => {
+                    let s = match v {
+                        PhpValue::Int(i) => i.to_string(),
+                        PhpValue::RustInt { value, .. } => value.to_string(),
+                        other => other.to_php_string(),
+                    };
+                    CarbonDate::parse(&s, None).map_err(|e| RuntimeErrorKind::Custom { message: e })?
+                }
+            };
+            Ok(PhpValue::string(time_obj.format(&fmt)))
         }
         "today" => {
             let tz = args.first().map(|v| v.to_php_string());
@@ -1622,7 +1646,7 @@ pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "parse" => {
-            let s = get_arg_str(args, 0, "Carbon::parse")?;
+            let s = get_arg_str(args, 0, "Time::parse")?;
             let tz = args.get(1).map(|v| v.to_php_string());
             match CarbonDate::parse(&s, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
@@ -1676,8 +1700,8 @@ pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "createFromFormat" => {
-            let fmt = get_arg_str(args, 0, "Carbon::createFromFormat")?;
-            let time_str = get_arg_str(args, 1, "Carbon::createFromFormat")?;
+            let fmt = get_arg_str(args, 0, "Time::createFromFormat")?;
+            let time_str = get_arg_str(args, 1, "Time::createFromFormat")?;
             let tz = args.get(2).map(|v| v.to_php_string());
             match CarbonDate::create_from_format(&fmt, &time_str, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
@@ -1704,21 +1728,29 @@ pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         }
         "hasTestNow" => Ok(PhpValue::Bool(CarbonDate::has_test_now())),
-        // Static invocations of instance methods operate on `Carbon::now()`
+        "clearTestNow" => {
+            CarbonDate::clear_test_now();
+            Ok(PhpValue::Null)
+        }
+        // Static invocations of instance methods operate on `Time::now()`
         _ => {
             let now = CarbonDate::now(None);
             let receiver = PhpValue::object(now.to_vm_object());
-            exec_carbon_instance_method(&receiver, method, args, Span::new(0, 0, 0, 1, 1))
+            exec_time_instance_method(&receiver, method, args, Span::new(0, 0, 0, 1, 1))
                 .map_err(|e| e.kind)
         }
     }
 }
 
+pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
+    dispatch_time(method, args)
+}
+
 // =========================================================================
-// Dispatch Object Instance Calls: $carbon->*
+// Dispatch Object Instance Calls: $time->*
 // =========================================================================
 
-pub fn exec_carbon_instance_method(
+pub fn exec_time_instance_method(
     receiver: &PhpValue,
     method: &str,
     args: &[PhpValue],
@@ -1753,6 +1785,10 @@ pub fn exec_carbon_instance_method(
         "toDayDateTimeString" => Ok(PhpValue::string(current.to_day_date_time_string())),
         "toJson" => Ok(PhpValue::string(format!("\"{}\"", current.to_iso_string()))),
         "format" => {
+            let fmt = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "Y-m-d H:i:s".to_string());
+            Ok(PhpValue::string(current.format(&fmt)))
+        }
+        "date" => {
             let fmt = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "Y-m-d H:i:s".to_string());
             Ok(PhpValue::string(current.format(&fmt)))
         }
@@ -2268,12 +2304,21 @@ pub fn exec_carbon_instance_method(
 
         _ => Err(RuntimeError::new(
             RuntimeErrorKind::UndefinedMethod {
-                class: "Carbon".to_string(),
+                class: "Time".to_string(),
                 method: method.to_string(),
             },
             span,
         )),
     }
+}
+
+pub fn exec_carbon_instance_method(
+    receiver: &PhpValue,
+    method: &str,
+    args: &[PhpValue],
+    span: Span,
+) -> Result<PhpValue, RuntimeError> {
+    exec_time_instance_method(receiver, method, args, span)
 }
 
 fn parse_arg_date(args: &[PhpValue], index: usize, span: Span) -> Result<CarbonDate, RuntimeError> {

@@ -307,28 +307,60 @@ pub enum TypeErrorKind {
     },
 
     #[error(
-        "Type Error: Cannot call non-static method '{method}' of singleton class '{singleton_class}' inside non-singleton class '{caller_class}'."
+        "Type Error: Cannot instantiate shared class '{shared_class}'. Shared instances are created by the container at boot."
     )]
-    NonStaticSingletonMethodCallForbidden {
-        singleton_class: String,
-        method: String,
-        caller_class: String,
+    SharedInstantiationForbidden {
+        shared_class: String,
     },
 
     #[error(
-        "Type Error: Cannot instantiate singleton class '{singleton_class}' inside non-singleton class '{caller_class}'. Only static methods of singleton classes can be used in non-singleton classes."
+        "Type Error: Cannot extend shared class '{parent_name}' from non-shared class '{class_name}'."
     )]
-    SingletonInstantiationForbidden {
-        singleton_class: String,
-        caller_class: String,
-    },
-
-    #[error(
-        "Type Error: Cannot extend singleton class '{parent_name}' from non-singleton class '{class_name}'."
-    )]
-    NonSingletonExtendsSingletonForbidden {
+    NonSharedExtendsSharedForbidden {
         class_name: String,
         parent_name: String,
+    },
+
+    #[error(
+        "Type Error: Shared class '{shared_class}' cannot inherit mutable property '${property}' from non-shared class '{parent_class}'. All inherited properties must be readonly."
+    )]
+    SharedClassInheritedMutablePropertyForbidden {
+        shared_class: String,
+        parent_class: String,
+        property: String,
+    },
+
+    #[error(
+        "Type Error: Shared class '{shared_class}' cannot declare mutable property '${property}'. Shared classes must enforce deep immutability."
+    )]
+    SharedClassMutablePropertyForbidden {
+        shared_class: String,
+        property: String,
+    },
+
+    #[error(
+        "Type Error: Shared class '{shared_class}' cannot inject request-scoped service '{service_type}' in constructor parameter '${param}'. Shared instances cannot capture request-scoped state."
+    )]
+    SharedClassCapturesScopedService {
+        shared_class: String,
+        param: String,
+        service_type: String,
+    },
+
+    #[error(
+        "Type Error: Shared class '{shared_class}' cannot store non-static closure in property '${property}'. Closures in shared fields must be static/pure to prevent request state leakage."
+    )]
+    SharedFieldClosureCaptureForbidden {
+        shared_class: String,
+        property: String,
+    },
+
+    #[error(
+        "Type Error: Shared class '{shared_class}' cannot declare mutable static property '${property}'. Static properties in shared classes must be readonly or concurrency-safe primitives (Atomic, Pool)."
+    )]
+    SharedClassMutableStaticForbidden {
+        shared_class: String,
+        property: String,
     },
 
     #[error(

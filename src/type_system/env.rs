@@ -825,11 +825,11 @@ pub fn resolve_facade_static_call(
             "open" | "memory" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
-        "Carbon" => match method {
+        "Time" | "Carbon" => match method {
             "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
             | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
             | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"
-            | "toDayDateTimeString" | "format" | "diffForHumans" => Ok(RhpType::String),
+            | "toDayDateTimeString" | "format" | "diffForHumans" | "date" => Ok(RhpType::String),
             "getTimestamp" | "timestamp" | "getTimestampMs" | "timestampMs"
             | "year" | "month" | "day" | "hour" | "minute" | "second" | "micro"
             | "millisecond" | "dayOfWeek" | "dayOfWeekIso" | "dayOfYear"
@@ -845,7 +845,7 @@ pub fn resolve_facade_static_call(
             | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
             | "lessThanOrEqualTo" | "between" | "hasTestNow" => Ok(RhpType::Bool),
             "setTestNow" => Ok(RhpType::Void),
-            _ => Ok(RhpType::Class("Carbon".to_string())),
+            _ => Ok(RhpType::Class("Time".to_string())),
         },
         "phpFun" => {
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
@@ -1125,12 +1125,12 @@ pub fn resolve_builtin_fluent_method(
                 "isValid" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),
             },
-            "Carbon" => match method {
+            "Time" | "Carbon" => match method {
                 "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                 | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
                 | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"
                 | "toDayDateTimeString" | "format" | "diffForHumans" | "timezoneName"
-                | "getTimezone" | "getTimezoneName" => Some(RhpType::String),
+                | "getTimezone" | "getTimezoneName" | "date" => Some(RhpType::String),
                 "getTimestamp" | "timestamp" | "getTimestampMs" | "timestampMs"
                 | "year" | "month" | "day" | "hour" | "minute" | "second" | "micro"
                 | "millisecond" | "dayOfWeek" | "dayOfWeekIso" | "dayOfYear"
@@ -1166,7 +1166,7 @@ pub fn resolve_builtin_fluent_method(
                 | "startOfMinute" | "endOfMinute" | "setYear" | "setMonth" | "setDay"
                 | "setHour" | "setMinute" | "setSecond" | "setTime" | "setDate"
                 | "setTimezone" | "next" | "previous" | "min" | "max" => {
-                    Some(RhpType::Class("Carbon".to_string()))
+                    Some(RhpType::Class("Time".to_string()))
                 }
                 _ => Some(RhpType::Dynamic),
             },

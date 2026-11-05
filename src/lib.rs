@@ -54,10 +54,10 @@ pub use ast::{
 pub use ir::{
     compile_source, compile_source_with_file_id, compile_to_bytecode, lower_program,
     lower_typed_program, lower_typed_program_with_base, BytecodeChunk, CatchTarget, ClassId,
-    CompilationError, CompiledClass, CompiledClassConst, CompiledEnum, CompiledEnumCase,
-    CompiledFunction, CompiledInterface, CompiledParam, CompiledProperty, Constant, ConstantId,
-    ExceptionHandler, FunctionId, IrCollectionKind, IrError, IrErrorKind, IrLowerer, IrModule,
-    IrUnaryOp, OpCode, Reg, RegisterInfo,
+    ClosureCategory, CompilationError, CompiledClass, CompiledClassConst, CompiledEnum,
+    CompiledEnumCase, CompiledFunction, CompiledInterface, CompiledParam, CompiledProperty,
+    Constant, ConstantId, ExceptionHandler, FunctionId, IrCollectionKind, IrError, IrErrorKind,
+    IrLowerer, IrModule, IrUnaryOp, OpCode, Reg, RegisterInfo,
 };
 pub use lexer::{
     error::{LexError, SpannedLexError},

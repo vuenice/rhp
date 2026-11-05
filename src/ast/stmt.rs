@@ -228,6 +228,8 @@ pub struct MethodDecl<'s> {
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_final: bool,
+    pub is_open: bool,
+    pub is_override: bool,
     pub function: FunctionDecl<'s>,
 }
 

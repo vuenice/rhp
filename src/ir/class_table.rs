@@ -43,8 +43,10 @@ pub struct ClassInfo {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
-    pub is_singleton: bool,
+    pub is_shared: bool,
     pub is_static_only: bool,
+    pub is_open: bool,
+    pub is_sealed: bool,
     pub is_trait: bool,
     pub is_interface: bool,
 
@@ -84,8 +86,10 @@ impl ClassInfo {
             is_abstract: false,
             is_final: false,
             is_readonly: false,
-            is_singleton: false,
+            is_shared: false,
             is_static_only: false,
+            is_open: false,
+            is_sealed: false,
             is_trait: false,
             is_interface: false,
             own_methods: HashMap::new(),
@@ -403,6 +407,16 @@ impl ClassTable {
                     ));
                 }
 
+                if self.classes[p_idx].is_sealed {
+                    return Err(IrError::new(
+                        IrErrorKind::CannotExtendSealedClass {
+                            class_name: class_name.to_string(),
+                            parent_name: self.classes[p_idx].name.to_string(),
+                        },
+                        span,
+                    ));
+                }
+
                 vtable = self.classes[p_idx].vtable.clone();
                 static_forward = self.classes[p_idx].static_forward;
                 final_methods = self.classes[p_idx].final_methods.clone();
@@ -426,6 +440,7 @@ impl ClassTable {
 
         // 2. Apply each used Trait: Trait methods override inherited parent methods
         let used_traits = self.classes[idx].traits.clone();
+        let mut trait_method_providers: HashMap<Arc<str>, ClassId> = HashMap::new();
         for tr_id in &used_traits {
             let tr_idx = tr_id.index();
             if tr_idx < self.classes.len() {
@@ -462,6 +477,22 @@ impl ClassTable {
                         continue;
                     }
 
+                    // Enforce explicit trait composition: conflicting trait methods without class resolution are errors
+                    if let Some(&first_tr_id) = trait_method_providers.get(&m_name) {
+                        if first_tr_id != *tr_id {
+                            return Err(IrError::new(
+                                IrErrorKind::TraitMethodCollision {
+                                    class_name: class_name.to_string(),
+                                    method_name: m_name.to_string(),
+                                    trait_a: self.classes[first_tr_id.index()].name.to_string(),
+                                    trait_b: self.classes[tr_idx].name.to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    }
+                    trait_method_providers.insert(m_name.clone(), *tr_id);
+
                     let orig_func = functions[tr_mid.index()].clone();
                     let new_id = FunctionId(functions.len() as u32);
                     let mut cloned_func = orig_func;
@@ -481,6 +512,19 @@ impl ClassTable {
         // 3. Apply class's own methods: they override trait methods and parent methods
         let own_methods = self.classes[idx].own_methods.clone();
         for (m_name, mid) in own_methods {
+            let child_func = &functions[mid.index()];
+            let has_inherited = vtable.contains_key(&m_name);
+
+            if child_func.is_override && !has_inherited {
+                return Err(IrError::new(
+                    IrErrorKind::MethodDoesNotOverride {
+                        class_name: class_name.to_string(),
+                        method_name: m_name.to_string(),
+                    },
+                    span,
+                ));
+            }
+
             if let Some(&parent_mid) = vtable.get(&m_name) {
                 if mid != parent_mid {
                     // Verify override compatibility
@@ -710,7 +754,10 @@ impl ClassTable {
             None => return true, // conservative fallback if class is unknown
         };
 
-        if self.classes[base_id.index()].is_final || self.classes[base_id.index()].final_methods.contains(method_name) {
+        if self.classes[base_id.index()].is_final
+            || self.classes[base_id.index()].is_sealed
+            || self.classes[base_id.index()].final_methods.contains(method_name)
+        {
             return false;
         }
 

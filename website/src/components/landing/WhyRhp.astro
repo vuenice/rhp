@@ -6,7 +6,7 @@ const features = [
     description: "Eliminates PHP-FPM's per-request bootstrap overhead. Your application code, routing, and framework state are compiled once into immutable Arc<EngineState>.",
     badge: "0ms Per-Request Re-parse",
     code: `// Bootstrapped once in Parent Process
-singleton class AppEngine {
+shared class AppEngine {
     public static function boot(): void {
         DB::pool(min: 10, max: 100);
     }

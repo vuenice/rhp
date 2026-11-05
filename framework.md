@@ -101,7 +101,7 @@ The Framework layer provides the developer-facing application architecture, desi
 ### Responsibilities & Capabilities
 - **Inversion of Control (IoC) Container & Service Providers:**
   - Service registration, dependency injection, and contract-to-implementation binding.
-  - Lifecycle providers that configure packages and singletons.
+  - Lifecycle providers that configure packages and shared services.
 - **Routing DSL & Controllers:**
   - Declarative route declarations (`Route::get('/', [UserController::class, 'index'])`).
   - Named routes, route parameters, grouping, and resource controllers.

@@ -1,6 +1,6 @@
 ---
-title: "Classes, Objects, Enums & Singletons"
-description: "Object-oriented programming in RHP: classes, property initialization contracts, enumerations, interfaces, traits, and persistent singleton classes."
+title: "Classes, Objects, Enums & Shared Classes"
+description: "Object-oriented programming in RHP: classes, property initialization contracts, enumerations, interfaces, traits, and persistent shared classes."
 section: "Language Guide"
 order: 5
 ---
@@ -486,28 +486,122 @@ Enums participate fully in RHP's nominal type hierarchy:
 
 ---
 
-## Persistent Parent Process: `singleton class`
+## Persistent Parent Process: `shared class`
 
-One of RHP's signature innovations is the `singleton class`. Singletons are instantiated once in the persistent parent process and remain shared across all worker threads via `Arc<EngineState>`:
+One of RHP's signature innovations is the `shared class` (declared with the `shared` keyword or the `#[Shared]` attribute). Shared classes are instantiated in the persistent parent process during application boot and remain safely shared across all worker threads via `Arc<EngineState>`:
 
 ```php
-singleton class DatabaseManager {
-    private static int $connectionCount = 0;
+shared class DatabasePool {
+    public readonly string $driver;
+    public readonly int $maxConnections;
 
-    public static function connect(): void {
-        self::$connectionCount++;
-        Log::info("Connected to shared pool");
+    public function __construct(string $driver = "pgsql", int $maxConnections = 50) {
+        $this->driver = $driver;
+        $this->maxConnections = $maxConnections;
     }
 
-    public static function getPoolSize(): int {
-        return self::$connectionCount;
+    public function getConnectionString(): string {
+        return "{$this->driver}://localhost:5432/app";
+    }
+
+    public static function version(): string {
+        return "1.0.0";
     }
 }
 ```
 
-### Invariants for Singleton Invocation:
-1. **Inside Non-Singleton Classes:** You can **only invoke static methods** on a singleton (e.g. `DatabaseManager::connect()`). Calling `new DatabaseManager()` or attempting `class Child extends DatabaseManager` throws a fatal `NonStaticSingletonMethodCallForbidden` compile error.
-2. **Inside Other Singleton Classes:** Developers may call both static and instance methods directly.
+### Why `shared` instead of `singleton`?
+
+* **Expresses Request Boundaries, Not Instance Count:** "Singleton" describes instance count (exactly one), but the property the compiler enforces is cross-request safety. Nothing in the architecture requires strictly one instance per class; you could have multiple shared config objects, routers, or connection pools of the same class.
+* **Eliminates Global-State Baggage:** PHP developers associate "singleton" with `getInstance()` anti-patterns, hidden coupling, and mutable global state. `shared` clarifies that the compiler enforces strict boundaries across request cycles.
+* **Natural Composition with Modifiers:** Much like `readonly` means a property cannot mutate, `shared` signifies that an object crosses request boundaries and is visible to multiple worker threads.
+
+---
+
+### Instance Methods Are First-Class & Fully Accessible
+
+In RHP, **instance methods on shared classes can be invoked from anywhere** (controllers, middleware, service classes, and background jobs):
+
+```php
+class OrderController {
+    public function handle(DatabasePool $pool, Router $router): Response {
+        // Calling instance methods on shared services is completely valid and encouraged!
+        $conn = $pool->getConnectionString();
+        $target = $router->dispatch("/checkout");
+        return new Response(200, "OK");
+    }
+}
+```
+
+> [!NOTE]
+> In traditional PHP runtimes like Laravel Octane, shared services frequently suffer from state-leak bugs because methods mutate `$this`. In RHP, instance methods are safe because **deep immutability is enforced at compile time**.
+
+---
+
+### Unconditional Instantiation Rule
+
+Direct instantiation of a shared class with `new` is **unconditionally forbidden** in user code:
+
+```php
+$pool = new DatabasePool();
+// Fatal Error: Cannot instantiate shared class 'DatabasePool'. Shared instances are created by the container at boot.
+```
+
+**Why Unconditional?**
+1. **Concurrency Primitives Safety:** Shared classes frequently manage stateful concurrency primitives such as `Atomic<T>` or `Pool<T>`. Instantiating a second copy bypasses the central pool or atomic counter, producing silent concurrency and logic bugs.
+2. **Explicit Lifecycle:** Shared instances belong to the application lifecycle and must be provisioned and registered by the dependency injection container during the boot phase before worker requests are dispatched.
+
+---
+
+### Inheritance Boundaries
+
+To prevent mutable state leaking across request boundaries, RHP enforces strict bidirectional inheritance rules:
+
+1. **Non-Shared Classes Cannot Extend Shared Classes (`RHP0115`):**
+   ```php
+   shared class SecureVault {}
+
+   // Compile Error: Cannot extend shared class 'SecureVault' from non-shared class 'CustomVault'.
+   class CustomVault extends SecureVault {}
+   ```
+   Without this restriction, a mutable subclass could be substituted where a shared type is expected, violating immutability guarantees.
+
+2. **Shared Classes Extending Non-Shared Classes Enforce Readonly Hierarchy (`RHP0114`):**
+   ```php
+   class BaseRepository {
+       public string $table = "users"; // Mutable!
+   }
+
+   // Compile Error: Shared class 'UserRepository' cannot inherit mutable property '$table' from non-shared class 'BaseRepository'. All inherited properties must be readonly.
+   shared class UserRepository extends BaseRepository {}
+   ```
+   When a shared class extends a non-shared parent, the compiler walks the entire inheritance chain and verifies that every inherited instance property is `readonly`.
+
+---
+
+### Preventing Octane State Leak Bugs (Deep Immutability Matrix)
+
+Laravel Octane and long-running PHP runtimes are infamous for subtle request-pollution bugs where state leaks between consecutive requests. RHP statically eliminates this entire class of bugs at compile time:
+
+| Octane Failure Mode | How It Leaks State | RHP Compile-Time Prevention | Error Code |
+| :--- | :--- | :--- | :--- |
+| **Constructor Request Injection** | Shared service captures `$request` or `$container` in a field | Constructors of shared classes cannot accept request-scoped services (`Request`, `Response`, `Container`, `Application`, `Session`, `WorkerRequest`) | `RHP0114` |
+| **Non-Static Closure Fields** | Closure captures request variables or outer scope via `use ($req)` | Properties in shared classes cannot be initialized or assigned non-static closures; only `static fn()` is allowed | `RHP0114` |
+| **Mutable Instance Properties** | Service mutates `$this->cachedUser = $user` across requests | All instance properties declared on a shared class must be `readonly` | `RHP0114` |
+| **Mutable Static Properties** | Static variables or memoization caches bleed across requests | Static properties on shared classes must be `readonly` or concurrency-safe primitives (`Atomic`, `Pool`, `Lock`, `Channel`) | `RHP0114` |
+
+---
+
+### Concurrency & Runtime Memory Model: RHP vs. Swoole
+
+| Feature | Swoole / OpenSwoole | RHP (Rust-Powered PHP) |
+| :--- | :--- | :--- |
+| **Execution Architecture** | Multi-process fork model with event loops | Persistent single parent process + multi-threaded Tokio/Rust worker pool |
+| **Cross-Worker Memory** | Linux IPC, shared memory segments, `Swoole\Table` | Shared heap via `Arc<EngineState>` with zero-copy reads across threads |
+| **Copy-on-Write (CoW)** | Memory pages shared via OS fork; any write triggers page faults and memory duplication | Compile-time deep immutability guarantees true zero-copy multi-threading without page duplication |
+| **Atomic Primitives** | `Swoole\Atomic` (POSIX mutex / C atomic shm) | Hardware-native Rust atomics (`Atomic<int>`, `Atomic<bool>`, `AtomicInt`) |
+| **Synchronization** | `Swoole\Lock`, `Swoole\Channel` | Zero-overhead Rust channels (`Channel<T>`), locks (`Lock`), and connection pools (`Pool<T>`) |
+| **Developer Discipline** | Manual developer hygiene required to reset singletons in `Octane::tick()` | **Compiler-enforced**: Illegal mutations and request leaks fail compilation before execution |
 
 ---
 

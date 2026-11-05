@@ -73,7 +73,9 @@ export const docsNavigation: DocNavSection[] = [
       item("Language Layer & Semantics", "advanced/language-layer"),
       item("FFI & Rust Native Interop", "advanced/ffi-interop"),
       item("Compiler & VM Internals", "advanced/compiler-internals"),
+      item("Pure Closure Optimization", "advanced/pure-closure-optimization"),
       item("Safe Addition & Arithmetic Semantics", "advanced/safe-addition-semantics"),
+      item("CPU Preemption & Instruction Budget", "advanced/cpu-preemption"),
     ]
   },
   {

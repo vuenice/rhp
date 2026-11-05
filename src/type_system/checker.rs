@@ -183,6 +183,8 @@ impl TypeChecker {
                         false,
                         false,
                         false,
+                        false,
+                        false,
                     )?;
                     self.result.functions.insert(func_name.clone(), sig.clone());
                     if func_name != func.name.name {
@@ -573,6 +575,8 @@ impl TypeChecker {
         is_static: bool,
         is_abstract: bool,
         is_final: bool,
+        is_open: bool,
+        is_override: bool,
     ) -> Result<FunctionSignature, TypeError> {
         let is_lifecycle_magic =
             current_class.is_some() && matches!(func.name.name, "__construct" | "__destruct");
@@ -679,6 +683,8 @@ impl TypeChecker {
             is_static,
             is_abstract,
             is_final,
+            is_open,
+            is_override,
             visibility,
             span: func.span,
         })
@@ -701,6 +707,8 @@ impl TypeChecker {
                 m.is_static,
                 true,
                 m.is_final,
+                true,
+                false,
             )?;
             methods.insert(m.function.name.name.to_string(), sig);
         }
@@ -738,6 +746,8 @@ impl TypeChecker {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
+                        m.is_open,
+                        m.is_override,
                     )?;
                     methods.insert(m.function.name.name.to_string(), sig);
                 }
@@ -798,7 +808,9 @@ impl TypeChecker {
             is_final: false,
             is_readonly: false,
             is_static_only: false,
-            is_singleton: false,
+            is_shared: false,
+            is_open: false,
+            is_sealed: false,
             extends: None,
             implements: Vec::new(),
             traits,
@@ -840,6 +852,8 @@ impl TypeChecker {
                 m.is_static,
                 m.is_abstract,
                 m.is_final,
+                false,
+                false,
             )?;
             methods.insert(m.function.name.name.to_string(), sig);
         }
@@ -858,6 +872,8 @@ impl TypeChecker {
                     is_static: true,
                     is_abstract: false,
                     is_final: false,
+                    is_open: false,
+                    is_override: false,
                     visibility: Visibility::Public,
                     span: enm.span,
                 },
@@ -884,6 +900,8 @@ impl TypeChecker {
                         is_static: true,
                         is_abstract: false,
                         is_final: false,
+                        is_open: false,
+                        is_override: false,
                         visibility: Visibility::Public,
                         span: enm.span,
                     },
@@ -907,6 +925,8 @@ impl TypeChecker {
                         is_static: true,
                         is_abstract: false,
                         is_final: false,
+                        is_open: false,
+                        is_override: false,
                         visibility: Visibility::Public,
                         span: enm.span,
                     },
@@ -964,6 +984,24 @@ impl TypeChecker {
         for member in &cls.members {
             match &member.kind {
                 ClassMemberKind::Property(prop) => {
+                    if cls.modifiers.is_shared {
+                        if let Some(ref def_expr) = prop.default {
+                            let is_non_static_closure = match &def_expr.kind {
+                                ExprKind::Closure { is_static, .. } => !*is_static,
+                                ExprKind::ArrowFunction { .. } => true,
+                                _ => false,
+                            };
+                            if is_non_static_closure {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::SharedFieldClosureCaptureForbidden {
+                                        shared_class: class_name.to_string(),
+                                        property: prop.name.name.strip_prefix('$').unwrap_or(prop.name.name).to_string(),
+                                    },
+                                    def_expr.span,
+                                ));
+                            }
+                        }
+                    }
                     let prop_info = self.build_property_info(prop, class_name, member.span)?;
                     properties.insert(prop.name.name.to_string(), prop_info);
                 }
@@ -978,12 +1016,32 @@ impl TypeChecker {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
+                        m.is_open,
+                        m.is_override,
                     )?;
 
                     // Handle constructor property promotion (`public readonly string $name` in `__construct`)
                     if m.function.name.name == "__construct" {
                         for (idx, param) in m.function.params.iter().enumerate() {
                             if let Some(vis) = param.visibility {
+                                if cls.modifiers.is_shared {
+                                    if let Some(ref def_expr) = param.default_value {
+                                        let is_non_static_closure = match &def_expr.kind {
+                                            ExprKind::Closure { is_static, .. } => !*is_static,
+                                            ExprKind::ArrowFunction { .. } => true,
+                                            _ => false,
+                                        };
+                                        if is_non_static_closure {
+                                            return Err(TypeError::new(
+                                                TypeErrorKind::SharedFieldClosureCaptureForbidden {
+                                                    shared_class: class_name.to_string(),
+                                                    property: param.name.name.strip_prefix('$').unwrap_or(param.name.name).to_string(),
+                                                },
+                                                def_expr.span,
+                                            ));
+                                        }
+                                    }
+                                }
                                 let promoted_type = sig.params[idx].rhp_type.clone();
                                 properties.insert(
                                     param.name.name.to_string(),
@@ -1060,7 +1118,9 @@ impl TypeChecker {
             is_final: cls.modifiers.is_final,
             is_readonly: cls.modifiers.is_readonly,
             is_static_only: cls.modifiers.is_static_only,
-            is_singleton: cls.modifiers.is_singleton,
+            is_shared: cls.modifiers.is_shared,
+            is_open: cls.modifiers.is_open,
+            is_sealed: cls.modifiers.is_sealed,
             extends: cls.extends.as_ref().map(|e| self.resolve_class_name(e.name, None)),
             implements: cls.implements.iter().map(|i| self.resolve_class_name(i.name, None)).collect(),
             traits,
@@ -1375,6 +1435,61 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn is_concurrency_primitive_type(ty: &RhpType) -> bool {
+        let base = ty.non_null_type();
+        let name = match &base {
+            RhpType::Class(n) => n.as_str(),
+            _ => return false,
+        };
+        let clean = name.strip_prefix('\\').unwrap_or(name);
+        let short_name = clean.rsplit('\\').next().unwrap_or(clean);
+        matches!(
+            short_name,
+            "Atomic"
+                | "AtomicInt"
+                | "AtomicFloat"
+                | "AtomicBool"
+                | "Pool"
+                | "ConnectionPool"
+                | "Channel"
+                | "Lock"
+                | "Mutex"
+        ) || short_name.starts_with("Atomic")
+            || short_name.starts_with("Pool")
+            || short_name.starts_with("Channel")
+            || short_name.starts_with("Lock")
+            || short_name.starts_with("Mutex")
+    }
+
+    fn is_scoped_service_type(ty: &RhpType) -> Option<String> {
+        let base = ty.non_null_type();
+        let name = match &base {
+            RhpType::Class(n) => n.as_str(),
+            _ => return None,
+        };
+        let clean = name.strip_prefix('\\').unwrap_or(name);
+        let short_name = clean.rsplit('\\').next().unwrap_or(clean);
+        let is_scoped = matches!(
+            short_name,
+            "Request"
+                | "ServerRequest"
+                | "ServerRequestInterface"
+                | "RequestInterface"
+                | "Response"
+                | "ResponseInterface"
+                | "Container"
+                | "ContainerInterface"
+                | "Application"
+                | "Session"
+                | "WorkerRequest"
+        );
+        if is_scoped {
+            Some(short_name.to_string())
+        } else {
+            None
+        }
+    }
+
     /// Validate inheritance (`extends`) and interface (`implements`) boundary contracts across all declared classes.
     fn validate_hierarchy_contracts(&self) -> Result<(), TypeError> {
         let hierarchy = &self.result.hierarchy;
@@ -1392,14 +1507,37 @@ impl TypeChecker {
                 }
 
                 if let Some(parent_info) = hierarchy.classes.get(parent_name) {
-                    if parent_info.is_singleton && !class_info.is_singleton {
+                    if parent_info.is_shared && !class_info.is_shared {
                         return Err(TypeError::new(
-                            TypeErrorKind::NonSingletonExtendsSingletonForbidden {
+                            TypeErrorKind::NonSharedExtendsSharedForbidden {
                                 class_name: class_name.clone(),
                                 parent_name: parent_name.clone(),
                             },
                             class_info.span,
                         ));
+                    }
+
+                    if class_info.is_shared && !parent_info.is_shared {
+                        let mut curr_p = Some(parent_name.clone());
+                        while let Some(ref p_n) = curr_p {
+                            if let Some(p_i) = hierarchy.classes.get(p_n) {
+                                for (prop_name, prop_info) in &p_i.properties {
+                                    if !prop_info.is_static && !prop_info.is_readonly {
+                                        return Err(TypeError::new(
+                                            TypeErrorKind::SharedClassInheritedMutablePropertyForbidden {
+                                                shared_class: class_name.clone(),
+                                                parent_class: p_n.clone(),
+                                                property: prop_name.strip_prefix('$').unwrap_or(prop_name).to_string(),
+                                            },
+                                            class_info.span,
+                                        ));
+                                    }
+                                }
+                                curr_p = p_i.extends.clone();
+                            } else {
+                                break;
+                            }
+                        }
                     }
 
                     if parent_info.is_static_only {
@@ -1423,12 +1561,43 @@ impl TypeChecker {
                         ));
                     }
 
+                    if parent_info.is_sealed {
+                        return Err(TypeError::new(
+                            TypeErrorKind::MethodOverrideContractViolation {
+                                class_name: class_name.clone(),
+                                parent_name: parent_name.clone(),
+                                method_name: "<class>".to_string(),
+                                reason: format!("cannot extend sealed class '{}'", parent_name),
+                            },
+                            class_info.span,
+                        ));
+                    }
+
                     for (method_name, child_sig) in &class_info.methods {
                         if method_name == "__construct" || method_name == "__destruct" {
                             continue;
                         }
-                        if let Some(parent_sig) = hierarchy.lookup_method(parent_name, method_name)
-                        {
+                        let parent_method = hierarchy.lookup_method(parent_name, method_name)
+                            .or_else(|| {
+                                class_info.implements.iter().find_map(|iface| hierarchy.lookup_method(iface, method_name))
+                            });
+
+                        if child_sig.is_override && parent_method.is_none() {
+                            return Err(TypeError::new(
+                                TypeErrorKind::MethodOverrideContractViolation {
+                                    class_name: class_name.clone(),
+                                    parent_name: parent_name.clone(),
+                                    method_name: method_name.clone(),
+                                    reason: format!(
+                                        "method '{}::{}()' has 'override' or '#[Override]' modifier but no matching parent or interface method was found",
+                                        class_name, method_name
+                                    ),
+                                },
+                                child_sig.span,
+                            ));
+                        }
+
+                        if let Some(parent_sig) = parent_method {
                             if parent_sig.is_final {
                                 return Err(TypeError::new(
                                     TypeErrorKind::MethodOverrideContractViolation {
@@ -1505,6 +1674,50 @@ impl TypeChecker {
                                     ));
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // 5. Validate shared class deep immutability & constructor injection
+            if class_info.is_shared {
+                for (prop_name, prop_info) in &class_info.properties {
+                    if !prop_info.is_static {
+                        if !prop_info.is_readonly {
+                            return Err(TypeError::new(
+                                TypeErrorKind::SharedClassMutablePropertyForbidden {
+                                    shared_class: class_name.clone(),
+                                    property: prop_name.strip_prefix('$').unwrap_or(prop_name).to_string(),
+                                },
+                                prop_info.span,
+                            ));
+                        }
+                    } else {
+                        // Static property
+                        if !prop_info.is_readonly && !Self::is_concurrency_primitive_type(&prop_info.rhp_type) {
+                            return Err(TypeError::new(
+                                TypeErrorKind::SharedClassMutableStaticForbidden {
+                                    shared_class: class_name.clone(),
+                                    property: prop_name.strip_prefix('$').unwrap_or(prop_name).to_string(),
+                                },
+                                prop_info.span,
+                            ));
+                        }
+                    }
+                }
+
+                // Check constructor parameters for request-scoped services
+                if let Some(construct_sig) = class_info.methods.get("__construct") {
+                    for param in &construct_sig.params {
+                        if let Some(service_type) = Self::is_scoped_service_type(&param.rhp_type) {
+                            return Err(TypeError::new(
+                                TypeErrorKind::SharedClassCapturesScopedService {
+                                    shared_class: class_name.clone(),
+                                    param: param.name.strip_prefix('$').unwrap_or(&param.name).to_string(),
+                                    service_type,
+                                },
+                                param.span,
+                            ));
                         }
                     }
                 }
@@ -2517,7 +2730,7 @@ impl TypeChecker {
             ExprKind::Assign { op, target, value } => {
                 self.check_cyclic_reference_assignment(target, value, expr.span)?;
                 let rhs_ty = self.infer_expr(value, env, ctx, None)?;
-                self.check_assignment(*op, target, rhs_ty, expr.span, env, ctx)?
+                self.check_assignment(*op, target, rhs_ty, Some(value), expr.span, env, ctx)?
             }
 
             ExprKind::Ternary {
@@ -2813,27 +3026,13 @@ impl TypeChecker {
                         ));
                     }
 
-                    if ci.is_singleton {
-                        if let Some(caller_ctx) = ctx {
-                            if let Some(ref caller_class) = caller_ctx.enclosing_class {
-                                let caller_is_singleton = self
-                                    .result
-                                    .hierarchy
-                                    .classes
-                                    .get(caller_class)
-                                    .map(|c| c.is_singleton)
-                                    .unwrap_or(false);
-                                if !caller_is_singleton {
-                                    return Err(TypeError::new(
-                                        TypeErrorKind::SingletonInstantiationForbidden {
-                                            singleton_class: class_name.clone(),
-                                            caller_class: caller_class.clone(),
-                                        },
-                                        expr.span,
-                                    ));
-                                }
-                            }
-                        }
+                    if ci.is_shared {
+                        return Err(TypeError::new(
+                            TypeErrorKind::SharedInstantiationForbidden {
+                                shared_class: class_name.clone(),
+                            },
+                            expr.span,
+                        ));
                     }
                 }
 
@@ -3050,33 +3249,6 @@ impl TypeChecker {
                         *r
                     }
                     RhpType::Class(ref cls_name) => {
-                        // Check singleton rule
-                        if let Some(target_ci) = self.result.hierarchy.classes.get(cls_name) {
-                            if target_ci.is_singleton {
-                                if let Some(caller_ctx) = ctx {
-                                    if let Some(ref caller_class) = caller_ctx.enclosing_class {
-                                        let caller_is_singleton = self
-                                            .result
-                                            .hierarchy
-                                            .classes
-                                            .get(caller_class)
-                                            .map(|c| c.is_singleton)
-                                            .unwrap_or(false);
-                                        if !caller_is_singleton {
-                                            return Err(TypeError::new(
-                                                TypeErrorKind::NonStaticSingletonMethodCallForbidden {
-                                                    singleton_class: cls_name.clone(),
-                                                    method: "__invoke".to_string(),
-                                                    caller_class: caller_class.clone(),
-                                                },
-                                                expr.span,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         if let Some(sig) = self
                             .result
                             .hierarchy
@@ -3192,35 +3364,6 @@ impl TypeChecker {
 
                 // 2. User-defined class/interface/trait/enum method calls
                 if let RhpType::Class(ref cls_name) = base_obj_ty {
-                    // Check singleton rule:
-                    // "one can use both static and non-static methods of singleton class within other singleton class
-                    //  but can only use static methods of singleton class inside non-singleton class."
-                    if let Some(target_ci) = self.result.hierarchy.classes.get(cls_name) {
-                        if target_ci.is_singleton {
-                            if let Some(caller_ctx) = ctx {
-                                if let Some(ref caller_class) = caller_ctx.enclosing_class {
-                                    let caller_is_singleton = self
-                                        .result
-                                        .hierarchy
-                                        .classes
-                                        .get(caller_class)
-                                        .map(|c| c.is_singleton)
-                                        .unwrap_or(false);
-                                    if !caller_is_singleton {
-                                        return Err(TypeError::new(
-                                            TypeErrorKind::NonStaticSingletonMethodCallForbidden {
-                                                singleton_class: cls_name.clone(),
-                                                method: method.name.to_string(),
-                                                caller_class: caller_class.clone(),
-                                            },
-                                            expr.span,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     if let Some(sig) = self
                         .result
                         .hierarchy
@@ -3639,6 +3782,7 @@ impl TypeChecker {
         op: AssignOp,
         target: &Expr<'_>,
         rhs_ty: RhpType,
+        rhs_expr: Option<&Expr<'_>>,
         span: Span,
         env: &mut TypeEnvironment,
         ctx: Option<&CallableContext>,
@@ -3735,6 +3879,26 @@ impl TypeChecker {
                     ));
                 }
                 if let RhpType::Class(ref cls_name) = obj_ty {
+                    if let Some(target_ci) = self.result.hierarchy.classes.get(cls_name) {
+                        if target_ci.is_shared {
+                            if let Some(rhs) = rhs_expr {
+                                let is_non_static_closure = match &rhs.kind {
+                                    ExprKind::Closure { is_static, .. } => !*is_static,
+                                    ExprKind::ArrowFunction { .. } => true,
+                                    _ => false,
+                                };
+                                if is_non_static_closure {
+                                    return Err(TypeError::new(
+                                        TypeErrorKind::SharedFieldClosureCaptureForbidden {
+                                            shared_class: cls_name.clone(),
+                                            property: property.name.to_string(),
+                                        },
+                                        rhs.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     if let Some(prop_info) = self
                         .result
                         .hierarchy
@@ -3798,6 +3962,27 @@ impl TypeChecker {
                 } else {
                     class.name
                 };
+
+                if let Some(target_ci) = self.result.hierarchy.classes.get(resolved_cls) {
+                    if target_ci.is_shared {
+                        if let Some(rhs) = rhs_expr {
+                            let is_non_static_closure = match &rhs.kind {
+                                ExprKind::Closure { is_static, .. } => !*is_static,
+                                ExprKind::ArrowFunction { .. } => true,
+                                _ => false,
+                            };
+                            if is_non_static_closure {
+                                return Err(TypeError::new(
+                                    TypeErrorKind::SharedFieldClosureCaptureForbidden {
+                                        shared_class: resolved_cls.to_string(),
+                                        property: property.name.to_string(),
+                                    },
+                                    rhs.span,
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 if let Some(prop_info) = self
                     .result

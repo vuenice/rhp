@@ -192,6 +192,8 @@ impl JitCompiler {
             inst_blocks.push(builder.create_block());
         }
 
+        let tick_counter_var = builder.declare_var(types::I64);
+
         // Build Entry Block: Load registers from slots into Cranelift variables
         builder.switch_to_block(entry_block);
         let slots_ptr = builder.block_params(entry_block)[0];
@@ -204,6 +206,8 @@ impl JitCompiler {
                 .load(types::I64, flags, slots_ptr, offset);
             builder.def_var(vars[i], val);
         }
+        let init_ticks = builder.ins().iconst(types::I64, 10_000);
+        builder.def_var(tick_counter_var, init_ticks);
         builder.ins().jump(inst_blocks[0], &[]);
 
         // Build each instruction in the loop
@@ -368,7 +372,24 @@ impl JitCompiler {
                 OpCode::Jump { target } => {
                     let t = target as usize;
                     if t >= header && t <= backedge {
-                        builder.ins().jump(inst_blocks[t - header], &[]);
+                        if t <= ip {
+                            let curr_ticks = builder.use_var(tick_counter_var);
+                            let next_ticks = builder.ins().iadd_imm_s(curr_ticks, -1);
+                            builder.def_var(tick_counter_var, next_ticks);
+                            let is_zero = builder.ins().icmp_imm_s(IntCC::Equal, next_ticks, 0);
+
+                            let yield_blk = builder.create_block();
+                            let cont_blk = builder.create_block();
+                            builder.ins().brif(is_zero, yield_blk, &[], cont_blk, &[]);
+
+                            builder.switch_to_block(yield_blk);
+                            Self::emit_exit(&mut builder, slots_ptr, &vars, target);
+
+                            builder.switch_to_block(cont_blk);
+                            builder.ins().jump(inst_blocks[t - header], &[]);
+                        } else {
+                            builder.ins().jump(inst_blocks[t - header], &[]);
+                        }
                     } else {
                         Self::emit_exit(&mut builder, slots_ptr, &vars, target);
                     }
@@ -380,10 +401,44 @@ impl JitCompiler {
                     if t >= header && t <= backedge {
                         let target_blk = inst_blocks[t - header];
                         if let Some(next) = next_block {
-                            builder.ins().brif(is_true, target_blk, &[], next, &[]);
+                            if t <= ip {
+                                let check_b = builder.create_block();
+                                builder.ins().brif(is_true, check_b, &[], next, &[]);
+
+                                builder.switch_to_block(check_b);
+                                let curr_ticks = builder.use_var(tick_counter_var);
+                                let next_ticks = builder.ins().iadd_imm_s(curr_ticks, -1);
+                                builder.def_var(tick_counter_var, next_ticks);
+                                let is_zero = builder.ins().icmp_imm_s(IntCC::Equal, next_ticks, 0);
+
+                                let yield_blk = builder.create_block();
+                                builder.ins().brif(is_zero, yield_blk, &[], target_blk, &[]);
+
+                                builder.switch_to_block(yield_blk);
+                                Self::emit_exit(&mut builder, slots_ptr, &vars, target);
+                            } else {
+                                builder.ins().brif(is_true, target_blk, &[], next, &[]);
+                            }
                         } else {
                             let fall_b = builder.create_block();
-                            builder.ins().brif(is_true, target_blk, &[], fall_b, &[]);
+                            if t <= ip {
+                                let check_b = builder.create_block();
+                                builder.ins().brif(is_true, check_b, &[], fall_b, &[]);
+
+                                builder.switch_to_block(check_b);
+                                let curr_ticks = builder.use_var(tick_counter_var);
+                                let next_ticks = builder.ins().iadd_imm_s(curr_ticks, -1);
+                                builder.def_var(tick_counter_var, next_ticks);
+                                let is_zero = builder.ins().icmp_imm_s(IntCC::Equal, next_ticks, 0);
+
+                                let yield_blk = builder.create_block();
+                                builder.ins().brif(is_zero, yield_blk, &[], target_blk, &[]);
+
+                                builder.switch_to_block(yield_blk);
+                                Self::emit_exit(&mut builder, slots_ptr, &vars, target);
+                            } else {
+                                builder.ins().brif(is_true, target_blk, &[], fall_b, &[]);
+                            }
                             builder.switch_to_block(fall_b);
                             Self::emit_exit(&mut builder, slots_ptr, &vars, (ip + 1) as u32);
                         }
@@ -409,10 +464,44 @@ impl JitCompiler {
                     if t >= header && t <= backedge {
                         let target_blk = inst_blocks[t - header];
                         if let Some(next) = next_block {
-                            builder.ins().brif(is_false, target_blk, &[], next, &[]);
+                            if t <= ip {
+                                let check_b = builder.create_block();
+                                builder.ins().brif(is_false, check_b, &[], next, &[]);
+
+                                builder.switch_to_block(check_b);
+                                let curr_ticks = builder.use_var(tick_counter_var);
+                                let next_ticks = builder.ins().iadd_imm_s(curr_ticks, -1);
+                                builder.def_var(tick_counter_var, next_ticks);
+                                let is_zero = builder.ins().icmp_imm_s(IntCC::Equal, next_ticks, 0);
+
+                                let yield_blk = builder.create_block();
+                                builder.ins().brif(is_zero, yield_blk, &[], target_blk, &[]);
+
+                                builder.switch_to_block(yield_blk);
+                                Self::emit_exit(&mut builder, slots_ptr, &vars, target);
+                            } else {
+                                builder.ins().brif(is_false, target_blk, &[], next, &[]);
+                            }
                         } else {
                             let fall_b = builder.create_block();
-                            builder.ins().brif(is_false, target_blk, &[], fall_b, &[]);
+                            if t <= ip {
+                                let check_b = builder.create_block();
+                                builder.ins().brif(is_false, check_b, &[], fall_b, &[]);
+
+                                builder.switch_to_block(check_b);
+                                let curr_ticks = builder.use_var(tick_counter_var);
+                                let next_ticks = builder.ins().iadd_imm_s(curr_ticks, -1);
+                                builder.def_var(tick_counter_var, next_ticks);
+                                let is_zero = builder.ins().icmp_imm_s(IntCC::Equal, next_ticks, 0);
+
+                                let yield_blk = builder.create_block();
+                                builder.ins().brif(is_zero, yield_blk, &[], target_blk, &[]);
+
+                                builder.switch_to_block(yield_blk);
+                                Self::emit_exit(&mut builder, slots_ptr, &vars, target);
+                            } else {
+                                builder.ins().brif(is_false, target_blk, &[], fall_b, &[]);
+                            }
                             builder.switch_to_block(fall_b);
                             Self::emit_exit(&mut builder, slots_ptr, &vars, (ip + 1) as u32);
                         }
@@ -497,5 +586,15 @@ impl JitCompiler {
         }
         let backedge_ip = (len - 1) as u32;
         self.compile_loop(name, chunk, 0, backedge_ip)
+    }
+
+    /// Compile a pure non-capturing closure into a native Cranelift machine-code function pointer.
+    /// Pure non-capturing closures require zero environment allocation (`env = null`).
+    pub fn compile_pure_closure(
+        &mut self,
+        name: &str,
+        chunk: &BytecodeChunk,
+    ) -> Result<CompiledFunctionFn, JitError> {
+        self.compile_function(name, chunk)
     }
 }

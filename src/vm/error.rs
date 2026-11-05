@@ -148,26 +148,16 @@ pub enum RuntimeErrorKind {
     StaticFacadeInheritanceForbidden { class: String },
 
     #[error(
-        "Fatal Error: Cannot call non-static method '{method}' of singleton class '{singleton_class}' inside non-singleton class '{caller_class}'."
+        "Fatal Error: Cannot instantiate shared class '{shared_class}'. Shared instances are created by the container at boot."
     )]
-    NonStaticSingletonMethodCallForbidden {
-        singleton_class: String,
-        method: String,
-        caller_class: String,
+    SharedInstantiationForbidden {
+        shared_class: String,
     },
 
     #[error(
-        "Fatal Error: Cannot instantiate singleton class '{singleton_class}' inside non-singleton class '{caller_class}'. Only static methods of singleton classes can be used in non-singleton classes."
+        "Fatal Error: Cannot extend shared class '{parent_name}' from non-shared class '{class_name}'."
     )]
-    SingletonInstantiationForbidden {
-        singleton_class: String,
-        caller_class: String,
-    },
-
-    #[error(
-        "Fatal Error: Cannot extend singleton class '{parent_name}' from non-singleton class '{class_name}'."
-    )]
-    NonSingletonExtendsSingletonForbidden {
+    NonSharedExtendsSharedForbidden {
         class_name: String,
         parent_name: String,
     },
@@ -199,6 +189,9 @@ pub enum RuntimeErrorKind {
 
     #[error("Die({0})")]
     Die(i32),
+
+    #[error("Fatal Error: Loop exceeded hard limit of {limit} iterations in Dev Mode (at ip={header_ip}). Ensure loop termination condition or run in production mode with cooperative preemption.")]
+    InfiniteLoopLimitExceeded { limit: u64, header_ip: u32 },
 
     #[error("RuntimeError: {message}")]
     Custom { message: String },

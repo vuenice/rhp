@@ -121,7 +121,7 @@ impl<'a> MetadataExtractor<'a> {
             attributes,
             is_abstract: class.modifiers.is_abstract,
             is_final: class.modifiers.is_final,
-            is_singleton: class.modifiers.is_singleton,
+            is_shared: class.modifiers.is_shared,
         };
 
         self.metadata.string_to_type.insert(full_name.clone(), RhpType::Class(full_name.clone()));
@@ -153,7 +153,7 @@ impl<'a> MetadataExtractor<'a> {
             attributes,
             is_abstract: true,
             is_final: false,
-            is_singleton: false,
+            is_shared: false,
         };
 
         self.metadata.string_to_type.insert(full_name.clone(), RhpType::Class(full_name.clone()));
@@ -195,7 +195,7 @@ impl<'a> MetadataExtractor<'a> {
             attributes,
             is_abstract: true,
             is_final: false,
-            is_singleton: false,
+            is_shared: false,
         };
 
         self.metadata.string_to_type.insert(full_name.clone(), RhpType::Class(full_name.clone()));
@@ -227,7 +227,7 @@ impl<'a> MetadataExtractor<'a> {
             attributes,
             is_abstract: false,
             is_final: true,
-            is_singleton: false,
+            is_shared: false,
         };
 
         self.metadata.string_to_type.insert(full_name.clone(), RhpType::Class(full_name.clone()));

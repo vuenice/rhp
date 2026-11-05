@@ -214,8 +214,17 @@ pub enum Token<'s> {
     #[token("readonly")]
     Readonly,
 
-    #[token("singleton")]
-    Singleton,
+    #[token("shared")]
+    Shared,
+
+    #[token("open")]
+    Open,
+
+    #[token("sealed")]
+    Sealed,
+
+    #[token("override")]
+    Override,
 
     #[token("const")]
     Const,
@@ -702,7 +711,10 @@ impl<'s> Token<'s> {
             Token::Abstract => "abstract",
             Token::Final => "final",
             Token::Readonly => "readonly",
-            Token::Singleton => "singleton",
+            Token::Shared => "shared",
+            Token::Open => "open",
+            Token::Sealed => "sealed",
+            Token::Override => "override",
             Token::Const => "const",
             Token::New => "new",
             Token::Clone => "clone",
@@ -873,7 +885,10 @@ impl<'s> Token<'s> {
                 | Token::Abstract
                 | Token::Final
                 | Token::Readonly
-                | Token::Singleton
+                | Token::Shared
+                | Token::Open
+                | Token::Sealed
+                | Token::Override
                 | Token::Const
                 | Token::New
                 | Token::Clone

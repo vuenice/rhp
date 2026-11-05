@@ -608,7 +608,9 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
         .to_string_lossy()
         .to_string();
 
-    match rhp::vm::run_source_with_path_vm_and_jit(&source, &canonical_path, jit_enabled) {
+    let is_dev_mode = matches!(mode, RunMode::Dev { .. });
+
+    match rhp::vm::run_source_with_path_vm_jit_and_dev_mode(&source, &canonical_path, jit_enabled, is_dev_mode) {
         Ok((vm, val)) => {
             let out = vm.output();
             if !out.is_empty() {

@@ -4,11 +4,11 @@
 //! - **Persistent Parent Process Architecture**: Boot, parse, and compile application code
 //!   inside a long-lived parent process into an immutable memory state (`Arc<EngineState>`)
 //!   to avoid per-request bootstrap overhead.
-//! - **Singleton Process Services**: If a developer needs to run something as part of the parent
-//!   process, they first declare a class with the `singleton` keyword.
-//! - **Singleton Invocation Invariants**: One can use both static and non-static methods of a
-//!   singleton class within other singleton classes, but can only use static methods of a singleton
-//!   class inside non-singleton classes.
+//! - **Shared Process Services**: If a developer needs to run something as part of the parent
+//!   process, they first declare a class with the `shared` keyword.
+//! - **Shared Invocation Invariants**: One can use both static and non-static methods of a
+//!   shared class within other shared classes, but can only use static methods of a shared
+//!   class inside non-shared classes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -244,8 +244,8 @@ pub struct EngineState {
     pub module: Arc<IrModule>,
     /// Pre-analyzed nominal type hierarchy for instant subtype and boundary verification.
     pub type_hierarchy: Arc<TypeHierarchy>,
-    /// Set of class names declared with the `singleton` keyword.
-    pub singleton_classes: HashSet<String>,
+    /// Set of class names declared with the `shared` keyword.
+    pub shared_classes: HashSet<String>,
     /// Static class properties evaluated during parent bootstrap.
     pub static_properties: HashMap<(String, String), FrozenValue>,
     /// Cached class constants and enum cases evaluated during parent bootstrap.
@@ -278,10 +278,16 @@ impl EngineState {
         vm
     }
 
-    /// Check if a class was declared with the `singleton` keyword.
+    /// Check if a class was declared with the `shared` keyword.
+    #[inline]
+    pub fn is_shared_class(&self, class_name: &str) -> bool {
+        self.shared_classes.contains(class_name)
+    }
+
+    /// Backwards compatibility alias for [`is_shared_class`].
     #[inline]
     pub fn is_singleton_class(&self, class_name: &str) -> bool {
-        self.singleton_classes.contains(class_name)
+        self.is_shared_class(class_name)
     }
 
     /// Execute a per-request script against the pre-compiled parent state.
@@ -448,10 +454,10 @@ impl ParentProcess {
     }
 
     fn boot_typed(typed: crate::type_system::TypedProgram<'_>) -> Result<Arc<EngineState>, ExecutionError> {
-        let mut singleton_classes = HashSet::new();
+        let mut shared_classes = HashSet::new();
         for (name, class_info) in &typed.type_info.hierarchy.classes {
-            if class_info.is_singleton {
-                singleton_classes.insert(name.clone());
+            if class_info.is_shared {
+                shared_classes.insert(name.clone());
             }
         }
 
@@ -488,7 +494,7 @@ impl ParentProcess {
         let state = Arc::new(EngineState {
             module: Arc::new(compiled_module),
             type_hierarchy: Arc::new(hierarchy),
-            singleton_classes,
+            shared_classes,
             static_properties,
             class_constants,
             globals,

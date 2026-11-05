@@ -85,7 +85,7 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "App",
-        "Static application IoC service container facade (bind, singleton, instance, swap, make, has, resolve)",
+        "Static application IoC service container facade (bind, shared, singleton, instance, swap, make, has, resolve)",
     ),
     FacadeInfo::native(
         "Arr",
@@ -204,8 +204,12 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Static reflection and inspection facade (classExists, functionExists)",
     ),
     FacadeInfo::native(
-        "Carbon",
+        "Time",
         "Static date and time manipulation facade inspired by Laravel Carbon (now, parse, today, tomorrow, yesterday, create, toDateTimeString, toDateString, addDay, subDay, lastOfMonth, diffForHumans)",
+    ),
+    FacadeInfo::native(
+        "Carbon",
+        "Date and time manipulation alias facade for Time",
     ),
     FacadeInfo::native(
         "Ip",
@@ -1401,6 +1405,19 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "uniqid",
         rhp_signature: "Uniq::uniqid(string $prefix = '', bool $more_entropy = false): string",
     },
+    // Time functions -> Time::*
+    LegacyPhpFunctionMapping {
+        php_name: "now",
+        rhp_facade: "Time",
+        rhp_method: "now",
+        rhp_signature: "Time::now(?string $tz = null): Time",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "date",
+        rhp_facade: "Time",
+        rhp_method: "date",
+        rhp_signature: "Time::date(string $format, ?int $timestamp = null): string",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function
@@ -1530,6 +1547,7 @@ impl FacadeRegistry {
             "crypt" => "Crypt",
             "html" => "Html",
             "url" => "Url",
+            "time" => "Time",
             "carbon" => "Carbon",
             "validate" => "Validate",
             "csv" => "Csv",
@@ -1596,6 +1614,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
+            | "time" | "carbon"
     )
 }
 

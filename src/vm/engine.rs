@@ -155,6 +155,13 @@ pub struct ErrorHandlerEntry {
     pub error_levels: i32,
 }
 
+/// Default instruction budget (ticks) before cooperative preemption (10,000 instructions).
+pub const DEFAULT_INSTRUCTION_BUDGET: u32 = 10_000;
+/// Dev Mode loop iteration threshold for emitting a runaway loop warning (1,000 iterations).
+pub const DEV_LOOP_WARN_THRESHOLD: u64 = 1_000;
+/// Dev Mode loop iteration hard ceiling before raising a fatal InfiniteLoopLimitExceeded error (100,000 iterations / 1 lakh).
+pub const DEV_LOOP_HARD_LIMIT: u64 = 100_000;
+
 pub struct VM {
     module: IrModule,
     jit_enabled: bool,
@@ -165,7 +172,7 @@ pub struct VM {
     /// Argument staging buffer populated by `OpCode::PushArg`.
     arg_buffer: Vec<StagedArg>,
     /// Upvalue staging buffer populated by `OpCode::CaptureUpvalue`.
-    upvalue_buffer: Vec<(String, PhpValue)>,
+    upvalue_buffer: Vec<(String, PhpValue, bool)>,
     /// Global variables (`global $x;`).
     globals: HashMap<String, PhpValue>,
     /// Static class properties (`Class::$prop`).
@@ -206,6 +213,24 @@ pub struct VM {
     pub source_files: HashMap<usize, String>,
     /// When true, function arguments are not captured into exception stack frames (zend.exception_ignore_args).
     pub exception_ignore_args: bool,
+    /// Configured instruction tick budget before cooperative preemption (default: 10,000).
+    pub tick_budget: u32,
+    /// Decrementing instruction tick counter for cooperative preemption.
+    pub tick_counter: u32,
+    /// Flag indicating whether the VM is executing in Development Mode (enabling loop warnings & hard limits).
+    pub dev_mode: bool,
+    /// Warning threshold for loop iterations in Dev Mode (default: 1,000).
+    pub dev_loop_warn_threshold: u64,
+    /// Hard limit for loop iterations in Dev Mode (default: 100,000).
+    pub dev_loop_hard_limit: u64,
+    /// When true, loop iteration warnings and hard limits are exempted/bypassed.
+    pub exempt_loop_limits: bool,
+    /// Active iteration counts per loop header: `(Option<FunctionId>, header_ip) -> count`.
+    loop_iterations: HashMap<(Option<FunctionId>, u32), u64>,
+    /// Set of loop headers that have already emitted a warning in Dev Mode.
+    loop_warned: std::collections::HashSet<(Option<FunctionId>, u32)>,
+    /// Total number of cooperative preemption events triggered.
+    pub total_preemptions: u64,
 }
 
 impl VM {
@@ -249,6 +274,15 @@ impl VM {
             file_path,
             source_files,
             exception_ignore_args: true,
+            tick_budget: DEFAULT_INSTRUCTION_BUDGET,
+            tick_counter: DEFAULT_INSTRUCTION_BUDGET,
+            dev_mode: false,
+            dev_loop_warn_threshold: DEV_LOOP_WARN_THRESHOLD,
+            dev_loop_hard_limit: DEV_LOOP_HARD_LIMIT,
+            exempt_loop_limits: false,
+            loop_iterations: HashMap::new(),
+            loop_warned: std::collections::HashSet::new(),
+            total_preemptions: 0,
         }
     }
 
@@ -256,6 +290,37 @@ impl VM {
     pub fn with_exit_hook(mut self, hook: impl Fn(i32) + Send + Sync + 'static) -> Self {
         self.exit_hook = Some(std::sync::Arc::new(hook));
         self
+    }
+
+    /// Configure whether this VM instance runs in Development Mode (enabling loop warnings and hard limits).
+    pub fn with_dev_mode(mut self, dev_mode: bool) -> Self {
+        self.dev_mode = dev_mode;
+        self
+    }
+
+    /// Set the instruction tick budget before cooperative preemption.
+    pub fn with_instruction_budget(mut self, budget: u32) -> Self {
+        self.tick_budget = budget.max(1);
+        self.tick_counter = self.tick_budget;
+        self
+    }
+
+    /// Set the loop warning and hard limit thresholds in Dev Mode.
+    pub fn with_loop_limits(mut self, warn_threshold: u64, hard_limit: u64) -> Self {
+        self.dev_loop_warn_threshold = warn_threshold;
+        self.dev_loop_hard_limit = hard_limit;
+        self
+    }
+
+    /// Exempt this VM instance from loop iteration limits and warnings.
+    pub fn with_exempt_loop_limits(mut self, exempt: bool) -> Self {
+        self.exempt_loop_limits = exempt;
+        self
+    }
+
+    /// Reset the instruction budget tick counter back to `tick_budget`.
+    pub fn reset_instruction_budget(&mut self) {
+        self.tick_counter = self.tick_budget;
     }
 
     /// Attach a source file path to this VM instance for stack trace and __FILE__ resolution.
@@ -955,9 +1020,93 @@ impl VM {
                 .unwrap()
                 .execute_loop(compiled_loop, reg_slice);
             self.frames[frame_idx].ip = next_ip as usize;
+
+            if next_ip == header_ip {
+                self.tick_counter = self.tick_budget;
+                self.total_preemptions += 1;
+                crate::vm::fiber::trigger_cooperative_yield(crate::vm::fiber::YieldReason::CooperativeYield);
+                if self.dev_mode && !self.exempt_loop_limits {
+                    let key = (func_id, header_ip);
+                    let count = self.loop_iterations.entry(key).or_insert(0);
+                    *count += 10_000;
+                    if *count > self.dev_loop_warn_threshold && !self.loop_warned.contains(&key) {
+                        self.loop_warned.insert(key);
+                        let func_desc = self.frames[frame_idx].function_name.clone();
+                        let msg = format!(
+                            "Loop in {} at ip={} exceeded {} iterations in Dev Mode (possible infinite loop).",
+                            func_desc, header_ip, self.dev_loop_warn_threshold
+                        );
+                        let _ = self.trigger_error(&msg, Some(512), Span::default());
+                    }
+                }
+            }
             true
         } else {
             false
+        }
+    }
+
+    /// Check loop back-edge for CPU preemption (instruction budget) and Dev Mode iteration limits.
+    fn handle_loop_backedge(
+        &mut self,
+        frame_idx: usize,
+        header_ip: u32,
+        _backedge_ip: u32,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        // 1. Cooperative Preemption & Instruction Budget (Tick Slicing)
+        if self.tick_counter == 0 {
+            self.tick_counter = self.tick_budget;
+            self.total_preemptions += 1;
+            crate::vm::fiber::trigger_cooperative_yield(crate::vm::fiber::YieldReason::CooperativeYield);
+        } else {
+            self.tick_counter = self.tick_counter.saturating_sub(1);
+        }
+
+        // 2. Dev Mode: Warning at 1,000 iterations & Hard Limit at 100,000 iterations
+        if self.dev_mode && !self.exempt_loop_limits {
+            let func_id = self.frames[frame_idx].func_id;
+            let key = (func_id, header_ip);
+            let count = self.loop_iterations.entry(key).or_insert(0);
+            *count += 1;
+            let current_count = *count;
+
+            // Warning at > 1,000 iterations (emitted once per loop execution)
+            if current_count > self.dev_loop_warn_threshold && !self.loop_warned.contains(&key) {
+                self.loop_warned.insert(key);
+                let func_desc = self.frames[frame_idx].function_name.clone();
+                let msg = format!(
+                    "Loop in {} at ip={} exceeded {} iterations in Dev Mode (possible infinite loop).",
+                    func_desc, header_ip, self.dev_loop_warn_threshold
+                );
+                let _ = self.trigger_error(&msg, Some(512), span);
+            }
+
+            // Hard limit at 100,000 iterations (1 lakh)
+            if current_count >= self.dev_loop_hard_limit {
+                return Err(self.make_error(
+                    RuntimeErrorKind::InfiniteLoopLimitExceeded {
+                        limit: self.dev_loop_hard_limit,
+                        header_ip,
+                    },
+                    span,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Clear iteration accounting for loops that completed or jumped past in Dev Mode.
+    fn handle_forward_jump(&mut self, frame_idx: usize, from_ip: u32, to_ip: u32) {
+        if self.dev_mode && !self.exempt_loop_limits {
+            let func_id = self.frames[frame_idx].func_id;
+            self.loop_iterations.retain(|&(fid, header_ip), _| {
+                !(fid == func_id && header_ip <= from_ip && to_ip > from_ip)
+            });
+            self.loop_warned.retain(|&(fid, header_ip)| {
+                !(fid == func_id && header_ip <= from_ip && to_ip > from_ip)
+            });
         }
     }
 
@@ -1226,6 +1375,17 @@ impl VM {
             let func_id = self.frames[frame_idx].func_id;
             let base_reg = self.frames[frame_idx].base_reg;
 
+            // Check instruction budget and cooperative yield at function prologue
+            if ip == 0 {
+                if self.tick_counter == 0 {
+                    self.tick_counter = self.tick_budget;
+                    self.total_preemptions += 1;
+                    crate::vm::fiber::trigger_cooperative_yield(crate::vm::fiber::YieldReason::CooperativeYield);
+                } else {
+                    self.tick_counter = self.tick_counter.saturating_sub(1);
+                }
+            }
+
             // Check for hot function compilation and execution if entering a function frame
             if ip == 0 && func_id.is_some() && self.jit_engine.is_some() {
                 if let Some(fid) = func_id {
@@ -1463,10 +1623,12 @@ impl VM {
                 // -----------------------------------------------------------------
                 OpCode::Jump { target } => {
                     if target <= (ip as u32) {
+                        self.handle_loop_backedge(frame_idx, target, ip as u32, span)?;
                         if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
                             self.frames[frame_idx].ip = target as usize;
                         }
                     } else {
+                        self.handle_forward_jump(frame_idx, ip as u32, target);
                         self.frames[frame_idx].ip = target as usize;
                     }
                 }
@@ -1474,10 +1636,12 @@ impl VM {
                 OpCode::JumpIfTrue { cond, target } => {
                     if self.registers[base_reg + cond.index()].is_truthy() {
                         if target <= (ip as u32) {
+                            self.handle_loop_backedge(frame_idx, target, ip as u32, span)?;
                             if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
                                 self.frames[frame_idx].ip = target as usize;
                             }
                         } else {
+                            self.handle_forward_jump(frame_idx, ip as u32, target);
                             self.frames[frame_idx].ip = target as usize;
                         }
                     }
@@ -1486,10 +1650,12 @@ impl VM {
                 OpCode::JumpIfFalse { cond, target } => {
                     if !self.registers[base_reg + cond.index()].is_truthy() {
                         if target <= (ip as u32) {
+                            self.handle_loop_backedge(frame_idx, target, ip as u32, span)?;
                             if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
                                 self.frames[frame_idx].ip = target as usize;
                             }
                         } else {
+                            self.handle_forward_jump(frame_idx, ip as u32, target);
                             self.frames[frame_idx].ip = target as usize;
                         }
                     }
@@ -1497,13 +1663,29 @@ impl VM {
 
                 OpCode::JumpIfNull { cond, target } => {
                     if self.registers[base_reg + cond.index()].is_null() {
-                        self.frames[frame_idx].ip = target as usize;
+                        if target <= (ip as u32) {
+                            self.handle_loop_backedge(frame_idx, target, ip as u32, span)?;
+                            if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
+                                self.frames[frame_idx].ip = target as usize;
+                            }
+                        } else {
+                            self.handle_forward_jump(frame_idx, ip as u32, target);
+                            self.frames[frame_idx].ip = target as usize;
+                        }
                     }
                 }
 
                 OpCode::JumpIfNotNull { cond, target } => {
                     if !self.registers[base_reg + cond.index()].is_null() {
-                        self.frames[frame_idx].ip = target as usize;
+                        if target <= (ip as u32) {
+                            self.handle_loop_backedge(frame_idx, target, ip as u32, span)?;
+                            if !self.check_and_run_hot_loop(frame_idx, target, ip as u32) {
+                                self.frames[frame_idx].ip = target as usize;
+                            }
+                        } else {
+                            self.handle_forward_jump(frame_idx, ip as u32, target);
+                            self.frames[frame_idx].ip = target as usize;
+                        }
                     }
                 }
 
@@ -2022,7 +2204,7 @@ impl VM {
                     self.registers[base_reg + dst.index()] = PhpValue::string(out);
                 }
 
-                OpCode::CaptureUpvalue { src, name } => {
+                OpCode::CaptureUpvalue { src, name, is_by_ref } => {
                     let upval_name = {
                         let chunk = self.chunk_for_func(func_id);
                         chunk
@@ -2031,20 +2213,21 @@ impl VM {
                             .to_string()
                     };
                     let val = self.registers[base_reg + src.index()].clone();
-                    self.upvalue_buffer.push((upval_name, val));
+                    self.upvalue_buffer.push((upval_name, val, is_by_ref));
                 }
 
                 OpCode::MakeClosure {
                     dst,
                     func_id: target_fn,
                     upvalue_count,
+                    category,
                 } => {
                     let count = upvalue_count as usize;
                     let start = self.upvalue_buffer.len().saturating_sub(count);
                     let captured: Vec<PhpValue> = self
                         .upvalue_buffer
                         .drain(start..)
-                        .map(|(_, v)| v)
+                        .map(|(_, v, _)| v)
                         .collect();
 
                     let (fn_name, is_static) = self
@@ -2054,7 +2237,7 @@ impl VM {
                         .unwrap_or_else(|| (format!("fn#{}", target_fn.0), false));
 
                     self.registers[base_reg + dst.index()] =
-                        PhpValue::closure(target_fn, fn_name, captured, is_static);
+                        PhpValue::closure(target_fn, fn_name, captured, is_static, category);
                 }
 
                 OpCode::CallFunction {
@@ -2088,6 +2271,16 @@ impl VM {
                     }
 
                     let clean_fn = fn_name.strip_prefix('\\').unwrap_or(&fn_name);
+                    if (clean_fn.eq_ignore_ascii_case("now") || clean_fn.eq_ignore_ascii_case("date"))
+                        && !self.module.function_index.contains_key(&fn_name)
+                    {
+                        let raw_args: Vec<PhpValue> = staged.into_iter().map(|a| a.value).collect();
+                        let val = crate::vm::time::dispatch_time(clean_fn, &raw_args)
+                            .map_err(|e| self.make_error(e, span))?;
+                        self.registers[base_reg + dst.index()] = val;
+                        continue;
+                    }
+
                     if (clean_fn.eq_ignore_ascii_case("ini_get") || clean_fn.eq_ignore_ascii_case("ini_set"))
                         && !self.module.function_index.contains_key(&fn_name)
                     {
@@ -2097,6 +2290,15 @@ impl VM {
                             if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
                                 self.registers[base_reg + dst.index()] =
                                     PhpValue::string(if self.exception_ignore_args { "1" } else { "0" });
+                            } else if clean_key == "max_loop_iterations" || key == "max_loop_iterations" {
+                                self.registers[base_reg + dst.index()] =
+                                    PhpValue::string(if self.exempt_loop_limits { "0".to_string() } else { self.dev_loop_hard_limit.to_string() });
+                            } else if clean_key == "warn_loop_iterations" || key == "warn_loop_iterations" {
+                                self.registers[base_reg + dst.index()] =
+                                    PhpValue::string(self.dev_loop_warn_threshold.to_string());
+                            } else if clean_key == "instruction_budget" || key == "instruction_budget" {
+                                self.registers[base_reg + dst.index()] =
+                                    PhpValue::string(self.tick_budget.to_string());
                             } else {
                                 self.registers[base_reg + dst.index()] = PhpValue::string("");
                             }
@@ -2111,6 +2313,30 @@ impl VM {
                                 self.exception_ignore_args =
                                     clean_val == "1" || clean_val.eq_ignore_ascii_case("true") || clean_val.eq_ignore_ascii_case("on")
                                     || val == "1" || val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("on");
+                                self.registers[base_reg + dst.index()] = PhpValue::string(old);
+                            } else if clean_key == "max_loop_iterations" || key == "max_loop_iterations" {
+                                let old = if self.exempt_loop_limits { "0".to_string() } else { self.dev_loop_hard_limit.to_string() };
+                                if let Ok(parsed) = clean_val.parse::<u64>() {
+                                    if parsed == 0 {
+                                        self.exempt_loop_limits = true;
+                                    } else {
+                                        self.exempt_loop_limits = false;
+                                        self.dev_loop_hard_limit = parsed;
+                                    }
+                                }
+                                self.registers[base_reg + dst.index()] = PhpValue::string(old);
+                            } else if clean_key == "warn_loop_iterations" || key == "warn_loop_iterations" {
+                                let old = self.dev_loop_warn_threshold.to_string();
+                                if let Ok(parsed) = clean_val.parse::<u64>() {
+                                    self.dev_loop_warn_threshold = parsed;
+                                }
+                                self.registers[base_reg + dst.index()] = PhpValue::string(old);
+                            } else if clean_key == "instruction_budget" || key == "instruction_budget" {
+                                let old = self.tick_budget.to_string();
+                                if let Ok(parsed) = clean_val.parse::<u32>() {
+                                    self.tick_budget = parsed.max(1);
+                                    self.tick_counter = self.tick_budget;
+                                }
                                 self.registers[base_reg + dst.index()] = PhpValue::string(old);
                             } else {
                                 self.registers[base_reg + dst.index()] = PhpValue::string("");
@@ -2208,32 +2434,6 @@ impl VM {
                         }
                         PhpValue::Object(ref obj_rc) => {
                             let cls_name = obj_rc.borrow().class_name.clone();
-
-                            // Check Singleton Invocation Invariant:
-                            // "one can use both static and non-static methods of singleton class within other singleton class
-                            //  but can only use static methods of singleton class inside non-singleton class."
-                            if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
-                                if target_cls.modifiers.is_singleton {
-                                    if let Some(caller_class) = self.current_caller_class() {
-                                        let caller_is_singleton = self
-                                            .module
-                                            .get_class_by_name(&caller_class)
-                                            .map(|c| c.modifiers.is_singleton)
-                                            .unwrap_or(false);
-
-                                        if !caller_is_singleton {
-                                            return Err(self.make_error(
-                                                RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
-                                                    singleton_class: cls_name,
-                                                    method: "__invoke".to_string(),
-                                                    caller_class,
-                                                },
-                                                span,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
 
                             if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
                                 self.push_compiled_call_frame(
@@ -3093,8 +3293,9 @@ impl VM {
                     };
                     if c_name == "class" {
                         self.registers[base_reg + dst.index()] = PhpValue::string(resolved_cls);
-                    } else if resolved_cls == "Carbon" || resolved_cls == "\\Carbon" {
-                        if let Some(val) = crate::vm::carbon::get_carbon_constant(&c_name) {
+                    } else if resolved_cls == "Time" || resolved_cls == "\\Time"
+                        || resolved_cls == "Carbon" || resolved_cls == "\\Carbon" {
+                        if let Some(val) = crate::vm::time::get_time_constant(&c_name) {
                             self.registers[base_reg + dst.index()] = val;
                         } else {
                             return Err(self.make_error(
@@ -3426,12 +3627,14 @@ impl VM {
         }
 
         // 3. Bind captured closure/arrow upvalues (`use ($var)`)
-        for (upval_name, upval_val) in func.upvalues.iter().zip(upvalues.iter()) {
-            if upval_name == "$this" && has_explicit_receiver {
-                continue;
-            }
-            if let Some(reg) = func.chunk.register_for_var(upval_name) {
-                self.registers[new_base + reg.index()] = upval_val.clone();
+        if !upvalues.is_empty() {
+            for (upval_name, upval_val) in func.upvalues.iter().zip(upvalues.iter()) {
+                if upval_name == "$this" && has_explicit_receiver {
+                    continue;
+                }
+                if let Some(reg) = func.chunk.register_for_var(upval_name) {
+                    self.registers[new_base + reg.index()] = upval_val.clone();
+                }
             }
         }
 
@@ -3574,7 +3777,7 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         let clean = class_name.strip_prefix('\\').unwrap_or(class_name);
-        let instance = self.instantiate_class(clean, span)?;
+        let instance = self.instantiate_class_raw(clean, span, true)?;
 
         if let Some(ctor_id) = self.resolve_method_id(clean, "__construct") {
             let staged: Vec<StagedArg> = args
@@ -3914,6 +4117,7 @@ impl VM {
         let func_id = closure.func_id;
         let name = closure.name.clone();
         let is_static = closure.is_static;
+        let category = closure.category;
         let frozen_upvalues: Vec<FrozenValue> = closure
             .upvalues
             .iter()
@@ -3954,6 +4158,7 @@ impl VM {
                         name,
                         upvalues,
                         is_static,
+                        category,
                     };
                     child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
                 }));
@@ -4026,6 +4231,12 @@ impl VM {
                 let clean_key = key.trim_matches('"').trim_matches('\'');
                 if clean_key == "zend.exception_ignore_args" || key == "zend.exception_ignore_args" {
                     return Ok(PhpValue::string(if self.exception_ignore_args { "1" } else { "0" }));
+                } else if clean_key == "max_loop_iterations" || key == "max_loop_iterations" {
+                    return Ok(PhpValue::string(if self.exempt_loop_limits { "0".to_string() } else { self.dev_loop_hard_limit.to_string() }));
+                } else if clean_key == "warn_loop_iterations" || key == "warn_loop_iterations" {
+                    return Ok(PhpValue::string(self.dev_loop_warn_threshold.to_string()));
+                } else if clean_key == "instruction_budget" || key == "instruction_budget" {
+                    return Ok(PhpValue::string(self.tick_budget.to_string()));
                 } else {
                     return Ok(PhpValue::string(""));
                 }
@@ -4039,6 +4250,30 @@ impl VM {
                     self.exception_ignore_args =
                         clean_val == "1" || clean_val.eq_ignore_ascii_case("true") || clean_val.eq_ignore_ascii_case("on")
                         || val == "1" || val.eq_ignore_ascii_case("true") || val.eq_ignore_ascii_case("on");
+                    return Ok(PhpValue::string(old));
+                } else if clean_key == "max_loop_iterations" || key == "max_loop_iterations" {
+                    let old = if self.exempt_loop_limits { "0".to_string() } else { self.dev_loop_hard_limit.to_string() };
+                    if let Ok(parsed) = clean_val.parse::<u64>() {
+                        if parsed == 0 {
+                            self.exempt_loop_limits = true;
+                        } else {
+                            self.exempt_loop_limits = false;
+                            self.dev_loop_hard_limit = parsed;
+                        }
+                    }
+                    return Ok(PhpValue::string(old));
+                } else if clean_key == "warn_loop_iterations" || key == "warn_loop_iterations" {
+                    let old = self.dev_loop_warn_threshold.to_string();
+                    if let Ok(parsed) = clean_val.parse::<u64>() {
+                        self.dev_loop_warn_threshold = parsed;
+                    }
+                    return Ok(PhpValue::string(old));
+                } else if clean_key == "instruction_budget" || key == "instruction_budget" {
+                    let old = self.tick_budget.to_string();
+                    if let Ok(parsed) = clean_val.parse::<u32>() {
+                        self.tick_budget = parsed.max(1);
+                        self.tick_counter = self.tick_budget;
+                    }
                     return Ok(PhpValue::string(old));
                 } else {
                     return Ok(PhpValue::string(""));
@@ -4098,6 +4333,7 @@ impl VM {
                                 let func_id = c.func_id;
                                 let name = c.name.clone();
                                 let is_static = c.is_static;
+                                let category = c.category;
                                 let frozen_upvalues: Vec<FrozenValue> = c
                                     .upvalues
                                     .iter()
@@ -4139,6 +4375,7 @@ impl VM {
                                                 name,
                                                 upvalues,
                                                 is_static,
+                                                category,
                                             };
                                             child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
                                         }));
@@ -4253,6 +4490,7 @@ impl VM {
                                 let func_id = c.func_id;
                                 let name = c.name.clone();
                                 let is_static = c.is_static;
+                                let category = c.category;
                                 let frozen_upvalues: Vec<FrozenValue> = c
                                     .upvalues
                                     .iter()
@@ -4293,6 +4531,7 @@ impl VM {
                                                 name,
                                                 upvalues,
                                                 is_static,
+                                                category,
                                             };
                                             child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
                                         }));
@@ -4888,10 +5127,10 @@ impl VM {
                     self.container.bind(abs, conc);
                     return Ok(PhpValue::Null);
                 }
-                "singleton" => {
+                "singleton" | "shared" => {
                     let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
-                    self.container.singleton(abs, conc);
+                    self.container.shared(abs, conc);
                     return Ok(PhpValue::Null);
                 }
                 "instance" => {
@@ -8088,7 +8327,7 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         if method == "toJson" {
-            if class_name == "Carbon" {
+            if class_name == "Time" || class_name == "Carbon" {
                 if let PhpValue::Object(rc) = receiver {
                     if let Some(iso) = rc.borrow().get_property("iso") {
                         return Ok(PhpValue::string(format!("\"{}\"", iso.to_php_string())));
@@ -8097,8 +8336,8 @@ impl VM {
             }
             return Ok(PhpValue::string(php_value_to_json(receiver)));
         }
-        if class_name == "Carbon" {
-            return crate::vm::carbon::exec_carbon_instance_method(receiver, method, args, span);
+        if class_name == "Time" || class_name == "Carbon" {
+            return crate::vm::time::exec_time_instance_method(receiver, method, args, span);
         }
 
         if class_name == "Application" || class_name == "Container"
@@ -8112,10 +8351,10 @@ impl VM {
                     self.container.bind(abs, conc);
                     return Ok(PhpValue::Null);
                 }
-                "singleton" => {
+                "singleton" | "shared" => {
                     let abs = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let conc = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
-                    self.container.singleton(abs, conc);
+                    self.container.shared(abs, conc);
                     return Ok(PhpValue::Null);
                 }
                 "instance" => {
@@ -9063,6 +9302,15 @@ impl VM {
     // =========================================================================
 
     fn instantiate_class(&mut self, class_name: &str, span: Span) -> Result<PhpValue, RuntimeError> {
+        self.instantiate_class_raw(class_name, span, false)
+    }
+
+    fn instantiate_class_raw(
+        &mut self,
+        class_name: &str,
+        span: Span,
+        allow_shared: bool,
+    ) -> Result<PhpValue, RuntimeError> {
         let clean_name = class_name.strip_prefix('\\').unwrap_or(class_name);
 
         // Engine-Level Instantiation Guard:
@@ -9087,24 +9335,13 @@ impl VM {
                 ));
             }
 
-            if cls.modifiers.is_singleton {
-                if let Some(caller_class) = self.current_caller_class() {
-                    let caller_is_singleton = self
-                        .module
-                        .get_class_by_name(&caller_class)
-                        .map(|c| c.modifiers.is_singleton)
-                        .unwrap_or(false);
-
-                    if !caller_is_singleton {
-                        return Err(self.make_error(
-                            RuntimeErrorKind::SingletonInstantiationForbidden {
-                                singleton_class: clean_name.to_string(),
-                                caller_class,
-                            },
-                            span,
-                        ));
-                    }
-                }
+            if cls.modifiers.is_shared && !allow_shared {
+                return Err(self.make_error(
+                    RuntimeErrorKind::SharedInstantiationForbidden {
+                        shared_class: clean_name.to_string(),
+                    },
+                    span,
+                ));
             }
         }
 
@@ -9154,9 +9391,9 @@ impl VM {
             if let Some(cls) = self.module.get_class_by_name(current_cls_name).cloned() {
                 if let Some(ref parent_name) = cls.extends {
                     if let Some(parent_cls) = self.module.get_class_by_name(parent_name) {
-                        if parent_cls.modifiers.is_singleton && !cls.modifiers.is_singleton {
+                        if parent_cls.modifiers.is_shared && !cls.modifiers.is_shared {
                             return Err(self.make_error(
-                                RuntimeErrorKind::NonSingletonExtendsSingletonForbidden {
+                                RuntimeErrorKind::NonSharedExtendsSharedForbidden {
                                     class_name: current_cls_name.to_string(),
                                     parent_name: parent_name.to_string(),
                                 },
@@ -9428,29 +9665,6 @@ impl VM {
             PhpValue::Object(obj_rc) => {
                 let cls_name = obj_rc.borrow().class_name.clone();
 
-                // Check Singleton Invocation Invariant:
-                if let Some(target_cls) = self.module.get_class_by_name(&cls_name) {
-                    if target_cls.modifiers.is_singleton {
-                        if let Some(caller_class) = self.current_caller_class() {
-                            let caller_is_singleton = self
-                                .module
-                                .get_class_by_name(&caller_class)
-                                .map(|c| c.modifiers.is_singleton)
-                                .unwrap_or(false);
-
-                            if !caller_is_singleton {
-                                return Err(self.make_error(
-                                    RuntimeErrorKind::NonStaticSingletonMethodCallForbidden {
-                                        singleton_class: cls_name,
-                                        method: method_name,
-                                        caller_class,
-                                    },
-                                    span,
-                                ));
-                            }
-                        }
-                    }
-                }
                 let is_throwable_final_method = match method_name.as_str() {
                     "getFile" | "getLine" | "getTrace" | "getPrevious" | "source"
                     | "rootCause" | "getRootCause" | "chain" | "getChain"

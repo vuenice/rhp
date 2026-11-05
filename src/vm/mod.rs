@@ -12,7 +12,8 @@
 //!   (`Arr::list`, `Arr::dict`, `Arr::set`, `Arr::hashMap`), closures, objects, and futures.
 
 pub mod arena;
-pub mod carbon;
+pub mod time;
+pub use time as carbon;
 pub mod crypto;
 pub mod csv;
 pub mod decimal;
@@ -444,10 +445,37 @@ pub fn run_source_with_path_vm_and_jit(
     path: impl Into<String>,
     jit_enabled: bool,
 ) -> Result<(VM, PhpValue), ExecutionError> {
+    run_source_with_path_vm_jit_and_dev_mode(source, path, jit_enabled, false)
+}
+
+/// Compile and execute an RHP source program with explicit file path, JIT option, and Dev Mode flag.
+pub fn run_source_with_path_vm_jit_and_dev_mode(
+    source: &str,
+    path: impl Into<String>,
+    jit_enabled: bool,
+    dev_mode: bool,
+) -> Result<(VM, PhpValue), ExecutionError> {
     let typed = crate::type_system::parse_and_check_with_path(source, path).map_err(CompilationError::from)?;
     let hierarchy = typed.type_info.hierarchy.clone();
     let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
-    let mut vm = VM::new(module, jit_enabled).with_type_hierarchy(hierarchy);
+    let mut vm = VM::new(module, jit_enabled)
+        .with_type_hierarchy(hierarchy)
+        .with_dev_mode(dev_mode);
+    let result = vm.run()?;
+    Ok((vm, result))
+}
+
+/// Compile and execute an RHP source program in Dev Mode (enabling loop warnings and hard limits).
+pub fn run_source_with_dev_mode(
+    source: &str,
+    dev_mode: bool,
+) -> Result<(VM, PhpValue), ExecutionError> {
+    let typed = parse_and_check(source).map_err(CompilationError::from)?;
+    let hierarchy = typed.type_info.hierarchy.clone();
+    let module = lower_typed_program(&typed).map_err(CompilationError::from)?;
+    let mut vm = VM::new(module, false)
+        .with_type_hierarchy(hierarchy)
+        .with_dev_mode(dev_mode);
     let result = vm.run()?;
     Ok((vm, result))
 }

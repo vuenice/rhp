@@ -102,6 +102,26 @@ pub enum IrErrorKind {
         class_name: String,
         method_name: String,
     },
+
+    #[error("Fatal Error: Class '{class_name}' cannot extend sealed class '{parent_name}'.")]
+    CannotExtendSealedClass {
+        class_name: String,
+        parent_name: String,
+    },
+
+    #[error("Fatal Error: Method '{class_name}::{method_name}()' has '#[Override]' or 'override' modifier but no matching parent or interface method was found.")]
+    MethodDoesNotOverride {
+        class_name: String,
+        method_name: String,
+    },
+
+    #[error("Fatal Error: Trait method collision: '{trait_a}::{method_name}()' and '{trait_b}::{method_name}()' collide in class '{class_name}'. Explicitly declare '{class_name}::{method_name}()' to resolve the conflict.")]
+    TraitMethodCollision {
+        class_name: String,
+        method_name: String,
+        trait_a: String,
+        trait_b: String,
+    },
 }
 
 /// Unified end-to-end compilation error encompassing Lexing/Parsing, Type Checking, and IR Lowering.

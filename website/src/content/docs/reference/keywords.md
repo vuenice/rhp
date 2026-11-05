@@ -16,7 +16,7 @@ else        elseif      enum        extends     final       finally
 fn          for         foreach     function    if          implements
 insteadof   interface   import      macro       match       namespace
 new         private     protected   public      readonly    return
-singleton   static      switch      throw       trait       try
+shared      static      switch      throw       trait       try
 use         while       yield
 ```
 

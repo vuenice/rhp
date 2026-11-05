@@ -20,7 +20,7 @@ my-rhp-app/
 │   │   └── OrderController.rhp
 │   ├── Models/              # Domain entities & ORM models
 │   │   └── User.rhp
-│   └── Services/            # Core business logic & singleton services
+│   └── Services/            # Core business logic & shared services
 │       └── PaymentGateway.rhp
 ├── storage/                 # Persistent SQLite database & application logs
 │   ├── logs/

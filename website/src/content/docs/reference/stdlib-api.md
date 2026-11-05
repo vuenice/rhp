@@ -1217,41 +1217,41 @@ Compress::gunzip(string $data): string;                  // GZIP decompression (
 
 ---
 
-## `Carbon` Facade API (Date & Time Services)
+## `Time` Facade API (Date & Time Services)
 
 ```php
 // Factory Constructors
-Carbon::now(?string $tz = null): Carbon;
-Carbon::today(?string $tz = null): Carbon;
-Carbon::yesterday(?string $tz = null): Carbon;
-Carbon::tomorrow(?string $tz = null): Carbon;
-Carbon::parse(string $time, ?string $tz = null): Carbon;
-Carbon::create(int $year = 0, int $month = 1, int $day = 1, int $hour = 0, int $minute = 0, int $second = 0, ?string $tz = null): Carbon;
-Carbon::createFromDate(int $year, int $month, int $day, ?string $tz = null): Carbon;
-Carbon::createFromTime(int $hour, int $minute, int $second, ?string $tz = null): Carbon;
-Carbon::createFromTimestamp(int $timestamp, ?string $tz = null): Carbon;
-Carbon::createFromTimestampMs(int $timestampMs, ?string $tz = null): Carbon;
-Carbon::createFromFormat(string $format, string $time, ?string $tz = null): Carbon;
-Carbon::maxValue(): Carbon;
-Carbon::minValue(): Carbon;
+Time::now(?string $tz = null): Time;
+Time::today(?string $tz = null): Time;
+Time::yesterday(?string $tz = null): Time;
+Time::tomorrow(?string $tz = null): Time;
+Time::parse(string $time, ?string $tz = null): Time;
+Time::create(int $year = 0, int $month = 1, int $day = 1, int $hour = 0, int $minute = 0, int $second = 0, ?string $tz = null): Time;
+Time::createFromDate(int $year, int $month, int $day, ?string $tz = null): Time;
+Time::createFromTime(int $hour, int $minute, int $second, ?string $tz = null): Time;
+Time::createFromTimestamp(int $timestamp, ?string $tz = null): Time;
+Time::createFromTimestampMs(int $timestampMs, ?string $tz = null): Time;
+Time::createFromFormat(string $format, string $time, ?string $tz = null): Time;
+Time::maxValue(): Time;
+Time::minValue(): Time;
 
 // Mock Test Time
-Carbon::setTestNow(mixed $testNow = null): void;
-Carbon::getTestNow(): ?Carbon;
-Carbon::hasTestNow(): bool;
+Time::setTestNow(mixed $testNow = null): void;
+Time::getTestNow(): ?Time;
+Time::hasTestNow(): bool;
 
 // Class Constants
-Carbon::SUNDAY;             // 0
-Carbon::MONDAY;             // 1
-Carbon::TUESDAY;            // 2
-Carbon::WEDNESDAY;          // 3
-Carbon::THURSDAY;           // 4
-Carbon::FRIDAY;             // 5
-Carbon::SATURDAY;           // 6
-Carbon::DAYS_PER_WEEK;      // 7
-Carbon::HOURS_PER_DAY;      // 24
-Carbon::MINUTES_PER_HOUR;   // 60
-Carbon::SECONDS_PER_MINUTE; // 60
+Time::SUNDAY;             // 0
+Time::MONDAY;             // 1
+Time::TUESDAY;            // 2
+Time::WEDNESDAY;          // 3
+Time::THURSDAY;           // 4
+Time::FRIDAY;             // 5
+Time::SATURDAY;           // 6
+Time::DAYS_PER_WEEK;      // 7
+Time::HOURS_PER_DAY;      // 24
+Time::MINUTES_PER_HOUR;   // 60
+Time::SECONDS_PER_MINUTE; // 60
 
 // Instance Output & Formatting
 $date->toDateTimeString(): string;
@@ -1269,13 +1269,13 @@ $date->toDayDateTimeString(): string;
 $date->format(string $format): string;
 $date->toJson(): string;
 
-// Static Shortcut Invocations (Evaluated on Carbon::now())
-Carbon::toDateTimeString(): string;
-Carbon::toDateString(): string;
-Carbon::toDatString(): string;
-Carbon::toTimeString(): string;
-Carbon::toISOString(): string;
-Carbon::format(string $format): string;
+// Static Shortcut Invocations (Evaluated on Time::now())
+Time::toDateTimeString(): string;
+Time::toDateString(): string;
+Time::toDatString(): string;
+Time::toTimeString(): string;
+Time::toISOString(): string;
+Time::format(string $format): string;
 
 // Public Properties & Queries
 $date->year: int;
@@ -1298,74 +1298,74 @@ $date->getTimestampMs(): int;
 $date->getTimezone(): string;
 
 // Fluent Addition & Subtraction (Mutates & Returns $this)
-$date->addDay(int $count = 1): Carbon;
-$date->addDays(int $count): Carbon;
-$date->subDay(int $count = 1): Carbon;
-$date->subDays(int $count): Carbon;
-$date->addWeek(int $count = 1): Carbon;
-$date->addWeeks(int $count): Carbon;
-$date->subWeek(int $count = 1): Carbon;
-$date->subWeeks(int $count): Carbon;
-$date->addMonth(int $count = 1): Carbon;
-$date->addMonths(int $count): Carbon;
-$date->subMonth(int $count = 1): Carbon;
-$date->subMonths(int $count): Carbon;
-$date->addQuarter(int $count = 1): Carbon;
-$date->addQuarters(int $count): Carbon;
-$date->subQuarter(int $count = 1): Carbon;
-$date->subQuarters(int $count): Carbon;
-$date->addYear(int $count = 1): Carbon;
-$date->addYears(int $count): Carbon;
-$date->subYear(int $count = 1): Carbon;
-$date->subYears(int $count): Carbon;
-$date->addHour(int $count = 1): Carbon;
-$date->addHours(int $count): Carbon;
-$date->subHour(int $count = 1): Carbon;
-$date->subHours(int $count): Carbon;
-$date->addMinute(int $count = 1): Carbon;
-$date->addMinutes(int $count): Carbon;
-$date->subMinute(int $count = 1): Carbon;
-$date->subMinutes(int $count): Carbon;
-$date->addSecond(int $count = 1): Carbon;
-$date->addSeconds(int $count): Carbon;
-$date->subSecond(int $count = 1): Carbon;
-$date->subSeconds(int $count): Carbon;
-$date->addUnit(string $unit, int $count = 1): Carbon;
-$date->subUnit(string $unit, int $count = 1): Carbon;
+$date->addDay(int $count = 1): Time;
+$date->addDays(int $count): Time;
+$date->subDay(int $count = 1): Time;
+$date->subDays(int $count): Time;
+$date->addWeek(int $count = 1): Time;
+$date->addWeeks(int $count): Time;
+$date->subWeek(int $count = 1): Time;
+$date->subWeeks(int $count): Time;
+$date->addMonth(int $count = 1): Time;
+$date->addMonths(int $count): Time;
+$date->subMonth(int $count = 1): Time;
+$date->subMonths(int $count): Time;
+$date->addQuarter(int $count = 1): Time;
+$date->addQuarters(int $count): Time;
+$date->subQuarter(int $count = 1): Time;
+$date->subQuarters(int $count): Time;
+$date->addYear(int $count = 1): Time;
+$date->addYears(int $count): Time;
+$date->subYear(int $count = 1): Time;
+$date->subYears(int $count): Time;
+$date->addHour(int $count = 1): Time;
+$date->addHours(int $count): Time;
+$date->subHour(int $count = 1): Time;
+$date->subHours(int $count): Time;
+$date->addMinute(int $count = 1): Time;
+$date->addMinutes(int $count): Time;
+$date->subMinute(int $count = 1): Time;
+$date->subMinutes(int $count): Time;
+$date->addSecond(int $count = 1): Time;
+$date->addSeconds(int $count): Time;
+$date->subSecond(int $count = 1): Time;
+$date->subSeconds(int $count): Time;
+$date->addUnit(string $unit, int $count = 1): Time;
+$date->subUnit(string $unit, int $count = 1): Time;
 
 // Period Boundaries
-$date->startOfDay(): Carbon;
-$date->endOfDay(): Carbon;
-$date->startOfMonth(): Carbon;
-$date->firstOfMonth(): Carbon;
-$date->endOfMonth(): Carbon;
-$date->lastOfMonth(): Carbon;
-$date->startOfWeek(): Carbon;
-$date->endOfWeek(): Carbon;
-$date->startOfQuarter(): Carbon;
-$date->endOfQuarter(): Carbon;
-$date->startOfYear(): Carbon;
-$date->endOfYear(): Carbon;
-$date->lastOfYear(): Carbon;
-$date->startOfHour(): Carbon;
-$date->endOfHour(): Carbon;
-$date->startOfMinute(): Carbon;
-$date->endOfMinute(): Carbon;
+$date->startOfDay(): Time;
+$date->endOfDay(): Time;
+$date->startOfMonth(): Time;
+$date->firstOfMonth(): Time;
+$date->endOfMonth(): Time;
+$date->lastOfMonth(): Time;
+$date->startOfWeek(): Time;
+$date->endOfWeek(): Time;
+$date->startOfQuarter(): Time;
+$date->endOfQuarter(): Time;
+$date->startOfYear(): Time;
+$date->endOfYear(): Time;
+$date->lastOfYear(): Time;
+$date->startOfHour(): Time;
+$date->endOfHour(): Time;
+$date->startOfMinute(): Time;
+$date->endOfMinute(): Time;
 
 // Modifiers & Setters
-$date->setYear(int $year): Carbon;
-$date->setMonth(int $month): Carbon;
-$date->setDay(int $day): Carbon;
-$date->setHour(int $hour): Carbon;
-$date->setMinute(int $minute): Carbon;
-$date->setSecond(int $second): Carbon;
-$date->setTime(int $hour, int $minute, int $second = 0, int $micro = 0): Carbon;
-$date->setDate(int $year, int $month, int $day): Carbon;
-$date->setTimezone(string $tz): Carbon;
-$date->next(?int $dayOfWeek = null): Carbon;
-$date->previous(?int $dayOfWeek = null): Carbon;
-$date->copy(): Carbon;
-$date->clone(): Carbon;
+$date->setYear(int $year): Time;
+$date->setMonth(int $month): Time;
+$date->setDay(int $day): Time;
+$date->setHour(int $hour): Time;
+$date->setMinute(int $minute): Time;
+$date->setSecond(int $second): Time;
+$date->setTime(int $hour, int $minute, int $second = 0, int $micro = 0): Time;
+$date->setDate(int $year, int $month, int $day): Time;
+$date->setTimezone(string $tz): Time;
+$date->next(?int $dayOfWeek = null): Time;
+$date->previous(?int $dayOfWeek = null): Time;
+$date->copy(): Time;
+$date->clone(): Time;
 
 // Comparisons & Boolean Checks
 $date->isToday(): bool;
@@ -1417,11 +1417,11 @@ $date->diffInYears(mixed $other = null, bool $abs = true): int;
 $date->diffForHumans(mixed $other = null): string;
 
 // Min / Max Helpers
-$date->min(mixed $other = null): Carbon;
-$date->max(mixed $other = null): Carbon;
+$date->min(mixed $other = null): Time;
+$date->max(mixed $other = null): Time;
 
 // Dynamic Macros
-Carbon::macro(string $name, callable $closure): bool;
+Time::macro(string $name, callable $closure): bool;
 ```
 
 ---

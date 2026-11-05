@@ -342,7 +342,7 @@ pub fn dispatch_facade_call(
         "Weak" => dispatch_weak(method, args),
         "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
         "Reflect" => dispatch_reflect(method, args),
-        "Carbon" => dispatch_carbon(method, args),
+        "Time" | "Carbon" => dispatch_time(method, args),
         "Ip" => dispatch_ip(method, args),
         "Compress" => dispatch_compress(method, args),
         "Uniq" => crate::vm::uniq::dispatch_uniq(method, args),
@@ -6245,6 +6245,8 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "is_scalar" => dispatch_validate("scalar", args),
         "is_resource" => dispatch_validate("resource", args),
         "is_a" => dispatch_validate("isA", args),
+        "now" => dispatch_time("now", args),
+        "date" => dispatch_time("date", args),
         "gettype" | "getType" | "get_debug_type" => dispatch_debug("type", args),
         "var_dump" | "dump" => dispatch_debug("dump", args),
         "print_r" | "var_export" => dispatch_debug("format", args),
@@ -6494,11 +6496,15 @@ fn dispatch_reflect(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 // =========================================================================
-// Carbon Facade
+// Time Facade
 // =========================================================================
 
+pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
+    crate::vm::time::dispatch_time(method, args)
+}
+
 pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
-    crate::vm::carbon::dispatch_carbon(method, args)
+    dispatch_time(method, args)
 }
 
 pub fn dispatch_uniq(method: &str, args: &[PhpValue]) -> FacadeResult {
@@ -7110,7 +7116,7 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
         }
         PhpValue::Object(o) => {
             let obj = o.borrow();
-            if obj.class_name == "Carbon" {
+            if obj.class_name == "Time" || obj.class_name == "Carbon" {
                 if let Some(iso) = obj.get_property("iso") {
                     let escaped = iso.to_php_string().replace('\\', "\\\\").replace('"', "\\\"");
                     return format!("\"{}\"", escaped);

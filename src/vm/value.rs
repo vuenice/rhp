@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 
 use crate::ir::opcode::{ClassId, FunctionId};
+use crate::ir::ClosureCategory;
 use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
 use crate::vm::parent_process::FrozenValue;
 
@@ -572,6 +573,24 @@ pub struct VmClosure {
     pub name: String,
     pub upvalues: Vec<PhpValue>,
     pub is_static: bool,
+    pub category: ClosureCategory,
+}
+
+impl VmClosure {
+    #[inline]
+    pub fn is_pure(&self) -> bool {
+        self.category.is_pure()
+    }
+
+    #[inline]
+    pub fn is_non_capturing(&self) -> bool {
+        self.category.is_non_capturing()
+    }
+
+    #[inline]
+    pub fn is_zero_allocation(&self) -> bool {
+        self.category.is_zero_allocation()
+    }
 }
 
 /// The execution state of an asynchronous Future, matching Rust's `Poll::Pending` / `Poll::Ready`.
@@ -959,12 +978,19 @@ impl PhpValue {
     }
 
     #[inline]
-    pub fn closure(func_id: FunctionId, name: impl Into<String>, upvalues: Vec<PhpValue>, is_static: bool) -> Self {
+    pub fn closure(
+        func_id: FunctionId,
+        name: impl Into<String>,
+        upvalues: Vec<PhpValue>,
+        is_static: bool,
+        category: ClosureCategory,
+    ) -> Self {
         Self::Closure(Rc::new(VmClosure {
             func_id,
             name: name.into(),
             upvalues,
             is_static,
+            category,
         }))
     }
 
@@ -1157,7 +1183,7 @@ impl PhpValue {
                 if let Some(ref t) = b.throwable {
                     return t.to_string_representation(&b.class_name);
                 }
-                if b.class_name == "Carbon" {
+                if b.class_name == "Time" || b.class_name == "Carbon" {
                     if let Some(formatted) = b.get_property("formatted") {
                         return formatted.to_php_string();
                     }

@@ -76,11 +76,11 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["functions", "arrow", "fn", "closures", "$this", "lexical capture", "parameters", "returns", "lambdas"]
   },
   {
-    title: "Classes, Objects & Enums",
+    title: "Classes, Objects, Enums & Shared Classes",
     section: "Language Guide",
-    description: "OOP architecture, visibility, invokable objects (__invoke), enums (cases, from, tryFrom), interfaces, traits, persistent singleton classes, and facade macro extensibility.",
+    description: "OOP architecture, visibility, invokable objects (__invoke), enums (cases, from, tryFrom), interfaces, traits, persistent shared classes, and facade macro extensibility.",
     url: "/docs/guide/classes-and-objects",
-    keywords: ["classes", "objects", "singleton", "interfaces", "traits", "enums", "enum", "cases", "from", "tryfrom", "unitenum", "backedenum", "invokable", "__invoke", "single action controller", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
+    keywords: ["classes", "objects", "shared", "shared class", "singleton", "interfaces", "traits", "enums", "enum", "cases", "from", "tryfrom", "unitenum", "backedenum", "invokable", "__invoke", "single action controller", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
   },
   {
     title: "Error Handling",
@@ -106,9 +106,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library Overview",
     section: "Language Guide",
-    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, Uniq, Future, Memory, File, HTTP, Log, Sys, Debug, Json, Bin, Validate, and Csv, plus runtime macro registration.",
+    description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Time, Uniq, Future, Memory, File, HTTP, Log, Sys, Debug, Json, Bin, Validate, and Csv, plus runtime macro registration.",
     url: "/docs/guide/standard-library",
-    keywords: ["standard library", "facades", "realpath", "dirname", "basename", "file::realpath", "file::dirname", "tempnam", "tmpfile", "sys_get_temp_dir", "file::tempnam", "file::tmpfile", "file::sysgettempdir", "file::createtempdirectory", "parsemode", "file::parsemode", "chmod", "mkdir", "natsort", "natcasesort", "sortNatural", "sortNaturalCase", "strnatcmp", "strnatcasecmp", "array_diff", "array_diff_key", "array_intersect", "array_intersect_key", "array_column", "array_chunk", "array_flip", "array_combine", "array_count_values", "array_rand", "shuffle", "usort", "uasort", "uksort", "ksort", "asort", "uniq", "uniq::uniqid", "uniq::uuid4", "uniq::uuid5", "uniq::uuid7", "uniq::uuid3", "uniqid", "uuid", "uuid4", "uuid5", "uuid7", "uuid3", "csv", "csv::fgetcsv", "csv::fputcsv", "fgetcsv", "fputcsv", "str_getcsv", "stream", "validate", "validate::null", "validate::int", "validate::bool", "validate::float", "validate::numeric", "validate::scalar", "is_null", "is_int", "is_bool", "is_float", "is_numeric", "is_scalar", "is_resource", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "var_export", "__set_state", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
+    keywords: ["standard library", "facades", "realpath", "dirname", "basename", "file::realpath", "file::dirname", "tempnam", "tmpfile", "sys_get_temp_dir", "file::tempnam", "file::tmpfile", "file::sysgettempdir", "file::createtempdirectory", "parsemode", "file::parsemode", "chmod", "mkdir", "natsort", "natcasesort", "sortNatural", "sortNaturalCase", "strnatcmp", "strnatcasecmp", "array_diff", "array_diff_key", "array_intersect", "array_intersect_key", "array_column", "array_chunk", "array_flip", "array_combine", "array_count_values", "array_rand", "shuffle", "usort", "uasort", "uksort", "ksort", "asort", "uniq", "uniq::uniqid", "uniq::uuid4", "uniq::uuid5", "uniq::uuid7", "uniq::uuid3", "uniqid", "uuid", "uuid4", "uuid5", "uuid7", "uuid3", "csv", "csv::fgetcsv", "csv::fputcsv", "fgetcsv", "fputcsv", "str_getcsv", "stream", "validate", "validate::null", "validate::int", "validate::bool", "validate::float", "validate::numeric", "validate::scalar", "is_null", "is_int", "is_bool", "is_float", "is_numeric", "is_scalar", "is_resource", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "var_export", "__set_state", "arr", "list", "dict", "indexmap", "laravel collections", "dot notation", "set", "hashmap", "str", "crypt", "html", "url", "time", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hmac", "openssl", "stripTags", "specialChars", "parseUrl", "future", "memory", "file", "http", "macro", "macros", "arr::macro", "macroable"]
   },
   {
     title: "Observability & OpenTelemetry",
@@ -138,7 +138,7 @@ const rawSearchIndex: SearchItem[] = [
     section: "Reference",
     description: "Exhaustive table of all reserved words, contextual keywords, and modifiers in RHP.",
     url: "/docs/reference/keywords",
-    keywords: ["keywords", "reserved", "modifiers", "singleton", "defer", "async"]
+    keywords: ["keywords", "reserved", "modifiers", "shared", "singleton", "defer", "async"]
   },
   {
     title: "Built-in Functions",
@@ -150,9 +150,9 @@ const rawSearchIndex: SearchItem[] = [
   {
     title: "Standard Library API Reference",
     section: "Reference",
-    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Carbon, HTTP, File, Memory, Debug, Json, Bin, Validate, Csv, and Tier 2 native helper classes (Cache, Log).",
+    description: "Full method signatures for Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Time, HTTP, File, Memory, Debug, Json, Bin, Validate, Csv, and Tier 2 native helper classes (Cache, Log).",
     url: "/docs/reference/stdlib-api",
-    keywords: ["stdlib", "api", "signatures", "methods", "realpath", "dirname", "file::realpath", "file::dirname", "file::tempnam", "file::tmpfile", "file::sysgettempdir", "file::createtempdirectory", "file::parsemode", "afile::realpath", "afile::tempnam", "afile::createtempdirectory", "natsort", "natcasesort", "strnatcmp", "strnatcasecmp", "array_diff", "array_diff_key", "array_intersect", "array_intersect_key", "array_column", "array_chunk", "array_flip", "array_combine", "array_count_values", "array_rand", "shuffle", "csv", "csv::fgetcsv", "csv::fputcsv", "csv::open", "csv::close", "csv::parse", "csv::generate", "fgetcsv", "fputcsv", "str_getcsv", "validate", "validate::null", "validate::int", "validate::bool", "validate::float", "validate::numeric", "validate::scalar", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
+    keywords: ["stdlib", "api", "signatures", "methods", "realpath", "dirname", "file::realpath", "file::dirname", "file::tempnam", "file::tmpfile", "file::sysgettempdir", "file::createtempdirectory", "file::parsemode", "afile::realpath", "afile::tempnam", "afile::createtempdirectory", "natsort", "natcasesort", "strnatcmp", "strnatcasecmp", "array_diff", "array_diff_key", "array_intersect", "array_intersect_key", "array_column", "array_chunk", "array_flip", "array_combine", "array_count_values", "array_rand", "shuffle", "csv", "csv::fgetcsv", "csv::fputcsv", "csv::open", "csv::close", "csv::parse", "csv::generate", "fgetcsv", "fputcsv", "str_getcsv", "validate", "validate::null", "validate::int", "validate::bool", "validate::float", "validate::numeric", "validate::scalar", "debug", "debug::dump", "debug::dd", "debug::format", "json", "json::encode", "json::decode", "bin", "bin::encode", "bin::decode", "arr", "list", "dict", "set", "hashmap", "map", "complex keys", "set algebra", "str", "crypt", "html", "url", "time", "carbon", "now", "today", "toDateTimeString", "toDateString", "addDay", "lastOfMonth", "diffForHumans", "hash", "hashHmac", "opensslEncrypt", "randomBytes", "specialChars", "stripTags", "parseUrl", "httpBuildQuery", "base64Encode", "http", "file", "cache", "log", "tier 2", "rust"]
   },
   {
     title: "Deprecated PHP Features",
@@ -236,11 +236,25 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["compiler", "vm", "jit", "cranelift", "bytecode", "logos", "ir", "internals", "pratt parser", "combinators", "ast", "ast visitor", "span tracking", "tree-walk", "register vm", "phpvalue", "dispatch loop", "callframe", "exception table"]
   },
   {
+    title: "Pure Closure Optimization",
+    section: "Advanced",
+    description: "Closure purity categorization, $this elision, zero-allocation inline struct layout, and raw Cranelift machine-code compilation.",
+    url: "/docs/advanced/pure-closure-optimization",
+    keywords: ["closure", "pure closure", "arrow function", "anonymous function", "cranelift", "jit", "fn_ptr", "zero allocation", "this elision", "closurecategory", "upvalues", "reference capture", "capturing", "closure purity", "cycle elimination"]
+  },
+  {
     title: "Safe Addition & Arithmetic Semantics",
     section: "Advanced",
     description: "Checked addition (+), wrapping (+%), saturating (+|), constant folding, LLVM overflow intrinsics, and eliminating PHP coercion pitfalls.",
     url: "/docs/advanced/safe-addition-semantics",
     keywords: ["safe addition", "addition", "arithmetic", "overflow", "checked add", "+%", "+|", "wrapping", "saturating", "checked_add", "overflowing_add", "llvm", "intrinsics", "inkwell", "php pitfalls", "constant folding", "type checking", "traits", "Add interface"]
+  },
+  {
+    title: "CPU Preemption & Instruction Budget",
+    section: "Advanced",
+    description: "Cooperative preemption, instruction tick budget (10,000 ticks), Cranelift JIT yield trampolines, Dev Mode infinite loop detection (1,000 warning, 100,000 hard limit), and ini_set exemptions.",
+    url: "/docs/advanced/cpu-preemption",
+    keywords: ["preemption", "cpu preemption", "instruction budget", "ticks", "tick_counter", "fiber", "yield", "cooperative", "jit", "cranelift", "infinite loop", "dev mode", "ini_set", "max_loop_iterations", "loop warning", "scheduler"]
   },
 
   // Meta

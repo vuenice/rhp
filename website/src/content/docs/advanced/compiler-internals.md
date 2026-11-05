@@ -301,6 +301,15 @@ Instead of running slow stack unwinders or runtime setup on every `try` block:
 
 Hooks registered via `defer { ... }` or `Future::defer(...)` lower to `OpCode::Defer { func_id }`. The VM queues them and runs them strictly in **LIFO (Last-In, First-Out)** order after `<main>` completes, before request arenas are dropped.
 
+### CPU Preemption & Instruction Budgeting
+
+To prevent tight compute loops from monopolizing cooperative worker event loops:
+* **Production Budget (10,000 Ticks):** At every loop back-edge (`target <= ip`) and function prologue (`ip == 0`), `vm.tick_counter` decrements. When zero, the VM yields cooperatively via `trigger_cooperative_yield()`, updating fiber statistics and relinquishing the OS timeslice without aborting valid long compute jobs.
+* **Cranelift JIT Preemption:** Compiled machine-code loops track an unboxed 64-bit tick counter in native registers, branching to an out-of-line yield trampoline that restores registers and yields to the VM.
+* **Dev Mode Loop Watchdog:** Warns at 1,000 iterations and enforces a hard ceiling at 100,000 iterations to catch infinite loops early.
+
+> See the dedicated deep dive: [CPU Preemption & Instruction Budgeting](/docs/advanced/cpu-preemption).
+
 ---
 
 ## 6. Dual-Engine Execution Modes (`RunMode`)
@@ -357,5 +366,27 @@ During bytecode lowering, RHP performs whole-program Class Hierarchy Analysis vi
 When `ClassName::class` is referenced in user code:
 * The compiler lowers it as a compile-time string literal constant (`OpCode::LoadConst`) with zero runtime reflection overhead.
 * The referenced class is flagged as **escaped** (`is_escaped = true`), instructing Dead Code Elimination (DCE) to preserve its public methods and constructor descriptors for runtime IoC dependency injection (`app()`).
+
+---
+
+## 8. Pure Closure Optimization & Cranelift Compilation Tier
+
+Closures (`function() use (...) { ... }`) and arrow functions (`fn(...) => ...`) are subject to compile-time purity analysis, `$this` elision, and inline memory allocation:
+
+1. **Closure Categorization ([`ClosureCategory`](/docs/advanced/pure-closure-optimization)):** The compiler inspects captured upvalues, reference flags (`u.by_ref`), and `$this` usage to classify closures into 6 optimization tiers:
+   - `PureNonCapturing`: 0 upvalues, no `$this`. Lowers to raw function pointer `(fn_ptr, null)` with **zero heap allocations**.
+   - `PureThisOnly`: Captures only `$this` (single pointer in a 16-byte inline struct).
+   - `PureValueSmall(u8)`: Captures 1 or 2 variables by immutable copy. Fits in 16–32B inline storage with **zero heap allocations**.
+   - `PureValueLarge(u16)`: Captures 3+ variables by immutable value-copy.
+   - `PureValueAndThis(u16)`: Captures `$this` and outer variables by immutable value-copy.
+   - `ImpureReference(u16)`: Captures variables by reference (`use (&$var)`), strictly rejected by the type checker (`ClosureReferenceCaptureForbidden`) to prevent reference cycles.
+
+2. **AST `$this` Elision (`closure_body_uses_this`):** If a closure defined inside a class method does not access `$this`, the compiler elides `$this` from its upvalue table, upgrading the closure to `PureNonCapturing` or `PureValueSmall`.
+
+3. **Cranelift Machine-Code Function Pointers:** In production mode (`RunMode::Build`), hot `PureNonCapturing` closures compile into raw machine-code function pointers:
+   $$\text{Closure} \equiv \left(\text{fn\_ptr: } \text{unsafe extern "C" fn}(*\text{mut NativeSlot}) \to \text{u32}, \; \text{env: } \text{null}\right)$$
+
+For complete architectural details, empirical codebase audits, and benchmarks, see the dedicated [Pure Closure Optimization Guide](/docs/advanced/pure-closure-optimization).
+
 
 

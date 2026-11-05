@@ -114,7 +114,7 @@
         },
         {
           "name": "keyword.other.rhp",
-          "match": "\\b(class|interface|trait|enum|singleton|extends|implements|new|use|namespace|const|public|protected|private|static|final|abstract|readonly|fn|function|async|defer|macro)\\b"
+          "match": "\\b(class|interface|trait|enum|shared|extends|implements|new|use|namespace|const|public|protected|private|static|final|abstract|readonly|fn|function|async|defer|macro)\\b"
         }
       ]
     },

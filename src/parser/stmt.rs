@@ -671,7 +671,9 @@ impl<'s> CombinatorStream<'s> {
                 | Token::Abstract
                 | Token::Final
                 | Token::Readonly
-                | Token::Singleton
+                | Token::Shared
+                | Token::Open
+                | Token::Sealed
                 | Token::Interface
                 | Token::Trait
                 | Token::Enum,
@@ -727,12 +729,14 @@ impl<'s> CombinatorStream<'s> {
             ));
         }
 
-        // Class Modifiers (can appear in any combination: `static class`, `final readonly class`, `singleton class`, etc.)
+        // Class Modifiers (can appear in any combination: `static class`, `final readonly class`, `shared class`, etc.)
         let mut is_abstract = false;
         let mut is_final = false;
         let mut is_readonly = false;
         let mut is_static_mod = false;
-        let mut is_singleton = false;
+        let mut is_shared = false;
+        let mut is_open = false;
+        let mut is_sealed = false;
 
         loop {
             if self.matches(&Token::Static) {
@@ -743,21 +747,29 @@ impl<'s> CombinatorStream<'s> {
                 is_final = true;
             } else if self.matches(&Token::Readonly) {
                 is_readonly = true;
-            } else if self.matches(&Token::Singleton) {
-                is_singleton = true;
+            } else if self.matches(&Token::Shared) {
+                is_shared = true;
+            } else if self.matches(&Token::Open) {
+                is_open = true;
+            } else if self.matches(&Token::Sealed) {
+                is_sealed = true;
             } else {
                 break;
             }
         }
 
         // Script-land static facades can also be declared via attributes (#[StaticOnly], #[Facade], #[StaticFacade])
-        // and singletons via #[Singleton]
+        // and shared classes via #[Shared], open via #[Open], sealed via #[Sealed]
         for attr in &attributes {
             let attr_name = attr.name.name;
             if attr_name == "StaticOnly" || attr_name == "Facade" || attr_name == "StaticFacade" {
                 is_static_mod = true;
-            } else if attr_name == "Singleton" {
-                is_singleton = true;
+            } else if attr_name == "Shared" {
+                is_shared = true;
+            } else if attr_name == "Open" {
+                is_open = true;
+            } else if attr_name == "Sealed" {
+                is_sealed = true;
             }
         }
 
@@ -766,7 +778,9 @@ impl<'s> CombinatorStream<'s> {
             is_final,
             is_readonly,
             is_static_only: is_static_mod,
-            is_singleton,
+            is_shared,
+            is_open,
+            is_sealed,
         };
 
         // Class declaration
@@ -1092,12 +1106,14 @@ impl<'s> CombinatorStream<'s> {
             });
         }
 
-        // Modifiers: visibility, static, abstract, final, readonly in any order
+        // Modifiers: visibility, static, abstract, final, readonly, open, override in any order
         let mut visibility = Visibility::Public;
         let mut is_static = false;
         let mut is_abstract = false;
         let mut is_final = false;
         let mut is_readonly = false;
+        let mut is_open = false;
+        let mut is_override = false;
 
         loop {
             if self.matches(&Token::Public) {
@@ -1114,8 +1130,21 @@ impl<'s> CombinatorStream<'s> {
                 is_final = true;
             } else if self.matches(&Token::Readonly) {
                 is_readonly = true;
+            } else if self.matches(&Token::Open) {
+                is_open = true;
+            } else if self.matches(&Token::Override) {
+                is_override = true;
             } else {
                 break;
+            }
+        }
+
+        for attr in &attributes {
+            let attr_name = attr.name.name;
+            if attr_name == "Override" {
+                is_override = true;
+            } else if attr_name == "Open" {
+                is_open = true;
             }
         }
 
@@ -1165,6 +1194,8 @@ impl<'s> CombinatorStream<'s> {
                     is_static,
                     is_abstract,
                     is_final,
+                    is_open,
+                    is_override,
                     function: FunctionDecl {
                         span,
                         attributes,

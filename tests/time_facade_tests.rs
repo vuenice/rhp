@@ -1,15 +1,14 @@
-use rhp::run_source;
-use rhp::vm::carbon::CarbonDate;
+use rhp::{compile_source, run_source, OpCode, PhpValue};
+use rhp::vm::time::TimeDate;
 use rhp::vm::facade::clear_runtime_closure_macros;
-use rhp::vm::value::PhpValue;
 
 #[test]
-fn test_carbon_create_parse_and_formatting() {
+fn test_time_create_parse_and_formatting() {
     clear_runtime_closure_macros();
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     let code = r#"
-        $d1 = Carbon::create(2024, 5, 20, 14, 30, 45);
+        $d1 = Time::create(2024, 5, 20, 14, 30, 45);
         $s_datetime = $d1->toDateTimeString();
         $s_date = $d1->toDateString();
         $s_dat = $d1->toDatString();
@@ -17,7 +16,7 @@ fn test_carbon_create_parse_and_formatting() {
         $s_formatted = $d1->toFormattedDateString();
         $s_custom = $d1->format("Y/m/d H:i");
 
-        $parsed = Carbon::parse("2024-12-25 08:00:00");
+        $parsed = Time::parse("2024-12-25 08:00:00");
         $parsed_str = $parsed->toDateTimeString();
 
         return [
@@ -59,12 +58,12 @@ fn test_carbon_create_parse_and_formatting() {
 }
 
 #[test]
-fn test_carbon_fluent_add_and_sub() {
+fn test_time_fluent_add_and_sub() {
     clear_runtime_closure_macros();
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     let code = r#"
-        $d = Carbon::parse("2024-01-15 10:00:00");
+        $d = Time::parse("2024-01-15 10:00:00");
         
         $d->addDay();
         $after_add_day = $d->toDateString();
@@ -88,7 +87,7 @@ fn test_carbon_fluent_add_and_sub() {
         $after_add_year = $d->toDateString();
 
         // Chaining
-        $chained = Carbon::parse("2024-06-01 12:00:00")->addDays(4)->subHours(2)->toDateTimeString();
+        $chained = Time::parse("2024-06-01 12:00:00")->addDays(4)->subHours(2)->toDateTimeString();
 
         return [
             $after_add_day,
@@ -119,31 +118,31 @@ fn test_carbon_fluent_add_and_sub() {
 }
 
 #[test]
-fn test_carbon_last_of_month_and_boundaries() {
+fn test_time_last_of_month_and_boundaries() {
     clear_runtime_closure_macros();
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     let code = r#"
         // Leap year February
-        $feb = Carbon::parse("2024-02-10 15:30:00");
+        $feb = Time::parse("2024-02-10 15:30:00");
         $feb_last = $feb->lastOfMonth()->toDateTimeString();
 
         // Non-leap year February
-        $feb2023 = Carbon::parse("2023-02-05 10:00:00");
+        $feb2023 = Time::parse("2023-02-05 10:00:00");
         $feb2023_last = $feb2023->lastOfMonth()->toDateTimeString();
 
         // January
-        $jan = Carbon::parse("2024-01-15 00:00:00");
+        $jan = Time::parse("2024-01-15 00:00:00");
         $jan_first = $jan->startOfMonth()->toDateTimeString();
         $jan_last = $jan->endOfMonth()->toDateTimeString();
 
         // Start / End of day
-        $day = Carbon::parse("2024-07-20 16:45:12");
+        $day = Time::parse("2024-07-20 16:45:12");
         $start_day = $day->startOfDay()->toDateTimeString();
         $end_day = $day->endOfDay()->toDateTimeString();
 
         // Start / End of year
-        $year = Carbon::parse("2024-07-20 16:45:12");
+        $year = Time::parse("2024-07-20 16:45:12");
         $start_year = $year->startOfYear()->toDateTimeString();
         $end_year = $year->endOfYear()->toDateTimeString();
 
@@ -176,17 +175,17 @@ fn test_carbon_last_of_month_and_boundaries() {
 }
 
 #[test]
-fn test_carbon_static_direct_calls() {
+fn test_time_static_direct_calls() {
     clear_runtime_closure_macros();
-    CarbonDate::set_test_now(CarbonDate::parse("2024-08-15 11:22:33", None).unwrap());
+    TimeDate::set_test_now(TimeDate::parse("2024-08-15 11:22:33", None).unwrap());
 
     let code = r#"
-        $datetime = Carbon::toDateTimeString();
-        $date = Carbon::toDateString();
-        $dat = Carbon::toDatString();
-        $time = Carbon::toTimeString();
-        $tomorrow = Carbon::addDay()->toDateString();
-        $last_month = Carbon::lastOfMonth()->toDateTimeString();
+        $datetime = Time::toDateTimeString();
+        $date = Time::toDateString();
+        $dat = Time::toDatString();
+        $time = Time::toTimeString();
+        $tomorrow = Time::addDay()->toDateString();
+        $last_month = Time::lastOfMonth()->toDateTimeString();
 
         return [
             $datetime,
@@ -199,7 +198,7 @@ fn test_carbon_static_direct_calls() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     if let PhpValue::Array(items_rc) = res {
         let items = items_rc.borrow();
@@ -215,20 +214,20 @@ fn test_carbon_static_direct_calls() {
 }
 
 #[test]
-fn test_carbon_comparisons_and_differences() {
+fn test_time_comparisons_and_differences() {
     clear_runtime_closure_macros();
-    CarbonDate::set_test_now(CarbonDate::parse("2024-05-15 12:00:00", None).unwrap());
+    TimeDate::set_test_now(TimeDate::parse("2024-05-15 12:00:00", None).unwrap());
 
     let code = r#"
-        $now = Carbon::now();
-        $past = Carbon::parse("2024-05-10 12:00:00");
-        $future = Carbon::parse("2024-05-20 12:00:00");
+        $now = Time::now();
+        $past = Time::parse("2024-05-10 12:00:00");
+        $future = Time::parse("2024-05-20 12:00:00");
 
         $is_past = $past->isPast();
         $is_future = $future->isFuture();
         $is_today = $now->isToday();
-        $is_leap = Carbon::parse("2024-01-01")->isLeapYear();
-        $is_not_leap = Carbon::parse("2023-01-01")->isLeapYear();
+        $is_leap = Time::parse("2024-01-01")->isLeapYear();
+        $is_not_leap = Time::parse("2023-01-01")->isLeapYear();
 
         $gt = $future->gt($past);
         $lt = $past->lt($future);
@@ -257,7 +256,7 @@ fn test_carbon_comparisons_and_differences() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     if let PhpValue::Array(items_rc) = res {
         let items = items_rc.borrow();
@@ -279,23 +278,23 @@ fn test_carbon_comparisons_and_differences() {
 }
 
 #[test]
-fn test_carbon_constants_and_echo_and_macros() {
+fn test_time_constants_and_echo_and_macros() {
     clear_runtime_closure_macros();
-    CarbonDate::clear_test_now();
+    TimeDate::clear_test_now();
 
     let code = r#"
-        $sun = Carbon::SUNDAY;
-        $mon = Carbon::MONDAY;
-        $days_in_week = Carbon::DAYS_PER_WEEK;
-        $hours_in_day = Carbon::HOURS_PER_DAY;
+        $sun = Time::SUNDAY;
+        $mon = Time::MONDAY;
+        $days_in_week = Time::DAYS_PER_WEEK;
+        $hours_in_day = Time::HOURS_PER_DAY;
 
         // String coercion
-        $d = Carbon::parse("2024-03-15 09:30:00");
+        $d = Time::parse("2024-03-15 09:30:00");
         $str = "Event on: " . $d;
 
         // Macro test
-        Carbon::macro('toCustomTag', fn($obj) => "TAG:" . $obj->toDateString());
-        $macro_res = Carbon::toCustomTag($d);
+        Time::macro('toCustomTag', fn($obj) => "TAG:" . $obj->toDateString());
+        $macro_res = Time::toCustomTag($d);
 
         return [
             $sun,
@@ -322,16 +321,146 @@ fn test_carbon_constants_and_echo_and_macros() {
 }
 
 #[test]
-fn test_carbon_instantiation_forbidden() {
+fn test_time_instantiation_forbidden() {
     clear_runtime_closure_macros();
 
     let code = r#"
-        $c = new Carbon();
+        $c = new Time();
     "#;
 
     let res = run_source(code);
     assert!(
         res.is_err(),
-        "Instantiating Carbon via `new Carbon()` should be forbidden by static facade guard"
+        "Instantiating Time via `new Time()` should be forbidden by static facade guard"
+    );
+}
+
+#[test]
+fn test_carbon_alias_backward_compatibility() {
+    clear_runtime_closure_macros();
+    TimeDate::clear_test_now();
+
+    let code = r#"
+        $d = Carbon::parse("2024-06-01 12:00:00");
+        $sun = Carbon::SUNDAY;
+        $date = Carbon::toDateString();
+        return [$d->toDateTimeString(), $sun];
+    "#;
+
+    let res = run_source(code).expect("Carbon alias execution failed");
+    if let PhpValue::Array(items_rc) = res {
+        let items = items_rc.borrow();
+        assert_eq!(items[0].to_php_string(), "2024-06-01 12:00:00");
+        assert_eq!(items[1].to_i64(), Some(0));
+    } else {
+        panic!("Expected array return, got: {:?}", res);
+    }
+}
+
+#[test]
+fn test_now_helper_lowering() {
+    clear_runtime_closure_macros();
+    TimeDate::clear_test_now();
+
+    let code = r#"
+        Time::setTestNow(Time::create(2025, 1, 15, 10, 30, 0));
+        $n = now();
+        $formatted = $n->toDateTimeString();
+        Time::clearTestNow();
+        return [$n instanceof Time, $formatted];
+    "#;
+
+    let res = run_source(code).expect("Execution failed");
+    if let PhpValue::Array(items_rc) = res {
+        let items = items_rc.borrow();
+        assert_eq!(items[0].to_bool(), Some(true));
+        assert_eq!(items[1].to_php_string(), "2025-01-15 10:30:00");
+    } else {
+        panic!("Expected array, got: {:?}", res);
+    }
+}
+
+#[test]
+fn test_date_helper_lowering() {
+    clear_runtime_closure_macros();
+    TimeDate::clear_test_now();
+
+    let code = r#"
+        Time::setTestNow(Time::create(2024, 5, 20, 14, 30, 45));
+        $d1 = date("Y-m-d");
+        $d2 = date("Y-m-d H:i:s");
+        $static_d = Time::date("Y-m-d");
+        Time::clearTestNow();
+        return [$d1, $d2, $static_d];
+    "#;
+
+    let res = run_source(code).expect("Execution failed");
+    if let PhpValue::Array(items_rc) = res {
+        let items = items_rc.borrow();
+        assert_eq!(items[0].to_php_string(), "2024-05-20");
+        assert_eq!(items[1].to_php_string(), "2024-05-20 14:30:45");
+        assert_eq!(items[2].to_php_string(), "2024-05-20");
+    } else {
+        panic!("Expected array, got: {:?}", res);
+    }
+}
+
+#[test]
+fn test_date_with_timestamp() {
+    clear_runtime_closure_macros();
+    TimeDate::clear_test_now();
+
+    let code = r#"
+        // 1716206400 is 2024-05-20 12:00:00 UTC
+        $ts = 1716206400;
+        $d1 = date("Y-m-d H:i:s", $ts);
+        $d2 = Time::date("Y-m-d H:i:s", $ts);
+        $d3 = date("Y-m-d", $ts);
+        $d_null = date("Y-m-d", null);
+        return [$d1, $d2, $d3, $d_null];
+    "#;
+
+    let res = run_source(code).expect("Execution failed");
+    if let PhpValue::Array(items_rc) = res {
+        let items = items_rc.borrow();
+        assert_eq!(items[0].to_php_string(), "2024-05-20 12:00:00");
+        assert_eq!(items[1].to_php_string(), "2024-05-20 12:00:00");
+        assert_eq!(items[2].to_php_string(), "2024-05-20");
+        let today_utc = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(items[3].to_php_string(), today_utc);
+    } else {
+        panic!("Expected array, got: {:?}", res);
+    }
+}
+
+#[test]
+fn test_now_and_date_compile_to_facade_call() {
+    let source = r#"
+        $n = now();
+        $d1 = date("Y-m-d");
+        $d2 = date("Y-m-d", 1716206400);
+        $t1 = Time::now();
+        $t2 = Time::date("Y-m-d");
+    "#;
+
+    let module = compile_source(source).expect("Source compilation should succeed");
+    let main_chunk = &module.main_chunk;
+
+    let mut time_calls = Vec::new();
+    for instr in &main_chunk.instructions {
+        if let OpCode::FacadeCall { facade, method, .. } = instr {
+            if let Some(rhp::Constant::String(facade_str)) = main_chunk.constants.get(facade.index()) {
+                if facade_str == "Time" {
+                    if let Some(rhp::Constant::String(method_str)) = main_chunk.constants.get(method.index()) {
+                        time_calls.push(method_str.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        time_calls,
+        vec!["now", "date", "date", "now", "date"]
     );
 }

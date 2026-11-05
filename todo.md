@@ -158,10 +158,10 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 ### Phase 8: Concurrency, Parent Process & Facades
 
-- [x] **Persistent Parent Process Architecture & Singleton Process Services:**
+- [x] **Persistent Parent Process Architecture & Shared Process Services:**
   - Parse and compile framework code once into immutable state (`Arc<EngineState>`), eliminating per-request bootstrap overhead.
-  - Require `singleton` keyword for classes declared to run as part of the parent process.
-  - Enforce invocation invariants: one can use both static and non-static methods of a singleton class within other singleton classes, but can only use static methods of a singleton class inside non-singleton classes.
+  - Require `shared` keyword for classes declared to run as part of the parent process.
+  - Enforce invocation invariants: one can use both static and non-static methods of a shared class within other shared classes, but can only use static methods of a shared class inside non-shared classes.
   - Workers execute requests concurrently against shared immutable `Arc<EngineState>` without per-request bootstrap overhead.
 
 - [x] **Worker Process Isolation & Concurrency (Step 14):**
@@ -474,6 +474,80 @@ This document outlines the engineering roadmap and architectural improvements fo
 
 ---
 
+### Phase 22: Centralized High-Performance Log Pool & Channel Multiplexing
+
+- [ ] **Dedicated Single-Thread Log Collector & MPSC Ring Buffer:**
+  - Route all file logging from request fibers across all worker processes into an in-memory lock-free MPSC ring buffer or shared-memory IPC queue.
+  - Keep logging operations non-blocking inside request fibers ($O(1)$, $\sim 15\text{–}30\text{ns}$ memory push), completely isolating worker event loops from disk I/O latency and dirty-page writeback stalls.
+  - Eliminate kernel VFS inode lock contention caused by concurrent worker processes issuing `O_APPEND` write syscalls to the same file.
+
+- [ ] **Batched Vectored I/O (`writev`) & Disk Saturation:**
+  - Dedicate a single OS thread/actor in the master process to drain log queues and buffer writes into 64KB chunks.
+  - Perform sequential vectored I/O (`writev`), saturating NVMe/SSD sequential write throughput and slashing syscall frequency by over 99%.
+  - Centralize log rotation, background compression, and atomic file-descriptor re-opening without interrupting or pausing active workers.
+
+- [ ] **Tagged Multi-Channel Multiplexing (`app`, `sql`, `audit`, `access_log`, `metrics`):**
+  - Implement compact binary log records: `LogRecord { channel_id: u8, level: u8, timestamp: u64, payload: SmallVec<[u8; 256]> }`.
+  - Maintain a centralized channel lookup table in the collector, routing incoming records to their respective channel sinks (`BufWriter<File>`).
+  - Support independent per-channel persistence policies (e.g. strict `fdatasync` every 100ms for security/audit logs vs. lazy 64KB bulk buffering for access and SQL query logs).
+
+---
+
+### Phase 23: `Future::run()` Optimization & Self-Contained Closure Scheduling
+
+- [ ] **Pure & Self-Contained Closure Lowering in JIT:**
+  - Leverage RHP closure isolation (pure closures with no outer mutable scope references or immutable value-captured environments).
+  - Compile non-capturing or scalar-capturing closures directly to raw machine-code function pointers `(fn_ptr, env)` with zero heap allocation and zero PHP-style GC/refcounting overhead.
+
+- [ ] **Suspended Worker Microtask Stealing (Zero-Sleep Idle Scheduling):**
+  - Implement a thread-local `MicrotaskQueue` in each worker process.
+  - When an active request fiber yields/suspends on I/O (`DB::find()`, `Http::get()`, `sleep()`), the worker scheduler immediately executes pending `Future::run()` closures on the same OS thread instead of putting the thread to sleep in `epoll_wait`.
+  - Avoid thread context switches and OS wake-up latency when I/O resolves.
+
+- [ ] **L1/L2 CPU Cache Locality & Two-Tier Dispatch:**
+  - **Local Microtasks:** Keep request-scoped async tasks running on the same worker thread/core to maximize L1/L2 cache hit rates for parsed payloads and `RequestArena` data.
+  - **Offloaded Heavy Tasks (`Future::runDetached()` / `Task::run()`):** Transparently dispatch heavy CPU-bound jobs (PDF generation, cryptography, heavy CSV exports) to the dedicated Task Worker process pool.
+
+- [ ] **Cross-Worker Lock-Free Work-Stealing:**
+  - Equip worker processes with lock-free work-stealing deques (`crossbeam::deque`).
+  - When a worker has suspended fibers and its local microtask queue is empty, it can safely steal independent pure closures from neighboring saturated workers without data races.
+
+---
+
+### Phase 24: Closed-World Compilation, Static Analysis & Laravel Compatibility Constraints
+
+- [ ] **Slot-Indexed Properties & Compile-Time Column Derivation:**
+  - **Derive Columns from Migrations:** Rather than declaring columns manually in every model, derive them from migrations at compile time since `Schema::create` calls are mostly literal builder chains. User code stays untouched and migrations remain the single source of truth.
+  - **Explicit Declaration Fallback:** Fall back to explicit declarations only for models whose migrations are unanalyzable (raw SQL, dynamic conditionals).
+  - **Handling Edge Cases that Break:**
+    - Dynamic field access: `$model->$field` and `setAttribute($name, ...)` with computed/variable names.
+    - Dynamic attributes that are not database columns.
+    - `getAttributes()` arrays treated as typed data.
+
+- [ ] **User-Defined Magic & Declarative Macro System:**
+  - **Closed-World Compiler Visibility:** Runtime class mutation is the primary blind spot for a closed-world compiler, especially custom `__get`, `__set`, `__call`, and `Macroable::macro()` calls executed inside service providers.
+  - **Declarative Alternatives:** Transition macros and dynamic extensions to a declarative form (e.g. `#[Mixin]` attributes or a typed extension block).
+
+- [ ] **String-Computed Dispatch & Dynamic Markers:**
+  - **Dynamic Call Patterns:** Address string-computed dispatch such as `new $class`, `$obj->$method()`, `$class::foo()`, and `app('cache')`-style string aliases.
+  - **Static Recovery:** Rescue resolvable patterns using `class-string<T>` types, and validate config keys if config files consist of literal arrays.
+  - **Dynamic Fallback:** Mark remaining unresolvable cases with an explicit dynamic marker.
+
+- [ ] **Conditional Container Bindings & Static DI Resolution:**
+  - **Static Dependency Injection:** Static DI resolution successfully handles standard `bind(Interface::class, Impl::class)`.
+  - **Dynamic State Bindings:** Bindings placed inside `if (config(...))` or closures depending on runtime state cannot be resolved at build time; these require explicit declarations or restructuring.
+
+- [ ] **Blade Template Variable Typing:**
+  - **Untyped View Variables:** Variables passed through `view('x', compact(...))` are untyped and default to `mixed`.
+  - **Explicit View Declarations:** Support typed variables in templates by introducing declarations via `@props` or `@var`-style directives.
+
+- [ ] **Taint Rules, Compile Errors & Validation Type Inference:**
+  - **Taint Analysis Compile Errors:** Under strict taint rules, dangerous dynamic calls such as `whereRaw("... $input")` and `User::create($request->all())` stop compiling.
+  - **Idiomatic Laravel Fixes:** Guide code toward existing idiomatic fixes (parameter bindings, `$request->validated()`).
+  - **Typed Validation Arrays:** Because `validated()` returns an array, infer typed fields by enabling the compiler to statically analyze and read literal `rules()` arrays.
+
+---
+
 ## 3. Progress Tracking
 
 | Subsystem | Planned Improvement | Status | Priority |
@@ -502,3 +576,8 @@ This document outlines the engineering roadmap and architectural improvements fo
 | **Concurrency** | `Future::any` cancellation tokens, cooperative cancel points, & in-flight query aborts | Pending | **P1** |
 | **Fiber & I/O Scheduling** | Epoll-based event loop (`epoll_wait`, timerfd, eventfd) for fibers and IPC readiness | Pending | **P1** |
 | **Process Manager (RHPM)** | Separate `rhp`/`rhpm`, PM2/supervisor lifecycle & crash recovery, >3s/resource tracking & secondary route diversion | Pending | **P0** |
+| **Log Pool** | Centralized single-thread log collector, MPSC ring buffer, multi-channel batching (`writev`) | Pending | **P1** |
+| **Async Closures** | `Future::run()` local microtask stealing on suspended fibers & pure closure JIT lowering | Pending | **P1** |
+| **Closed-World / AOT** | Compile-time migration column derivation, declarative macros (`#[Mixin]`), dynamic dispatch markers, static DI, Blade typing, & taint rules | Pending | **P1** |
+
+

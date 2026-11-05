@@ -428,13 +428,13 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::String,
                     },
                     "Html" => RhpType::String,
-                    "Carbon" => match method.name {
+                    "Time" | "Carbon" => match method.name {
                         "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                         | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
-                        | "toFormattedDateString" | "toDayDateTimeString" | "format" | "diffForHumans" => RhpType::String,
+                        | "toFormattedDateString" | "toDayDateTimeString" | "format" | "diffForHumans" | "date" => RhpType::String,
                         "getTimestamp" | "timestamp" | "year" | "month" | "day" | "hour" | "minute" | "second" => RhpType::Int,
                         "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast" | "isWeekend" | "isWeekday" | "isLeapYear" => RhpType::Bool,
-                        _ => RhpType::Class("Carbon".to_string()),
+                        _ => RhpType::Class("Time".to_string()),
                     },
                     "Url" | "URL" => match method.name {
                         "parseUrl" | "parseQuery" => RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
@@ -565,9 +565,13 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::InvalidTypeAnnotation { .. } => "invalid-type-annotation",
         TypeErrorKind::StaticFacadeInstantiationForbidden { .. } => "static-facade-instantiation-forbidden",
         TypeErrorKind::StaticFacadeInheritanceForbidden { .. } => "static-facade-inheritance-forbidden",
-        TypeErrorKind::NonStaticSingletonMethodCallForbidden { .. } => "non-static-singleton-method-call-forbidden",
-        TypeErrorKind::SingletonInstantiationForbidden { .. } => "singleton-instantiation-forbidden",
-        TypeErrorKind::NonSingletonExtendsSingletonForbidden { .. } => "non-singleton-extends-singleton-forbidden",
+        TypeErrorKind::SharedInstantiationForbidden { .. } => "shared-instantiation-forbidden",
+        TypeErrorKind::NonSharedExtendsSharedForbidden { .. } => "non-shared-extends-shared-forbidden",
+        TypeErrorKind::SharedClassInheritedMutablePropertyForbidden { .. } => "shared-class-inherited-mutable-property",
+        TypeErrorKind::SharedClassMutablePropertyForbidden { .. } => "shared-class-mutable-property",
+        TypeErrorKind::SharedClassCapturesScopedService { .. } => "shared-class-captures-scoped-service",
+        TypeErrorKind::SharedFieldClosureCaptureForbidden { .. } => "shared-field-closure-capture-forbidden",
+        TypeErrorKind::SharedClassMutableStaticForbidden { .. } => "shared-class-mutable-static-forbidden",
         TypeErrorKind::TraitMethodCollision { .. } => "trait-method-collision",
         TypeErrorKind::TraitAdaptationError { .. } => "trait-adaptation-error",
         TypeErrorKind::CannotInstantiateAbstractClass { .. } => "cannot-instantiate-abstract-class",

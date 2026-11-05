@@ -52,6 +52,65 @@ pub struct CompiledParam {
     pub span: Span,
 }
 
+/// Optimization category of a closure determining its purity, memory layout, and Cranelift JIT compilation tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClosureCategory {
+    /// Pure non-capturing closure (0 captured variables, no `$this`, no external mutable references).
+    /// Lowers to a raw function pointer `(fn_ptr, null)` with ZERO heap allocations.
+    PureNonCapturing,
+
+    /// Pure closure capturing only `$this` (single 8-byte instance pointer).
+    /// Lowers to `(fn_ptr, this_ptr)` fitting in a 16-byte inline struct with ZERO heap allocations.
+    PureThisOnly,
+
+    /// Pure closure capturing 1 or 2 outer variables strictly by immutable value-copy (no `$this`, no references).
+    /// Fits in a 16-to-32 byte inline struct buffer with ZERO heap allocations.
+    PureValueSmall(u8),
+
+    /// Pure closure capturing 3 or more outer variables strictly by immutable value-copy (no `$this`, no references).
+    PureValueLarge(u16),
+
+    /// Pure closure capturing `$this` and 1 or more outer variables by immutable value-copy.
+    PureValueAndThis(u16),
+
+    /// Impure closure capturing outer variables by reference (`use (&$var)`).
+    /// Requires heap indirection / escape analysis.
+    ImpureReference(u16),
+}
+
+impl ClosureCategory {
+    #[inline]
+    pub fn is_pure(&self) -> bool {
+        !matches!(self, ClosureCategory::ImpureReference(_))
+    }
+
+    #[inline]
+    pub fn is_non_capturing(&self) -> bool {
+        matches!(self, ClosureCategory::PureNonCapturing)
+    }
+
+    #[inline]
+    pub fn is_zero_allocation(&self) -> bool {
+        matches!(
+            self,
+            ClosureCategory::PureNonCapturing
+                | ClosureCategory::PureThisOnly
+                | ClosureCategory::PureValueSmall(_)
+        )
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ClosureCategory::PureNonCapturing => "PureNonCapturing",
+            ClosureCategory::PureThisOnly => "PureThisOnly",
+            ClosureCategory::PureValueSmall(_) => "PureValueSmall",
+            ClosureCategory::PureValueLarge(_) => "PureValueLarge",
+            ClosureCategory::PureValueAndThis(_) => "PureValueAndThis",
+            ClosureCategory::ImpureReference(_) => "ImpureReference",
+        }
+    }
+}
+
 /// Compiled function, method, closure, arrow function, or deferred hook.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledFunction {
@@ -64,7 +123,10 @@ pub struct CompiledFunction {
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_final: bool,
+    pub is_open: bool,
+    pub is_override: bool,
     pub is_closure: bool,
+    pub closure_category: Option<ClosureCategory>,
     pub visibility: Visibility,
     pub enclosing_class: Option<String>,
     pub declaring_class_id: Option<ClassId>,
@@ -247,8 +309,10 @@ impl IrModule {
             info.is_abstract = cls.modifiers.is_abstract;
             info.is_final = cls.modifiers.is_final;
             info.is_readonly = cls.modifiers.is_readonly;
-            info.is_singleton = cls.modifiers.is_singleton;
+            info.is_shared = cls.modifiers.is_shared;
             info.is_static_only = cls.modifiers.is_static_only;
+            info.is_open = cls.modifiers.is_open;
+            info.is_sealed = cls.modifiers.is_sealed;
             info.is_trait = cls.is_trait;
             info.is_interface = false;
             info.own_props = cls.properties.clone();

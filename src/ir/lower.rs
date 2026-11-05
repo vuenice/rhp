@@ -9,15 +9,16 @@ use crate::ast::{
     types::{CastType, Ident, TypeHint, Visibility},
     Program,
 };
+use crate::ast::visitor::{walk_expr, AstVisitor};
 use crate::ir::{
     error::{IrError, IrErrorKind},
     opcode::{
         BytecodeChunk, CatchTarget, ClassId, Constant, ConstantId, ExceptionHandler, FunctionId,
         IrCollectionKind, IrUnaryOp, OpCode, Reg, RegisterInfo,
     },
-    CompiledClass, CompiledClassConst, CompiledEnum, CompiledEnumCase, CompiledFunction,
-    CompiledInterface, CompiledParam, CompiledProperty, CompiledTraitAdaptation, CompiledTraitUse,
-    IrModule,
+    ClosureCategory, CompiledClass, CompiledClassConst, CompiledEnum, CompiledEnumCase,
+    CompiledFunction, CompiledInterface, CompiledParam, CompiledProperty, CompiledTraitAdaptation,
+    CompiledTraitUse, IrModule,
 };
 use crate::lexer::{
     facade::{get_legacy_php_function, is_native_or_plugin_facade},
@@ -1009,6 +1010,8 @@ impl<'a> IrLowerer<'a> {
                     false,
                     false,
                     false,
+                    false,
+                    false,
                 )?;
                 self.module
                     .function_index
@@ -1189,7 +1192,10 @@ impl<'a> IrLowerer<'a> {
                     is_static: false,
                     is_abstract: false,
                     is_final: false,
+                    is_open: false,
+                    is_override: false,
                     is_closure: true,
+                    closure_category: Some(ClosureCategory::PureNonCapturing),
                     visibility: Visibility::Public,
                     enclosing_class: b.enclosing_class.clone(),
                     declaring_class_id: None,
@@ -1702,6 +1708,40 @@ impl<'a> IrLowerer<'a> {
                 };
 
                 if let ExprKind::Ident(ident) = &callee.kind {
+                    let clean_fn = ident.name.strip_prefix('\\').unwrap_or(ident.name);
+                    if clean_fn.eq_ignore_ascii_case("now") && !self.module.function_index.contains_key(clean_fn) {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("Time");
+                        let method_const = b.intern_string("now");
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
+                    if clean_fn.eq_ignore_ascii_case("date") && !self.module.function_index.contains_key(clean_fn) {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("Time");
+                        let method_const = b.intern_string("date");
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
+
                     let arg_count = self.evaluate_and_push_args(b, args)?;
                     let func_name_const = b.intern_string(ident.name);
                     b.emit(
@@ -2284,7 +2324,7 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
-                let (func_id, upvalues) =
+                let (func_id, upvalues, category) =
                     self.compile_arrow_function(b, params, return_type.as_ref(), body, expr.span)?;
                 for upval in &upvalues {
                     let src_reg = b.get_or_alloc_local(upval, None, false, false, expr.span)?;
@@ -2293,6 +2333,7 @@ impl<'a> IrLowerer<'a> {
                         OpCode::CaptureUpvalue {
                             src: src_reg,
                             name: name_const,
+                            is_by_ref: false,
                         },
                         expr.span,
                     );
@@ -2302,6 +2343,7 @@ impl<'a> IrLowerer<'a> {
                         dst,
                         func_id,
                         upvalue_count: upvalues.len() as u16,
+                        category,
                     },
                     expr.span,
                 );
@@ -2319,21 +2361,41 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
+                let uses_this = !*is_static && closure_body_uses_this(body);
+                let ref_captures = uses.iter().filter(|u| u.by_ref).count();
                 let mut upvalues: Vec<String> = uses
                     .iter()
                     .map(|u| normalize_var_name(u.var.name))
                     .collect();
-                if !*is_static
+                if uses_this
                     && b.chunk.local_map.contains_key("$this")
                     && !upvalues.iter().any(|u| u == "$this")
                 {
                     upvalues.push("$this".to_string());
                 }
+
+                let has_this = upvalues.iter().any(|u| u == "$this");
+                let val_count = upvalues.iter().filter(|u| *u != "$this").count();
+                let category = if ref_captures > 0 {
+                    ClosureCategory::ImpureReference(ref_captures as u16)
+                } else if has_this && val_count == 0 {
+                    ClosureCategory::PureThisOnly
+                } else if has_this && val_count > 0 {
+                    ClosureCategory::PureValueAndThis(val_count as u16)
+                } else if val_count == 0 {
+                    ClosureCategory::PureNonCapturing
+                } else if val_count <= 2 {
+                    ClosureCategory::PureValueSmall(val_count as u8)
+                } else {
+                    ClosureCategory::PureValueLarge(val_count as u16)
+                };
+
                 let func_id = self.compile_closure(
                     b,
                     *is_static,
                     params,
                     &upvalues,
+                    category,
                     return_type.as_ref(),
                     body,
                     expr.span,
@@ -2341,10 +2403,16 @@ impl<'a> IrLowerer<'a> {
                 for upval in &upvalues {
                     let src_reg = b.get_or_alloc_local(upval, None, false, false, expr.span)?;
                     let name_const = b.intern_string(upval);
+                    let is_by_ref = uses
+                        .iter()
+                        .find(|u| normalize_var_name(u.var.name) == *upval)
+                        .map(|u| u.by_ref)
+                        .unwrap_or(false);
                     b.emit(
                         OpCode::CaptureUpvalue {
                             src: src_reg,
                             name: name_const,
+                            is_by_ref,
                         },
                         expr.span,
                     );
@@ -2354,6 +2422,7 @@ impl<'a> IrLowerer<'a> {
                         dst,
                         func_id,
                         upvalue_count: upvalues.len() as u16,
+                        category,
                     },
                     expr.span,
                 );
@@ -3356,6 +3425,8 @@ impl<'a> IrLowerer<'a> {
         is_static: bool,
         is_abstract: bool,
         is_final: bool,
+        is_open: bool,
+        is_override: bool,
     ) -> Result<FunctionId, IrError> {
         let return_type = func
             .return_type
@@ -3493,7 +3564,10 @@ impl<'a> IrLowerer<'a> {
             is_static,
             is_abstract,
             is_final,
+            is_open,
+            is_override,
             is_closure: false,
+            closure_category: None,
             visibility,
             enclosing_class,
             declaring_class_id: None,
@@ -3511,7 +3585,7 @@ impl<'a> IrLowerer<'a> {
         return_type_hint: Option<&TypeHint<'_>>,
         body: &Expr<'_>,
         span: Span,
-    ) -> Result<(FunctionId, Vec<String>), IrError> {
+    ) -> Result<(FunctionId, Vec<String>, ClosureCategory), IrError> {
         let arrow_name = format!("<arrow#{}>", self.synthetic_counter);
         self.synthetic_counter += 1;
 
@@ -3591,8 +3665,18 @@ impl<'a> IrLowerer<'a> {
         collect_expr_variables(body, &mut referenced_vars);
 
         let mut upvalues = Vec::new();
+        let uses_this = expr_uses_this(body);
+        if uses_this
+            && parent.chunk.local_map.contains_key("$this")
+            && !upvalues.contains(&"$this".to_string())
+        {
+            fb.get_or_alloc_local("$this", None, false, false, span)?;
+            upvalues.push("$this".to_string());
+        }
+
         for var_name in referenced_vars {
-            if var_name != "this"
+            if var_name != "$this"
+                && var_name != "this"
                 && !param_names.contains(&var_name)
                 && parent.chunk.local_map.contains_key(&var_name)
                 && !upvalues.contains(&var_name)
@@ -3601,6 +3685,20 @@ impl<'a> IrLowerer<'a> {
                 upvalues.push(var_name);
             }
         }
+
+        let has_this = upvalues.iter().any(|u| u == "$this");
+        let val_count = upvalues.iter().filter(|u| *u != "$this").count();
+        let category = if has_this && val_count == 0 {
+            ClosureCategory::PureThisOnly
+        } else if has_this && val_count > 0 {
+            ClosureCategory::PureValueAndThis(val_count as u16)
+        } else if val_count == 0 {
+            ClosureCategory::PureNonCapturing
+        } else if val_count <= 2 {
+            ClosureCategory::PureValueSmall(val_count as u8)
+        } else {
+            ClosureCategory::PureValueLarge(val_count as u16)
+        };
 
         let ret_reg = self.lower_expr(&mut fb, body, None)?;
         if !matches!(
@@ -3634,7 +3732,10 @@ impl<'a> IrLowerer<'a> {
             is_static: false,
             is_abstract: false,
             is_final: false,
+            is_open: false,
+            is_override: false,
             is_closure: true,
+            closure_category: Some(category),
             visibility: Visibility::Public,
             enclosing_class: parent.enclosing_class.clone(),
             declaring_class_id: None,
@@ -3642,7 +3743,7 @@ impl<'a> IrLowerer<'a> {
             span,
         });
 
-        Ok((func_id, upvalues))
+        Ok((func_id, upvalues, category))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3652,6 +3753,7 @@ impl<'a> IrLowerer<'a> {
         is_static: bool,
         params: &[Param<'_>],
         upvalues: &[String],
+        category: ClosureCategory,
         return_type_hint: Option<&TypeHint<'_>>,
         body: &[Stmt<'_>],
         span: Span,
@@ -3763,7 +3865,10 @@ impl<'a> IrLowerer<'a> {
             is_static,
             is_abstract: false,
             is_final: false,
+            is_open: false,
+            is_override: false,
             is_closure: true,
+            closure_category: Some(category),
             visibility: Visibility::Public,
             enclosing_class: if is_static {
                 None
@@ -3905,6 +4010,8 @@ impl<'a> IrLowerer<'a> {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
+                        m.is_open,
+                        m.is_override,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
                     methods.insert(m.function.name.name.to_string(), func_id);
@@ -4035,6 +4142,8 @@ impl<'a> IrLowerer<'a> {
                         m.is_static,
                         m.is_abstract,
                         m.is_final,
+                        m.is_open,
+                        m.is_override,
                     )?;
                     self.module.function_index.insert(method_key, func_id);
                     methods.insert(m.function.name.name.to_string(), func_id);
@@ -4229,6 +4338,8 @@ impl<'a> IrLowerer<'a> {
                 m.is_static,
                 true,
                 m.is_final,
+                true,
+                false,
             )?;
             self.module.function_index.insert(method_key, func_id);
             methods.insert(m.function.name.name.to_string(), func_id);
@@ -4293,6 +4404,8 @@ impl<'a> IrLowerer<'a> {
                 m.is_static,
                 m.is_abstract,
                 m.is_final,
+                false,
+                false,
             )?;
             self.module.function_index.insert(method_key, func_id);
             methods.insert(m.function.name.name.to_string(), func_id);
@@ -4669,3 +4782,48 @@ fn collect_expr_variables(expr: &Expr<'_>, out: &mut Vec<String>) {
         | ExprKind::List(_) => {}
     }
 }
+
+/// AST visitor scanner to determine if an expression or closure body references `$this`.
+struct ThisUsageScanner {
+    found: bool,
+}
+
+impl<'s> AstVisitor<'s> for ThisUsageScanner {
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        if self.found {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::Variable(v) => {
+                if v.name.eq_ignore_ascii_case("this") || v.name.eq_ignore_ascii_case("$this") {
+                    self.found = true;
+                    return;
+                }
+            }
+            // Static closures and anonymous classes cannot capture or use outer $this
+            ExprKind::Closure { is_static: true, .. } | ExprKind::AnonymousClass { .. } => return,
+            _ => {}
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Inspect an anonymous closure body to check if `$this` is actually referenced.
+pub fn closure_body_uses_this(body: &[Stmt<'_>]) -> bool {
+    let mut scanner = ThisUsageScanner { found: false };
+    for s in body {
+        scanner.visit_stmt(s);
+        if scanner.found {
+            return true;
+        }
+    }
+    false
+}
+
+/// Inspect an expression (such as an arrow function body) to check if `$this` is referenced.
+pub fn expr_uses_this(expr: &Expr<'_>) -> bool {
+    let mut scanner = ThisUsageScanner { found: false };
+    scanner.visit_expr(expr);
+    scanner.found
+}
+

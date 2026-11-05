@@ -221,10 +221,14 @@ pub struct ClassMetadata {
     pub attributes: Vec<CompiledAttribute>,
     pub is_abstract: bool,
     pub is_final: bool,
-    pub is_singleton: bool,
+    pub is_shared: bool,
 }
 
 impl ClassMetadata {
+    #[inline]
+    pub fn is_singleton(&self) -> bool {
+        self.is_shared
+    }
     pub fn has_attribute(&self, attr_name: &str) -> bool {
         self.attributes.iter().any(|a| a.name == attr_name)
     }

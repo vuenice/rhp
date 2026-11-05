@@ -90,7 +90,7 @@ Rather than using Zend Engine's monolithic `zend_array` (which incurs massive me
 ## Memory & State Rules
 
 ### 1. Boot Heap Immutability (`index.rhp` $\rightarrow$ CoW Worker Memory)
-The application boot phase in `index.rhp` executes once in the master process prior to worker forking. All parsed routes, compiled bytecode, and container singletons are frozen into an immutable state (`Arc<EngineState>`), shared read-only across all pre-forked worker processes via OS Copy-on-Write (CoW).
+The application boot phase in `index.rhp` executes once in the master process prior to worker forking. All parsed routes, compiled bytecode, and container shared services are frozen into an immutable state (`Arc<EngineState>`), shared read-only across all pre-forked worker processes via OS Copy-on-Write (CoW).
 - **Strict Single-Threaded Boot Rule:** The master process remains strictly single-threaded during boot. It is forbidden to spawn Tokio runtimes, thread pools, or database connections before forking (`fork()` deadlocks if locks are held by non-calling threads). Workers initialize their connection pools and async engines post-fork.
 - **Read-Only Invariant:** Request code inside workers cannot mutate boot-time structures. Any attempt to write to frozen boot data throws a fatal runtime error.
 - **Shared Mutable State:** Any state that must be shared across requests or workers must pass through explicit host-provided native APIs (e.g., Redis, SQLite/PostgreSQL, or host cache stores).

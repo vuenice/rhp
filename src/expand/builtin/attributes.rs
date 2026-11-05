@@ -30,7 +30,7 @@ fn extract_string_args(site: &ExpansionSite, ctx: &mut ExpandCtx) -> Result<Vec<
     Ok(names)
 }
 
-/// Declarative metadata attribute expander (e.g. `#[Route]`, `#[Singleton]`).
+/// Declarative metadata attribute expander (e.g. `#[Route]`, `#[Shared]`).
 ///
 /// Returns `Expansion::Empty` while retaining the attribute for compile-time reflection / metadata extraction.
 pub struct DeclarativeExpander {

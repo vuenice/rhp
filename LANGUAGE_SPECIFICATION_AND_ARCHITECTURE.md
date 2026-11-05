@@ -109,7 +109,7 @@ flowchart TD
 │                   RHP SUPERVISOR (Master Process)                      │
 │ - Reads rhp.toml (port, worker count, timeouts, file watch rules)      │
 │ - Executes index.rhp Boot Phase (Sync, strictly single-threaded)       │
-│ - Freezes routing tables, container singletons, bytecode into CoW heap │
+│ - Freezes routing tables, container shared services, bytecode into CoW heap │
 │ - Binds shared TCP listening socket (passed fd / SO_REUSEPORT)         │
 │ - File watcher (hot reloading) & process supervisor (reaps & respawns) │
 └───────────────────┬────────────────────────────────┬───────────────────┘
