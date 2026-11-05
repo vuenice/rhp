@@ -7,3 +7,5 @@ website/node_modules/
 website/dist/
 website/.astro/
 dist/
+config.bat
+node_modules

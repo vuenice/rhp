@@ -18,6 +18,7 @@ pub use pkg as rpm;
 pub mod telemetry;
 pub mod type_system;
 pub mod vm;
+pub mod runtime;
 
 pub use expand::{
     compile_template, discover_expanders, expand_program, expand_template, parse_and_expand,
@@ -135,4 +136,6 @@ pub use telemetry::{
     CrashReport, HistogramSummary, MetricsRegistry, Span as OtelSpan, SpanContext, SpanEvent, SpanId, SpanKind,
     SpanLink, SpanStatus, SpanStatusCode, TraceFlags, TraceId, TraceState, TracerConfig,
 };
+
+pub use runtime::*;
 

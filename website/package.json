@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Marketing landing page and documentation site for RHP programming language",
   "scripts": {
-    "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
-    "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "dev": "node init && ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "build": "node init && ASTRO_TELEMETRY_DISABLED=1 astro build",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
   },
   "keywords": [
