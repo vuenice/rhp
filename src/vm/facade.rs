@@ -368,6 +368,9 @@ pub fn dispatch_facade_call(
         "Ip" => dispatch_ip(method, args),
         "Compress" => dispatch_compress(method, args),
         "Uniq" => crate::vm::uniq::dispatch_uniq(method, args),
+        "Path" => dispatch_path(method, args),
+        "Socket" => dispatch_socket(method, args),
+        "Binary" => dispatch_binary(method, args),
         _ => {
             if let Some((in_proc_fn, is_blocking)) =
                 crate::vm::rust_loader::get_in_process_native_function(facade, method)
@@ -1008,6 +1011,36 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 chars.iter().skip(actual_start).collect()
             };
             Ok(PhpValue::string(sub))
+        }
+        "fromLast" | "substringFromLast" | "lastFrom" | "strrchr" => {
+            let s = get_arg_str(args, 0, "Str::fromLast")?;
+            let needle_val = args.get(1).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::fromLast".to_string(),
+                passed: args.len(),
+                expected: 2,
+            })?;
+            let needle = needle_val.to_php_string();
+            if needle.is_empty() {
+                return Ok(PhpValue::Bool(false));
+            }
+            let search_char = needle.chars().next().unwrap();
+            if let Some(idx) = s.rfind(search_char) {
+                Ok(PhpValue::string(&s[idx..]))
+            } else {
+                Ok(PhpValue::Bool(false))
+            }
+        }
+        "afterLast" => {
+            let s = get_arg_str(args, 0, "Str::afterLast")?;
+            let needle = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            if needle.is_empty() {
+                return Ok(PhpValue::string(s));
+            }
+            if let Some(idx) = s.rfind(&needle) {
+                Ok(PhpValue::string(&s[idx + needle.len()..]))
+            } else {
+                Ok(PhpValue::string(s))
+            }
         }
         // Pad a string to a given length with another string.
         // Example: `Str::pad("Alien", 10, "_", "right")` -> `"Alien_____"`
@@ -2754,6 +2787,28 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
             let is_emp = php_value_is_empty(args.first().unwrap_or(&PhpValue::Null));
             Ok(PhpValue::Bool(is_emp))
         }
+        "usleep" => {
+            let micros = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .unwrap_or(0)
+                .max(0) as u64;
+            if micros > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(micros));
+            }
+            Ok(PhpValue::Null)
+        }
+        "sleep" => {
+            let secs = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .unwrap_or(0)
+                .max(0) as u64;
+            if secs > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+            }
+            Ok(PhpValue::Int(0))
+        }
         "exit" => execute_exit_signal(args),
         "die" => execute_process_exit(args),
         "register_shutdown_function" | "registerShutdownFunction" => Ok(PhpValue::Null),
@@ -3215,6 +3270,13 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             let path = get_arg_str(args, 0, "File::delete")?;
             record_fiber_io_start(IoKind::FileDelete { path: path.clone() });
             let ok = std::fs::remove_file(&path).is_ok();
+            record_fiber_io_finish();
+            Ok(PhpValue::Bool(ok))
+        }
+        "rmdir" | "removeDirectory" | "deleteDirectory" => {
+            let path = get_arg_str(args, 0, "File::rmdir")?;
+            record_fiber_io_start(IoKind::FileDelete { path: path.clone() });
+            let ok = std::fs::remove_dir(&path).is_ok();
             record_fiber_io_finish();
             Ok(PhpValue::Bool(ok))
         }
@@ -6301,7 +6363,21 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "rewind" => dispatch_file("rewind", args),
         "tempnam" => dispatch_file("tempnam", args),
         "tmpfile" => dispatch_file("tmpfile", args),
-        "sys_get_temp_dir" => dispatch_file("sysGetTempDir", args),
+        "sys_get_temp_dir" => dispatch_path("tempDir", args),
+        "glob" => dispatch_path("glob", args),
+        "stream_socket_server" => dispatch_socket("server", args),
+        "stream_socket_get_name" => dispatch_socket("getName", args),
+        "bin2hex" => dispatch_binary("bin2hex", args),
+        "hex2bin" => dispatch_binary("hex2bin", args),
+        "random_bytes" => dispatch_binary("randomBytes", args),
+        "rmdir" => dispatch_file("rmdir", args),
+        "strrchr" => dispatch_str("fromLast", args),
+        "unlink" => dispatch_file("delete", args),
+        "file_put_contents" => dispatch_file("write", args),
+        "file_get_contents" => dispatch_file("read", args),
+        "file_exists" => dispatch_file("exists", args),
+        "usleep" => dispatch_sys("usleep", args),
+        "sleep" => dispatch_sys("sleep", args),
         "fwrite" => dispatch_file("writeStream", args),
         "fread" => dispatch_file("readStream", args),
         "collect" => {
@@ -7860,6 +7936,344 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Debug".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Path Facade
+// =========================================================================
+
+pub fn dispatch_path(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "basename" => {
+            let path_str = get_arg_str(args, 0, "Path::basename")?;
+            let ext = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
+            let base = path_basename(&path_str, ext.as_deref());
+            Ok(PhpValue::string(base))
+        }
+        "dirname" => {
+            let path_str = get_arg_str(args, 0, "Path::dirname")?;
+            let levels = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1).max(1) as usize;
+            let mut dir = path_str;
+            for _ in 0..levels {
+                dir = path_dirname(&dir);
+            }
+            Ok(PhpValue::string(dir))
+        }
+        "extname" => {
+            let path_str = get_arg_str(args, 0, "Path::extname")?;
+            let ext = path_extname(&path_str);
+            Ok(PhpValue::string(ext))
+        }
+        "isAbsolute" | "is_absolute" => {
+            let path_str = get_arg_str(args, 0, "Path::isAbsolute")?;
+            Ok(PhpValue::Bool(path_is_absolute(&path_str)))
+        }
+        "parse" => {
+            let path_str = get_arg_str(args, 0, "Path::parse")?;
+            let map = path_parse(&path_str);
+            Ok(PhpValue::dict_from_map(map))
+        }
+        "tempDir" | "sysGetTempDir" | "sys_get_temp_dir" | "getTempDir" => {
+            let temp = std::env::temp_dir().to_string_lossy().trim_end_matches('/').to_string();
+            Ok(PhpValue::string(temp))
+        }
+        "glob" => {
+            let pattern = get_arg_str(args, 0, "Path::glob")?;
+            let matches = path_glob(&pattern);
+            Ok(PhpValue::list(matches.into_iter().map(PhpValue::string).collect()))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Path".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+pub fn path_basename(path: &str, ext: Option<&str>) -> String {
+    let clean = path.trim_end_matches(|c| c == '/' || c == '\\');
+    if clean.is_empty() {
+        return String::new();
+    }
+    let last = clean.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(clean);
+    let mut base = last.to_string();
+    if let Some(ext_str) = ext {
+        if !ext_str.is_empty() && base.ends_with(ext_str) {
+            base.truncate(base.len() - ext_str.len());
+        }
+    }
+    base
+}
+
+pub fn path_dirname(path: &str) -> String {
+    let trimmed = path.trim_end_matches(|c| c == '/' || c == '\\');
+    if trimmed.is_empty() {
+        if path.starts_with('/') {
+            return "/".to_string();
+        }
+        return ".".to_string();
+    }
+    if let Some(idx) = trimmed.rfind(|c| c == '/' || c == '\\') {
+        if idx == 0 {
+            "/".to_string()
+        } else {
+            trimmed[..idx].to_string()
+        }
+    } else {
+        ".".to_string()
+    }
+}
+
+pub fn path_extname(path: &str) -> String {
+    let base = path_basename(path, None);
+    if base.is_empty() {
+        return String::new();
+    }
+    if let Some(dot_idx) = base.rfind('.') {
+        if dot_idx == 0 {
+            return String::new();
+        }
+        base[dot_idx..].to_string()
+    } else {
+        String::new()
+    }
+}
+
+pub fn path_is_absolute(path: &str) -> bool {
+    if path.starts_with('/') || path.starts_with('\\') {
+        return true;
+    }
+    if path.len() >= 3 {
+        let bytes = path.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\') {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn path_parse(path: &str) -> IndexMap<String, PhpValue> {
+    let is_abs = path_is_absolute(path);
+    let root = if is_abs {
+        if path.starts_with('/') {
+            "/".to_string()
+        } else if path.starts_with('\\') {
+            "\\".to_string()
+        } else if path.len() >= 3 && path.as_bytes()[1] == b':' {
+            path[..3].to_string()
+        } else {
+            "/".to_string()
+        }
+    } else {
+        String::new()
+    };
+
+    let base = path_basename(path, None);
+    let ext = path_extname(path);
+    let name = if !ext.is_empty() && base.ends_with(&ext) {
+        base[..base.len() - ext.len()].to_string()
+    } else {
+        base.clone()
+    };
+    let dir = path_dirname(path);
+    let dir_val = if dir == "." && !path.contains('/') && !path.contains('\\') {
+        String::new()
+    } else {
+        dir
+    };
+
+    let mut map = IndexMap::new();
+    map.insert("root".to_string(), PhpValue::string(root));
+    map.insert("dir".to_string(), PhpValue::string(dir_val));
+    map.insert("base".to_string(), PhpValue::string(base));
+    map.insert("ext".to_string(), PhpValue::string(ext));
+    map.insert("name".to_string(), PhpValue::string(name));
+    map
+}
+
+pub fn path_glob(pattern: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let norm_pattern = pattern.replace('\\', "/");
+    let first_wildcard = norm_pattern.find(|c| c == '*' || c == '?' || c == '[');
+    let (base_dir, has_wildcards) = match first_wildcard {
+        Some(idx) => {
+            let prefix = &norm_pattern[..idx];
+            let dir = match prefix.rfind('/') {
+                Some(p_idx) => {
+                    if p_idx == 0 {
+                        "/".to_string()
+                    } else {
+                        prefix[..p_idx].to_string()
+                    }
+                }
+                None => ".".to_string(),
+            };
+            (dir, true)
+        }
+        None => (norm_pattern.clone(), false),
+    };
+
+    if !has_wildcards {
+        if std::path::Path::new(pattern).exists() {
+            return vec![pattern.to_string()];
+        }
+        return vec![];
+    }
+
+    let regex_pattern = glob_to_regex(&norm_pattern);
+    let Ok(re) = regex::Regex::new(&regex_pattern) else {
+        return vec![];
+    };
+
+    let recursive = norm_pattern.contains("**");
+    walk_and_match(&base_dir, &re, recursive, &mut results);
+    results.sort();
+    results
+}
+
+fn glob_to_regex(pattern: &str) -> String {
+    let mut reg = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => {
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    if chars.peek() == Some(&'/') {
+                        chars.next();
+                        reg.push_str("(?:.*/)?");
+                    } else {
+                        reg.push_str(".*");
+                    }
+                } else {
+                    reg.push_str("[^/]*");
+                }
+            }
+            '?' => reg.push_str("[^/]"),
+            '.' | '(' | ')' | '+' | '|' | '^' | '$' | '@' | '%' => {
+                reg.push('\\');
+                reg.push(c);
+            }
+            '{' => reg.push('('),
+            '}' => reg.push(')'),
+            ',' => reg.push('|'),
+            other => reg.push(other),
+        }
+    }
+    reg.push('$');
+    reg
+}
+
+fn walk_and_match(dir: &str, re: &regex::Regex, recursive: bool, results: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let path_str = path.to_string_lossy().replace('\\', "/");
+        let test_str = if path_str.starts_with("./") {
+            &path_str[2..]
+        } else {
+            &path_str
+        };
+        if re.is_match(&path_str) || re.is_match(test_str) {
+            results.push(path_str.clone());
+        }
+        if recursive && path.is_dir() {
+            walk_and_match(&path_str, re, recursive, results);
+        }
+    }
+}
+
+// =========================================================================
+// Socket Facade
+// =========================================================================
+
+pub fn dispatch_socket(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "server" | "createServer" => {
+            let addr = get_arg_str(args, 0, "Socket::server")?;
+            let clean = addr.strip_prefix("tcp://").unwrap_or(&addr);
+            match std::net::TcpListener::bind(clean) {
+                Ok(listener) => {
+                    let local = listener
+                        .local_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|_| clean.to_string());
+                    Ok(crate::vm::csv::create_socket_stream(listener, local))
+                }
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "getName" | "get_name" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Socket::getName".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let want_peer = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+            match crate::vm::csv::get_socket_addr(val, want_peer) {
+                Ok(Some(addr)) => Ok(PhpValue::string(addr)),
+                Ok(None) => Ok(PhpValue::Bool(false)),
+                Err(e) => Err(e),
+            }
+        }
+        "close" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Socket::close".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            crate::vm::csv::close_stream(val)
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Socket".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// Binary Facade
+// =========================================================================
+
+pub fn dispatch_binary(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "bin2hex" | "toHex" | "hex" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Binary::bin2hex".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let bytes = match val {
+                PhpValue::String(s) => s.as_bytes().to_vec(),
+                other => other.to_php_string().into_bytes(),
+            };
+            let encoded = hex::encode(bytes);
+            Ok(PhpValue::string(encoded))
+        }
+        "hex2bin" | "fromHex" => {
+            let s = get_arg_str(args, 0, "Binary::hex2bin")?;
+            match hex::decode(&s) {
+                Ok(decoded) => Ok(PhpValue::bytes(decoded)),
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+        "randomBytes" | "random_bytes" | "random" => {
+            let len = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .unwrap_or(16)
+                .max(0) as usize;
+            let bytes = crate::vm::crypto::random_bytes(len).map_err(|e| RuntimeErrorKind::Custom {
+                message: format!("Binary::randomBytes failed: {}", e),
+            })?;
+            Ok(PhpValue::bytes(bytes))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Binary".to_string(),
             method: method.to_string(),
         }),
     }

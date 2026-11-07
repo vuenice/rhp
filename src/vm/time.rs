@@ -1609,6 +1609,28 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
     }
 
     match method {
+        "sleep" => {
+            let secs = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .unwrap_or(0)
+                .max(0) as u64;
+            if secs > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+            }
+            Ok(PhpValue::Int(0))
+        }
+        "sleepMs" | "sleep_ms" => {
+            let ms = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .unwrap_or(0)
+                .max(0) as u64;
+            if ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+            Ok(PhpValue::Null)
+        }
         "now" => {
             let tz = args.first().map(|v| v.to_php_string());
             let c = CarbonDate::now(tz.as_deref());

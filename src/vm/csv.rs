@@ -13,11 +13,19 @@ pub enum StreamSource {
         buf_pos: usize,
     },
     Memory(std::io::Cursor<Vec<u8>>),
+    Socket {
+        listener: Option<std::net::TcpListener>,
+        local_addr: String,
+        peer_addr: Option<String>,
+    },
 }
 
 impl StreamSource {
     pub fn read_byte(&mut self) -> std::io::Result<Option<u8>> {
         match self {
+            StreamSource::Socket { .. } => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Cannot read bytes directly from listening socket"))
+            }
             StreamSource::Memory(cursor) => {
                 let mut buf = [0u8; 1];
                 let n = cursor.read(&mut buf)?;
@@ -82,11 +90,15 @@ impl StreamSource {
                     buffer.insert(0, byte);
                 }
             }
+            StreamSource::Socket { .. } => {}
         }
     }
 
     pub fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         match self {
+            StreamSource::Socket { .. } => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Cannot write to listening socket"))
+            }
             StreamSource::Memory(cursor) => cursor.write_all(bytes),
             StreamSource::File {
                 file,
@@ -110,6 +122,9 @@ impl StreamSource {
 
     pub fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         match self {
+            StreamSource::Socket { .. } => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Cannot seek listening socket"))
+            }
             StreamSource::Memory(cursor) => cursor.seek(pos),
             StreamSource::File {
                 file,
@@ -141,8 +156,14 @@ pub struct StreamResource {
 impl Drop for StreamResource {
     fn drop(&mut self) {
         if let Ok(mut src) = self.source.lock() {
-            if let StreamSource::File { file, .. } = &mut *src {
-                *file = None;
+            match &mut *src {
+                StreamSource::File { file, .. } => {
+                    *file = None;
+                }
+                StreamSource::Socket { listener, .. } => {
+                    *listener = None;
+                }
+                _ => {}
             }
         }
         if let Some(ref path) = self.delete_on_close {
@@ -252,12 +273,48 @@ pub fn close_stream(val: &PhpValue) -> Result<PhpValue, RuntimeErrorKind> {
         StreamSource::Memory(cursor) => {
             cursor.get_mut().clear();
         }
+        StreamSource::Socket { listener, .. } => {
+            *listener = None;
+        }
     }
     drop(src);
     if let Some(ref path) = stream.delete_on_close {
         let _ = std::fs::remove_file(path);
     }
     Ok(PhpValue::Bool(true))
+}
+
+pub fn create_socket_stream(listener: std::net::TcpListener, local_addr: String) -> PhpValue {
+    let stream = StreamResource {
+        source: Mutex::new(StreamSource::Socket {
+            listener: Some(listener),
+            local_addr,
+            peer_addr: None,
+        }),
+        closed: Mutex::new(false),
+        delete_on_close: None,
+    };
+    PhpValue::Resource(Arc::new(stream))
+}
+
+pub fn get_socket_addr(val: &PhpValue, want_peer: bool) -> Result<Option<String>, RuntimeErrorKind> {
+    let stream = get_stream(val)?;
+    let closed = *stream.closed.lock().unwrap();
+    if closed {
+        return Ok(None);
+    }
+    let src = stream.source.lock().unwrap();
+    if let StreamSource::Socket { local_addr, peer_addr, .. } = &*src {
+        if want_peer {
+            Ok(peer_addr.clone())
+        } else {
+            Ok(Some(local_addr.clone()))
+        }
+    } else {
+        Err(RuntimeErrorKind::TypeError {
+            message: "Resource is not a valid socket resource".to_string(),
+        })
+    }
 }
 
 pub fn feof_stream(val: &PhpValue) -> Result<PhpValue, RuntimeErrorKind> {
@@ -296,6 +353,7 @@ pub fn feof_stream(val: &PhpValue) -> Result<PhpValue, RuntimeErrorKind> {
                 }
             }
         }
+        StreamSource::Socket { .. } => true,
     };
     Ok(PhpValue::Bool(is_eof))
 }

@@ -144,6 +144,10 @@ RHP strings are fundamentally **binary-safe raw byte structures** (`RhpString` s
 | **Instantiation** | Static facades (`Str::utf8()`, `Str::fromEncoding()`) | Avoids `new Str()` object header overhead; keeps syntax clean and performant. |
 | **Mutations** | Immutable helpers + explicit reassignment (`$str = $str->method()`) | Predictable side-effect-free data manipulation combined with zero-garbage memory replacement. |
 
+- **Substrings from delimiters (`Str::fromLast`, `Str::afterLast`):**
+  - `Str::fromLast($haystack, $needle)`: Returns substring starting from the last occurrence of `$needle` through the end (canonical replacement for legacy `strrchr()`).
+  - `Str::afterLast($haystack, $needle)`: Returns substring strictly after the last occurrence of `$needle`.
+
 ### 3. Asynchronous Execution (`async` / `defer`)
 
 - **Use `async()` to spawn background tasks and return immediate futures:**
@@ -426,6 +430,36 @@ class OrderProcessor {
     }
 }
 ```
+
+### 14. Native Path, Socket, Binary & System Utilities
+
+RHP provides clean static facades replacing procedural system, path, networking, and binary functions:
+
+- **`Path` Facade:**
+  - `Path::basename($path, ?$ext)`: Trailing filename component, optionally stripping `$ext`.
+  - `Path::dirname($path, $levels = 1)`: Parent directory with level traversal.
+  - `Path::extname($path)`: File extension including dot (`.php`, `.json`).
+  - `Path::parse($path)`: Structured dictionary with `root`, `dir`, `base`, `ext`, `name`.
+  - `Path::isAbsolute($path)`: True if the path is absolute.
+  - `Path::tempDir()`: System temporary directory (replaces `sys_get_temp_dir()`).
+  - `Path::glob($pattern, $flags = 0)`: Filesystem pattern matching (replaces `glob()`).
+
+- **`Socket` Facade:**
+  - `Socket::server($address)`: Creates a stream socket listener (replaces `stream_socket_server()`).
+  - `Socket::getName($handle, $wantPeer = false)`: Socket name / address (replaces `stream_socket_get_name()`).
+  - `Socket::close($handle)`: Closes socket listener (compatible with `fclose($handle)`).
+
+- **`Binary` Facade:**
+  - `Binary::bin2hex($bytes)` / `Binary::toHex($bytes)`: Hexadecimal encoding (replaces `bin2hex()`).
+  - `Binary::hex2bin($hex)` / `Binary::fromHex($hex)`: Hexadecimal decoding (replaces `hex2bin()`).
+  - `Binary::randomBytes($length)` / `Binary::random($length)`: Cryptographically secure random bytes (replaces `random_bytes()`).
+
+- **`File::rmdir`:**
+  - `File::rmdir($path)`: Removes an empty directory (replaces legacy `rmdir()`).
+
+- **`Sys::usleep` & `Sys::sleep`:**
+  - `Sys::usleep($microseconds)`: Microsecond execution delay (replaces procedural `usleep()`).
+  - `Sys::sleep($seconds)`: Second execution delay (replaces procedural `sleep()`).
 
 ---
 

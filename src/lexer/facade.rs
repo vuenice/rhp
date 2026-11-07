@@ -235,6 +235,18 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Debug",
         "Runtime diagnostics, value inspection, and type reflection facade (type, dump, dd, format)",
     ),
+    FacadeInfo::native(
+        "Path",
+        "Filesystem path operations, extension inspection, and glob pattern matching facade (basename, dirname, extname, parse, isAbsolute, glob, tempDir)",
+    ),
+    FacadeInfo::native(
+        "Socket",
+        "Stream socket networking and TCP listener facade (server, getName, close)",
+    ),
+    FacadeInfo::native(
+        "Binary",
+        "Binary data manipulation, hex encoding/decoding, and cryptographic byte generation facade (bin2hex, hex2bin, randomBytes, toHex, fromHex)",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
@@ -616,6 +628,12 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "Str::substr(string $string, int $offset, ?int $length = null): string",
     },
     LegacyPhpFunctionMapping {
+        php_name: "strrchr",
+        rhp_facade: "Str",
+        rhp_method: "fromLast",
+        rhp_signature: "Str::fromLast(string $string, string $needle): string|false",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "strpos",
         rhp_facade: "Str",
         rhp_method: "find",
@@ -669,6 +687,12 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "File",
         rhp_method: "mkdir",
         rhp_signature: "File::mkdir(string $path, string $mode = \"0777\", bool $recursive = false): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "rmdir",
+        rhp_facade: "File",
+        rhp_method: "rmdir",
+        rhp_signature: "File::rmdir(string $path): bool",
     },
     LegacyPhpFunctionMapping {
         php_name: "chmod",
@@ -1048,9 +1072,27 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     LegacyPhpFunctionMapping {
         php_name: "sys_get_temp_dir",
-        rhp_facade: "File",
-        rhp_method: "sysGetTempDir",
-        rhp_signature: "File::sysGetTempDir(): string",
+        rhp_facade: "Path",
+        rhp_method: "tempDir",
+        rhp_signature: "Path::tempDir(): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "glob",
+        rhp_facade: "Path",
+        rhp_method: "glob",
+        rhp_signature: "Path::glob(string $pattern, int $flags = 0): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "stream_socket_server",
+        rhp_facade: "Socket",
+        rhp_method: "server",
+        rhp_signature: "Socket::server(string $address): resource|false",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "stream_socket_get_name",
+        rhp_facade: "Socket",
+        rhp_method: "getName",
+        rhp_signature: "Socket::getName(resource $handle, bool $want_peer = false): string|false",
     },
     LegacyPhpFunctionMapping {
         php_name: "fwrite",
@@ -1101,11 +1143,24 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "opensslDecrypt",
         rhp_signature: "Crypt::opensslDecrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = ''): string|false",
     },
+    // Binary & Hex functions -> Binary::*
     LegacyPhpFunctionMapping {
         php_name: "random_bytes",
-        rhp_facade: "Crypt",
+        rhp_facade: "Binary",
         rhp_method: "randomBytes",
-        rhp_signature: "Crypt::randomBytes(int $length): string",
+        rhp_signature: "Binary::randomBytes(int $length): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "bin2hex",
+        rhp_facade: "Binary",
+        rhp_method: "bin2hex",
+        rhp_signature: "Binary::bin2hex(string $string): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "hex2bin",
+        rhp_facade: "Binary",
+        rhp_method: "hex2bin",
+        rhp_signature: "Binary::hex2bin(string $string): string|false",
     },
     // HTML functions -> Html::*
     LegacyPhpFunctionMapping {
@@ -1319,15 +1374,15 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     LegacyPhpFunctionMapping {
         php_name: "dirname",
-        rhp_facade: "File",
+        rhp_facade: "Path",
         rhp_method: "dirname",
-        rhp_signature: "File::dirname(string $path, int $levels = 1): string",
+        rhp_signature: "Path::dirname(string $path): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "basename",
-        rhp_facade: "File",
+        rhp_facade: "Path",
         rhp_method: "basename",
-        rhp_signature: "File::basename(string $path): string",
+        rhp_signature: "Path::basename(string $path, ?string $ext = null): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "pathinfo",
@@ -1417,6 +1472,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "Time",
         rhp_method: "date",
         rhp_signature: "Time::date(string $format, ?int $timestamp = null): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "usleep",
+        rhp_facade: "Sys",
+        rhp_method: "usleep",
+        rhp_signature: "Sys::usleep(int $microseconds): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "sleep",
+        rhp_facade: "Sys",
+        rhp_method: "sleep",
+        rhp_signature: "Sys::sleep(int $seconds): int",
     },
 ];
 
@@ -1553,6 +1620,9 @@ impl FacadeRegistry {
             "csv" => "Csv",
             "uniq" => "Uniq",
             "debug" => "Debug",
+            "path" => "Path",
+            "socket" => "Socket",
+            "binary" => "Binary",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -1614,7 +1684,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
-            | "time" | "carbon"
+            | "time" | "carbon" | "path" | "socket" | "binary"
     )
 }
 
