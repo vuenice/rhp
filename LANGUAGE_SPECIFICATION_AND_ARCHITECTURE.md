@@ -280,6 +280,7 @@ Provides explicit collection instantiation and chaining helpers. Standard arrays
   ```
   Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointer mechanics, making variable replacement lightning-fast without unnecessary memory duplication or garbage collection overhead.
 - **Custom Macros (`Arr::macro`):** Supports dynamic method registration bound to collection instances (`list`, `dict`, `set`, `hashMap`) without subclassing `Arr`.
+- **String Callables in Functional Helpers:** Functions such as `array_map` fully support string callables referencing built-in facades and user functions (e.g. `array_map('unlink', $files)` or `array_map('trim', $items)`), eliminating the need for boilerplate anonymous closure wrappers.
 
 #### Method Chaining & Collection Subtype Examples:
 
@@ -349,7 +350,9 @@ $text = $text->trim()->upper();
 
 #### 5. Key Facade & Instance Methods
 - **Inspection & Validation:** `Str::contains()`, `Str::startsWith()`, `Str::endsWith()`, `Str::isUtf8()`, `Str::byteLength()`, `Str::encoding()`.
-- **Transformation:** `Str::slug()`, `Str::upper()`, `Str::lower()`, `Str::trim()`, `Str::ltrim()`, `Str::rtrim()`, `Str::replace()`, `Str::substr()`, `Str::reverse()`, `Str::repeat()`.
+- **Transformation & Slicing:** `Str::slug()`, `Str::upper()`, `Str::lower()`, `Str::trim()`, `Str::ltrim()`, `Str::rtrim()`, `Str::replace()`, `Str::substr()`, `Str::reverse()`, `Str::repeat()`, `Str::fromLast()`, `Str::afterLast()`.
+  - `Str::fromLast(string $haystack, string $needle): string|false`: Returns the portion of `$haystack` starting from the last occurrence of `$needle` through to the end of the string, or `false` if not found (direct canonical replacement for legacy PHP `strrchr`).
+  - `Str::afterLast(string $haystack, string $needle): string|false`: Returns the portion of `$haystack` strictly after the last occurrence of `$needle` (excluding the delimiter), or `false` if not found.
 - **Encoding & Conversion:** `Str::fromEncoding()`, `Str::toEncoding()`, `Str::utf8()`, `Str::fromBytes()`, `Str::bytes()`.
 - **Dynamic Macros:** `Str::macro('method', fn() => ...)` binds custom helper methods to all string instances.
 
@@ -368,10 +371,11 @@ $response = HTTP::withHeaders(['Authorization' => 'Bearer token'])
 
 High-level file I/O interface supporting both synchronous fibers and non-blocking asynchronous execution models:
 
-- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`, `File::mkdir()`, `File::makeDirectory()`, `File::parseMode()`, `File::chmod()`, `File::realpath()`, `File::dirname()`, `File::tempnam()`, `File::tmpfile()`, `File::sysGetTempDir()`, `File::createTempDirectory()`.
+- **Operations:** `File::read()`, `File::write()`, `File::exists()`, `File::delete()`, `File::rmdir()`, `File::mkdir()`, `File::makeDirectory()`, `File::parseMode()`, `File::chmod()`, `File::realpath()`, `File::dirname()`, `File::tempnam()`, `File::tmpfile()`, `File::createTempDirectory()`.
+- **Directory Removal:** `File::rmdir(string $path): bool` removes an empty directory, returning `true` on success and `false` on failure (or if the directory does not exist / is not empty). The legacy procedural `rmdir()` function maps directly to `File::rmdir()`.
 - **String Permission Formats:** Functions accepting octal-format file permissions (`File::mkdir`, `File::chmod`, `File::createTempDirectory`, procedural `mkdir`) strictly require string format (`"0755"`, `"0o755"`, or symbolic `"rwxr-xr-x"`). Non-string arguments (integers) or invalid modes return `false`. Permission strings are validated via `File::parseMode($mode)`. If `parseMode` fails or directory creation fails, `File::mkdir` returns `false`.
-- **Temporary File & Directory Creation:** `File::tempnam()` creates unique temporary files with `0600` permissions and returns their path (with fallback to `sys_get_temp_dir()`). `File::tmpfile()` creates auto-deleting read/write temporary streams (`fclose` removes file from disk). `File::createTempDirectory()` securely creates isolated temporary directories.
-- **Canonical Path Resolution:** `File::realpath()` and procedural `realpath()` resolve relative paths, symbolic links, and `.` / `..` references, returning the canonical absolute path as a string or `false` if the path does not exist. `File::dirname()` supports directory traversal with an optional `$levels` argument.
+- **Temporary File & Directory Creation:** `File::tempnam()` creates unique temporary files with `0600` permissions and returns their path (with fallback to `Path::tempDir()`). `File::tmpfile()` creates auto-deleting read/write temporary streams (`fclose` removes file from disk). `File::createTempDirectory()` securely creates isolated temporary directories.
+- **Canonical Path Resolution:** `File::realpath()` and procedural `realpath()` resolve relative paths, symbolic links, and `.` / `..` references, returning the canonical absolute path as a string or `false` if the path does not exist. `File::dirname()` supports directory traversal with an optional `$levels` argument (also mirrored in `Path::dirname()`). System temporary directory discovery is canonically centralized in `Path::tempDir()`.
 - **Execution Models:** Standard call `File::read('app.log')` blocks the local fiber transparently. Using `Future::run(fn() => File::read(...))` or the `AFile` facade spawns a background task for non-blocking concurrent execution.
 
 ### 5. Session Facade
@@ -485,6 +489,58 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
   - Incoming requests: `WorkerRequest` extracts `traceparent` and starts a root `SERVER` span, recording status and populating `WorkerResponse::trace_id` and `span_id`.
   - Outgoing HTTP client: `HTTP::get` and `HTTP::post` auto-instrument `CLIENT` spans and inject the active W3C `traceparent` header.
   - Database queries: `DB::*` auto-instruments `CLIENT` spans with semantic attributes.
+
+### 11. Path Facade
+
+Expressive path manipulation, path parsing, extension inspection, and filesystem pattern matching:
+
+- **Key Methods:**
+  - `Path::basename(string $path, ?string $ext = null): string`: Returns the trailing component (filename) of a path. If `$ext` is provided, any matching trailing suffix is stripped.
+  - `Path::dirname(string $path, int $levels = 1): string`: Returns the parent directory name, traversing `$levels` upwards.
+  - `Path::extname(string $path): string`: Returns the extension portion of a path including the leading dot (e.g. `".php"` or `".json"`), or empty string if no extension exists.
+  - `Path::parse(string $path): dict`: Deconstructs a path into an associative dictionary containing `root`, `dir`, `base`, `ext`, and `name` properties:
+    ```php
+    $parsed = Path::parse('/var/www/index.rhp');
+    // Returns:
+    // [
+    //   'root' => '/',
+    //   'dir'  => '/var/www',
+    //   'base' => 'index.rhp',
+    //   'ext'  => '.rhp',
+    //   'name' => 'index'
+    // ]
+    ```
+  - `Path::isAbsolute(string $path): bool`: Returns `true` if the path is absolute (`/` or Windows drive letter `C:\`), or `false` otherwise.
+  - `Path::tempDir(): string`: Returns the system temporary directory path (canonical replacement for legacy `sys_get_temp_dir()`).
+  - `Path::glob(string $pattern, int $flags = 0): list<string>`: Searches for all pathname patterns matching `$pattern` using standard filesystem globbing rules (canonical replacement for legacy `glob()`).
+
+### 12. Socket Facade
+
+Low-level networking and stream socket listeners:
+
+- **Key Methods:**
+  - `Socket::server(string $address): resource|false`: Creates a stream socket server bound to the specified transport address (e.g. `'tcp://127.0.0.1:0'`) and returns a stream socket handle (canonical replacement for legacy `stream_socket_server()`).
+  - `Socket::getName(resource $handle, bool $want_peer = false): string|false`: Retrieves the local socket name (or remote peer address if `$want_peer` is `true`), e.g. `'127.0.0.1:54321'` (canonical replacement for legacy `stream_socket_get_name()`).
+  - `Socket::close(resource $handle): bool`: Closes the stream socket server listener. Socket handles are also fully integrated with procedural `fclose($handle)`.
+
+### 13. Binary Facade
+
+High-performance binary data inspection, hexadecimal conversions, and cryptographically secure random byte generation:
+
+- **Key Methods:**
+  - `Binary::bin2hex(string $bytes): string` / `Binary::toHex(...)`: Converts raw binary bytes into their hexadecimal string representation (canonical replacement for legacy `bin2hex()`).
+  - `Binary::hex2bin(string $hex): string|false` / `Binary::fromHex(...)`: Decodes a hexadecimal string into raw binary bytes, or returns `false` on malformed hex input (canonical replacement for legacy `hex2bin()`).
+  - `Binary::randomBytes(int $length): string` / `Binary::random(...)`: Generates `$length` cryptographically secure pseudo-random bytes via OS CSPRNG (canonical replacement for legacy `random_bytes()`).
+
+### 14. Sys Facade & Process Intrinsics
+
+System environment, execution delays, and process intrinsics:
+
+- **Key Methods:**
+  - `Sys::usleep(int $microseconds): void`: Delays execution for the specified number of microseconds (canonical replacement for procedural `usleep()`).
+  - `Sys::sleep(int $seconds): int`: Delays execution for the specified number of seconds (canonical replacement for procedural `sleep()`).
+  - `Sys::env(string $key, mixed $default = null)`: Retrieves an environment variable.
+  - `Sys::print(...)` / `Sys::echo(...)`: Native Rust-formatted standard output.
 
 ---
 

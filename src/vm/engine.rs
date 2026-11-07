@@ -4930,20 +4930,32 @@ impl VM {
                     }
                 }
                 "map" | "array_map" => {
-                    let (cb_opt, arr_opt) = match (args.first(), args.get(1)) {
-                        (Some(PhpValue::Closure(cb)), Some(arr)) => (Some(cb), Some(arr)),
-                        (Some(arr), Some(PhpValue::Closure(cb))) => (Some(cb), Some(arr)),
+                    let (cb_val, arr_opt) = match (args.first(), args.get(1)) {
+                        (Some(cb), Some(arr)) if matches!(cb, PhpValue::Closure(_) | PhpValue::String(_)) => (Some(cb), Some(arr)),
+                        (Some(arr), Some(cb)) if matches!(cb, PhpValue::Closure(_) | PhpValue::String(_)) => (Some(cb), Some(arr)),
                         _ => (None, None),
                     };
-                    if let (Some(cb), Some(arr)) = (cb_opt, arr_opt) {
+                    if let (Some(cb), Some(arr)) = (cb_val, arr_opt) {
                         let items = Self::extract_items(arr);
                         let mut mapped = Vec::with_capacity(items.len());
-                        for (idx, item) in items.into_iter().enumerate() {
-                            mapped.push(self.invoke_closure_sync(
-                                cb,
-                                vec![item, PhpValue::Int(idx as i32)],
-                                span,
-                            )?);
+                        match cb {
+                            PhpValue::Closure(c) => {
+                                for (idx, item) in items.into_iter().enumerate() {
+                                    mapped.push(self.invoke_closure_sync(
+                                        c,
+                                        vec![item, PhpValue::Int(idx as i32)],
+                                        span,
+                                    )?);
+                                }
+                            }
+                            PhpValue::String(fn_name) => {
+                                let name = fn_name.as_str();
+                                for (_idx, item) in items.into_iter().enumerate() {
+                                    let res = dispatch_facade_call("phpFun", name, &[item.clone()], span)?;
+                                    mapped.push(res);
+                                }
+                            }
+                            _ => {}
                         }
                         return Ok(PhpValue::list(mapped));
                     }

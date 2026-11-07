@@ -413,6 +413,7 @@ pub fn resolve_facade_static_call(
             }
             "split" => Ok(RhpType::Array(Box::new(RhpType::String))),
             "countOccurrences" => Ok(RhpType::Int),
+            "fromLast" | "substringFromLast" | "lastFrom" | "strrchr" | "afterLast" => Ok(RhpType::String),
             "find" | "pos" | "indexOf" => Ok(RhpType::Nullable(Box::new(RhpType::Int))),
             _ => Ok(RhpType::String),
         },
@@ -463,7 +464,8 @@ pub fn resolve_facade_static_call(
             }
             "exists" | "delete" | "remove" | "copy" | "rename" | "move" | "chown" | "touch"
             | "isReadable" | "is_readable" | "isWritable" | "is_writable"
-            | "mkdir" | "makeDirectory" | "make_directory" => {
+            | "mkdir" | "makeDirectory" | "make_directory"
+            | "rmdir" | "removeDirectory" | "deleteDirectory" => {
                 check_arg_type(
                     &format!("File::{}", method),
                     "$path",
@@ -718,11 +720,11 @@ pub fn resolve_facade_static_call(
         },
         "Log" => Ok(RhpType::Void),
         "Sys" => match method {
-            "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" | "registerShutdownFunction" | "register_shutdown_function" => Ok(RhpType::Void),
+            "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" | "registerShutdownFunction" | "register_shutdown_function" | "usleep" => Ok(RhpType::Void),
             "print_r" => Ok(RhpType::Mixed),
             "env" => Ok(RhpType::Mixed),
             "os" | "version" => Ok(RhpType::String),
-            "timestamp" => Ok(RhpType::Int),
+            "timestamp" | "sleep" => Ok(RhpType::Int),
             "setErrorHandler" | "set_error_handler" | "setExceptionHandler" | "set_exception_handler" => Ok(RhpType::Mixed),
             "restoreErrorHandler" | "restore_error_handler" | "restoreExceptionHandler" | "restore_exception_handler" | "triggerError" | "trigger_error" => Ok(RhpType::Bool),
             "disk_free_space" | "diskFreeSpace" | "diskfreespace" | "disk_total_space" | "diskTotalSpace" => {
@@ -825,6 +827,25 @@ pub fn resolve_facade_static_call(
             "open" | "memory" => Ok(RhpType::Mixed),
             _ => Ok(RhpType::Mixed),
         },
+        "Path" => match method {
+            "isAbsolute" | "is_absolute" => Ok(RhpType::Bool),
+            "basename" | "dirname" | "extname" | "tempDir" | "sysGetTempDir" => Ok(RhpType::String),
+            "parse" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::String)))),
+            "glob" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Socket" => match method {
+            "server" | "createServer" => Ok(RhpType::Mixed),
+            "getName" | "get_name" => Ok(RhpType::Union(vec![RhpType::String, RhpType::Bool])),
+            "close" => Ok(RhpType::Bool),
+            _ => Ok(RhpType::Mixed),
+        },
+        "Binary" => match method {
+            "bin2hex" | "toHex" | "hex" => Ok(RhpType::String),
+            "hex2bin" | "fromHex" => Ok(RhpType::Union(vec![RhpType::String, RhpType::Bool])),
+            "randomBytes" | "random_bytes" | "random" => Ok(RhpType::String),
+            _ => Ok(RhpType::Mixed),
+        },
         "Time" | "Carbon" => match method {
             "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
             | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
@@ -835,7 +856,8 @@ pub fn resolve_facade_static_call(
             | "millisecond" | "dayOfWeek" | "dayOfWeekIso" | "dayOfYear"
             | "weekOfYear" | "quarter" | "daysInMonth" | "age"
             | "diffInSeconds" | "diffInMinutes" | "diffInHours" | "diffInDays"
-            | "diffInWeeks" | "diffInMonths" | "diffInQuarters" | "diffInYears" => Ok(RhpType::Int),
+            | "diffInWeeks" | "diffInMonths" | "diffInQuarters" | "diffInYears"
+            | "sleep" => Ok(RhpType::Int),
             "isToday" | "isYesterday" | "isTomorrow" | "isFuture" | "isPast"
             | "isCurrentYear" | "isCurrentMonth" | "isWeekend" | "isWeekday"
             | "isMonday" | "isTuesday" | "isWednesday" | "isThursday" | "isFriday"
@@ -844,7 +866,7 @@ pub fn resolve_facade_static_call(
             | "eq" | "equalTo" | "ne" | "notEqualTo" | "gt" | "greaterThan"
             | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
             | "lessThanOrEqualTo" | "between" | "hasTestNow" => Ok(RhpType::Bool),
-            "setTestNow" => Ok(RhpType::Void),
+            "setTestNow" | "sleepMs" | "sleep_ms" => Ok(RhpType::Void),
             _ => Ok(RhpType::Class("Time".to_string())),
         },
         "phpFun" => {
