@@ -55,7 +55,7 @@ pub use exception::{
     root_cause, Frame, RawFrame, Throwable, BUILTIN_THROWABLE_PARENTS,
 };
 pub use facade::{
-    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_runtime_closure_macros, clear_tier2_plugins,
+    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_response_context, create_response_object, get_active_response, clear_runtime_closure_macros, clear_tier2_plugins,
     dispatch_facade_call, extract_array_elements, extract_dict_elements, extract_dict_map,
     extract_map_elements, flatten_elements, get_recorded_logs, get_runtime_closure_macro,
     has_runtime_closure_macro, has_tier2_plugin, init_cookie_data, init_request_params, init_session_data,

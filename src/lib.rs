@@ -19,6 +19,7 @@ pub mod telemetry;
 pub mod type_system;
 pub mod vm;
 pub mod runtime;
+pub use lint::upgrade_php;
 
 pub use expand::{
     compile_template, discover_expanders, expand_program, expand_template, parse_and_expand,
@@ -91,7 +92,7 @@ pub use jit::{
     NativeSlot, TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_NULL, TAG_OTHER,
 };
 pub use vm::{
-    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_rust_modules, clear_runtime_closure_macros, clear_tier2_plugins,
+    append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_response_context, create_response_object, get_active_response, clear_rust_modules, clear_runtime_closure_macros, clear_tier2_plugins,
     set_exit_hook,
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats,
     deserialize_response, dispatch_blocking_native, dispatch_facade_call, enter_fiber, eval_expr, execute,
@@ -138,4 +139,45 @@ pub use telemetry::{
 };
 
 pub use runtime::*;
+
+/// Standard HTTP/1.1 status reason phrases.
+pub fn http_status_reason(code: u16) -> &'static str {
+    match code {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Status",
+    }
+}
 

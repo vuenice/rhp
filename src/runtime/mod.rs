@@ -16,11 +16,13 @@
 
 pub mod arena_pool;
 pub mod config;
+pub mod env_store;
 pub mod ipc;
 pub mod log_pool;
 pub mod manager;
 pub mod reactor;
 pub mod task;
+pub mod supervisor;
 pub mod types;
 pub mod worker;
 

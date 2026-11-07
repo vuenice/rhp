@@ -1272,6 +1272,43 @@ fn test_scalar_and_collection_type_hint_casing_rules() {
     }
 }
 
+#[test]
+fn test_dynamic_include_and_require_forbidden() {
+    use rhp::parser::error::ParseErrorKind;
+
+    let test_cases = [
+        ("require $path;", "require"),
+        ("require 'config.rhp';", "require"),
+        ("require_once __DIR__ . '/vendor/autoload.php';", "require_once"),
+        ("include $template;", "include"),
+        ("include_once 'header.php';", "include_once"),
+        ("$x = require($file);", "require"),
+        ("$ok = spl_autoload_register('my_loader');", "spl_autoload_register"),
+        ("spl_autoload_unregister('my_loader');", "spl_autoload_unregister"),
+    ];
+
+    for (code, construct) in test_cases {
+        let err = parse(code).expect_err(&format!("Code '{}' must fail compilation", code));
+        match &err.kind {
+            ParseErrorKind::DynamicIncludeForbidden { construct: c } => {
+                assert_eq!(c, construct, "Construct name mismatch for '{}'", code);
+            }
+            other => panic!("Expected DynamicIncludeForbidden for '{}', got {:?}", code, other),
+        }
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("is not supported in RHP"),
+            "Error string '{}' should explain rejection",
+            err_str
+        );
+        assert!(
+            err_str.contains("Use static 'import' or 'use'"),
+            "Error string '{}' should suggest replacement",
+            err_str
+        );
+    }
+}
+
 
 
 

@@ -1188,6 +1188,11 @@ impl PhpValue {
                         return formatted.to_php_string();
                     }
                 }
+                if b.class_name == "Response" {
+                    if let Some(content) = b.get_property("content") {
+                        return content.to_php_string();
+                    }
+                }
                 format!("class@{}", b.class_name)
             }
             Self::Closure(c) => format!("Closure({})", c.name),

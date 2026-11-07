@@ -1833,6 +1833,9 @@ impl VM {
                             }
                             Some(map)
                         }
+                        (PhpValue::Null, _) => {
+                            Some(IndexMap::new())
+                        }
                         _ => None,
                     };
 
@@ -8531,6 +8534,284 @@ impl VM {
                 }
                 Ok(PhpValue::string(""))
             }
+            ("Response", "header") => {
+                if let PhpValue::Object(o) = receiver {
+                    if args.len() >= 2 {
+                        let key = args[0].to_php_string();
+                        let val = args[1].to_php_string();
+                        if key.eq_ignore_ascii_case("set-cookie") {
+                            crate::vm::facade::add_active_cookie(val.clone());
+                            if let Some(PhpValue::List(l)) = o.borrow().get_property("cookies") {
+                                l.borrow_mut().push(PhpValue::string(&val));
+                            } else {
+                                o.borrow_mut().set_property("cookies", PhpValue::list(vec![PhpValue::string(&val)]));
+                            }
+                        } else {
+                            if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                                d.borrow_mut().insert(key.clone(), PhpValue::string(&val));
+                            } else {
+                                let mut d = indexmap::IndexMap::new();
+                                d.insert(key.clone(), PhpValue::string(&val));
+                                o.borrow_mut().set_property("headers", PhpValue::dict_from_map(d));
+                            }
+                            crate::vm::facade::ACTIVE_RESPONSE.with(|cell| {
+                                cell.borrow_mut().headers.insert(key, val);
+                            });
+                        }
+                        Ok(receiver.clone())
+                    } else if let Some(first) = args.first() {
+                        let key = first.to_php_string();
+                        if key.eq_ignore_ascii_case("set-cookie") {
+                            if let Some(PhpValue::List(l)) = o.borrow().get_property("cookies") {
+                                if let Some(first_cookie) = l.borrow().first() {
+                                    return Ok(first_cookie.clone());
+                                }
+                            }
+                        }
+                        if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                            let borrowed = d.borrow();
+                            for (k, v) in borrowed.iter() {
+                                if k.eq_ignore_ascii_case(&key) {
+                                    return Ok(v.clone());
+                                }
+                            }
+                        }
+                        Ok(PhpValue::Null)
+                    } else {
+                        Ok(receiver.clone())
+                    }
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "withHeaders") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(first) = args.first() {
+                        let map = extract_dict_map(first);
+                        for (k, v) in &map {
+                            let val_str = v.to_php_string();
+                            if k.eq_ignore_ascii_case("set-cookie") {
+                                crate::vm::facade::add_active_cookie(val_str.clone());
+                                if let Some(PhpValue::List(l)) = o.borrow().get_property("cookies") {
+                                    l.borrow_mut().push(PhpValue::string(&val_str));
+                                } else {
+                                    o.borrow_mut().set_property("cookies", PhpValue::list(vec![PhpValue::string(&val_str)]));
+                                }
+                            } else {
+                                if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                                    d.borrow_mut().insert(k.clone(), PhpValue::string(&val_str));
+                                } else {
+                                    let mut d = indexmap::IndexMap::new();
+                                    d.insert(k.clone(), PhpValue::string(&val_str));
+                                    o.borrow_mut().set_property("headers", PhpValue::dict_from_map(d));
+                                }
+                                crate::vm::facade::ACTIVE_RESPONSE.with(|cell| {
+                                    cell.borrow_mut().headers.insert(k.clone(), val_str);
+                                });
+                            }
+                        }
+                    }
+                    Ok(receiver.clone())
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "status" | "setStatusCode") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(code_val) = args.first().and_then(|v| v.to_i64()) {
+                        o.borrow_mut().set_property("status", PhpValue::Int(code_val as i32));
+                        crate::vm::facade::ACTIVE_RESPONSE.with(|cell| {
+                            cell.borrow_mut().status = code_val as u16;
+                        });
+                    }
+                    Ok(receiver.clone())
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "getStatusCode") => {
+                if let PhpValue::Object(o) = receiver {
+                    let status = o.borrow().get_property("status").and_then(|v| v.to_i64()).unwrap_or(200);
+                    Ok(PhpValue::Int(status as i32))
+                } else {
+                    Ok(PhpValue::Int(200))
+                }
+            }
+            ("Response", "content" | "setContent") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(first) = args.first() {
+                        let s = first.to_php_string();
+                        o.borrow_mut().set_property("content", PhpValue::string(&s));
+                        crate::vm::facade::ACTIVE_RESPONSE.with(|cell| {
+                            cell.borrow_mut().content = Some(s);
+                        });
+                    }
+                    Ok(receiver.clone())
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "getContent") => {
+                if let PhpValue::Object(o) = receiver {
+                    let content = o.borrow().get_property("content").cloned().unwrap_or_else(|| PhpValue::string(""));
+                    Ok(content)
+                } else {
+                    Ok(PhpValue::string(""))
+                }
+            }
+            ("Response", "getHeaders" | "headers") => {
+                if let PhpValue::Object(o) = receiver {
+                    let hdrs = o.borrow().get_property("headers").cloned().unwrap_or_else(|| PhpValue::dict_from_map(indexmap::IndexMap::new()));
+                    Ok(hdrs)
+                } else {
+                    Ok(PhpValue::dict_from_map(indexmap::IndexMap::new()))
+                }
+            }
+            ("Response", "cookie" | "withCookie") => {
+                if let PhpValue::Object(o) = receiver {
+                    let name = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+                    let val = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+                    if !name.is_empty() {
+                        let cookie_str = crate::vm::facade::format_cookie_from_args(&name, &val, &args[2..]);
+                        crate::vm::facade::add_active_cookie(cookie_str.clone());
+                        if let Some(PhpValue::List(l)) = o.borrow().get_property("cookies") {
+                            l.borrow_mut().push(PhpValue::string(&cookie_str));
+                        } else {
+                            o.borrow_mut().set_property("cookies", PhpValue::list(vec![PhpValue::string(&cookie_str)]));
+                        }
+                    }
+                    Ok(receiver.clone())
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "withoutCookie" | "forgetCookie") => {
+                if let PhpValue::Object(o) = receiver {
+                    let name = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+                    let path = args.get(1).map(|v| v.to_php_string()).unwrap_or_else(|| "/".to_string());
+                    let domain = args.get(2).map(|v| v.to_php_string());
+                    if !name.is_empty() {
+                        let mut cookie_str = format!("{}=deleted; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path={}", name, path);
+                        if let Some(d) = domain {
+                            if !d.is_empty() {
+                                cookie_str.push_str(&format!("; Domain={}", d));
+                            }
+                        }
+                        crate::vm::facade::add_active_cookie(cookie_str.clone());
+                        if let Some(PhpValue::List(l)) = o.borrow().get_property("cookies") {
+                            l.borrow_mut().push(PhpValue::string(&cookie_str));
+                        } else {
+                            o.borrow_mut().set_property("cookies", PhpValue::list(vec![PhpValue::string(&cookie_str)]));
+                        }
+                    }
+                    Ok(receiver.clone())
+                } else {
+                    Ok(receiver.clone())
+                }
+            }
+            ("Response", "cookies" | "getCookies") => {
+                if let PhpValue::Object(o) = receiver {
+                    let cookies = o.borrow().get_property("cookies").cloned().unwrap_or_else(|| PhpValue::list(Vec::new()));
+                    Ok(cookies)
+                } else {
+                    Ok(PhpValue::list(Vec::new()))
+                }
+            }
+            ("Request", "header") => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                        for (k, v) in d.borrow().iter() {
+                            if k.eq_ignore_ascii_case(&key) {
+                                return Ok(v.clone());
+                            }
+                        }
+                    }
+                }
+                crate::vm::facade::dispatch_facade_call("Request", "header", args, span)
+            }
+            ("Request", "hasHeader") => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                        for (k, _) in d.borrow().iter() {
+                            if k.eq_ignore_ascii_case(&key) {
+                                return Ok(PhpValue::Bool(true));
+                            }
+                        }
+                    }
+                }
+                Ok(PhpValue::Bool(false))
+            }
+            ("Request", "headers") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(hdrs) = o.borrow().get_property("headers") {
+                        return Ok(hdrs.clone());
+                    }
+                }
+                crate::vm::facade::dispatch_facade_call("Request", "headers", args, span)
+            }
+            ("Request", "cookie") => {
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(d)) = o.borrow().get_property("cookies") {
+                        for (k, v) in d.borrow().iter() {
+                            if k == &key {
+                                return Ok(v.clone());
+                            }
+                        }
+                    }
+                }
+                crate::vm::facade::dispatch_facade_call("Request", "cookie", args, span)
+            }
+            ("Request", "cookies") => {
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(cookies) = o.borrow().get_property("cookies") {
+                        return Ok(cookies.clone());
+                    }
+                }
+                crate::vm::facade::dispatch_facade_call("Request", "cookies", args, span)
+            }
+            ("Request", "server") => {
+                if args.is_empty() {
+                    if let PhpValue::Object(o) = receiver {
+                        if let Some(srv) = o.borrow().get_property("server") {
+                            return Ok(srv.clone());
+                        }
+                    }
+                    return crate::vm::facade::dispatch_facade_call("Request", "server", args, span);
+                }
+                let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(d)) = o.borrow().get_property("server") {
+                        for (k, v) in d.borrow().iter() {
+                            if k.eq_ignore_ascii_case(&key) {
+                                return Ok(v.clone());
+                            }
+                        }
+                    }
+                }
+                crate::vm::facade::dispatch_facade_call("Request", "server", args, span)
+            }
+            ("Request", "bearerToken") => {
+                crate::vm::facade::dispatch_facade_call("Request", "bearerToken", args, span)
+            }
+            ("Request", "method") => {
+                crate::vm::facade::dispatch_facade_call("Request", "method", args, span)
+            }
+            ("Request", "isMethod") => {
+                crate::vm::facade::dispatch_facade_call("Request", "isMethod", args, span)
+            }
+            ("Request", "all") => {
+                crate::vm::facade::dispatch_facade_call("Request", "all", args, span)
+            }
+            ("Request", "get" | "input") => {
+                crate::vm::facade::dispatch_facade_call("Request", "get", args, span)
+            }
+            ("Request", "has") => {
+                crate::vm::facade::dispatch_facade_call("Request", "has", args, span)
+            }
+            ("Response", "send" | "sendHeaders") => Ok(receiver.clone()),
             ("HTTPResponse", "json") => {
                 let mut entries = Vec::new();
                 entries.push(("status".to_string(), PhpValue::string("ok")));

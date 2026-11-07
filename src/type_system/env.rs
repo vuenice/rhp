@@ -710,6 +710,19 @@ pub fn resolve_facade_static_call(
             }
             _ => Ok(RhpType::Mixed),
         },
+        "Response" => match method {
+            "json" | "html" | "make" | "redirect" | "redirectTo" | "noContent" | "download" => {
+                Ok(RhpType::Class("Response".to_string()))
+            }
+            "status" | "setStatusCode" | "getStatusCode" => Ok(RhpType::Int),
+            "getContent" => Ok(RhpType::String),
+            "getHeaders" | "headers" => {
+                Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
+            }
+            "header" => Ok(RhpType::Mixed),
+            "clear" => Ok(RhpType::Void),
+            _ => Ok(RhpType::Class("Response".to_string())),
+        },
         "DB" => Ok(RhpType::Class("QueryBuilder".to_string())),
         "ADB" => match method {
             "table" => Ok(RhpType::Class("ADBQuery".to_string())),
@@ -722,7 +735,7 @@ pub fn resolve_facade_static_call(
         "Sys" => match method {
             "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" | "registerShutdownFunction" | "register_shutdown_function" | "usleep" => Ok(RhpType::Void),
             "print_r" => Ok(RhpType::Mixed),
-            "env" => Ok(RhpType::Mixed),
+            "env" | "osEnv" | "os_env" => Ok(RhpType::Mixed),
             "os" | "version" => Ok(RhpType::String),
             "timestamp" | "sleep" => Ok(RhpType::Int),
             "setErrorHandler" | "set_error_handler" | "setExceptionHandler" | "set_exception_handler" => Ok(RhpType::Mixed),
@@ -1096,6 +1109,17 @@ pub fn resolve_builtin_fluent_method(
 
         // Built-in fluent facade return objects (`HTTPResponse`, `ImageInstance`, `QueryBuilder`)
         RhpType::Class(name) => match name.as_str() {
+            "Response" => match method {
+                "header" | "withHeaders" | "status" | "setStatusCode" | "content" | "setContent" | "cookie" | "withCookie" | "send" | "sendHeaders" => {
+                    Some(RhpType::Class("Response".to_string()))
+                }
+                "getStatusCode" => Some(RhpType::Int),
+                "getContent" => Some(RhpType::String),
+                "getHeaders" | "headers" => {
+                    Some(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
+                }
+                _ => Some(RhpType::Dynamic),
+            },
             "HTTPResponse" => match method {
                 "post" | "get" | "put" | "delete" | "withHeaders" | "timeout" => {
                     Some(RhpType::Class("HTTPResponse".to_string()))

@@ -403,6 +403,18 @@ pub fn build_request_object(req: &WorkerRequest) -> PhpValue {
     }
     obj.set_property("headers", PhpValue::dict(header_dict));
 
+    let mut cookie_dict = indexmap::IndexMap::new();
+    for (k, v) in &req.cookies {
+        cookie_dict.insert(k.clone(), PhpValue::string(v.clone()));
+    }
+    obj.set_property("cookies", PhpValue::dict(cookie_dict));
+
+    let mut server_dict = indexmap::IndexMap::new();
+    for (k, v) in &req.server_vars {
+        server_dict.insert(k.clone(), PhpValue::string(v.clone()));
+    }
+    obj.set_property("server", PhpValue::dict(server_dict));
+
     obj.set_property("id", PhpValue::string(req.id.clone()));
 
     PhpValue::object(obj)

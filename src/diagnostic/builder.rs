@@ -165,6 +165,15 @@ impl<'a> DiagnosticBuilder<'a> {
                 None,
                 None,
             ),
+            ParseErrorKind::DynamicIncludeForbidden { construct } => (
+                "RHP0120".to_string(),
+                format!(
+                    "dynamic '{}' is not supported in RHP. Use static 'import' or 'use' with literal paths or namespaces.",
+                    construct
+                ),
+                Some(construct.clone()),
+                Some(vec!["use".to_string(), "import".to_string()]),
+            ),
             ParseErrorKind::Lex(lex_err) => match lex_err {
                 crate::lexer::error::LexError::UnterminatedString => (
                     "RHP0002".to_string(),

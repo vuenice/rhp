@@ -172,6 +172,14 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("unset(123);"),
         fix: Some("Pass a variable or an array/map element ($arr['key']) to unset()."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0120",
+        title: "Dynamic file inclusion forbidden",
+        summary: "Dynamic 'include', 'require', 'include_once', and 'require_once' are not supported in RHP.",
+        explanation: "RHP requires all program symbols to be statically known at compile time for whole-program type checking and standalone binary compilation ('rhp run build'). Runtime-loaded source files undermine type checking and inject untyped variables into caller scopes. Use static 'import' or 'use' with literal paths or namespaces.",
+        example: Some("require $path;\nrequire_once __DIR__ . '/vendor/autoload.php';"),
+        fix: Some("Use static 'import \"./path.rhp\";' or 'use App\\Namespace\\Class;' with literal paths or namespaces. Package autoloading is resolved at build time."),
+    },
 
     // --- 0200 - 0299: Type system & boundary errors ---
     DiagnosticCodeInfo {

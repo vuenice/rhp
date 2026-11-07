@@ -19,9 +19,17 @@ fn print_help() {
             "    dev [OPTIONS]                    Execute in Development Mode (e.g. 'rhp dev --file=\"server.rhp\"')\n",
             "    build [OPTIONS]                  Execute in Production Mode (e.g. 'rhp build --file=\"server.rhp\"')\n",
             "    serve [OPTIONS]                  Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
+            "    upgrade-php [PATH] [OPTIONS]     Upgrade PHP superglobals and globals to RHP Request/Cookie facades\n",
             "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
             "    check [PATH] [OPTIONS]           Check syntax and type boundary contracts (supports --format=json)\n",
             "    explain <CODE> [OPTIONS]         Explain a compiler diagnostic code (e.g. 'rhp explain RHP0102')\n\n",
+            "PROCESS SUPERVISION (RHPM / PM2-STYLE):\n",
+            "    start <NAME> [OPTIONS]           Start application instance in background (PM2 supervisor)\n",
+            "    stop <NAME|ID|all>               Stop running application instance\n",
+            "    status, ps                       Display tabular status of all managed applications (PM2 view)\n",
+            "    restart <NAME|ID|all>            Restart running application instance\n",
+            "    delete <NAME|ID|all>             Stop and remove application instance from supervisor\n",
+            "    logs <NAME|ID> [OPTIONS]         Display recent logs for managed application\n\n",
             "PACKAGE MANAGEMENT:\n",
             "    add <PACKAGE> [OPTIONS]          Add dependency to rhp.toml and lockfile (Git URL, GitHub 'owner/repo', or local path)\n",
             "    remove <PACKAGE>                 Remove dependency from rhp.toml and vendor/\n",
@@ -42,6 +50,12 @@ fn print_help() {
             "OPTIONS for 'serve':\n",
             "    --port <PORT>, -p <PORT>         Port to listen on (defaults to 8080)\n",
             "    --host <HOST>                    Host to bind (defaults to 127.0.0.1)\n\n",
+            "OPTIONS for 'start':\n",
+            "    --file <PATH>, -f <PATH>         Target script file (defaults to 'index.rhp' or 'app.rhp')\n",
+            "    --port <PORT>, -p <PORT>         Port for web server (defaults to 8080 or next available)\n",
+            "    --host <HOST>                    Host interface to bind (defaults to 127.0.0.1)\n",
+            "    --watch                          Enable source file watching\n",
+            "    --mode <fork|cluster>            Process execution mode (defaults to 'fork')\n\n",
             "OPTIONS for 'add':\n",
             "    --branch <BRANCH>, -b <BRANCH>   Specify git branch to clone\n",
             "    --tag <TAG>, -t <TAG>            Specify git tag or release\n",
@@ -114,6 +128,9 @@ fn main() {
         "explain" => {
             handle_run_explain(&args[2..]);
         }
+        "upgrade-php" | "upgrade_php" => {
+            handle_run_upgrade_php(&args[2..]);
+        }
         "lint" => {
             handle_run_lint(&args[2..]);
         }
@@ -135,6 +152,42 @@ fn main() {
         "list" | "ls" => {
             rhp::pkg::handle_list(&root_dir);
         }
+        "start" => {
+            rhp::runtime::supervisor::handle_start(&args[2..]);
+        }
+        "stop" => {
+            rhp::runtime::supervisor::handle_stop(&args[2..]);
+        }
+        "status" | "ps" => {
+            rhp::runtime::supervisor::handle_status(&args[2..]);
+        }
+        "restart" => {
+            rhp::runtime::supervisor::handle_restart(&args[2..]);
+        }
+        "delete" => {
+            rhp::runtime::supervisor::handle_delete(&args[2..]);
+        }
+        "logs" => {
+            rhp::runtime::supervisor::handle_logs(&args[2..]);
+        }
+        "pm" | "rhpm" => {
+            if args.len() < 3 {
+                rhp::runtime::supervisor::handle_status(&[]);
+                return;
+            }
+            match args[2].as_str() {
+                "start" => rhp::runtime::supervisor::handle_start(&args[3..]),
+                "stop" => rhp::runtime::supervisor::handle_stop(&args[3..]),
+                "status" | "ps" | "ls" | "list" => rhp::runtime::supervisor::handle_status(&args[3..]),
+                "restart" => rhp::runtime::supervisor::handle_restart(&args[3..]),
+                "delete" | "rm" | "kill" => rhp::runtime::supervisor::handle_delete(&args[3..]),
+                "logs" => rhp::runtime::supervisor::handle_logs(&args[3..]),
+                cmd => {
+                    eprintln!("Error: Unknown supervisor command '{}'. Run 'rhp start --help' for usage.", cmd);
+                    process::exit(1);
+                }
+            }
+        }
         "run" => {
             if args.len() < 3 {
                 handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
@@ -143,6 +196,9 @@ fn main() {
             match args[2].as_str() {
                 "playground" | "play" | "ui" | "gui" => {
                     print_playground_hint();
+                }
+                "upgrade-php" | "upgrade_php" => {
+                    handle_run_upgrade_php(&args[3..]);
                 }
                 "lint" => {
                     handle_run_lint(&args[3..]);
@@ -406,6 +462,79 @@ fn handle_run_lint(sub_args: &[String]) {
     }
 }
 
+/// Handle `rhp upgrade-php [PATH] [--check] [--dry-run] [--format=human|json]`
+fn handle_run_upgrade_php(sub_args: &[String]) {
+    let mut check_only = false;
+    let mut target_path = ".".to_string();
+    let mut json_format = false;
+
+    let mut iter = sub_args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--help" || arg == "-h" {
+            println!(
+                concat!(
+                    "rhp upgrade-php [PATH] [OPTIONS]\n\n",
+                    "Upgrades legacy PHP scripts to modern RHP conventions:\n",
+                    "  - Adds extra initialization lines when superglobals are used:\n",
+                    "      $_GET = Request::query();\n",
+                    "      $_POST = Request::body();\n",
+                    "      $_SERVER['REQUEST_METHOD'] = Request::method();\n",
+                    "      $_SERVER['REMOTE_ADDR'] = Request::ip();\n",
+                    "      $_SERVER['HTTP_HOST'] = Request::host();\n",
+                    "      $_FILES = Request::files();\n",
+                    "      $_COOKIE = Cookie::get();\n",
+                    "  - Upgrades cookie setting (setcookie / $_COOKIE[...] = ...) to Cookie::set(...)\n",
+                    "  - Replaces $_GLOBAL and $GLOBALS access with original global values\n\n",
+                    "OPTIONS:\n",
+                    "    PATH                         Target file or directory (default: current directory '.')\n",
+                    "    --check, --dry-run           Check only without writing changes to disk\n",
+                    "    --format <human|json>        Output format: 'human' (default) or 'json'\n",
+                    "    --help, -h                   Show this help message\n"
+                )
+            );
+            process::exit(0);
+        } else if arg == "--check" || arg == "--dry-run" {
+            check_only = true;
+        } else if arg == "--format=json" {
+            json_format = true;
+        } else if arg == "--format" {
+            if let Some(next_val) = iter.next() {
+                if next_val == "json" {
+                    json_format = true;
+                }
+            }
+        } else if !arg.starts_with('-') {
+            target_path = arg.clone();
+        }
+    }
+
+    let path = Path::new(&target_path);
+    if !path.exists() {
+        eprintln!("Error: Target path '{}' does not exist.", target_path);
+        process::exit(1);
+    }
+
+    let options = rhp::upgrade_php::UpgradeOptions {
+        fix: !check_only,
+    };
+
+    match rhp::upgrade_php::upgrade_php_path(path, options) {
+        Ok(report) => {
+            if json_format {
+                println!("{}", report.to_json());
+            } else {
+                print!("{}", report.to_human(check_only));
+            }
+            process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error during upgrade-php execution: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+
 #[derive(Debug, Clone)]
 struct ScriptRunOptions {
     script_path: String,
@@ -413,6 +542,7 @@ struct ScriptRunOptions {
     host: Option<String>,
     force_cli: bool,
     force_server: bool,
+    env_mode: Option<String>,
 }
 
 /// Parse options for `rhp run dev`, `rhp run build`, `rhp dev`, and `rhp build`.
@@ -423,6 +553,7 @@ fn parse_script_run_options(sub_args: &[String]) -> Result<ScriptRunOptions, Str
     let mut host: Option<String> = None;
     let mut force_cli = false;
     let mut force_server = false;
+    let mut env_mode: Option<String> = None;
 
     let mut iter = sub_args.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -443,6 +574,12 @@ fn parse_script_run_options(sub_args: &[String]) -> Result<ScriptRunOptions, Str
         } else if arg == "--host" {
             if let Some(next_val) = iter.next() {
                 host = Some(next_val.clone());
+            }
+        } else if let Some(val) = arg.strip_prefix("--mode=") {
+            env_mode = Some(val.to_string());
+        } else if arg == "--mode" || arg == "-m" {
+            if let Some(next_val) = iter.next() {
+                env_mode = Some(next_val.clone());
             }
         } else if let Some(val) = arg.strip_prefix("--file=") {
             let clean = val.trim().trim_matches(|c| c == '\'' || c == '"');
@@ -489,6 +626,7 @@ fn parse_script_run_options(sub_args: &[String]) -> Result<ScriptRunOptions, Str
         host,
         force_cli,
         force_server,
+        env_mode,
     })
 }
 
@@ -513,7 +651,7 @@ fn print_run_script_help(mode: &RunMode) {
             "rhp run {mode} [PATH] [OPTIONS]\n\n",
             "{desc}\n\n",
             "Defaults to 'index.rhp' in current working directory if the third parameter (or --file) is not provided.\n",
-            "Web applications (using $_SERVER, $_GET, $_POST, or rendering HTML) automatically\n",
+            "Web applications (using Request::*, Response::*, or rendering HTML) automatically\n",
             "launch the interactive HTTP server on port 8080.\n\n",
             "OPTIONS:\n",
             "    --file <PATH>, -f <PATH>  Script file to execute (e.g. --file=\"server.rhp\" or file path)\n",
@@ -557,14 +695,23 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
         std::path::PathBuf::from("app.rhp")
     } else if !target_path.exists() && opts.script_path == "index.rhp" && Path::new("examples/todo/index.rhp").exists() {
         std::path::PathBuf::from("examples/todo/index.rhp")
-    } else if !target_path.exists() && opts.script_path == "index.rhp" && Path::new("examples/todo/app.rhp").exists() {
-        std::path::PathBuf::from("examples/todo/app.rhp")
     } else if !target_path.exists() {
         eprintln!("Error: Script file '{}' does not exist.", opts.script_path);
         process::exit(1);
     } else {
         target_path.to_path_buf()
     };
+
+    let root_cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let env_mode = opts.env_mode.as_deref().unwrap_or(match mode {
+        RunMode::Dev { .. } => "development",
+        RunMode::Build { .. } => "production",
+    });
+    rhp::runtime::env_store::init_env(Some(&resolved_path), &root_cwd, env_mode);
+
+    if matches!(mode, RunMode::Dev { .. }) {
+        rhp::runtime::env_store::start_env_watcher();
+    }
 
     let raw_source = match std::fs::read_to_string(&resolved_path) {
         Ok(s) => s,
@@ -579,9 +726,9 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
     let is_web_app = opts.force_server
         || opts.port.is_some()
         || (!opts.force_cli
-            && (source.contains("$_SERVER")
-                || source.contains("$_GET")
-                || source.contains("$_POST")
+            && (source.contains("Request::")
+                || source.contains("Response::")
+                || source.contains("Cookie::")
                 || source.contains("HTTP_HX_REQUEST")
                 || source.contains("<!DOCTYPE html>")
                 || source.contains("<html")));
@@ -682,6 +829,7 @@ fn handle_serve(sub_args: &[String]) {
     let mut port: u16 = 8080;
     let mut host = "127.0.0.1".to_string();
     let mut custom_path: Option<String> = None;
+    let mut env_mode = "development".to_string();
 
     let mut iter = sub_args.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -694,6 +842,7 @@ fn handle_serve(sub_args: &[String]) {
                     "    PATH               Script file to serve (default: 'examples/todo/app.rhp' or 'index.rhp')\n",
                     "    --port, -p <PORT>  Port to listen on (default: 8080)\n",
                     "    --host <HOST>      Host interface to bind (default: 127.0.0.1)\n",
+                    "    --mode, -m <MODE>  Environment mode (default: 'development')\n",
                     "    --help, -h         Show this help message\n"
                 )
             );
@@ -709,6 +858,12 @@ fn handle_serve(sub_args: &[String]) {
         } else if arg == "--host" {
             if let Some(next_val) = iter.next() {
                 host = next_val.clone();
+            }
+        } else if let Some(val) = arg.strip_prefix("--mode=") {
+            env_mode = val.to_string();
+        } else if arg == "--mode" || arg == "-m" {
+            if let Some(next_val) = iter.next() {
+                env_mode = next_val.clone();
             }
         } else if !arg.starts_with('-') && custom_path.is_none() {
             custom_path = Some(arg.clone());
@@ -744,6 +899,10 @@ fn handle_serve(sub_args: &[String]) {
         target_file.to_path_buf()
     };
     let script_path = resolved_file.to_string_lossy().to_string();
+
+    let root_cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    rhp::runtime::env_store::init_env(Some(&resolved_file), &root_cwd, &env_mode);
+    rhp::runtime::env_store::start_env_watcher();
 
     start_server(&script_path, &host, port, None);
 }
@@ -832,7 +991,7 @@ fn serve_http_connection(
     let method = parts[0].to_uppercase();
     let full_uri = parts[1].to_string();
 
-    let mut headers = indexmap::IndexMap::new();
+    let mut raw_headers: Vec<(String, String)> = Vec::new();
     let mut content_length: usize = 0;
     let mut is_htmx = false;
 
@@ -843,14 +1002,14 @@ fn serve_http_connection(
         }
         let trimmed = line.trim();
         if let Some((k, v)) = trimmed.split_once(':') {
-            let key = k.trim().to_ascii_lowercase();
+            let key = k.trim().to_string();
             let val = v.trim().to_string();
-            if key == "content-length" {
+            if key.eq_ignore_ascii_case("content-length") {
                 content_length = val.parse().unwrap_or(0);
-            } else if key == "hx-request" && val.eq_ignore_ascii_case("true") {
+            } else if key.eq_ignore_ascii_case("hx-request") && val.eq_ignore_ascii_case("true") {
                 is_htmx = true;
             }
-            headers.insert(key, val);
+            raw_headers.push((key, val));
         }
     }
 
@@ -944,6 +1103,35 @@ fn serve_http_connection(
         req = req.with_server("HTTP_HX_REQUEST", "true");
     }
 
+    for (k, v) in &raw_headers {
+        req = req.with_header(k.clone(), v.clone());
+
+        let upper_k = k.to_ascii_uppercase().replace('-', "_");
+        if upper_k == "CONTENT_TYPE" {
+            req = req.with_server("CONTENT_TYPE", v.clone());
+        } else if upper_k == "CONTENT_LENGTH" {
+            req = req.with_server("CONTENT_LENGTH", v.clone());
+        } else {
+            let cgi_name = format!("HTTP_{}", upper_k);
+            req = req.with_server(cgi_name, v.clone());
+        }
+        req = req.with_server(k.clone(), v.clone());
+
+        if k.eq_ignore_ascii_case("cookie") {
+            for cookie_pair in v.split(';') {
+                let pair = cookie_pair.trim();
+                if let Some((c_name, c_val)) = pair.split_once('=') {
+                    let c_name = c_name.trim();
+                    let c_val = c_val.trim();
+                    if !c_name.is_empty() {
+                        let decoded_val = url_decode(c_val);
+                        req = req.with_cookie(c_name, decoded_val);
+                    }
+                }
+            }
+        }
+    }
+
     for (k, v) in get_params {
         req = req.with_get(k, v);
     }
@@ -972,39 +1160,71 @@ fn serve_http_connection(
 
     let resp = rhp::execute_isolated_request(&state, &req, 0);
 
-    let (status_line, body_content, content_type) = if resp.status == rhp::WorkerResponseStatus::Success {
-        let out = resp.output();
-        let content = if !out.is_empty() {
-            out.to_string()
+    let (status_line, body_content, headers) = if resp.status == rhp::WorkerResponseStatus::Success {
+        let val = resp.to_php_value();
+        let content = if let rhp::PhpValue::Object(ref o) = val {
+            if o.borrow().class_name == "Response" {
+                o.borrow().get_property("content").map(|v| v.to_php_string()).unwrap_or_default()
+            } else {
+                let out = resp.output();
+                if !out.is_empty() {
+                    out.to_string()
+                } else if val != rhp::PhpValue::Null {
+                    val.to_php_string()
+                } else {
+                    String::new()
+                }
+            }
         } else {
-            let val = resp.to_php_value();
-            if val != rhp::PhpValue::Null {
+            let out = resp.output();
+            if !out.is_empty() {
+                out.to_string()
+            } else if val != rhp::PhpValue::Null {
                 val.to_php_string()
             } else {
                 String::new()
             }
         };
 
-        let trimmed = content.trim();
-        let mime = if trimmed.starts_with('{') || trimmed.starts_with('[') {
-            "application/json; charset=utf-8"
-        } else {
-            "text/html; charset=utf-8"
-        };
-        ("HTTP/1.1 200 OK", content, mime)
+        let status_code = resp.status_code;
+        let status_line = format!("HTTP/1.1 {} {}", status_code, rhp::http_status_reason(status_code));
+        (status_line, content, resp.headers.clone())
     } else {
         let err_msg = resp.error.clone().unwrap_or_else(|| "Unknown runtime error".to_string());
         let err_body = format!("<h1>500 Server Error</h1><pre>{}</pre>", err_msg);
-        ("HTTP/1.1 500 Internal Server Error", err_body, "text/html; charset=utf-8")
+        (
+            "HTTP/1.1 500 Internal Server Error".to_string(),
+            err_body,
+            vec![("Content-Type".to_string(), "text/html; charset=utf-8".to_string())],
+        )
     };
 
-    let http_resp = format!(
-        "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        status_line,
-        content_type,
+    let mut has_content_type = false;
+    for (k, _) in &headers {
+        if k.eq_ignore_ascii_case("content-type") {
+            has_content_type = true;
+            break;
+        }
+    }
+
+    let default_content_type = if body_content.trim().starts_with('{') || body_content.trim().starts_with('[') {
+        "application/json; charset=utf-8"
+    } else {
+        "text/html; charset=utf-8"
+    };
+
+    let mut http_resp = format!("{}\r\n", status_line);
+    for (k, v) in &headers {
+        http_resp.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if !has_content_type {
+        http_resp.push_str(&format!("Content-Type: {}\r\n", default_content_type));
+    }
+    http_resp.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n{}",
         body_content.len(),
         body_content
-    );
+    ));
 
     let _ = stream.write_all(http_resp.as_bytes());
     let _ = stream.flush();

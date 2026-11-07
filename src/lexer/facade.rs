@@ -128,6 +128,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "HTTP request inspection, input parameters, and type formatting facade (get, all, only, has, set, format, merge, clear)",
     ),
     FacadeInfo::native(
+        "Response",
+        "HTTP response builder and factory facade (json, html, make, redirect, redirectTo, status, header, noContent, download)",
+    ),
+    FacadeInfo::native(
         "Image",
         "Fluent image manipulation facade (make, resize, crop, save)",
     ),
@@ -169,7 +173,7 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "Sys",
-        "System environment, output, and debugging intrinsics facade (env, echo, print, dd, os, version, timestamp, clearstatcache, disk_free_space, disk_total_space)",
+        "System environment, output, and debugging intrinsics facade (env, osEnv, echo, print, dd, os, version, timestamp, clearstatcache, disk_free_space, disk_total_space)",
     ),
     FacadeInfo::native(
         "Glob",
@@ -252,7 +256,7 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites
 /// directly into `Sys::<name>(args)` in the AST (`Sys::env()`, `Sys::print()`, `Sys::echo()`, `Sys::println()`, `Sys::dd()`, `Sys::print_r()`, `Sys::dump()`, `Sys::isset()`, `Sys::empty()`, `Sys::exit()`).
 pub static RESERVED_INTRINSICS: &[&str] = &[
-    "env", "print", "println", "echo", "dd", "print_r", "var_dump", "dump", "isset", "empty",
+    "env", "os_env", "osEnv", "print", "println", "echo", "dd", "print_r", "var_dump", "dump", "isset", "empty",
     "exit", "die", "register_shutdown_function",
     "set_error_handler", "restore_error_handler", "set_exception_handler", "restore_exception_handler",
     "trigger_error",
@@ -770,8 +774,8 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     LegacyPhpFunctionMapping {
         php_name: "getenv",
         rhp_facade: "Sys",
-        rhp_method: "env",
-        rhp_signature: "Sys::env(string $key, mixed $default = null): mixed",
+        rhp_method: "osEnv",
+        rhp_signature: "Sys::osEnv(string $key, mixed $default = null): mixed",
     },
     LegacyPhpFunctionMapping {
         php_name: "var_dump",
@@ -1485,6 +1489,49 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_method: "sleep",
         rhp_signature: "Sys::sleep(int $seconds): int",
     },
+    // HTTP Header & Cookie functions -> phpFun::*
+    LegacyPhpFunctionMapping {
+        php_name: "setcookie",
+        rhp_facade: "phpFun",
+        rhp_method: "setcookie",
+        rhp_signature: "phpFun::setcookie(string $name, string $value = '', int|array $expires_or_options = 0, string $path = '', string $domain = '', bool $secure = false, bool $httponly = false): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "setrawcookie",
+        rhp_facade: "phpFun",
+        rhp_method: "setrawcookie",
+        rhp_signature: "phpFun::setrawcookie(string $name, string $value = '', int|array $expires_or_options = 0, string $path = '', string $domain = '', bool $secure = false, bool $httponly = false): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "header",
+        rhp_facade: "phpFun",
+        rhp_method: "header",
+        rhp_signature: "phpFun::header(string $header, bool $replace = true, int $response_code = 0): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "header_remove",
+        rhp_facade: "phpFun",
+        rhp_method: "header_remove",
+        rhp_signature: "phpFun::header_remove(?string $name = null): void",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "headers_sent",
+        rhp_facade: "phpFun",
+        rhp_method: "headers_sent",
+        rhp_signature: "phpFun::headers_sent(): bool",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "headers_list",
+        rhp_facade: "phpFun",
+        rhp_method: "headers_list",
+        rhp_signature: "phpFun::headers_list(): array",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "http_response_code",
+        rhp_facade: "phpFun",
+        rhp_method: "http_response_code",
+        rhp_signature: "phpFun::http_response_code(?int $response_code = null): int|bool",
+    },
 ];
 
 /// Returns true if the given function name is a recognized legacy PHP standard library function
@@ -1609,6 +1656,7 @@ impl FacadeRegistry {
             "session" => "Session",
             "cookie" => "Cookie",
             "request" => "Request",
+            "response" => "Response",
             "regex" => "Regex",
             "reflect" => "Reflect",
             "crypt" => "Crypt",
@@ -1682,7 +1730,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
-            | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "image" | "url" | "phpfun"
+            | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "response" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
             | "time" | "carbon" | "path" | "socket" | "binary"
     )

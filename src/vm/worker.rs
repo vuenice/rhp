@@ -7,7 +7,7 @@
 //! - **Zero Bootstrap Overhead**: Workers reuse the pre-parsed, pre-compiled immutable AST,
 //!   type hierarchy, and bytecode module of the persistent parent process.
 //! - **Copy-on-Write (CoW) State Isolation**: Request-level mutations (local variables, globals,
-//!   `$_GET`/`$_POST`/`$_SERVER` superglobals, and static class properties) are isolated to the
+//!   request facade context, and static class properties) are isolated to the
 //!   individual request VM and do not contaminate the parent process or other concurrent workers.
 //! - **Fault Isolation & Panic Boundaries**: Failures, runtime errors, or panics in user requests
 //!   are isolated to the request, returning clean error responses without crashing the worker pool
@@ -171,13 +171,13 @@ pub struct WorkerRequest {
     pub id: String,
     /// Execution payload (script source or direct function call).
     pub payload: WorkerPayload,
-    /// Superglobal `$_GET` parameters.
+    /// Request query (`Request::get`) parameters.
     pub get_params: IndexMap<String, FrozenValue>,
-    /// Superglobal `$_POST` parameters.
+    /// Request post (`Request::post`/`Request::input`) parameters.
     pub post_params: IndexMap<String, FrozenValue>,
-    /// Superglobal `$_SERVER` environment and request metadata.
+    /// Request server variables (`Request::server`).
     pub server_vars: IndexMap<String, String>,
-    /// Superglobal `$_COOKIE` parameters.
+    /// Request cookies (`Request::cookie`/`Cookie::get`).
     pub cookies: IndexMap<String, String>,
     /// Request HTTP headers.
     pub headers: IndexMap<String, String>,
@@ -231,13 +231,13 @@ impl WorkerRequest {
         self
     }
 
-    /// Add a `$_GET` parameter.
+    /// Add a query (`Request::get`) parameter.
     pub fn with_get(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
         self.get_params.insert(key.into(), value.into());
         self
     }
 
-    /// Add a `$_POST` parameter.
+    /// Add a post (`Request::post`/`Request::input`) parameter.
     pub fn with_post(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
         self.post_params.insert(key.into(), value.into());
         self
@@ -249,13 +249,13 @@ impl WorkerRequest {
         self
     }
 
-    /// Add a `$_SERVER` variable.
+    /// Add a server variable (`Request::server`).
     pub fn with_server(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.server_vars.insert(key.into(), value.into());
         self
     }
 
-    /// Add a `$_COOKIE` variable.
+    /// Add a cookie parameter (`Request::cookie`/`Cookie::get`).
     pub fn with_cookie(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.cookies.insert(key.into(), value.into());
         self
@@ -277,6 +277,26 @@ impl WorkerRequest {
     pub fn with_session(mut self, key: impl Into<String>, value: impl Into<FrozenValue>) -> Self {
         self.session.insert(key.into(), value.into());
         self
+    }
+
+    /// Retrieve a request HTTP header by name (case-insensitive).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        for (k, v) in &self.headers {
+            if k.eq_ignore_ascii_case(name) {
+                return Some(v.as_str());
+            }
+        }
+        None
+    }
+
+    /// Retrieve a request cookie by name.
+    pub fn cookie(&self, name: &str) -> Option<&str> {
+        self.cookies.get(name).map(|s| s.as_str())
+    }
+
+    /// Retrieve a request server variable by name.
+    pub fn server(&self, name: &str) -> Option<&str> {
+        self.server_vars.get(name).map(|s| s.as_str())
     }
 }
 
@@ -325,9 +345,44 @@ pub struct WorkerResponse {
     pub trace_id: Option<String>,
     /// Distributed OpenTelemetry root span ID for this request.
     pub span_id: Option<String>,
+    /// HTTP status code (e.g. 200, 201, 302, 401, 422, 500).
+    pub status_code: u16,
+    /// Custom HTTP headers emitted by the script.
+    pub headers: Vec<(String, String)>,
 }
 
 impl WorkerResponse {
+    /// Retrieve the HTTP status code (e.g. 200, 201, 302, 401, 422, 500).
+    #[inline]
+    pub fn status_code(&self) -> u16 {
+        self.status_code
+    }
+
+    /// Retrieve the HTTP response headers.
+    #[inline]
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    /// Retrieve a specific HTTP response header by name (case-insensitive).
+    pub fn header(&self, name: &str) -> Option<&str> {
+        for (k, v) in &self.headers {
+            if k.eq_ignore_ascii_case(name) {
+                return Some(v.as_str());
+            }
+        }
+        None
+    }
+
+    /// Retrieve all Set-Cookie header values emitted by the response.
+    pub fn cookies(&self) -> Vec<&str> {
+        self.headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+            .map(|(_, v)| v.as_str())
+            .collect()
+    }
+
     /// Retrieve the distributed OpenTelemetry trace ID, if recorded.
     #[inline]
     pub fn trace_id(&self) -> Option<&str> {
@@ -359,6 +414,8 @@ impl WorkerResponse {
             arena_drop: None,
             trace_id: None,
             span_id: None,
+            status_code: 500,
+            headers: Vec::new(),
         }
     }
 
@@ -907,8 +964,8 @@ fn execute_isolated_request_inner(
             vm.set_class_constants(state.rehydrate_class_constants());
             vm.set_globals(state.rehydrate_globals());
 
-            // Inject superglobals and request-local context
-            inject_superglobals(&mut vm, request);
+            // Inject custom request-local global variables and request context
+            inject_request_globals(&mut vm, request);
             setup_request_context(request);
 
             // Execute request inside an isolated local execution fiber
@@ -924,6 +981,7 @@ fn execute_isolated_request_inner(
                 (res, f.stats)
             };
 
+            let (status_code, headers) = extract_response_metadata(&run_res);
             let output = vm.output().to_string();
             // Instantaneous O(1) request arena drop and register file flush
             let arena_drop = vm.finish_request();
@@ -949,6 +1007,8 @@ fn execute_isolated_request_inner(
                         arena_drop: Some(arena_drop),
                         trace_id: Some(trace_id_str),
                         span_id: Some(span_id_str),
+                        status_code,
+                        headers,
                     }
                 }
                 Err(err) => {
@@ -970,13 +1030,15 @@ fn execute_isolated_request_inner(
                         arena_drop: Some(arena_drop),
                         trace_id: Some(trace_id_str),
                         span_id: Some(span_id_str),
+                        status_code: 500,
+                        headers: Vec::new(),
                     }
                 }
             }
         }
         WorkerPayload::Call { func_name, args } => {
             let mut vm = state.create_worker_vm();
-            inject_superglobals(&mut vm, request);
+            inject_request_globals(&mut vm, request);
             setup_request_context(request);
 
             let php_args: Vec<PhpValue> = args.iter().map(|a| a.to_php_value()).collect();
@@ -993,6 +1055,7 @@ fn execute_isolated_request_inner(
                 (res, f.stats)
             };
 
+            let (status_code, headers) = extract_response_metadata(&run_res);
             let output = vm.output().to_string();
             // Instantaneous O(1) request arena drop and register file flush
             let arena_drop = vm.finish_request();
@@ -1017,6 +1080,8 @@ fn execute_isolated_request_inner(
                         arena_drop: Some(arena_drop),
                         trace_id: Some(trace_id_str),
                         span_id: Some(span_id_str),
+                        status_code,
+                        headers,
                     }
                 }
                 Err(err) => {
@@ -1038,6 +1103,8 @@ fn execute_isolated_request_inner(
                         arena_drop: Some(arena_drop),
                         trace_id: Some(trace_id_str),
                         span_id: Some(span_id_str),
+                        status_code: 500,
+                        headers: Vec::new(),
                     }
                 }
             }
@@ -1045,45 +1112,54 @@ fn execute_isolated_request_inner(
     }
 }
 
-/// Inject superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_COOKIE`) into request VM.
-fn inject_superglobals(vm: &mut VM, request: &WorkerRequest) {
-    // 1. $_GET
-    let mut get_dict = IndexMap::new();
-    for (k, v) in &request.get_params {
-        get_dict.insert(k.clone(), v.to_php_value());
+fn extract_response_metadata(run_res: &Result<PhpValue, crate::vm::error::RuntimeError>) -> (u16, Vec<(String, String)>) {
+    let (active_status, active_hdrs, active_cookies, _) = crate::vm::facade::get_active_response();
+    if let Ok(val) = run_res {
+        if let PhpValue::Object(o) = val {
+            if o.borrow().class_name == "Response" {
+                let b = o.borrow();
+                let status = b.get_property("status").and_then(|v| v.to_i64()).unwrap_or(active_status as i64) as u16;
+                let mut map = active_hdrs;
+                let mut all_cookies = active_cookies;
+                if let Some(PhpValue::Dict(d)) = b.get_property("headers") {
+                    for (k, v) in d.borrow().iter() {
+                        let val_str = v.to_php_string();
+                        if k.eq_ignore_ascii_case("set-cookie") {
+                            if !all_cookies.contains(&val_str) {
+                                all_cookies.push(val_str);
+                            }
+                        } else {
+                            map.insert(k.clone(), val_str);
+                        }
+                    }
+                }
+                if let Some(PhpValue::List(l)) = b.get_property("cookies") {
+                    for c in l.borrow().iter() {
+                        let val_str = c.to_php_string();
+                        if !all_cookies.contains(&val_str) {
+                            all_cookies.push(val_str);
+                        }
+                    }
+                }
+                let mut result_headers: Vec<(String, String)> = map.into_iter().collect();
+                for c in all_cookies {
+                    result_headers.push(("Set-Cookie".to_string(), c));
+                }
+                return (status, result_headers);
+            }
+        }
+        let mut result_headers: Vec<(String, String)> = active_hdrs.into_iter().collect();
+        for c in active_cookies {
+            result_headers.push(("Set-Cookie".to_string(), c));
+        }
+        (active_status, result_headers)
+    } else {
+        (500, Vec::new())
     }
-    let get_val = PhpValue::dict(get_dict);
-    vm.set_global("_GET", get_val.clone());
-    vm.set_global("$_GET", get_val);
+}
 
-    // 2. $_POST
-    let mut post_dict = IndexMap::new();
-    for (k, v) in &request.post_params {
-        post_dict.insert(k.clone(), v.to_php_value());
-    }
-    let post_val = PhpValue::dict(post_dict);
-    vm.set_global("_POST", post_val.clone());
-    vm.set_global("$_POST", post_val);
-
-    // 3. $_SERVER
-    let mut server_dict = IndexMap::new();
-    for (k, v) in &request.server_vars {
-        server_dict.insert(k.clone(), PhpValue::string(v.clone()));
-    }
-    let server_val = PhpValue::dict(server_dict);
-    vm.set_global("_SERVER", server_val.clone());
-    vm.set_global("$_SERVER", server_val);
-
-    // 4. $_COOKIE
-    let mut cookie_dict = IndexMap::new();
-    for (k, v) in &request.cookies {
-        cookie_dict.insert(k.clone(), PhpValue::string(v.clone()));
-    }
-    let cookie_val = PhpValue::dict(cookie_dict);
-    vm.set_global("_COOKIE", cookie_val.clone());
-    vm.set_global("$_COOKIE", cookie_val);
-
-    // 5. Custom globals
+/// Inject custom request-local global variables into request VM.
+fn inject_request_globals(vm: &mut VM, request: &WorkerRequest) {
     for (k, v) in &request.globals {
         let bare = k.strip_prefix('$').unwrap_or(k);
         let sigil = format!("${}", bare);
@@ -1111,6 +1187,9 @@ fn setup_request_context(request: &WorkerRequest) {
     }
     crate::vm::facade::init_cookie_data(cookie_map);
 
+    crate::vm::facade::init_request_headers(request.headers.clone());
+    crate::vm::facade::init_request_server(request.server_vars.clone());
+
     let mut session_map = IndexMap::new();
     for (k, v) in &request.session {
         session_map.insert(k.clone(), v.to_php_value());
@@ -1122,6 +1201,7 @@ fn setup_request_context(request: &WorkerRequest) {
         files_map.insert(k.clone(), v.to_php_value());
     }
     crate::vm::facade::init_request_files(files_map);
+    crate::vm::facade::clear_response_context();
 }
 
 /// Extract human-readable string message from panic payload.
@@ -1401,6 +1481,17 @@ pub fn serialize_response(resp: &WorkerResponse) -> Vec<u8> {
         None => buf.push(0),
     }
 
+    // 12. HTTP status code
+    buf.extend_from_slice(&resp.status_code.to_le_bytes());
+
+    // 13. HTTP headers
+    let num_hdrs = resp.headers.len() as u32;
+    buf.extend_from_slice(&num_hdrs.to_le_bytes());
+    for (k, v) in &resp.headers {
+        write_string(&mut buf, k);
+        write_string(&mut buf, v);
+    }
+
     buf
 }
 
@@ -1519,6 +1610,30 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         None
     };
 
+    let (status_code, headers) = if cursor < data.len() {
+        let code = read_u16(data, &mut cursor)?;
+        let count = if cursor < data.len() {
+            read_u32(data, &mut cursor)? as usize
+        } else {
+            0
+        };
+        let mut hdrs = Vec::with_capacity(count);
+        for _ in 0..count {
+            if cursor >= data.len() {
+                break;
+            }
+            let k = read_string(data, &mut cursor)?;
+            let v = read_string(data, &mut cursor)?;
+            hdrs.push((k, v));
+        }
+        (code, hdrs)
+    } else {
+        (
+            if status == WorkerResponseStatus::Success { 200 } else { 500 },
+            Vec::new(),
+        )
+    };
+
     Ok(WorkerResponse {
         request_id,
         status,
@@ -1531,7 +1646,20 @@ pub fn deserialize_response(data: &[u8]) -> Result<WorkerResponse, WorkerError> 
         arena_drop,
         trace_id,
         span_id,
+        status_code,
+        headers,
     })
+}
+
+fn read_u16(data: &[u8], cursor: &mut usize) -> Result<u16, WorkerError> {
+    if *cursor + 2 > data.len() {
+        return Err(WorkerError::SerializationError(
+            "Unexpected EOF reading u16".to_string(),
+        ));
+    }
+    let val = u16::from_le_bytes(data[*cursor..*cursor + 2].try_into().unwrap());
+    *cursor += 2;
+    Ok(val)
 }
 
 fn write_string(buf: &mut Vec<u8>, s: &str) {

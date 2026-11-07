@@ -10,6 +10,7 @@
   - [2. Standard Library & Explicit Subtype System](#2-standard-library--explicit-subtype-system)
   - [Facade Library Pattern](#facade-library-pattern)
   - [Facade Tiering Architecture](#facade-tiering-architecture)
+  - [Module System, Static Imports & Elimination of Dynamic Includes](#module-system-static-imports--elimination-of-dynamic-includes)
   - [Facade Extensibility: Runtime Macro Registration vs. Class Inheritance](#facade-extensibility-runtime-macro-registration-vs-class-inheritance)
 - [Facades & Utility Helpers](#facades--utility-helpers)
   - [1. Arr Facade](#1-arr-facade)
@@ -190,6 +191,37 @@ Logger::info("Cache loaded successfully");
    - Subsequent script boots link via `dlopen`/`dlsym` in microseconds.
 3. **In-Process Fallback Engine:** For fast sub-millisecond cold starts in development (`rhp run dev`) or test environments, RHP includes an in-process thread-safe native engine (`RustCacheStore` & `RustLogStore`).
 4. **FrozenValue State Boundaries:** Data shared across worker threads is stored using `FrozenValue`, ensuring strict thread safety across multi-threaded Tokio execution pools without garbage collection pauses or race conditions.
+
+### Module System, Static Imports & Elimination of Dynamic Includes
+
+Dynamic include and require constructs (`include`, `require`, `include_once`, `require_once`) are deliberately dropped from RHP, not ported.
+
+#### Why Dynamic Include Does Not Fit
+
+1. **Type Checking & Whole-Program Verification:**
+   `require $path` pulls in arbitrary source files that the compiler cannot inspect during compilation. When paths are computed or evaluated dynamically at runtime, the compiler cannot know which classes, interfaces, traits, functions, or types will exist after the statement executes. That fundamentally undermines mandatory static types, symbol table resolution, devirtualization, and compile-time type checking.
+2. **Standalone Binary Distribution (`rhp run build`):**
+   A single compiled binary must know the complete program up front to build the closed-world dependency graph, perform dead-code elimination (tree-shaking), and link machine code. Runtime-loaded source files force an engine to bundle a compiler, parser, AST builder, or VM interpreter and dynamic file loader inside every production artifact.
+3. **Scope Injection & Untyped Semantics:**
+   In PHP, `include` executes code directly in the caller's active variable scope, leaking or overwriting local variables (`extract($data)`). Furthermore, an include statement evaluates to an untyped return value (or arbitrary scalar). Clean lexical scoping and deterministic type safety cannot be maintained in a statically typed language when external scripts can dynamically pollute stack frames.
+
+#### What RHP Does Instead
+
+1. **Static Imports Only (`use` / `import`):**
+   All file and symbol dependencies are imported declaratively at compile time using literal paths or fully-qualified namespaces:
+   ```php
+   use App\Services\OrderService;
+   use App\Models\User;
+   import "./Config.rhp";
+   import "./Cache.rs" as NativeCache;
+   ```
+   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view . '.rhp';`) are fatal compile-time errors (`RHP0120`).
+2. **Build-Time Class Map & Implicit Prelude:**
+   Package and dependency autoloading is moved entirely to build/install time. `vendor/autoload.rhp` is generated ahead of time by `rhp add` / `rhp install` / `rhpm` as a static class map and package manifest, not executed dynamically at startup. The compiler reads the PSR-4 namespace-to-directory mapping declared in `rhp.toml` / `composer.json`, resolves all imports, and builds the complete module dependency graph. The autoloader functions as an implicit prelude prepended to the compilation root. There is **no `spl_autoload_register()`**, zero runtime filesystem probing, and zero lazy class loading in production.
+3. **Deterministic Go/Rust-Style Module Initialization Semantics:**
+   Legacy PHP relied on `require_once` and `include_once` to guard against duplicate symbol declarations. In RHP, module execution follows Go/Rust semantics: each module initializes **exactly once**, in topological dependency order, inside the parent process during boot before child workers are forked. Top-level statements in an imported file execute once during master initialization; worker processes inherit this initialized immutable state via Copy-on-Write (CoW).
+4. **Incremental Dev Mode Hot Reloading:**
+   In development (`rhp run dev`), the server hot-reloads changed files incrementally without sacrificing static type safety. When a file changes, the file-watcher recompiles only the modified module and incrementally re-checks it against the pre-computed static dependency graph. This provides sub-millisecond dev turnaround while preserving strict compile-time type verification.
 
 ### Facade Extensibility: Runtime Macro Registration vs. Class Inheritance
 
@@ -539,7 +571,8 @@ System environment, execution delays, and process intrinsics:
 - **Key Methods:**
   - `Sys::usleep(int $microseconds): void`: Delays execution for the specified number of microseconds (canonical replacement for procedural `usleep()`).
   - `Sys::sleep(int $seconds): int`: Delays execution for the specified number of seconds (canonical replacement for procedural `sleep()`).
-  - `Sys::env(string $key, mixed $default = null)`: Retrieves an environment variable.
+  - `Sys::osEnv(?string $key = null, mixed $default = null): mixed`: Retrieves host OS process environment variables (`std::env::var`). If `$key` is omitted, returns an associative array of all OS variables.
+  - `Sys::env(?string $key = null, mixed $default = null): mixed`: Retrieves variables from `.env` files located at the script (`index.rhp`) location or execution directory following Vite resolution hierarchy (`.env`, `.env.local`, `.env.[mode]`, `.env.[mode].local`). In dev mode, process restarts automatically on `.env` file changes (no in-memory hot reloading). If `$key` is omitted, returns an associative array of all loaded env variables.
   - `Sys::print(...)` / `Sys::echo(...)`: Native Rust-formatted standard output.
 
 ---
