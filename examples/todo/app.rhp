@@ -429,43 +429,18 @@ class TodoRenderer {
 // Main Execution & Request Handling
 // =========================================================================
 
-// Read superglobals when invoked via Web/WorkerRequest
-global $_GET, $_POST, $_SERVER;
-
-$filePath = "";
-if ($_SERVER != null && $_SERVER->has("TODOS_FILE")) {
-    $filePath = string($_SERVER["TODOS_FILE"]);
-}
+// Read request parameters via Request facade
+$filePath = Request::server("TODOS_FILE") ?? "";
 $store = new TodoStore($filePath);
 
-$method = "GET";
-$uri = "/";
-$isHtmx = false;
-
-if ($_SERVER != null) {
-    if ($_SERVER->has("REQUEST_METHOD")) {
-        $method = $_SERVER["REQUEST_METHOD"];
-    }
-    if ($_SERVER->has("REQUEST_URI")) {
-        $uri = $_SERVER["REQUEST_URI"];
-    }
-    if ($_SERVER->has("HTTP_HX_REQUEST")) {
-        $isHtmx = true;
-    }
-}
+$method = Request::server("REQUEST_METHOD") ?? "GET";
+$uri = Request::server("REQUEST_URI") ?? "/";
+$isHtmx = Request::server("HTTP_HX_REQUEST") == "true";
 
 // 1. POST /todos -> Add a new task
 if ($method == "POST" && Str::startsWith($uri, "/todos") && !Str::contains($uri, "toggle") && !Str::contains($uri, "delete") && !Str::contains($uri, "clear-completed")) {
-    $title = "New task";
-    $category = "General";
-    if ($_POST != null) {
-        if ($_POST->has("title")) {
-            $title = $_POST["title"];
-        }
-        if ($_POST->has("category")) {
-            $category = $_POST["category"];
-        }
-    }
+    $title = Request::get("title") ?? "New task";
+    $category = Request::get("category") ?? "General";
     $store->add($title, $category);
     $stats = $store->getStats();
     echo TodoRenderer::renderList($store->todos, "all", $stats);
@@ -474,12 +449,7 @@ if ($method == "POST" && Str::startsWith($uri, "/todos") && !Str::contains($uri,
 
 // 2. POST /todos/toggle -> Toggle a task
 if ($method == "POST" && Str::contains($uri, "/todos/toggle")) {
-    $id = 1;
-    if ($_GET != null && $_GET->has("id")) {
-        $id = int($_GET["id"]);
-    } elseif ($_POST != null && $_POST->has("id")) {
-        $id = int($_POST["id"]);
-    }
+    $id = int(Request::get("id") ?? "1");
     $store->toggle($id);
     $stats = $store->getStats();
     echo TodoRenderer::renderList($store->todos, "all", $stats);
@@ -488,12 +458,7 @@ if ($method == "POST" && Str::contains($uri, "/todos/toggle")) {
 
 // 3. POST /todos/delete -> Delete a task
 if ($method == "POST" && Str::contains($uri, "/todos/delete")) {
-    $id = 1;
-    if ($_GET != null && $_GET->has("id")) {
-        $id = int($_GET["id"]);
-    } elseif ($_POST != null && $_POST->has("id")) {
-        $id = int($_POST["id"]);
-    }
+    $id = int(Request::get("id") ?? "1");
     $store->delete($id);
     $stats = $store->getStats();
     echo TodoRenderer::renderList($store->todos, "all", $stats);
@@ -516,11 +481,7 @@ if (Str::startsWith($uri, "/api/todos")) {
 }
 
 // 6. Default / GET -> Full page or partial based on filter
-$filter = "all";
-if ($_GET != null && $_GET->has("filter")) {
-    $filter = $_GET["filter"];
-}
-
+$filter = Request::get("filter") ?? "all";
 $filtered = $store->getFiltered($filter);
 $stats = $store->getStats();
 

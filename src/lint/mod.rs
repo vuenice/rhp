@@ -6,6 +6,7 @@ pub mod formatter;
 pub mod param_order;
 pub mod ref_params;
 pub mod reporter;
+pub mod upgrade_php;
 
 use std::fs;
 use std::io;
@@ -22,6 +23,10 @@ pub use formatter::{format_source, split_statements_on_semicolons};
 pub use param_order::{check_parameter_order, fix_parameter_order, has_required_after_optional};
 pub use ref_params::convert_mutated_array_params_to_ref;
 pub use reporter::{Issue, IssueLevel, IssueSpan, LintReport};
+pub use upgrade_php::{
+    upgrade_php_file, upgrade_php_path, upgrade_php_source, UpgradeFileResult, UpgradeOptions,
+    UpgradeReport,
+};
 
 /// Lint configuration options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

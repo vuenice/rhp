@@ -24,6 +24,7 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
         Err(parse_err) => {
             let code = match &parse_err.kind {
                 crate::parser::error::ParseErrorKind::UnsupportedOperator { .. } => "unsupported-operator",
+                crate::parser::error::ParseErrorKind::DynamicIncludeForbidden { .. } => "dynamic-include-forbidden",
                 _ => "parse-error",
             };
             issues.push(Issue::new(

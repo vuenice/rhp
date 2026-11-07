@@ -17,9 +17,13 @@ use rhp::{
     FrontendError, FrozenValue, MemoryScope, MemoryStats, OwnershipEnforcer, ParentProcess,
     PhpValue, TypeErrorKind, WorkerModel, WorkerRequest, WorkerResponseStatus,
 };
+use std::sync::Mutex;
+
+static MEM_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_zero_tracing_garbage_collector_and_instant_drop() {
+    let _lock = MEM_MUTEX.lock().unwrap();
     reset_memory_tracker();
 
     // 1. Invariants verification: 0 GC runs, 0.0ms GC pause, tracing GC disabled
@@ -63,6 +67,7 @@ fn test_zero_tracing_garbage_collector_and_instant_drop() {
 
 #[test]
 fn test_deterministic_scoped_raii_reclamation() {
+    let _lock = MEM_MUTEX.lock().unwrap();
     reset_memory_tracker();
 
     let source = r#"
@@ -88,6 +93,7 @@ fn test_deterministic_scoped_raii_reclamation() {
 
 #[test]
 fn test_copy_on_write_detachment_and_telemetry_tracking() {
+    let _lock = MEM_MUTEX.lock().unwrap();
     reset_memory_tracker();
 
     let source = r#"
@@ -273,6 +279,7 @@ fn test_prohibition_of_pass_by_reference_prevents_cyclic_leaks() {
 
 #[test]
 fn test_leak_check_and_peak_memory_tracking() {
+    let _lock = MEM_MUTEX.lock().unwrap();
     reset_memory_tracker();
 
     let source = r#"
@@ -335,6 +342,7 @@ fn test_concurrent_future_background_tasks_zero_data_races() {
 
 #[test]
 fn test_rust_api_memory_scope_and_stats() {
+    let _lock = MEM_MUTEX.lock().unwrap();
     reset_memory_tracker();
     reset_peak();
 

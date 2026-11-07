@@ -219,6 +219,12 @@ thread_local! {
     /// Configured type formatting rules for request parameters.
     static REQUEST_TYPE_FORMATS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
 
+    /// Active HTTP request headers.
+    static REQUEST_HEADERS: RefCell<IndexMap<String, String>> = RefCell::new(IndexMap::new());
+
+    /// Active server variables (Request::server).
+    static REQUEST_SERVER: RefCell<IndexMap<String, String>> = RefCell::new(IndexMap::new());
+
     /// Active session state.
     static SESSION_DATA: RefCell<IndexMap<String, PhpValue>> = RefCell::new(IndexMap::new());
 
@@ -227,6 +233,45 @@ thread_local! {
 
     /// Active uploaded files from multipart request.
     static REQUEST_FILES: RefCell<IndexMap<String, PhpValue>> = RefCell::new(IndexMap::new());
+
+    /// Active HTTP response state (status code, headers, content).
+    pub(crate) static ACTIVE_RESPONSE: RefCell<ActiveResponseState> = RefCell::new(ActiveResponseState {
+        status: 200,
+        headers: IndexMap::new(),
+        cookies: Vec::new(),
+        content: None,
+    });
+}
+
+/// Active HTTP response context: status code, headers, and content.
+#[derive(Debug, Clone)]
+pub struct ActiveResponseState {
+    pub status: u16,
+    pub headers: IndexMap<String, String>,
+    pub cookies: Vec<String>,
+    pub content: Option<String>,
+}
+
+/// Initialize or replace current request HTTP headers.
+pub fn init_request_headers(headers: impl IntoIterator<Item = (String, String)>) {
+    REQUEST_HEADERS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        map.clear();
+        for (k, v) in headers {
+            map.insert(k, v);
+        }
+    });
+}
+
+/// Initialize or replace current server variables.
+pub fn init_request_server(server: impl IntoIterator<Item = (String, String)>) {
+    REQUEST_SERVER.with(|cell| {
+        let mut map = cell.borrow_mut();
+        map.clear();
+        for (k, v) in server {
+            map.insert(k, v);
+        }
+    });
 }
 
 /// Initialize or replace current request parameters.
@@ -303,13 +348,193 @@ pub fn init_session_data(data: impl IntoIterator<Item = (String, PhpValue)>) {
     });
 }
 
-/// Clear request, cookie, session, and uploaded files state (for request cleanup and test isolation).
+/// Clear request, cookie, session, uploaded files, and response state (for request cleanup and test isolation).
 pub fn clear_request_context() {
     REQUEST_PARAMS.with(|cell| cell.borrow_mut().clear());
     REQUEST_TYPE_FORMATS.with(|cell| cell.borrow_mut().clear());
     COOKIE_DATA.with(|cell| cell.borrow_mut().clear());
     SESSION_DATA.with(|cell| cell.borrow_mut().clear());
     REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
+    REQUEST_HEADERS.with(|cell| cell.borrow_mut().clear());
+    REQUEST_SERVER.with(|cell| cell.borrow_mut().clear());
+    clear_response_context();
+}
+
+/// Reset active HTTP response state to clean defaults.
+pub fn clear_response_context() {
+    ACTIVE_RESPONSE.with(|cell| {
+        *cell.borrow_mut() = ActiveResponseState {
+            status: 200,
+            headers: IndexMap::new(),
+            cookies: Vec::new(),
+            content: None,
+        };
+    });
+}
+
+/// Retrieve the active HTTP response status, headers, cookies, and content.
+pub fn get_active_response() -> (u16, IndexMap<String, String>, Vec<String>, Option<String>) {
+    ACTIVE_RESPONSE.with(|cell| {
+        let b = cell.borrow();
+        (b.status, b.headers.clone(), b.cookies.clone(), b.content.clone())
+    })
+}
+
+/// Append a Set-Cookie string to the active response context.
+pub fn add_active_cookie(cookie_str: String) {
+    ACTIVE_RESPONSE.with(|cell| {
+        cell.borrow_mut().cookies.push(cookie_str);
+    });
+}
+
+/// Retrieve currently queued Set-Cookie headers on active response.
+pub fn get_active_cookies() -> Vec<String> {
+    ACTIVE_RESPONSE.with(|cell| cell.borrow().cookies.clone())
+}
+
+/// Helper to construct a standard Set-Cookie header string from arguments.
+pub fn format_cookie_from_args(name: &str, val: &str, extra_args: &[PhpValue]) -> String {
+    let mut path = "/".to_string();
+    let mut domain: Option<String> = None;
+    let mut secure = false;
+    let mut http_only = true;
+    let mut same_site: Option<String> = None;
+    let mut max_age: Option<i64> = None;
+    let mut expires_str: Option<String> = None;
+
+    if let Some(first_extra) = extra_args.first() {
+        if let PhpValue::Dict(d) = first_extra {
+            let b = d.borrow();
+            if let Some(p) = b.get("path").map(|v| v.to_php_string()) {
+                if !p.is_empty() {
+                    path = p;
+                }
+            }
+            if let Some(dm) = b.get("domain").map(|v| v.to_php_string()) {
+                if !dm.is_empty() {
+                    domain = Some(dm);
+                }
+            }
+            if let Some(s) = b.get("secure") {
+                secure = s.is_truthy();
+            }
+            if let Some(h) = b.get("httponly").or_else(|| b.get("httpOnly")) {
+                http_only = h.is_truthy();
+            }
+            if let Some(ss) = b.get("samesite").or_else(|| b.get("sameSite")).map(|v| v.to_php_string()) {
+                if !ss.is_empty() {
+                    same_site = Some(ss);
+                }
+            }
+            if let Some(exp) = b.get("expires").or_else(|| b.get("max-age")).or_else(|| b.get("max_age")) {
+                if let Some(exp_num) = exp.to_i64() {
+                    calculate_cookie_expiry(exp_num, &mut max_age, &mut expires_str);
+                }
+            }
+        } else if let Some(exp_num) = first_extra.to_i64() {
+            calculate_cookie_expiry(exp_num, &mut max_age, &mut expires_str);
+
+            if let Some(p_val) = extra_args.get(1).map(|v| v.to_php_string()) {
+                if !p_val.is_empty() {
+                    path = p_val;
+                }
+            }
+            if let Some(d_val) = extra_args.get(2).map(|v| v.to_php_string()) {
+                if !d_val.is_empty() {
+                    domain = Some(d_val);
+                }
+            }
+            if let Some(s_val) = extra_args.get(3) {
+                secure = s_val.is_truthy();
+            }
+            if let Some(h_val) = extra_args.get(4) {
+                http_only = h_val.is_truthy();
+            }
+            if let Some(ss_val) = extra_args.get(5).map(|v| v.to_php_string()) {
+                if !ss_val.is_empty() {
+                    same_site = Some(ss_val);
+                }
+            }
+        } else if let Some(p_val) = extra_args.get(1).map(|v| v.to_php_string()) {
+            if !p_val.is_empty() {
+                path = p_val;
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    parts.push(format!("{}={}", name, val));
+    if let Some(ma) = max_age {
+        parts.push(format!("Max-Age={}", ma));
+    }
+    if let Some(exp) = expires_str {
+        parts.push(format!("Expires={}", exp));
+    }
+    parts.push(format!("Path={}", path));
+    if let Some(dm) = domain {
+        parts.push(format!("Domain={}", dm));
+    }
+    if secure {
+        parts.push("Secure".to_string());
+    }
+    if http_only {
+        parts.push("HttpOnly".to_string());
+    }
+    if let Some(ss) = same_site {
+        parts.push(format!("SameSite={}", ss));
+    }
+
+    parts.join("; ")
+}
+
+fn calculate_cookie_expiry(exp_num: i64, max_age: &mut Option<i64>, expires_str: &mut Option<String>) {
+    if exp_num <= 0 {
+        *max_age = Some(0);
+        *expires_str = Some("Thu, 01 Jan 1970 00:00:00 GMT".to_string());
+        return;
+    }
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    if exp_num > 100_000_000 {
+        let delta = exp_num - now_secs;
+        *max_age = Some(delta.max(0));
+        *expires_str = Some(format_rfc1123_date(exp_num));
+    } else {
+        let total_secs = exp_num * 60;
+        *max_age = Some(total_secs);
+        let future_time = now_secs + total_secs;
+        *expires_str = Some(format_rfc1123_date(future_time));
+    }
+}
+
+fn format_rfc1123_date(secs: i64) -> String {
+    if let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) {
+        dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+    } else {
+        "Thu, 01 Jan 1970 00:00:00 GMT".to_string()
+    }
+}
+
+/// Create a structured Response VmObject.
+pub fn create_response_object(
+    status: u16,
+    content: &str,
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> VmObject {
+    let mut obj = VmObject::new("Response");
+    obj.set_property("status", PhpValue::Int(status as i32));
+    obj.set_property("content", PhpValue::string(content));
+    let mut map = IndexMap::new();
+    for (k, v) in headers {
+        map.insert(k, PhpValue::string(v));
+    }
+    obj.set_property("headers", PhpValue::dict_from_map(map));
+    obj.set_property("cookies", PhpValue::list(Vec::<PhpValue>::new()));
+    obj
 }
 
 /// Result type for standard facade dispatch functions.
@@ -352,6 +577,7 @@ pub fn dispatch_facade_call(
         "Session" => dispatch_session(method, args),
         "Cookie" => dispatch_cookie(method, args),
         "Request" => dispatch_request(method, args),
+        "Response" => dispatch_response(method, args),
         "Image" => dispatch_image(method, args),
         "URL" | "Url" => dispatch_url(method, args),
         "Crypt" => dispatch_crypt(method, args),
@@ -2829,13 +3055,40 @@ fn dispatch_sys(method: &str, args: &[PhpValue]) -> FacadeResult {
             let path = get_arg_str(args, 0, "Sys::disk_total_space")?;
             get_disk_space(&path, DiskSpaceMetric::Total)
         }
+        "os_env" | "osEnv" => {
+            if args.is_empty() {
+                let mut map = std::collections::BTreeMap::new();
+                for (k, v) in std::env::vars() {
+                    map.insert(k, PhpValue::string(v));
+                }
+                Ok(PhpValue::dict(map))
+            } else {
+                let key = get_arg_str(args, 0, "Sys::osEnv")?;
+                match std::env::var(&key) {
+                    Ok(val) => Ok(PhpValue::string(val)),
+                    Err(_) => {
+                        let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        Ok(default_val)
+                    }
+                }
+            }
+        }
         "env" => {
-            let key = get_arg_str(args, 0, "Sys::env")?;
-            match std::env::var(&key) {
-                Ok(val) => Ok(PhpValue::string(val)),
-                Err(_) => {
-                    let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
-                    Ok(default_val)
+            if args.is_empty() {
+                let all_vars = crate::runtime::env_store::get_all_env();
+                let mut map = std::collections::BTreeMap::new();
+                for (k, v) in all_vars {
+                    map.insert(k, PhpValue::string(v));
+                }
+                Ok(PhpValue::dict(map))
+            } else {
+                let key = get_arg_str(args, 0, "Sys::env")?;
+                match crate::runtime::env_store::get_env(&key) {
+                    Some(val) => Ok(PhpValue::string(val)),
+                    None => {
+                        let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        Ok(default_val)
+                    }
                 }
             }
         }
@@ -5418,14 +5671,22 @@ fn dispatch_cookie(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(cell.borrow().get(&key).cloned().unwrap_or(default_val))
             })
         }
-        "set" | "put" => {
+        "set" | "put" | "queue" => {
             let key = get_arg_str(args, 0, "Cookie::set")?;
             let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
             let val_str = PhpValue::string(val.to_php_string());
             COOKIE_DATA.with(|cell| {
-                cell.borrow_mut().insert(key, val_str.clone());
+                cell.borrow_mut().insert(key.clone(), val_str.clone());
             });
+            let cookie_str = format_cookie_from_args(&key, &val.to_php_string(), &args[2..]);
+            add_active_cookie(cookie_str);
             Ok(val_str)
+        }
+        "make" => {
+            let key = get_arg_str(args, 0, "Cookie::make")?;
+            let val = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let cookie_str = format_cookie_from_args(&key, &val, &args[2..]);
+            Ok(PhpValue::string(cookie_str))
         }
         "has" => {
             let key = get_arg_str(args, 0, "Cookie::has")?;
@@ -5448,6 +5709,8 @@ fn dispatch_cookie(method: &str, args: &[PhpValue]) -> FacadeResult {
             COOKIE_DATA.with(|cell| {
                 cell.borrow_mut().shift_remove(&key);
             });
+            let cookie_str = format!("{}={}; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT", key, "");
+            add_active_cookie(cookie_str);
             Ok(PhpValue::Null)
         }
         "clear" => {
@@ -5532,13 +5795,25 @@ fn cast_request_value(val: &PhpValue, target_type: &str) -> PhpValue {
 
 fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
-        "get" | "input" => {
+        "get" | "input" | "query" => {
             if args.is_empty() {
                 return REQUEST_PARAMS.with(|cell| {
                     Ok(PhpValue::dict_from_map(cell.borrow().clone()))
                 });
             }
             let key = get_arg_str(args, 0, "Request::get")?;
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            REQUEST_PARAMS.with(|cell| {
+                Ok(cell.borrow().get(&key).cloned().unwrap_or(default_val))
+            })
+        }
+        "body" | "post" => {
+            if args.is_empty() {
+                return REQUEST_PARAMS.with(|cell| {
+                    Ok(PhpValue::dict_from_map(cell.borrow().clone()))
+                });
+            }
+            let key = get_arg_str(args, 0, "Request::body")?;
             let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
             REQUEST_PARAMS.with(|cell| {
                 Ok(cell.borrow().get(&key).cloned().unwrap_or(default_val))
@@ -5677,19 +5952,386 @@ fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::Bool(cell.borrow().contains_key(&key)))
             })
         }
+        "header" => {
+            let key = get_arg_str(args, 0, "Request::header")?;
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            REQUEST_HEADERS.with(|cell| {
+                let map = cell.borrow();
+                for (k, v) in map.iter() {
+                    if k.eq_ignore_ascii_case(&key) {
+                        return Ok(PhpValue::string(v.clone()));
+                    }
+                }
+                Ok(default_val)
+            })
+        }
+        "headers" => {
+            REQUEST_HEADERS.with(|cell| {
+                let mut map = IndexMap::new();
+                for (k, v) in cell.borrow().iter() {
+                    map.insert(k.clone(), PhpValue::string(v.clone()));
+                }
+                Ok(PhpValue::dict_from_map(map))
+            })
+        }
+        "server" => {
+            if args.is_empty() {
+                return REQUEST_SERVER.with(|cell| {
+                    let mut map = IndexMap::new();
+                    for (k, v) in cell.borrow().iter() {
+                        map.insert(k.clone(), PhpValue::string(v.clone()));
+                    }
+                    Ok(PhpValue::dict_from_map(map))
+                });
+            }
+            let key = get_arg_str(args, 0, "Request::server")?;
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            REQUEST_SERVER.with(|cell| {
+                let map = cell.borrow();
+                for (k, v) in map.iter() {
+                    if k.eq_ignore_ascii_case(&key) {
+                        return Ok(PhpValue::string(v.clone()));
+                    }
+                }
+                Ok(default_val)
+            })
+        }
+        "cookie" => {
+            dispatch_cookie("get", args)
+        }
+        "cookies" => {
+            dispatch_cookie("all", args)
+        }
+        "bearerToken" => {
+            REQUEST_HEADERS.with(|cell| {
+                let map = cell.borrow();
+                for (k, v) in map.iter() {
+                    if k.eq_ignore_ascii_case("authorization") {
+                        if let Some(token) = v.strip_prefix("Bearer ") {
+                            return Ok(PhpValue::string(token.trim().to_string()));
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
+            })
+        }
+        "method" => {
+            REQUEST_SERVER.with(|cell| {
+                let map = cell.borrow();
+                if let Some(m) = map.get("REQUEST_METHOD") {
+                    Ok(PhpValue::string(m.clone()))
+                } else {
+                    Ok(PhpValue::string("GET"))
+                }
+            })
+        }
         "files" | "allFiles" => {
             REQUEST_FILES.with(|cell| {
                 Ok(PhpValue::dict_from_map(cell.borrow().clone()))
+            })
+        }
+        "ip" => {
+            REQUEST_SERVER.with(|cell| {
+                let map = cell.borrow();
+                if let Some(ip) = map.get("REMOTE_ADDR") {
+                    Ok(PhpValue::string(ip.clone()))
+                } else if let Some(ip) = map.get("HTTP_X_FORWARDED_FOR") {
+                    let first = ip.split(',').next().unwrap_or("127.0.0.1").trim();
+                    Ok(PhpValue::string(first.to_string()))
+                } else if let Some(ip) = map.get("HTTP_CLIENT_IP") {
+                    Ok(PhpValue::string(ip.clone()))
+                } else {
+                    Ok(PhpValue::string("127.0.0.1"))
+                }
+            })
+        }
+        "host" => {
+            REQUEST_SERVER.with(|cell| {
+                let map = cell.borrow();
+                if let Some(host) = map.get("HTTP_HOST") {
+                    Ok(PhpValue::string(host.clone()))
+                } else if let Some(host) = map.get("SERVER_NAME") {
+                    Ok(PhpValue::string(host.clone()))
+                } else {
+                    REQUEST_HEADERS.with(|h_cell| {
+                        let h_map = h_cell.borrow();
+                        for (k, v) in h_map.iter() {
+                            if k.eq_ignore_ascii_case("host") {
+                                return Ok(PhpValue::string(v.clone()));
+                            }
+                        }
+                        Ok(PhpValue::string("localhost"))
+                    })
+                }
             })
         }
         "clear" => {
             REQUEST_PARAMS.with(|cell| cell.borrow_mut().clear());
             REQUEST_TYPE_FORMATS.with(|cell| cell.borrow_mut().clear());
             REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
+            REQUEST_HEADERS.with(|cell| cell.borrow_mut().clear());
+            REQUEST_SERVER.with(|cell| cell.borrow_mut().clear());
             Ok(PhpValue::Null)
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Request".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+fn dispatch_response(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "json" => {
+            let data = args.get(0).cloned().unwrap_or(PhpValue::Null);
+            let status = args.get(1).and_then(|v| v.to_i64()).unwrap_or(200) as u16;
+            let json_str = php_value_to_json(&data);
+            let mut hdrs = IndexMap::new();
+            hdrs.insert("Content-Type".to_string(), "application/json; charset=utf-8".to_string());
+            if let Some(h) = args.get(2) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(json_str.clone());
+            });
+            let obj = create_response_object(status, &json_str, hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "html" => {
+            let content = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+            let status = args.get(1).and_then(|v| v.to_i64()).unwrap_or(200) as u16;
+            let mut hdrs = IndexMap::new();
+            hdrs.insert("Content-Type".to_string(), "text/html; charset=utf-8".to_string());
+            if let Some(h) = args.get(2) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(content.clone());
+            });
+            let obj = create_response_object(status, &content, hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "make" => {
+            let content = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+            let status = args.get(1).and_then(|v| v.to_i64()).unwrap_or(200) as u16;
+            let mut hdrs = IndexMap::new();
+            if let Some(h) = args.get(2) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            let has_ct = hdrs.keys().any(|k| k.eq_ignore_ascii_case("content-type"));
+            if !has_ct {
+                hdrs.insert("Content-Type".to_string(), "text/html; charset=utf-8".to_string());
+            }
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(content.clone());
+            });
+            let obj = create_response_object(status, &content, hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "redirect" | "redirectTo" => {
+            let url = args.get(0).map(|v| v.to_php_string()).unwrap_or_else(|| "/".to_string());
+            let status = args.get(1).and_then(|v| v.to_i64()).unwrap_or(302) as u16;
+            let mut hdrs = IndexMap::new();
+            hdrs.insert("Location".to_string(), url.clone());
+            if let Some(h) = args.get(2) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            let body = format!("<p>Redirecting to <a href=\"{0}\">{0}</a>...</p>", url);
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(body.clone());
+            });
+            let obj = create_response_object(status, &body, hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "noContent" => {
+            let status = args.get(0).and_then(|v| v.to_i64()).unwrap_or(204) as u16;
+            let mut hdrs = IndexMap::new();
+            if let Some(h) = args.get(1) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(String::new());
+            });
+            let obj = create_response_object(status, "", hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "download" => {
+            let path = get_arg_str(args, 0, "Response::download")?;
+            let client_name = args
+                .get(1)
+                .map(|v| v.to_php_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "download".to_string())
+                });
+            let mime = detect_mime_type_for_path(std::path::Path::new(&path))
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            let status = 200u16;
+            let mut hdrs = IndexMap::new();
+            hdrs.insert(
+                "Content-Disposition".to_string(),
+                format!("attachment; filename=\"{}\"", client_name),
+            );
+            hdrs.insert("Content-Type".to_string(), mime);
+            if let Some(h) = args.get(2) {
+                let map = extract_dict_map(h);
+                for (k, v) in map {
+                    hdrs.insert(k, v.to_php_string());
+                }
+            }
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                b.status = status;
+                for (k, v) in &hdrs {
+                    b.headers.insert(k.clone(), v.clone());
+                }
+                b.content = Some(content.clone());
+            });
+            let obj = create_response_object(status, &content, hdrs);
+            Ok(PhpValue::object(obj))
+        }
+        "status" | "setStatusCode" => {
+            let code = args.get(0).and_then(|v| v.to_i64()).unwrap_or(200) as u16;
+            ACTIVE_RESPONSE.with(|cell| {
+                cell.borrow_mut().status = code;
+            });
+            Ok(PhpValue::Int(code as i32))
+        }
+        "cookie" | "withCookie" => {
+            let name = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+            let val = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            if !name.is_empty() {
+                let cookie_str = format_cookie_from_args(&name, &val, &args[2..]);
+                add_active_cookie(cookie_str);
+            }
+            Ok(PhpValue::Null)
+        }
+        "header" => {
+            if args.len() >= 2 {
+                let key = args[0].to_php_string();
+                let val = args[1].to_php_string();
+                if key.eq_ignore_ascii_case("set-cookie") {
+                    add_active_cookie(val.clone());
+                } else {
+                    ACTIVE_RESPONSE.with(|cell| {
+                        cell.borrow_mut().headers.insert(key, val.clone());
+                    });
+                }
+                Ok(PhpValue::string(val))
+            } else if let Some(first) = args.first() {
+                let key = first.to_php_string();
+                ACTIVE_RESPONSE.with(|cell| {
+                    let b = cell.borrow();
+                    for (k, v) in &b.headers {
+                        if k.eq_ignore_ascii_case(&key) {
+                            return Ok(PhpValue::string(v.clone()));
+                        }
+                    }
+                    if key.eq_ignore_ascii_case("set-cookie") {
+                        if let Some(c) = b.cookies.first() {
+                            return Ok(PhpValue::string(c.clone()));
+                        }
+                    }
+                    Ok(PhpValue::Null)
+                })
+            } else {
+                Ok(PhpValue::Null)
+            }
+        }
+        "withHeaders" => {
+            if let Some(first) = args.first() {
+                let map = extract_dict_map(first);
+                ACTIVE_RESPONSE.with(|cell| {
+                    let mut b = cell.borrow_mut();
+                    for (k, v) in map {
+                        if k.eq_ignore_ascii_case("set-cookie") {
+                            b.cookies.push(v.to_php_string());
+                        } else {
+                            b.headers.insert(k, v.to_php_string());
+                        }
+                    }
+                });
+            }
+            ACTIVE_RESPONSE.with(|cell| {
+                let b = cell.borrow();
+                let mut map = IndexMap::new();
+                for (k, v) in &b.headers {
+                    map.insert(k.clone(), PhpValue::string(v.clone()));
+                }
+                Ok(PhpValue::dict_from_map(map))
+            })
+        }
+        "getStatusCode" => {
+            ACTIVE_RESPONSE.with(|cell| Ok(PhpValue::Int(cell.borrow().status as i32)))
+        }
+        "getContent" => {
+            ACTIVE_RESPONSE.with(|cell| Ok(PhpValue::string(cell.borrow().content.as_deref().unwrap_or(""))))
+        }
+        "setContent" => {
+            let s = args.get(0).map(|v| v.to_php_string()).unwrap_or_default();
+            ACTIVE_RESPONSE.with(|cell| cell.borrow_mut().content = Some(s.clone()));
+            Ok(PhpValue::string(s))
+        }
+        "getHeaders" | "headers" => {
+            ACTIVE_RESPONSE.with(|cell| {
+                let b = cell.borrow();
+                let mut map = IndexMap::new();
+                for (k, v) in &b.headers {
+                    map.insert(k.clone(), PhpValue::string(v.clone()));
+                }
+                Ok(PhpValue::dict_from_map(map))
+            })
+        }
+        "clear" => {
+            clear_response_context();
+            Ok(PhpValue::Null)
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Response".to_string(),
             method: method.to_string(),
         }),
     }
@@ -6541,6 +7183,110 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "gzencode" => dispatch_compress("gzip", args),
         "gzdecode" => dispatch_compress("gunzip", args),
         "uniqid" => crate::vm::uniq::dispatch_uniq("uniqid", args),
+        "setcookie" | "setrawcookie" => {
+            let name = get_arg_str(args, 0, method)?;
+            let raw_val = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
+            let val = if method == "setrawcookie" {
+                raw_val
+            } else {
+                urlencoding::encode(&raw_val).into_owned().replace("%20", "+")
+            };
+            if !name.is_empty() {
+                let cookie_str = format_cookie_from_args(&name, &val, &args[2..]);
+                add_active_cookie(cookie_str);
+                COOKIE_DATA.with(|c| {
+                    c.borrow_mut().insert(name, PhpValue::string(val));
+                });
+            }
+            Ok(PhpValue::Bool(true))
+        }
+        "header" => {
+            let header_str = get_arg_str(args, 0, "header")?;
+            let replace = args.get(1).map(|v| v.is_truthy()).unwrap_or(true);
+            let response_code = args.get(2).and_then(|v| v.to_i64()).unwrap_or(0);
+
+            if response_code > 0 {
+                ACTIVE_RESPONSE.with(|cell| {
+                    cell.borrow_mut().status = response_code as u16;
+                });
+            }
+
+            let trimmed = header_str.trim();
+            if trimmed.to_ascii_uppercase().starts_with("HTTP/") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(code) = parts[1].parse::<u16>() {
+                        ACTIVE_RESPONSE.with(|cell| {
+                            cell.borrow_mut().status = code;
+                        });
+                    }
+                }
+            } else if let Some((k, v)) = trimmed.split_once(':') {
+                let key = k.trim().to_string();
+                let val = v.trim().to_string();
+                if key.eq_ignore_ascii_case("set-cookie") {
+                    add_active_cookie(val);
+                } else {
+                    ACTIVE_RESPONSE.with(|cell| {
+                        let mut b = cell.borrow_mut();
+                        if replace || !b.headers.contains_key(&key) {
+                            b.headers.insert(key, val);
+                        }
+                    });
+                }
+            }
+            Ok(PhpValue::Null)
+        }
+        "header_remove" => {
+            let name_opt = args.first().map(|v| v.to_php_string());
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                if let Some(name) = name_opt {
+                    if !name.is_empty() {
+                        if name.eq_ignore_ascii_case("set-cookie") {
+                            b.cookies.clear();
+                        }
+                        b.headers.retain(|k, _| !k.eq_ignore_ascii_case(&name));
+                    } else {
+                        b.headers.clear();
+                        b.cookies.clear();
+                    }
+                } else {
+                    b.headers.clear();
+                    b.cookies.clear();
+                }
+            });
+            Ok(PhpValue::Null)
+        }
+        "headers_sent" => {
+            Ok(PhpValue::Bool(false))
+        }
+        "headers_list" => {
+            ACTIVE_RESPONSE.with(|cell| {
+                let b = cell.borrow();
+                let mut list = Vec::new();
+                for (k, v) in &b.headers {
+                    list.push(PhpValue::string(format!("{}: {}", k, v)));
+                }
+                for c in &b.cookies {
+                    list.push(PhpValue::string(format!("Set-Cookie: {}", c)));
+                }
+                Ok(PhpValue::list(list))
+            })
+        }
+        "http_response_code" => {
+            ACTIVE_RESPONSE.with(|cell| {
+                let mut b = cell.borrow_mut();
+                if let Some(code_val) = args.first().and_then(|v| v.to_i64()) {
+                    if code_val > 0 {
+                        let old = b.status;
+                        b.status = code_val as u16;
+                        return Ok(PhpValue::Int(old as i32));
+                    }
+                }
+                Ok(PhpValue::Int(b.status as i32))
+            })
+        }
         _ => Err(RuntimeErrorKind::UndefinedFunction {
             name: method.to_string(),
         }),

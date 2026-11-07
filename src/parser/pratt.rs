@@ -1414,6 +1414,23 @@ impl<'s> CombinatorStream<'s> {
                     let callee_name = raw_name.strip_prefix('\\').unwrap_or(raw_name);
                     let callee_span = callee_ident.span;
 
+                    if matches!(
+                        callee_name,
+                        "require"
+                            | "require_once"
+                            | "include"
+                            | "include_once"
+                            | "spl_autoload_register"
+                            | "spl_autoload_unregister"
+                    ) {
+                        return Err(ParseError::new(
+                            ParseErrorKind::DynamicIncludeForbidden {
+                                construct: callee_name.to_string(),
+                            },
+                            callee_span,
+                        ));
+                    }
+
                     if callee_name.eq_ignore_ascii_case("gettype") || callee_name == "get_debug_type" {
                         return Ok(Expr::static_call("Debug", "type", args, callee_span, span));
                     }
@@ -1442,6 +1459,7 @@ impl<'s> CombinatorStream<'s> {
                         // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
                         let method = match callee_name {
                             "println" => "print",
+                            "os_env" => "osEnv",
                             "register_shutdown_function" => "registerShutdownFunction",
                             "set_error_handler" => "setErrorHandler",
                             "restore_error_handler" => "restoreErrorHandler",

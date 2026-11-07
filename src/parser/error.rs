@@ -102,6 +102,11 @@ pub enum ParseErrorKind {
         reason: String,
     },
 
+    #[error("Compile Error: Dynamic '{construct}' is not supported in RHP. Use static 'import' or 'use' with literal paths or namespaces. Dynamic file inclusion violates compile-time type safety and standalone binary compilation.")]
+    DynamicIncludeForbidden {
+        construct: String,
+    },
+
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 }

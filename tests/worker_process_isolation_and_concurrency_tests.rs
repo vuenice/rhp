@@ -154,14 +154,13 @@ fn test_copy_on_write_state_isolation_static_properties() {
 }
 
 #[test]
-fn test_superglobals_injection_and_request_isolation() {
+fn test_request_facade_injection_and_isolation() {
     let parent_code = r#"
         class RequestInspector {
             public static function handle(): string {
-                global $_GET, $_POST, $_SERVER;
-                $user = $_GET["user"];
-                $action = $_POST["action"];
-                $method = $_SERVER["REQUEST_METHOD"];
+                $user = Request::get("user");
+                $action = Request::get("action");
+                $method = Request::server("REQUEST_METHOD");
                 return $method . " -> " . $user . " performs " . $action;
             }
         }
@@ -171,7 +170,7 @@ fn test_superglobals_injection_and_request_isolation() {
     let pool = state.spawn_worker_threads(2).expect("Pool spawn");
 
     let req = WorkerRequest::new("return RequestInspector::handle();")
-        .with_id("req_superglobals")
+        .with_id("req_facade")
         .with_get("user", "alice")
         .with_post("action", "checkout")
         .with_server("REQUEST_METHOD", "POST")
@@ -185,13 +184,8 @@ fn test_superglobals_injection_and_request_isolation() {
     );
 
     // Next request with different params is isolated
-    let req2 = WorkerRequest::new(
-        r#"
-        global $_GET;
-        return $_GET["user"];
-        "#,
-    )
-    .with_get("user", "bob");
+    let req2 = WorkerRequest::new("return Request::get('user');")
+        .with_get("user", "bob");
 
     let resp2 = pool.execute(req2);
     assert_eq!(resp2.status, WorkerResponseStatus::Success);
@@ -344,6 +338,8 @@ fn test_ipc_binary_serialization_round_trip() {
         arena_drop: None,
         trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_string()),
         span_id: Some("00f067aa0ba902b7".to_string()),
+        status_code: 201,
+        headers: vec![("X-Inertia".to_string(), "true".to_string())],
     };
 
     let serialized = serialize_response(&sample_resp);
@@ -358,6 +354,8 @@ fn test_ipc_binary_serialization_round_trip() {
     assert_eq!(deserialized.worker_id, 3);
     assert_eq!(deserialized.trace_id(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
     assert_eq!(deserialized.span_id(), Some("00f067aa0ba902b7"));
+    assert_eq!(deserialized.status_code(), 201);
+    assert_eq!(deserialized.header("X-Inertia"), Some("true"));
 
     // Verify complex rehydrated value
     let php_val = deserialized.to_php_value();

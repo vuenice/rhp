@@ -70,6 +70,21 @@ impl<'s> CombinatorStream<'s> {
             }
         }
 
+        // 3b. Reject legacy dynamic include / require constructs
+        if let Some(spanned) = self.peek() {
+            if let Token::Ident(name) = spanned.token {
+                if matches!(name, "require" | "require_once" | "include" | "include_once") {
+                    let err_span = spanned.span;
+                    return Err(ParseError::new(
+                        ParseErrorKind::DynamicIncludeForbidden {
+                            construct: name.to_string(),
+                        },
+                        err_span,
+                    ));
+                }
+            }
+        }
+
         // 4. Strongly-typed variable declaration: only prefix type syntax `int $x = 10;` is supported.
         // Colon syntax `$x: int = 10;` is explicitly rejected.
         if let Some(tok) = self.peek() {

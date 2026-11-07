@@ -1,9 +1,9 @@
 ---
 title: "Deprecated PHP Features"
-description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting, Named Arguments, var_export), architectural rationale, modern RHP replacements, and migration guide."
+description: "Exhaustive guide to deprecated and unsupported PHP features (Reflection, Output Buffering, cURL, Serialization, Directives, list(), die(), error_reporting, Named Arguments, var_export, dynamic include/require), architectural rationale, modern RHP replacements, and migration guide."
 section: "Reference"
 order: 5
-keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "named arguments", "named parameters", "skipped arguments", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
+keywords: ["unsupported", "unsupported php", "deprecated php", "deprecated php features", "depriciated php features", "include", "require", "include_once", "require_once", "spl_autoload_register", "dynamic imports", "static imports", "psr-4 autoload", "named arguments", "named parameters", "skipped arguments", "var_export", "var_dump", "__set_state", "debug::format", "debug::dump", "bin::encode", "json::encode", "error_reporting", "error reporting", "set_error_handler", "@ error suppression", "reflection", "output buffering", "curl", "serialization", "php to rhp migration"]
 ---
 
 # Deprecated PHP Features
@@ -1206,6 +1206,110 @@ dict $loadedJson = Json::decode(File::read('bootstrap/cache/config.json'));
 
 ---
 
+## 12. Dynamic File Inclusion & Runtime Autoloading (`include`, `require`, `include_once`, `require_once`, `spl_autoload_register`)
+
+**Not supported:** `include`, `require`, `include_once`, `require_once`, `include $path`, `require $file`, `spl_autoload_register()`, `spl_autoload_unregister()`, `__autoload()`, and runtime evaluation of source code files.
+
+### What Was Bad About It in PHP
+
+- **Type Checking Breakdown:** `require $path` pulls in code the compiler cannot inspect during compilation. When a path is dynamically resolved from a variable or expression, the compiler cannot know which classes, interfaces, traits, functions, or types will exist after execution. That undermines mandatory static typing, symbol resolution, and whole-program compile-time verification.
+- **Incompatible with Single Compiled Binary Distribution (`rhp run build`):** A single compiled native binary must know the complete program up front to build the closed-world dependency graph, devirtualize method tables, perform dead-code elimination (tree-shaking), and link machine code. Runtime-loaded source files force an engine to bundle an entire parser, AST builder, compiler, or VM interpreter and dynamic file loader inside every production binary.
+- **Scope Injection & Untyped Semantics:** In PHP, `include` executes code directly in the caller's variable scope, leaking variables (`extract($data)`) or overwriting local state. Furthermore, an include statement evaluates to an untyped return value (or arbitrary scalar). Clean lexical scoping and deterministic type safety cannot be maintained in a statically typed language when external scripts can dynamically pollute stack frames.
+- **Runtime I/O & Concurrency Bottlenecks:** PHP's `spl_autoload_register()` defers class resolution until an uninstantiated symbol is first referenced at runtime. Every class access triggers filesystem stat calls (`file_exists`, `is_file`) and dynamic `require_once` loops during request handling, penalizing latency and creating concurrency contention in persistent workers.
+
+---
+
+### What Replaces It in RHP
+
+1. **Static Imports Only (`use` / `import`):**
+   Imports are strictly declarative and resolved at compile time using literal paths or fully-qualified namespace symbols:
+   ```php
+   use App\Services\OrderService;
+   use App\Models\User;
+   import "./Config.rhp";
+   import "./Cache.rs" as NativeCache;
+   ```
+   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view . '.rhp';`) trigger fatal compile-time syntax errors (`RHP0120`).
+2. **Build-Time Class Map & Implicit Prelude:**
+   Package and dependency autoloading is moved entirely to build/install time. `vendor/autoload.rhp` is generated ahead of time by `rhp add` / `rhp install` / `rhpm` as a static class map and package manifest, not executed dynamically at startup. The compiler reads the PSR-4 namespace-to-directory mapping declared in `rhp.toml` / `composer.json`, resolves all imports, and builds the complete module dependency graph. The autoloader functions as an implicit prelude prepended to the compilation root. There is **no `spl_autoload_register()`**, zero runtime filesystem probing, and zero lazy class loading in production.
+3. **Deterministic Go/Rust-Style Module Initialization Semantics:**
+   Legacy PHP relied on `require_once` and `include_once` to guard against duplicate symbol declarations. In RHP, module execution follows Go/Rust semantics: each module initializes **exactly once**, in topological dependency order, inside the parent process during boot before child workers are forked. Top-level statements in an imported file execute once during master initialization; worker processes inherit this initialized immutable state via Copy-on-Write (CoW).
+4. **Incremental Dev Mode Hot Reloading:**
+   In development (`rhp run dev`), the server hot-reloads changed files incrementally without sacrificing static type safety. When a file changes, the file-watcher recompiles only the modified module and incrementally re-checks it against the pre-computed static dependency graph. This provides sub-millisecond dev turnaround while preserving strict compile-time type verification.
+
+---
+
+### Which Code to Change: Before & After
+
+#### Example A: Dynamic Configuration Loading
+
+**Before (Legacy PHP with Dynamic `require`):**
+```php
+// In PHP: Runtime file loading with dynamic string path
+function loadConfig(string $environment): array {
+    $path = __DIR__ . '/config/' . $environment . '.php';
+    if (!file_exists($path)) {
+        throw new InvalidArgumentException("Missing config: {$path}");
+    }
+    return require $path;
+}
+```
+
+**After (Modern RHP with Typed Caching / Static Imports):**
+```php
+// In RHP: Static structured binary/JSON loading with explicit typing
+function loadConfig(string $environment): dict {
+    string $path = "config/{$environment}.bin";
+    if (!File::exists($path)) {
+        throw new InvalidArgumentException("Missing config: {$path}");
+    }
+    return Bin::decode(File::read($path));
+}
+```
+
+#### Example B: Template Rendering & Scope Injection
+
+**Before (Legacy PHP with Scope-Injecting `include`):**
+```php
+// In PHP: Procedural include executing in caller scope with output buffering
+function renderView(string $viewPath, array $data): string {
+    extract($data);
+    ob_start();
+    include $viewPath;
+    return ob_get_clean();
+}
+```
+
+**After (Modern RHP with Typed Views & Scoped Captures):**
+```php
+// In RHP: Scoped capture or dedicated typed template function
+use App\Views\UserDashboardView;
+
+function renderView(User $user, list $orders): string {
+    return UserDashboardView::render($user, $orders);
+}
+```
+
+#### Example C: Package & Class Autoloading
+
+**Before (Legacy PHP with Runtime Autoloader):**
+```php
+// In PHP: Runtime autoloader registration and dynamic require_once
+require_once __DIR__ . '/vendor/autoload.php';
+
+$client = new GuzzleHttp\Client();
+```
+
+**After (Modern RHP with Build-Time Module Resolution):**
+```php
+// In RHP: Zero runtime require_once; symbols resolved at compile time
+use GuzzleHttp\Client;
+
+$client = new Client();
+```
+
+---
+
 ## Comprehensive Feature Matrix
 
 | Legacy PHP Feature | Status in RHP | Primary Architectural Reason | Recommended RHP Replacement | Key Win Over PHP |
@@ -1222,6 +1326,7 @@ dict $loadedJson = Json::decode(File::read('bootstrap/cache/config.json'));
 | **Error Reporting Configuration** (`error_reporting()`, `set_error_handler()`, `@`) | ❌ **Rejected / Deprecated** | Process-global mutable error bitmask causes race conditions in concurrent workers; masks silent bugs | Compile-time checks, `rhp.toml` logging, structured `Log` facade, `try-catch` | Thread-safe; zero silent production bugs; native OpenTelemetry tracing integration |
 | **Named Arguments** (`func(param: $val)`) | ❌ **Rejected** | Couples call sites to internal variable names; breaks refactoring and interface variance; runtime dictionary binding tax | Positional arguments with skipped optional arguments via extra comma (`func($a, , $c)`), typed `dict $options` | High-performance positional register calling; safe parameter renaming; clean skipped-argument syntax |
 | **Code Export & Caching** (`var_export()`, `__set_state()`) | ❌ **Rejected** | Generating executable source code for caching is an anti-pattern in compiled binaries; silent failure on closures/cycles | `Debug::dump/dd/format` for inspection; `Json`/`Bin::encode/decode` for caching | Zero `__set_state` boilerplate; $10\times$ faster binary cache loading; fail-fast serialization |
+| **Dynamic Include & Runtime Autoloading** (`include`, `require`, `*_once`, `spl_autoload_register`) | ❌ **Rejected** | Runtime file loading undermines compile-time types; prevents AOT single-binary distribution (`rhp run build`); leaks scope | Static `import`/`use` with literal paths/namespaces, build-time PSR-4 module graph, Go/Rust module init | Predictable whole-program typing; self-contained AOT native binaries; zero runtime autoloading I/O |
 
 ---
 
@@ -1258,5 +1363,6 @@ rhp migrate ./app --write
 - **Complex Control-Flow `die()` Statements:** Usages of `... or die(...)` guards or expressions where `die()` return values are conditionally evaluated are flagged for refactoring into typed exceptions or explicit `abort()` handlers.
 - **Custom Error Handlers (`set_error_handler`):** Flags custom procedural `set_error_handler()` and `restore_error_handler()` calls to be refactored into centralized application error middleware or `App::onError()`.
 - **File-Based Code Generation / Config Caching with `var_export`:** Code patterns that write `var_export` output to `.php` files for dynamic `require`/`include` are flagged to be migrated to `Bin::encode()` / `Bin::decode()` or `Json::encode()` / `Json::decode()`.
+- **Dynamic File Inclusions (`require`, `include`, `require_once`, `include_once`):** Flagged as fatal errors (`RHP0120`) to be migrated to static `import` or `use` statements with literal paths or namespaces, with runtime package loading converted to build-time PSR-4 manifests.
 
 

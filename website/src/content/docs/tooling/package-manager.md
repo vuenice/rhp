@@ -102,20 +102,18 @@ rhp install --frozen
 
 ---
 
-## PSR-4 Autoloading Integration
+## Build-Time PSR-4 Class Map & Autoloading
 
-Whenever dependencies are installed, added, or removed, RHP generates standard PHP autoload files in `vendor/`:
-- `vendor/autoload.rhp`: Main entry point class autoloader.
+Whenever dependencies are installed, added, or removed, RHP generates static autoload manifests in `vendor/`:
+- `vendor/autoload.rhp`: Build-time class map and package prelude.
 - `vendor/rhp/installed.json`: Package metadata and installation manifests.
 - `vendor/rhp/autoload_psr4.rhp`: PSR-4 namespace mapping table.
 - `vendor/rhp/autoload_files.rhp`: Static helper files autoloader.
 
-To consume installed packages in any RHP application or script:
+In RHP, there is **no `require_once` and no runtime `spl_autoload_register`**. The compiler reads the PSR-4 namespace mapping at compile time, links `vendor/` into the static module graph, and initializes packages once during boot. You simply import installed package classes directly:
 
 ```php
 <?php
-require_once __DIR__ . '/vendor/autoload.rhp';
-
 use Symfony\Component\VarDumper\VarDumper;
 
 VarDumper::dump(['status' => 'success', 'engine' => 'rhp']);

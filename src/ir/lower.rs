@@ -1612,8 +1612,8 @@ impl<'a> IrLowerer<'a> {
                             }
                             indices.reverse();
                             let mut curr = (**curr_expr).clone();
-                            for (i, idx) in indices.into_iter().enumerate() {
-                                let is_nullsafe = i > 0;
+                            for (_i, idx) in indices.into_iter().enumerate() {
+                                let is_nullsafe = true;
                                 let span = curr.span.merge(idx.span);
                                 curr = Expr::new(
                                     ExprKind::MethodCall {
