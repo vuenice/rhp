@@ -131,11 +131,14 @@ impl RustCacheStore {
         if let Ok(mut guard) = self.items.write() {
             let entry = guard.entry(key.to_string()).or_insert((FrozenValue::Int(0), None));
             let new_val = match &entry.0 {
-                FrozenValue::Int(n) => (*n as i64) + amount,
-                FrozenValue::RustInt { value, .. } => *value as i64 + amount,
+                FrozenValue::Int(n) => *n + amount,
+                FrozenValue::I8(n) => *n as i64 + amount,
+                FrozenValue::I32(n) => *n as i64 + amount,
+                FrozenValue::U64(n) => i64::try_from(*n).unwrap_or(i64::MAX).saturating_add(amount),
+                FrozenValue::I128(n) => i64::try_from(*n).unwrap_or(i64::MAX).saturating_add(amount),
                 _ => amount,
             };
-            entry.0 = FrozenValue::Int(new_val as i32);
+            entry.0 = FrozenValue::Int(new_val);
             new_val
         } else {
             amount
@@ -1030,7 +1033,10 @@ fn execute_in_process_cache_or_log(
                 let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
                 let ttl = args.get(2).and_then(|v| match v {
                     PhpValue::Int(n) if *n > 0 => Some(*n as u64),
-                    PhpValue::RustInt { value, .. } if *value > 0 => Some(*value as u64),
+                    PhpValue::I8(n) if *n > 0 => Some(*n as u64),
+                    PhpValue::I32(n) if *n > 0 => Some(*n as u64),
+                    PhpValue::U64(n) if *n > 0 => Some(*n),
+                    PhpValue::I128(n) if *n > 0 => u64::try_from(*n).ok(),
                     _ => None,
                 });
                 return Ok(PhpValue::Bool(cache.set(&key, &val, ttl)));
@@ -1050,19 +1056,19 @@ fn execute_in_process_cache_or_log(
                 let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                 let amt = args.get(1).and_then(|v| match v {
                     PhpValue::Int(n) => Some(*n as i64),
-                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                    ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0)),
                     _ => None,
                 }).unwrap_or(1);
-                return Ok(PhpValue::Int(cache.increment(&key, amt) as i32));
+                return Ok(PhpValue::Int(cache.increment(&key, amt) as i64));
             }
             "decrement" => {
                 let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                 let amt = args.get(1).and_then(|v| match v {
                     PhpValue::Int(n) => Some(*n as i64),
-                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                    ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0)),
                     _ => None,
                 }).unwrap_or(1);
-                return Ok(PhpValue::Int(cache.decrement(&key, amt) as i32));
+                return Ok(PhpValue::Int(cache.decrement(&key, amt) as i64));
             }
             "add" => {
                 let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
@@ -1086,7 +1092,7 @@ fn execute_in_process_cache_or_log(
                 return Ok(PhpValue::list(keys));
             }
             "count" => {
-                return Ok(PhpValue::Int(cache.count() as i32));
+                return Ok(PhpValue::Int(cache.count() as i64));
             }
             _ => {}
         }
@@ -1118,7 +1124,7 @@ fn execute_in_process_cache_or_log(
                         d.insert("message".to_string(), PhpValue::string(e.message));
                         d.insert("context".to_string(), e.context.map(|c| c.to_php_value()).unwrap_or(PhpValue::Null));
                         d.insert("channel".to_string(), PhpValue::string(e.channel));
-                        d.insert("timestamp".to_string(), PhpValue::Int(e.timestamp_ms as i32));
+                        d.insert("timestamp".to_string(), PhpValue::Int(e.timestamp_ms as i64));
                         PhpValue::dict(d)
                     })
                     .collect();

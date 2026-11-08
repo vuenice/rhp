@@ -313,8 +313,10 @@ fn is_scalar_type(ty: &RhpType) -> bool {
             | RhpType::String
             | RhpType::Float
             | RhpType::Bool
-            | RhpType::RustInt(_)
-            | RhpType::RustFloat(_)
+            | RhpType::I8
+            | RhpType::I32
+            | RhpType::U64
+            | RhpType::I128
     )
 }
 
@@ -347,17 +349,17 @@ fn parse_scalar_param(
     target_type: &RhpType,
 ) -> Result<PhpValue, DispatchError> {
     match target_type {
-        RhpType::Int | RhpType::RustInt(_) => {
+        RhpType::Int | RhpType::I8 | RhpType::I32 | RhpType::U64 | RhpType::I128 => {
             val_str
                 .parse::<i64>()
-                .map(|n| PhpValue::Int(n as i32))
+                .map(|n| PhpValue::Int(n as i64))
                 .map_err(|_| DispatchError::ValidationError {
                     param_name: param_name.to_string(),
                     expected: "integer".to_string(),
                     actual: val_str.to_string(),
                 })
         }
-        RhpType::Float | RhpType::RustFloat(_) => {
+        RhpType::Float => {
             val_str
                 .parse::<f64>()
                 .map(|f| PhpValue::Float(f as f32))

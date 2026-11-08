@@ -123,9 +123,13 @@ impl Decimal {
     pub fn from_php_value(val: &crate::vm::value::PhpValue) -> Option<Self> {
         match val {
             crate::vm::value::PhpValue::Float(f) => Self::from_f32(*f),
-            crate::vm::value::PhpValue::RustFloat { value, .. } => Self::from_f64(*value),
-            crate::vm::value::PhpValue::Int(n) => Some(Self::from_i64(*n as i64)),
-            crate::vm::value::PhpValue::RustInt { value, .. } => Self::from_str_exact(&value.to_string()),
+            crate::vm::value::PhpValue::Float64(f) => Self::from_f64(*f),
+            crate::vm::value::PhpValue::Decimal(d) => Some((**d).clone()),
+            crate::vm::value::PhpValue::Int(n) => Some(Self::from_i64(*n)),
+            crate::vm::value::PhpValue::I8(n) => Some(Self::from_i64(*n as i64)),
+            crate::vm::value::PhpValue::I32(n) => Some(Self::from_i64(*n as i64)),
+            crate::vm::value::PhpValue::U64(n) => Self::from_str_exact(&n.to_string()),
+            crate::vm::value::PhpValue::I128(n) => Self::from_str_exact(&n.to_string()),
             crate::vm::value::PhpValue::String(s) => Self::from_str_exact(s.as_str()),
             _ => None,
         }
@@ -180,6 +184,17 @@ impl Decimal {
         if self.is_zero() {
             self.negative = false;
         }
+    }
+
+    /// Significant digits, ignoring a lone integral zero.
+    pub fn digit_count(&self) -> usize {
+        let integral = if self.integral.len() == 1 && self.integral[0] == 0 {
+            0
+        } else {
+            self.integral.len()
+        };
+        let fractional = self.fractional.len();
+        (integral + fractional).max(1)
     }
 
     /// Converts to standard `f64`.

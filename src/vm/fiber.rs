@@ -239,27 +239,27 @@ impl FiberStats {
     /// Convert statistics to a script-land subtyped `dict` (`Arr::dict`).
     pub fn to_php_value(&self) -> PhpValue {
         let mut map = IndexMap::new();
-        map.insert("id".to_string(), PhpValue::Int(self.fiber_id.0 as i32));
+        map.insert("id".to_string(), PhpValue::Int(self.fiber_id.0 as i64));
         map.insert("name".to_string(), PhpValue::string(self.name.clone()));
-        map.insert("yield_count".to_string(), PhpValue::Int(self.yield_count as i32));
-        map.insert("io_count".to_string(), PhpValue::Int(self.io_count as i32));
+        map.insert("yield_count".to_string(), PhpValue::Int(self.yield_count as i64));
+        map.insert("io_count".to_string(), PhpValue::Int(self.io_count as i64));
         map.insert(
             "total_duration_us".to_string(),
-            PhpValue::Int(self.total_duration.as_micros() as i32),
+            PhpValue::Int(self.total_duration.as_micros() as i64),
         );
         map.insert(
             "cpu_duration_us".to_string(),
-            PhpValue::Int(self.cpu_duration.as_micros() as i32),
+            PhpValue::Int(self.cpu_duration.as_micros() as i64),
         );
         map.insert(
             "io_wait_duration_us".to_string(),
-            PhpValue::Int(self.io_wait_duration.as_micros() as i32),
+            PhpValue::Int(self.io_wait_duration.as_micros() as i64),
         );
         map.insert("is_completed".to_string(), PhpValue::Bool(self.is_completed));
 
         let mut breakdown_map = IndexMap::new();
         for (k, v) in &self.io_breakdown {
-            breakdown_map.insert(k.clone(), PhpValue::Int(*v as i32));
+            breakdown_map.insert(k.clone(), PhpValue::Int(*v as i64));
         }
         map.insert("io_breakdown".to_string(), PhpValue::dict_from_map(breakdown_map));
 

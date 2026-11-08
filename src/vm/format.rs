@@ -417,8 +417,8 @@ pub fn php_value_to_format_string(val: &PhpValue) -> String {
                 f.to_string()
             }
         }
-        PhpValue::RustInt { value, .. } => value.to_string(),
-        PhpValue::RustFloat { value, .. } => value.to_string(),
+        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_string(),
+        ref value @ (PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
         PhpValue::String(s) => s.to_string(),
         _ => val.to_php_string(),
     }

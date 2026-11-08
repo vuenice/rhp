@@ -16,7 +16,7 @@ use crate::lexer::facade::{
     is_static_only, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
 };
 use crate::lexer::span::Span;
-use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
+use crate::type_system::types::{RhpType, TypeHierarchy};
 use crate::vm::arena::{RequestArena, RequestDropStats};
 use crate::vm::error::{RuntimeError, RuntimeErrorKind, StackTraceEntry};
 use crate::vm::exception::{
@@ -476,7 +476,7 @@ impl VM {
         obj.set_property("message", PhpValue::string(""));
         obj.set_property("code", PhpValue::Int(0));
         obj.set_property("file", PhpValue::string(&throwable.file));
-        obj.set_property("line", PhpValue::Int(throwable.line as i32));
+        obj.set_property("line", PhpValue::Int(throwable.line as i64));
         obj.throwable = Some(Box::new(throwable));
     }
 
@@ -498,12 +498,12 @@ impl VM {
             }
             if let Some(code_arg) = args.get(1) {
                 throwable.code = code_arg.to_i64().unwrap_or(0);
-                obj.set_property("code", PhpValue::Int(throwable.code as i32));
+                obj.set_property("code", PhpValue::Int(throwable.code as i64));
             }
             if let Some(sev_arg) = args.get(2) {
                 let sev = sev_arg.to_i64().unwrap_or(1) as i32;
                 throwable.severity = Some(sev);
-                obj.set_property("severity", PhpValue::Int(sev));
+                obj.set_property("severity", PhpValue::Int((sev) as i64));
             }
             if let Some(file_arg) = args.get(3) {
                 if !matches!(file_arg, PhpValue::Null) {
@@ -514,7 +514,7 @@ impl VM {
             if let Some(line_arg) = args.get(4) {
                 if !matches!(line_arg, PhpValue::Null) {
                     throwable.line = line_arg.to_i64().unwrap_or(0) as usize;
-                    obj.set_property("line", PhpValue::Int(throwable.line as i32));
+                    obj.set_property("line", PhpValue::Int(throwable.line as i64));
                 }
             }
             if let Some(prev_arg) = args.get(5) {
@@ -533,7 +533,7 @@ impl VM {
             }
             if let Some(code_arg) = args.get(1) {
                 throwable.code = code_arg.to_i64().unwrap_or(0);
-                obj.set_property("code", PhpValue::Int(throwable.code as i32));
+                obj.set_property("code", PhpValue::Int(throwable.code as i64));
             }
             if let Some(prev_arg) = args.get(2) {
                 if let PhpValue::Object(prev_rc) = prev_arg {
@@ -707,10 +707,10 @@ impl VM {
         if let Some(entry) = self.error_handlers.last().cloned() {
             if (entry.error_levels & level) != 0 {
                 let args = vec![
-                    PhpValue::Int(level),
+                    PhpValue::Int((level) as i64),
                     PhpValue::string(message),
                     PhpValue::string(&file),
-                    PhpValue::Int(line as i32),
+                    PhpValue::Int(line as i64),
                 ];
                 let res = self.invoke_callable_sync(&entry.callback, args, span)?;
                 if !matches!(res, PhpValue::Bool(false)) {
@@ -1284,7 +1284,7 @@ impl VM {
                     let backing_val = if let Some(ref chunk) = case.value_chunk {
                         self.eval_isolated_chunk(chunk)?
                     } else {
-                        PhpValue::Int(idx as i32)
+                        PhpValue::Int(idx as i64)
                     };
                     case_obj.set_property("value", backing_val);
                     case_obj.readonly_props.insert("value".to_string(), true);
@@ -1317,7 +1317,7 @@ impl VM {
             match op {
                 OpCode::LoadNull { dst } => regs[dst.index()] = PhpValue::Null,
                 OpCode::LoadBool { dst, value } => regs[dst.index()] = PhpValue::Bool(value),
-                OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value),
+                OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value as i64),
                 OpCode::LoadFloat { dst, bits } => regs[dst.index()] = PhpValue::Float(f32::from_bits(bits)),
                 OpCode::LoadConst { dst, const_id } => {
                     let c = chunk.get_constant(const_id).ok_or_else(|| {
@@ -1447,7 +1447,7 @@ impl VM {
                 }
 
                 OpCode::LoadInt { dst, value } => {
-                    self.registers[base_reg + dst.index()] = PhpValue::Int(value);
+                    self.registers[base_reg + dst.index()] = PhpValue::Int(value as i64);
                 }
 
                 OpCode::LoadFloat { dst, bits } => {
@@ -1504,30 +1504,14 @@ impl VM {
                 OpCode::IncDec { dst, src, is_inc } => {
                     let delta = if is_inc { 1 } else { -1 };
                     let current = &self.registers[base_reg + src.index()];
-                    let updated = match current {
-                        PhpValue::Int(n) => PhpValue::Int(n.wrapping_add(delta)),
-                        PhpValue::Float(f) => PhpValue::Float(*f + (delta as f32)),
-                        PhpValue::RustInt { kind, value } => PhpValue::RustInt {
-                            kind: *kind,
-                            value: value.wrapping_add(delta as i128),
-                        },
-                        PhpValue::RustFloat { kind, value } => PhpValue::RustFloat {
-                            kind: *kind,
-                            value: *value + (delta as f64),
-                        },
-                        PhpValue::Null => PhpValue::Int(if is_inc { 1 } else { 0 }),
-                        other => {
-                            let n = other.to_i32().unwrap_or(0);
-                            PhpValue::Int(n.wrapping_add(delta))
-                        }
-                    };
+                    let updated = self.exec_inc_dec(current, delta, span)?;
                     self.registers[base_reg + dst.index()] = updated;
                 }
 
                 OpCode::Cast { dst, kind, src } => {
                     let val = self.registers[base_reg + src.index()].clone();
                     let casted = match kind {
-                        CastType::Int => PhpValue::Int(val.to_i32().unwrap_or(0)),
+                        CastType::Int => PhpValue::Int(val.to_i64().unwrap_or(0)),
                         CastType::Float => PhpValue::Float(val.to_f32().unwrap_or(0.0)),
                         CastType::String => PhpValue::string(val.to_php_string()),
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
@@ -1584,38 +1568,25 @@ impl VM {
 
                     // Coerce `Int` into `Float` if the boundary explicitly expects `float`
                     if matches!(expected_ty, RhpType::Float) {
-                        if let PhpValue::Int(n) = actual_val {
-                            self.registers[base_reg + reg.index()] = PhpValue::Float(*n as f32);
+                        if actual_val.is_integer_value() {
+                            if let Some(decimal) = crate::vm::numeric::php_to_decimal(actual_val) {
+                                if let Ok(narrowed) = crate::vm::numeric::narrow_decimal(decimal) {
+                                    self.registers[base_reg + reg.index()] = narrowed;
+                                }
+                            }
+                        }
+                    } else if let Some(width) = match &expected_ty {
+                        RhpType::Int => Some("i64"),
+                        RhpType::I8 => Some("i8"),
+                        RhpType::I32 => Some("i32"),
+                        RhpType::U64 => Some("u64"),
+                        RhpType::I128 => Some("i128"),
+                        _ => None,
+                    } {
+                        if let Some(stored) = crate::vm::numeric::fits_stored_width(actual_val, width) {
+                            self.registers[base_reg + reg.index()] = stored;
                         }
                     }
-                }
-
-                OpCode::WrapRustInt { dst, src, kind } => {
-                    let raw = match src {
-                        Some(s) => self.registers[base_reg + s.index()]
-                            .to_i64()
-                            .unwrap_or(0) as i128,
-                        None => 0i128,
-                    };
-                    self.registers[base_reg + dst.index()] = PhpValue::RustInt {
-                        kind,
-                        value: clamp_rust_int(kind, raw),
-                    };
-                }
-
-                OpCode::WrapRustFloat { dst, src, kind } => {
-                    let raw = match src {
-                        Some(s) => self.registers[base_reg + s.index()]
-                            .to_f64()
-                            .unwrap_or(0.0),
-                        None => 0.0,
-                    };
-                    let val = match kind {
-                        RustFloatKind::F32 => (raw as f32) as f64,
-                        RustFloatKind::F64 => raw,
-                    };
-                    self.registers[base_reg + dst.index()] =
-                        PhpValue::RustFloat { kind, value: val };
                 }
 
                 // -----------------------------------------------------------------
@@ -1804,7 +1775,7 @@ impl VM {
                         PhpValue::HashMap(_) => {
                             target.ensure_hash_map_mut();
                             if let PhpValue::HashMap(map) = target {
-                                let next_key = PhpValue::Int(map.borrow().len() as i32);
+                                let next_key = PhpValue::Int(map.borrow().len() as i64);
                                 map.borrow_mut().insert(next_key, val);
                             }
                             true
@@ -1848,8 +1819,11 @@ impl VM {
                         let is_valid = match &mut self.registers[base_reg + array.index()] {
                             PhpValue::List(arr) => {
                                 let maybe_idx = match &k {
-                                    PhpValue::Int(i) => Some(*i as i64),
-                                    PhpValue::RustInt { value, .. } => Some(*value as i64),
+                                    PhpValue::Int(i) => Some(*i),
+                                    PhpValue::I8(i) => Some(*i as i64),
+                                    PhpValue::I32(i) => Some(*i as i64),
+                                    PhpValue::U64(i) => i64::try_from(*i).ok(),
+                                    PhpValue::I128(i) => i64::try_from(*i).ok(),
                                     PhpValue::Float(f) => Some(*f as i64),
                                     PhpValue::String(s) => s.trim().parse::<i64>().ok(),
                                     _ => None,
@@ -2073,7 +2047,7 @@ impl VM {
                                 let curr = *cursor;
                                 *cursor += 1;
                                 Ok(IterYield::Next {
-                                    key: Some(PhpValue::Int(curr as i32)),
+                                    key: Some(PhpValue::Int(curr as i64)),
                                     val,
                                 })
                             } else {
@@ -2104,7 +2078,7 @@ impl VM {
                                 let curr = *cursor;
                                 *cursor += 1;
                                 Ok(IterYield::Next {
-                                    key: Some(PhpValue::Int(curr as i32)),
+                                    key: Some(PhpValue::Int(curr as i64)),
                                     val,
                                 })
                             } else {
@@ -2358,8 +2332,8 @@ impl VM {
                         if clean_fn.eq_ignore_ascii_case("set_error_handler") {
                             let cb = staged.first().map(|a| a.value.clone()).unwrap_or(PhpValue::Null);
                             let levels = staged.get(1).and_then(|a| match &a.value {
-                                PhpValue::Int(i) => Some(*i),
-                                PhpValue::RustInt { value, .. } => Some(*value as i32),
+                                PhpValue::Int(i) => Some(*i as i32),
+                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                                 _ => None,
                             });
                             let prev = self.set_error_handler(cb, levels);
@@ -2381,8 +2355,8 @@ impl VM {
                         } else if clean_fn.eq_ignore_ascii_case("trigger_error") {
                             let msg = staged.first().map(|a| a.value.to_php_string()).unwrap_or_default();
                             let level = staged.get(1).and_then(|a| match &a.value {
-                                PhpValue::Int(i) => Some(*i),
-                                PhpValue::RustInt { value, .. } => Some(*value as i32),
+                                PhpValue::Int(i) => Some(*i as i32),
+                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                                 _ => None,
                             });
                             let res = self.trigger_error(&msg, level, span)?;
@@ -4665,7 +4639,7 @@ impl VM {
                 }
                 "resetArena" => {
                     let stats = self.arena.drop_request();
-                    return Ok(PhpValue::Int(stats.bytes_reclaimed as i32));
+                    return Ok(PhpValue::Int(stats.bytes_reclaimed as i64));
                 }
                 "assertThreadSafe" => {
                     if let Some(val) = args.first() {
@@ -4748,11 +4722,11 @@ impl VM {
                                 exit_code = 0;
                             }
                             PhpValue::Int(i) => exit_code = *i,
-                            PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                             _ => exit_code = 0,
                         }
                     }
-                    return Err(self.make_error(RuntimeErrorKind::Exit(exit_code), span));
+                    return Err(self.make_error(RuntimeErrorKind::Exit((exit_code) as i32), span));
                 }
                 "die" => {
                     if !self.output_buffer.is_empty() {
@@ -4772,12 +4746,12 @@ impl VM {
                                     exit_code = 0;
                                 }
                                 PhpValue::Int(i) => exit_code = *i,
-                                PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                                 _ => exit_code = 0,
                             }
                         }
-                        hook(exit_code);
-                        return Err(self.make_error(RuntimeErrorKind::Die(exit_code), span));
+                        hook((exit_code) as i32);
+                        return Err(self.make_error(RuntimeErrorKind::Die((exit_code) as i32), span));
                     }
                     return crate::vm::facade::execute_process_exit(args)
                         .map_err(|e| self.make_error(e, span));
@@ -4796,8 +4770,8 @@ impl VM {
                 "setErrorHandler" | "set_error_handler" => {
                     let callback = args.first().cloned().unwrap_or(PhpValue::Null);
                     let error_levels = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(i) => Some(*i),
-                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        PhpValue::Int(i) => Some(*i as i32),
+                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let prev = self.set_error_handler(callback, error_levels);
@@ -4819,8 +4793,8 @@ impl VM {
                 "triggerError" | "trigger_error" => {
                     let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let level = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(i) => Some(*i),
-                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        PhpValue::Int(i) => Some(*i as i32),
+                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let res = self.trigger_error(&msg, level, span)?;
@@ -4841,11 +4815,11 @@ impl VM {
                                 exit_code = 0;
                             }
                             PhpValue::Int(i) => exit_code = *i,
-                            PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                             _ => exit_code = 0,
                         }
                     }
-                    return Err(self.make_error(RuntimeErrorKind::Exit(exit_code), span));
+                    return Err(self.make_error(RuntimeErrorKind::Exit((exit_code) as i32), span));
                 }
                 "die" => {
                     if !self.output_buffer.is_empty() {
@@ -4865,12 +4839,12 @@ impl VM {
                                     exit_code = 0;
                                 }
                                 PhpValue::Int(i) => exit_code = *i,
-                                PhpValue::RustInt { value, .. } => exit_code = *value as i32,
+                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                                 _ => exit_code = 0,
                             }
                         }
-                        hook(exit_code);
-                        return Err(self.make_error(RuntimeErrorKind::Die(exit_code), span));
+                        hook((exit_code) as i32);
+                        return Err(self.make_error(RuntimeErrorKind::Die((exit_code) as i32), span));
                     }
                     return crate::vm::facade::execute_process_exit(args)
                         .map_err(|e| self.make_error(e, span));
@@ -4889,8 +4863,8 @@ impl VM {
                 "set_error_handler" | "setErrorHandler" => {
                     let callback = args.first().cloned().unwrap_or(PhpValue::Null);
                     let error_levels = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(i) => Some(*i),
-                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        PhpValue::Int(i) => Some(*i as i32),
+                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let prev = self.set_error_handler(callback, error_levels);
@@ -4912,8 +4886,8 @@ impl VM {
                 "trigger_error" | "triggerError" => {
                     let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let level = args.get(1).and_then(|v| match v {
-                        PhpValue::Int(i) => Some(*i),
-                        PhpValue::RustInt { value, .. } => Some(*value as i32),
+                        PhpValue::Int(i) => Some(*i as i32),
+                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let res = self.trigger_error(&msg, level, span)?;
@@ -4946,7 +4920,7 @@ impl VM {
                                 for (idx, item) in items.into_iter().enumerate() {
                                     mapped.push(self.invoke_closure_sync(
                                         c,
-                                        vec![item, PhpValue::Int(idx as i32)],
+                                        vec![item, PhpValue::Int(idx as i64)],
                                         span,
                                     )?);
                                 }
@@ -4977,7 +4951,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let keep = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if keep.is_truthy() {
@@ -5458,7 +5432,7 @@ impl VM {
                         let mut out = IndexMap::new();
                         for (k, v) in dict.borrow().iter() {
                             let orig_val = if let Ok(n) = k.parse::<i32>() {
-                                PhpValue::Int(n)
+                                PhpValue::Int((n) as i64)
                             } else {
                                 PhpValue::string(k.clone())
                             };
@@ -5632,7 +5606,7 @@ impl VM {
                         Ok(PhpValue::dict_from_map(rev))
                     }
                     "count" | "size" | "length" | "len" => {
-                        Ok(PhpValue::Int(dict.borrow().len() as i32))
+                        Ok(PhpValue::Int(dict.borrow().len() as i64))
                     }
                     "isEmpty" => Ok(PhpValue::Bool(dict.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!dict.borrow().is_empty())),
@@ -5775,7 +5749,7 @@ impl VM {
                         }
                         let mut out = IndexMap::new();
                         for (k, cnt) in counts {
-                            out.insert(k, PhpValue::Int(cnt));
+                            out.insert(k, PhpValue::Int((cnt) as i64));
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -5999,7 +5973,7 @@ impl VM {
                         for item in dict.borrow().values() {
                             if let Some(fl) = item.to_f64() {
                                 if item.to_i64().is_none()
-                                    || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. })
+                                    || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_))
                                 {
                                     is_float = true;
                                 }
@@ -6012,7 +5986,7 @@ impl VM {
                         if is_float {
                             Ok(PhpValue::Float(float_sum as f32))
                         } else {
-                            Ok(PhpValue::Int(int_sum as i32))
+                            Ok(PhpValue::Int(int_sum as i64))
                         }
                     }
                     "avg" | "average" => {
@@ -6111,7 +6085,7 @@ impl VM {
                         let removed = set.borrow_mut().remove(&val);
                         Ok(PhpValue::Bool(removed))
                     }
-                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(set.borrow().len() as i32)),
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(set.borrow().len() as i64)),
                     "isEmpty" => Ok(PhpValue::Bool(set.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!set.borrow().is_empty())),
                     "keys" => {
@@ -6320,7 +6294,7 @@ impl VM {
                         }
                         let mut out = IndexMap::new();
                         for (k, cnt) in counts {
-                            out.insert(k, PhpValue::Int(cnt));
+                            out.insert(k, PhpValue::Int((cnt) as i64));
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -6491,7 +6465,7 @@ impl VM {
                             .collect();
                         Ok(PhpValue::list(entries))
                     }
-                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(map.borrow().len() as i32)),
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(map.borrow().len() as i64)),
                     "isEmpty" => Ok(PhpValue::Bool(map.borrow().is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!map.borrow().is_empty())),
                     "map" => {
@@ -6672,7 +6646,7 @@ impl VM {
                         }
                         let mut out = IndexMap::new();
                         for (k, cnt) in counts {
-                            out.insert(k, PhpValue::Int(cnt));
+                            out.insert(k, PhpValue::Int((cnt) as i64));
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -6803,7 +6777,7 @@ impl VM {
                     }
                     "keys" => {
                         let keys: Vec<PhpValue> = (0..items.len())
-                            .map(|i| PhpValue::Int(i as i32))
+                            .map(|i| PhpValue::Int(i as i64))
                             .collect();
                         Ok(PhpValue::list(keys))
                     }
@@ -6813,7 +6787,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 out.push(self.invoke_closure_sync(
                                     cb,
-                                    vec![item, PhpValue::Int(idx as i32)],
+                                    vec![item, PhpValue::Int(idx as i64)],
                                     span,
                                 )?);
                             }
@@ -6828,7 +6802,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let keep = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if keep.is_truthy() {
@@ -6846,7 +6820,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let drop = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if !drop.is_truthy() {
@@ -6872,7 +6846,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if matched.is_truthy() {
@@ -6887,7 +6861,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if matched.is_truthy() {
@@ -6905,7 +6879,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if matched.is_truthy() {
@@ -6917,7 +6891,7 @@ impl VM {
                             Ok(items.into_iter().last().unwrap_or(PhpValue::Null))
                         }
                     }
-                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(items.len() as i32)),
+                    "count" | "size" | "length" | "len" => Ok(PhpValue::Int(items.len() as i64)),
                     "isEmpty" => Ok(PhpValue::Bool(items.is_empty())),
                     "isNotEmpty" => Ok(PhpValue::Bool(!items.is_empty())),
                     "all" | "toArray" | "values" => Ok(PhpValue::list(items)),
@@ -6926,7 +6900,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let matched = self.invoke_closure_sync(
                                     cb,
-                                    vec![item, PhpValue::Int(idx as i32)],
+                                    vec![item, PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if matched.is_truthy() {
@@ -7168,7 +7142,7 @@ impl VM {
                         let mut int_sum = 0i64;
                         for item in &items {
                             if let Some(fl) = item.to_f64() {
-                                if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::RustFloat { .. }) {
+                                if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) {
                                     is_float = true;
                                 }
                                 float_sum += fl;
@@ -7180,7 +7154,7 @@ impl VM {
                         if is_float {
                             Ok(PhpValue::Float(float_sum as f32))
                         } else {
-                            Ok(PhpValue::Int(int_sum as i32))
+                            Ok(PhpValue::Int(int_sum as i64))
                         }
                     }
                     "avg" | "average" => {
@@ -7314,7 +7288,7 @@ impl VM {
                             for (idx, item) in items.iter().enumerate() {
                                 self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                             }
@@ -7382,7 +7356,7 @@ impl VM {
                     "flip" | "array_flip" => {
                         let mut out = IndexMap::new();
                         for (idx, val) in items.into_iter().enumerate() {
-                            out.insert(val.to_php_string(), PhpValue::Int(idx as i32));
+                            out.insert(val.to_php_string(), PhpValue::Int(idx as i64));
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -7419,7 +7393,7 @@ impl VM {
                         }
                         let mut out = IndexMap::new();
                         for (k, cnt) in counts {
-                            out.insert(k, PhpValue::Int(cnt));
+                            out.insert(k, PhpValue::Int((cnt) as i64));
                         }
                         Ok(PhpValue::dict_from_map(out))
                     }
@@ -7443,13 +7417,13 @@ impl VM {
                         }
                         if num == 1 {
                             let idx = random_usize(items.len());
-                            Ok(PhpValue::Int(idx as i32))
+                            Ok(PhpValue::Int(idx as i64))
                         } else {
                             let mut indices: Vec<usize> = (0..items.len()).collect();
                             shuffle_slice(&mut indices);
                             indices.truncate(num);
                             indices.sort();
-                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::Int(i as i32)).collect();
+                            let picked: Vec<PhpValue> = indices.into_iter().map(|i| PhpValue::Int(i as i64)).collect();
                             Ok(PhpValue::list(picked))
                         }
                     }
@@ -7488,7 +7462,7 @@ impl VM {
                             for (idx, item) in items.into_iter().enumerate() {
                                 let res = self.invoke_closure_sync(
                                     cb,
-                                    vec![item.clone(), PhpValue::Int(idx as i32)],
+                                    vec![item.clone(), PhpValue::Int(idx as i64)],
                                     span,
                                 )?;
                                 if res.is_truthy() {
@@ -7543,24 +7517,41 @@ impl VM {
                 }
             }
 
-            // 2. Integer fluent methods
-            PhpValue::Int(value) => {
-                let val = *value;
-                let next_val = match method {
-                    "round" | "floor" | "ceil" | "ciel" => val,
-                    "add" => val.wrapping_add(args.first().and_then(|v| v.to_i32()).unwrap_or(0)),
-                    "subtract" | "sub" => val.wrapping_sub(args.first().and_then(|v| v.to_i32()).unwrap_or(0)),
-                    "multiply" | "mul" => val.wrapping_mul(args.first().and_then(|v| v.to_i32()).unwrap_or(1)),
-                    "divide" | "div" => {
-                        let rhs = args.first().and_then(|v| v.to_i32()).unwrap_or(0);
-                        if rhs == 0 {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        val / rhs
+            // 2. Integer fluent methods. The result is always i64.
+            value if value.is_integer_value() => {
+                let val = crate::vm::numeric::int_operand(value)
+                    .map_err(|fail| self.arith_error(fail, span))?;
+                let rhs_int = |default: i64| -> Result<i64, RuntimeError> {
+                    match args.first() {
+                        Some(v) => crate::vm::numeric::int_operand(v)
+                            .map_err(|fail| self.arith_error(fail, span)),
+                        None => Ok(default),
                     }
-                    "abs" => val.abs(),
+                };
+                let next_val = match method {
+                    "round" | "floor" | "ceil" | "ciel" => Ok(val),
+                    "add" => crate::vm::numeric::checked_int_add(val, rhs_int(0)?),
+                    "subtract" | "sub" => crate::vm::numeric::checked_int_op(
+                        BinaryOp::Sub,
+                        val,
+                        rhs_int(0)?,
+                    ),
+                    "multiply" | "mul" => crate::vm::numeric::checked_int_op(
+                        BinaryOp::Mul,
+                        val,
+                        rhs_int(1)?,
+                    ),
+                    "divide" | "div" => crate::vm::numeric::checked_int_op(
+                        BinaryOp::Div,
+                        val,
+                        rhs_int(0)?,
+                    ),
+                    "abs" => val.checked_abs().ok_or(crate::vm::numeric::ArithFail::Overflow),
                     "toInt" => return Ok(PhpValue::Int(val)),
-                    "toFloat" => return Ok(PhpValue::Float(val as f32)),
+                    "toFloat" => {
+                        return crate::vm::numeric::narrow_decimal(crate::vm::decimal::Decimal::from_i64(val))
+                            .map_err(|fail| self.arith_error(fail, span));
+                    }
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -7572,138 +7563,18 @@ impl VM {
                         ))
                     }
                 };
+                let next_val = next_val.map_err(|fail| self.arith_error(fail, span))?;
                 Ok(PhpValue::Int(next_val))
             }
 
-            // Native Rust Integer Wrapper fluent methods (`Int::i64()->random()->add()->subtract()`)
-            PhpValue::RustInt { kind, value } => {
-                let next_val = match method {
-                    "round" | "floor" | "ceil" | "ciel" => *value,
-                    "random" => {
-                        let bound = args.first().and_then(|v| v.to_i64()).unwrap_or(100).max(1) as i128;
-                        ((*value).wrapping_add(42)) % bound
-                    }
-                    "add" => value.wrapping_add(args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128),
-                    "subtract" | "sub" => value.wrapping_sub(args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128),
-                    "multiply" | "mul" => value.wrapping_mul(args.first().and_then(|v| v.to_i64()).unwrap_or(1) as i128),
-                    "divide" | "div" => {
-                        let rhs = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as i128;
-                        if rhs == 0 {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        value.wrapping_div(rhs)
-                    }
-                    "abs" => value.abs(),
-                    "toInt" => return Ok(PhpValue::Int(*value as i32)),
-                    "toFloat" => return Ok(PhpValue::Float(*value as f32)),
-                    "toString" => return Ok(PhpValue::string(value.to_string())),
-                    other => {
-                        return Err(self.make_error(
-                            RuntimeErrorKind::UndefinedMethod {
-                                class: kind.as_str().to_string(),
-                                method: other.to_string(),
-                            },
-                            span,
-                        ))
-                    }
-                };
-                Ok(PhpValue::RustInt {
-                    kind: *kind,
-                    value: clamp_rust_int(*kind, next_val),
-                })
-            }
-
-            // 3. Native Rust Float Wrapper fluent methods (`Float::f64(3.14159)->toDecimal(2)`)
-            PhpValue::RustFloat { kind, value } => {
-                let fk = *kind;
-                let val = *value;
-                let extract_f64 = |pv: &PhpValue| -> f64 {
-                    match pv {
-                        PhpValue::Float(f) => f.to_string().parse::<f64>().unwrap_or(*f as f64),
-                        PhpValue::RustFloat { value, .. } => *value,
-                        PhpValue::Int(n) => *n as f64,
-                        PhpValue::RustInt { value, .. } => *value as f64,
-                        PhpValue::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
-                        _ => pv.to_f64().unwrap_or(0.0),
-                    }
-                };
-                let next_val = match method {
-                    "round" => {
-                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(0).clamp(0, 15) as i32;
-                        let factor = 10_f64.powi(places);
-                        (val * factor).round() / factor
-                    }
-                    "toDecimal" => {
-                        let places = args.first().and_then(|v| v.to_i64()).unwrap_or(2).clamp(0, 15) as i32;
-                        let factor = 10_f64.powi(places);
-                        (val * factor).round() / factor
-                    }
-                    // Binary format operations (IEEE-754 64-bit float)
-                    "bAdd" => val + args.first().map(extract_f64).unwrap_or(0.0),
-                    "bSub" => val - args.first().map(extract_f64).unwrap_or(0.0),
-                    "bMul" => val * args.first().map(extract_f64).unwrap_or(0.0),
-                    "bDiv" => {
-                        let rhs = args.first().map(extract_f64).unwrap_or(0.0);
-                        if rhs == 0.0 {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        val / rhs
-                    }
-                    // Arbitrary-precision decimal math
-                    "add" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        dec_a.add(&dec_b).to_f64()
-                    }
-                    "subtract" | "sub" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        dec_a.sub(&dec_b).to_f64()
-                    }
-                    "multiply" | "mul" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
-                        dec_a.mul(&dec_b).to_f64()
-                    }
-                    "divide" | "div" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        if dec_b.is_zero() {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        dec_a.div(&dec_b, None).map_err(|_| self.make_error(RuntimeErrorKind::DivisionByZero, span))?.to_f64()
-                    }
-                    "floor" => val.floor(),
-                    "ceil" | "ciel" => val.ceil(),
-                    "toInt" => return Ok(PhpValue::Int(val as i32)),
-                    "toFloat" => return Ok(PhpValue::Float(val as f32)),
-                    "toString" => return Ok(PhpValue::string(val.to_string())),
-                    other => {
-                        return Err(self.make_error(
-                            RuntimeErrorKind::UndefinedMethod {
-                                class: fk.as_str().to_string(),
-                                method: other.to_string(),
-                            },
-                            span,
-                        ))
-                    }
-                };
-                Ok(PhpValue::RustFloat {
-                    kind: fk,
-                    value: next_val,
-                })
-            }
-
-            PhpValue::Float(value) => {
-                let val = *value;
-                let extract_f64 = |pv: &PhpValue| -> f64 {
-                    match pv {
-                        PhpValue::Float(f) => f.to_string().parse::<f64>().unwrap_or(*f as f64),
-                        PhpValue::RustFloat { value, .. } => *value,
-                        PhpValue::Int(n) => *n as f64,
-                        PhpValue::RustInt { value, .. } => *value as f64,
-                        PhpValue::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
-                        _ => pv.to_f64().unwrap_or(0.0),
+            value if crate::vm::numeric::is_float_like(value) => {
+                let val = value.to_f64().unwrap_or(0.0);
+                let extract_f64 = |pv: &PhpValue| pv.to_f64().unwrap_or(0.0);
+                let narrow_f64 = |n: f64| -> Result<PhpValue, RuntimeError> {
+                    match crate::vm::decimal::Decimal::from_f64(n) {
+                        Some(d) => crate::vm::numeric::narrow_decimal(d)
+                            .map_err(|fail| self.arith_error(fail, span)),
+                        None => Ok(PhpValue::Float64(n)),
                     }
                 };
                 match method {
@@ -7711,26 +7582,17 @@ impl VM {
                     "bAdd" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return Ok(PhpValue::RustFloat {
-                            kind: RustFloatKind::F64,
-                            value: a + b,
-                        });
+                        return narrow_f64(a + b);
                     }
                     "bSub" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return Ok(PhpValue::RustFloat {
-                            kind: RustFloatKind::F64,
-                            value: a - b,
-                        });
+                        return narrow_f64(a - b);
                     }
                     "bMul" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return Ok(PhpValue::RustFloat {
-                            kind: RustFloatKind::F64,
-                            value: a * b,
-                        });
+                        return narrow_f64(a * b);
                     }
                     "bDiv" => {
                         let a = extract_f64(receiver);
@@ -7738,26 +7600,23 @@ impl VM {
                         if b == 0.0 {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
-                        return Ok(PhpValue::RustFloat {
-                            kind: RustFloatKind::F64,
-                            value: a / b,
-                        });
+                        return narrow_f64(a / b);
                     }
                     // Arbitrary-precision decimal math
                     "add" => {
                         let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
                         let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        return Ok(PhpValue::Float(dec_a.add(&dec_b).to_f32()));
+                        return crate::vm::numeric::narrow_decimal(dec_a.add(&dec_b)).map_err(|fail| self.arith_error(fail, span));
                     }
                     "subtract" | "sub" => {
                         let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
                         let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        return Ok(PhpValue::Float(dec_a.sub(&dec_b).to_f32()));
+                        return crate::vm::numeric::narrow_decimal(dec_a.sub(&dec_b)).map_err(|fail| self.arith_error(fail, span));
                     }
                     "multiply" | "mul" => {
                         let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
                         let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
-                        return Ok(PhpValue::Float(dec_a.mul(&dec_b).to_f32()));
+                        return crate::vm::numeric::narrow_decimal(dec_a.mul(&dec_b)).map_err(|fail| self.arith_error(fail, span));
                     }
                     "divide" | "div" => {
                         let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
@@ -7766,23 +7625,23 @@ impl VM {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
                         let quot = dec_a.div(&dec_b, None).map_err(|_| self.make_error(RuntimeErrorKind::DivisionByZero, span))?;
-                        return Ok(PhpValue::Float(quot.to_f32()));
+                        return crate::vm::numeric::narrow_decimal(quot).map_err(|fail| self.arith_error(fail, span));
                     }
                     "round" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(0).clamp(0, 15);
-                        let factor = 10_f32.powi(places);
-                        return Ok(PhpValue::Float((val * factor).round() / factor));
+                        let factor = 10_f64.powi(places);
+                        return narrow_f64((val * factor).round() / factor);
                     }
                     "toDecimal" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(2).clamp(0, 15);
-                        let factor = 10_f32.powi(places);
-                        return Ok(PhpValue::Float((val * factor).round() / factor));
+                        let factor = 10_f64.powi(places);
+                        return narrow_f64((val * factor).round() / factor);
                     }
-                    "floor" => return Ok(PhpValue::Float(val.floor())),
-                    "ceil" | "ciel" => return Ok(PhpValue::Float(val.ceil())),
-                    "abs" => return Ok(PhpValue::Float(val.abs())),
-                    "toInt" => return Ok(PhpValue::Int(val as i32)),
-                    "toFloat" => return Ok(PhpValue::Float(val)),
+                    "floor" => return narrow_f64(val.floor()),
+                    "ceil" | "ciel" => return narrow_f64(val.ceil()),
+                    "abs" => return narrow_f64(val.abs()),
+                    "toInt" => return Ok(PhpValue::Int(val as i64)),
+                    "toFloat" => return narrow_f64(val),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -7929,7 +7788,7 @@ impl VM {
             // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
             // String helper methods are immutable by default, returning a new instance.
             PhpValue::String(s) if s.is_bytes() => match method {
-                "len" | "length" => Ok(PhpValue::Int(s.len() as i32)),
+                "len" | "length" => Ok(PhpValue::Int(s.len() as i64)),
                 "slice" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
                     let length = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
@@ -7975,19 +7834,19 @@ impl VM {
                     let enc = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
                     if enc.as_deref().map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8")).unwrap_or(true) {
                         if s.is_ascii() {
-                            Ok(PhpValue::Int(s.len() as i32))
+                            Ok(PhpValue::Int(s.len() as i64))
                         } else {
-                            Ok(PhpValue::Int(s.as_str().chars().count() as i32))
+                            Ok(PhpValue::Int(s.as_str().chars().count() as i64))
                         }
                     } else {
                         let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
                             .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
-                        Ok(PhpValue::Int(count as i32))
+                        Ok(PhpValue::Int(count as i64))
                     }
                 }
                 "graphemeLen" | "grapheme_len" => {
                     let count = crate::vm::encoding::grapheme_len(s.as_str());
-                    Ok(PhpValue::Int(count as i32))
+                    Ok(PhpValue::Int(count as i64))
                 }
                 "mbSubstr" | "mb_substr" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
@@ -7998,7 +7857,7 @@ impl VM {
                     Ok(PhpValue::string(sub))
                 }
                 "len" | "byteLength" | "bytesCount" => {
-                    Ok(PhpValue::Int(s.len() as i32))
+                    Ok(PhpValue::Int(s.len() as i64))
                 }
                 "check" => {
                     if let Some(enc_val) = args.first() {
@@ -8032,7 +7891,7 @@ impl VM {
                         PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
                         val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
                     };
-                    Ok(PhpValue::Int(crate::vm::facade::binary_strcmp(b1, &b2)))
+                    Ok(PhpValue::Int((crate::vm::facade::binary_strcmp(b1, &b2)) as i64))
                 }
                 "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase" => {
                     let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
@@ -8045,7 +7904,7 @@ impl VM {
                         PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
                         val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
                     };
-                    Ok(PhpValue::Int(crate::vm::facade::binary_strcasecmp(b1, &b2)))
+                    Ok(PhpValue::Int((crate::vm::facade::binary_strcasecmp(b1, &b2)) as i64))
                 }
                 "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN" => {
                     let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
@@ -8071,7 +7930,7 @@ impl VM {
                         PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
                         val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
                     };
-                    Ok(PhpValue::Int(crate::vm::facade::binary_strncmp(b1, &b2, len_i64 as usize)))
+                    Ok(PhpValue::Int((crate::vm::facade::binary_strncmp(b1, &b2, len_i64 as usize)) as i64))
                 }
                 "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => {
                     let other = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
@@ -8097,7 +7956,7 @@ impl VM {
                         PhpValue::String(os) => std::borrow::Cow::Borrowed(os.as_bytes()),
                         val => std::borrow::Cow::Owned(val.to_php_string().into_bytes()),
                     };
-                    Ok(PhpValue::Int(crate::vm::facade::binary_strncasecmp(b1, &b2, len_i64 as usize)))
+                    Ok(PhpValue::Int((crate::vm::facade::binary_strncasecmp(b1, &b2, len_i64 as usize)) as i64))
                 }
                 "digit" | "isDigit" | "is_digit" => {
                     let b = s.as_bytes();
@@ -8196,12 +8055,12 @@ impl VM {
                         str_val.len()
                     };
                     if needle.is_empty() {
-                        return Ok(PhpValue::Int(start_char_idx as i32));
+                        return Ok(PhpValue::Int(start_char_idx as i64));
                     }
                     if let Some(pos) = str_val[byte_offset..].find(&needle) {
                         let actual_byte_pos = byte_offset + pos;
                         let char_idx = str_val[..actual_byte_pos].chars().count();
-                        Ok(PhpValue::Int(char_idx as i32))
+                        Ok(PhpValue::Int(char_idx as i64))
                     } else {
                         Ok(PhpValue::Null)
                     }
@@ -8226,7 +8085,7 @@ impl VM {
                     }
                 }
                 "length" => {
-                    Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i32))
+                    Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i64))
                 }
                 "split" => {
                     let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
@@ -8288,7 +8147,7 @@ impl VM {
                     Ok(PhpValue::string(clean))
                 }
                 "bytes" => {
-                    let byte_list: Vec<PhpValue> = s.as_bytes().iter().map(|&b| PhpValue::Int(b as i32)).collect();
+                    let byte_list: Vec<PhpValue> = s.as_bytes().iter().map(|&b| PhpValue::Int(b as i64)).collect();
                     Ok(PhpValue::list(byte_list))
                 }
                 "isUtf8" => {
@@ -8433,7 +8292,7 @@ impl VM {
                     if let Some(path_val) = o.borrow().get_property("path") {
                         let path_str = path_val.to_php_string();
                         if let Ok(meta) = std::fs::metadata(&path_str) {
-                            return Ok(PhpValue::Int(meta.len() as i32));
+                            return Ok(PhpValue::Int(meta.len() as i64));
                         }
                     }
                     Ok(o.borrow().get_property("size").cloned().unwrap_or(PhpValue::Int(0)))
@@ -8619,7 +8478,7 @@ impl VM {
             ("Response", "status" | "setStatusCode") => {
                 if let PhpValue::Object(o) = receiver {
                     if let Some(code_val) = args.first().and_then(|v| v.to_i64()) {
-                        o.borrow_mut().set_property("status", PhpValue::Int(code_val as i32));
+                        o.borrow_mut().set_property("status", PhpValue::Int(code_val as i64));
                         crate::vm::facade::ACTIVE_RESPONSE.with(|cell| {
                             cell.borrow_mut().status = code_val as u16;
                         });
@@ -8632,7 +8491,7 @@ impl VM {
             ("Response", "getStatusCode") => {
                 if let PhpValue::Object(o) = receiver {
                     let status = o.borrow().get_property("status").and_then(|v| v.to_i64()).unwrap_or(200);
-                    Ok(PhpValue::Int(status as i32))
+                    Ok(PhpValue::Int(status as i64))
                 } else {
                     Ok(PhpValue::Int(200))
                 }
@@ -9054,8 +8913,8 @@ impl VM {
                 let mut paginator = VmObject::new("LengthAwarePaginator");
                 paginator.set_property("items", items);
                 paginator.set_property("total", PhpValue::Int(1));
-                paginator.set_property("perPage", PhpValue::Int(per_page));
-                paginator.set_property("currentPage", PhpValue::Int(page));
+                paginator.set_property("perPage", PhpValue::Int((per_page) as i64));
+                paginator.set_property("currentPage", PhpValue::Int((page) as i64));
                 Ok(PhpValue::object(paginator))
             }
             ("ADBQuery", "where" | "orderBy" | "limit" | "offset" | "select") => {
@@ -9176,8 +9035,8 @@ impl VM {
                         ))),
                     );
                     paginator.set_property("total", PhpValue::Int(1));
-                    paginator.set_property("perPage", PhpValue::Int(per_page));
-                    paginator.set_property("currentPage", PhpValue::Int(page));
+                    paginator.set_property("perPage", PhpValue::Int((per_page) as i64));
+                    paginator.set_property("currentPage", PhpValue::Int((page) as i64));
                     let frozen = crate::vm::parent_process::FrozenValue::from_php_value(&PhpValue::object(paginator));
                     let _ = tx.send(Ok(frozen));
                 });
@@ -9193,7 +9052,7 @@ impl VM {
                             PhpValue::Set(s) => s.borrow().len(),
                             _ => 0,
                         };
-                        return Ok(PhpValue::Int(cnt as i32));
+                        return Ok(PhpValue::Int(cnt as i64));
                     }
                 }
                 Ok(PhpValue::Int(0))
@@ -9268,7 +9127,7 @@ impl VM {
                     if let Some(items) = b.get_property("items") {
                         match items {
                             PhpValue::List(_) | PhpValue::Array(_) => {
-                                return Ok(PhpValue::Int(cursor as i32));
+                                return Ok(PhpValue::Int(cursor as i64));
                             }
                             PhpValue::Dict(d) => {
                                 let db = d.borrow();
@@ -9288,7 +9147,7 @@ impl VM {
                 if let PhpValue::Object(o) = receiver {
                     let mut b = o.borrow_mut();
                     let cursor = b.get_property("cursor").and_then(|v| v.to_i64()).unwrap_or(0);
-                    b.set_property("cursor", PhpValue::Int((cursor + 1) as i32));
+                    b.set_property("cursor", PhpValue::Int((cursor + 1) as i64));
                 }
                 Ok(PhpValue::Null)
             }
@@ -9311,7 +9170,7 @@ impl VM {
                             PhpValue::Set(s) => s.borrow().len(),
                             _ => 0,
                         };
-                        return Ok(PhpValue::Int(cnt as i32));
+                        return Ok(PhpValue::Int(cnt as i64));
                     }
                 }
                 Ok(PhpValue::Int(0))
@@ -9369,7 +9228,7 @@ impl VM {
                             PhpValue::Set(s) => s.borrow().len(),
                             _ => 0,
                         };
-                        return Ok(PhpValue::Int(cnt as i32));
+                        return Ok(PhpValue::Int(cnt as i64));
                     }
                 }
                 Ok(PhpValue::Int(0))
@@ -9425,7 +9284,7 @@ impl VM {
                 if let PhpValue::Object(o) = receiver {
                     let b = o.borrow();
                     if let Some(ref t) = b.throwable {
-                        return Ok(PhpValue::Int(t.line as i32));
+                        return Ok(PhpValue::Int(t.line as i64));
                     }
                     if let Some(l) = b.get_property("line") {
                         return Ok(l.clone());
@@ -9467,9 +9326,9 @@ impl VM {
                         if let Some(prev) = t.source() {
                             let mut prev_o = VmObject::new("Exception");
                             prev_o.set_property("message", PhpValue::string(&prev.message));
-                            prev_o.set_property("code", PhpValue::Int(prev.code as i32));
+                            prev_o.set_property("code", PhpValue::Int(prev.code as i64));
                             prev_o.set_property("file", PhpValue::string(&prev.file));
-                            prev_o.set_property("line", PhpValue::Int(prev.line as i32));
+                            prev_o.set_property("line", PhpValue::Int(prev.line as i64));
                             prev_o.throwable = Some(Box::new(prev.clone()));
                             return Ok(PhpValue::object(prev_o));
                         }
@@ -9530,7 +9389,7 @@ impl VM {
                 if let PhpValue::Object(o) = receiver {
                     let b = o.borrow();
                     if let Some(ref t) = b.throwable {
-                        return Ok(PhpValue::Int(t.code as i32));
+                        return Ok(PhpValue::Int(t.code as i64));
                     }
                     if let Some(c) = b.get_property("code") {
                         return Ok(c.clone());
@@ -9543,7 +9402,7 @@ impl VM {
                     let b = o.borrow();
                     if let Some(ref t) = b.throwable {
                         if let Some(sev) = t.severity {
-                            return Ok(PhpValue::Int(sev));
+                            return Ok(PhpValue::Int((sev) as i64));
                         }
                     }
                     if let Some(s) = b.get_property("severity") {
@@ -10408,14 +10267,21 @@ impl VM {
         match op {
             IrUnaryOp::Plus => match src {
                 PhpValue::Int(_)
+                | PhpValue::I8(_)
+                | PhpValue::I32(_)
+                | PhpValue::U64(_)
+                | PhpValue::I128(_)
                 | PhpValue::Float(_)
-                | PhpValue::RustInt { .. }
-                | PhpValue::RustFloat { .. } => Ok(src.clone()),
+                | PhpValue::Float64(_)
+                | PhpValue::Decimal(_) => Ok(src.clone()),
                 other => {
-                    if let Some(i) = other.to_i32() {
+                    if let Some(i) = other.to_i64() {
                         Ok(PhpValue::Int(i))
-                    } else if let Some(f) = other.to_f32() {
-                        Ok(PhpValue::Float(f))
+                    } else if let Some(f) = other.to_f64() {
+                        crate::vm::numeric::narrow_decimal(
+                            crate::vm::decimal::Decimal::from_f64(f).unwrap_or_else(crate::vm::decimal::Decimal::zero),
+                        )
+                        .map_err(|fail| self.arith_error(fail, span))
                     } else {
                         Err(self.make_error(
                             RuntimeErrorKind::InvalidUnaryOperand {
@@ -10428,19 +10294,23 @@ impl VM {
                 }
             },
             IrUnaryOp::Neg => match src {
-                PhpValue::Int(n) => Ok(PhpValue::Int(n.wrapping_neg())),
-                PhpValue::Float(f) => Ok(PhpValue::Float(-*f)),
-                PhpValue::RustInt { kind, value } => Ok(PhpValue::RustInt {
-                    kind: *kind,
-                    value: value.wrapping_neg(),
-                }),
-                PhpValue::RustFloat { kind, value } => Ok(PhpValue::RustFloat {
-                    kind: *kind,
-                    value: -*value,
-                }),
+                value if value.is_integer_value() || matches!(value, PhpValue::Bool(_)) => {
+                    let n = crate::vm::numeric::int_operand(value)
+                        .map_err(|fail| self.arith_error(fail, span))?;
+                    let negated = crate::vm::numeric::checked_int_neg(n)
+                        .map_err(|fail| self.arith_error(fail, span))?;
+                    Ok(PhpValue::Int(negated))
+                }
+                value if crate::vm::numeric::is_float_like(value) => {
+                    let zero = PhpValue::Int(0);
+                    crate::vm::numeric::float_binary(BinaryOp::Sub, &zero, value)
+                        .map_err(|fail| self.arith_error(fail, span))
+                }
                 other => {
-                    if let Some(i) = other.to_i32() {
-                        Ok(PhpValue::Int(-i))
+                    if let Some(i) = other.to_i64() {
+                        let negated = crate::vm::numeric::checked_int_neg(i)
+                            .map_err(|fail| self.arith_error(fail, span))?;
+                        Ok(PhpValue::Int(negated))
                     } else {
                         Err(self.make_error(
                             RuntimeErrorKind::InvalidUnaryOperand {
@@ -10454,7 +10324,7 @@ impl VM {
             },
             IrUnaryOp::Not => Ok(PhpValue::Bool(!src.is_truthy())),
             IrUnaryOp::BitNot => {
-                if let Some(n) = src.to_i32() {
+                if let Some(n) = src.to_i64() {
                     Ok(PhpValue::Int(!n))
                 } else {
                     Err(self.make_error(
@@ -10500,114 +10370,13 @@ impl VM {
                 Ok(PhpValue::string(s))
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
-                let involves_float = matches!(
-                    lhs,
-                    PhpValue::Float(_) | PhpValue::RustFloat { .. }
-                ) || matches!(
-                    rhs,
-                    PhpValue::Float(_) | PhpValue::RustFloat { .. }
-                );
-
-                if involves_float {
-                    let a = lhs.to_f32().ok_or_else(|| {
-                        self.make_error(
-                            RuntimeErrorKind::InvalidBinaryOperands {
-                                op: op.to_string(),
-                                lhs_type: lhs.type_name().to_string(),
-                                rhs_type: rhs.type_name().to_string(),
-                            },
-                            span,
-                        )
-                    })?;
-                    let b = rhs.to_f32().ok_or_else(|| {
-                        self.make_error(
-                            RuntimeErrorKind::InvalidBinaryOperands {
-                                op: op.to_string(),
-                                lhs_type: lhs.type_name().to_string(),
-                                rhs_type: rhs.type_name().to_string(),
-                            },
-                            span,
-                        )
-                    })?;
-
-                    let res = match op {
-                        BinaryOp::Add => a + b,
-                        BinaryOp::Sub => a - b,
-                        BinaryOp::Mul => a * b,
-                        BinaryOp::Div => {
-                            if b == 0.0 {
-                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                            }
-                            a / b
-                        }
-                        BinaryOp::Mod => {
-                            if b == 0.0 {
-                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                            }
-                            a % b
-                        }
-                        BinaryOp::Pow => a.powf(b),
-                        _ => unreachable!(),
-                    };
-                    Ok(PhpValue::Float(res))
-                } else {
-                    let a = lhs.to_i32().ok_or_else(|| {
-                        self.make_error(
-                            RuntimeErrorKind::InvalidBinaryOperands {
-                                op: op.to_string(),
-                                lhs_type: lhs.type_name().to_string(),
-                                rhs_type: rhs.type_name().to_string(),
-                            },
-                            span,
-                        )
-                    })?;
-                    let b = rhs.to_i32().ok_or_else(|| {
-                        self.make_error(
-                            RuntimeErrorKind::InvalidBinaryOperands {
-                                op: op.to_string(),
-                                lhs_type: lhs.type_name().to_string(),
-                                rhs_type: rhs.type_name().to_string(),
-                            },
-                            span,
-                        )
-                    })?;
-
-                    match op {
-                        BinaryOp::Add => Ok(PhpValue::Int(a.wrapping_add(b))),
-                        BinaryOp::Sub => Ok(PhpValue::Int(a.wrapping_sub(b))),
-                        BinaryOp::Mul => Ok(PhpValue::Int(a.wrapping_mul(b))),
-                        BinaryOp::Div => {
-                            if b == 0 {
-                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                            }
-                            if a % b == 0 {
-                                Ok(PhpValue::Int(a / b))
-                            } else {
-                                Ok(PhpValue::Float((a as f32) / (b as f32)))
-                            }
-                        }
-                        BinaryOp::Mod => {
-                            if b == 0 {
-                                return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                            }
-                            Ok(PhpValue::Int(a % b))
-                        }
-                        BinaryOp::Pow => {
-                            if b >= 0 {
-                                Ok(PhpValue::Int(a.wrapping_pow(b as u32)))
-                            } else {
-                                Ok(PhpValue::Float((a as f32).powf(b as f32)))
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
+                self.exec_numeric_binary(op, lhs, rhs, span)
             }
 
             // Bitwise operators
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
-                let a = lhs.to_i32().unwrap_or(0);
-                let b = rhs.to_i32().unwrap_or(0);
+                let a = lhs.to_i64().unwrap_or(0);
+                let b = rhs.to_i64().unwrap_or(0);
                 let res = match op {
                     BinaryOp::BitAnd => a & b,
                     BinaryOp::BitOr => a | b,
@@ -10684,29 +10453,89 @@ impl VM {
         }
     }
 
+    fn arith_error(&self, fail: crate::vm::numeric::ArithFail, span: Span) -> RuntimeError {
+        let kind = match fail {
+            crate::vm::numeric::ArithFail::Overflow => RuntimeErrorKind::IntegerOverflow,
+            crate::vm::numeric::ArithFail::DecimalOverflow => RuntimeErrorKind::DecimalOverflow {
+                digits: crate::vm::numeric::DECIMAL_MAX_DIGITS,
+            },
+            crate::vm::numeric::ArithFail::DivideByZero => RuntimeErrorKind::DivisionByZero,
+            crate::vm::numeric::ArithFail::NotNumeric => RuntimeErrorKind::Custom {
+                message: "numeric operation expected a number".to_string(),
+            },
+        };
+        self.make_error(kind, span)
+    }
+
+    fn exec_inc_dec(&self, current: &PhpValue, delta: i64, span: Span) -> Result<PhpValue, RuntimeError> {
+        if matches!(current, PhpValue::Null) {
+            return Ok(PhpValue::Int(if delta > 0 { 1 } else { 0 }));
+        }
+        if crate::vm::numeric::is_float_like(current) {
+            return crate::vm::numeric::float_binary(BinaryOp::Add, current, &PhpValue::Int(delta))
+                .map_err(|fail| self.arith_error(fail, span));
+        }
+        let n = crate::vm::numeric::int_operand(current).map_err(|fail| self.arith_error(fail, span))?;
+        let updated = crate::vm::numeric::checked_int_add(n, delta).map_err(|fail| self.arith_error(fail, span))?;
+        Ok(PhpValue::Int(updated))
+    }
+
+    fn exec_numeric_binary(
+        &self,
+        op: BinaryOp,
+        lhs: &PhpValue,
+        rhs: &PhpValue,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let operand_err = || {
+            self.make_error(
+                RuntimeErrorKind::InvalidBinaryOperands {
+                    op: op.to_string(),
+                    lhs_type: lhs.type_name().to_string(),
+                    rhs_type: rhs.type_name().to_string(),
+                },
+                span,
+            )
+        };
+        if crate::vm::numeric::is_float_like(lhs) || crate::vm::numeric::is_float_like(rhs) {
+            return crate::vm::numeric::float_binary(op, lhs, rhs).map_err(|fail| match fail {
+                crate::vm::numeric::ArithFail::NotNumeric => operand_err(),
+                other => self.arith_error(other, span),
+            });
+        }
+        let a = match crate::vm::numeric::int_operand(lhs) {
+            Ok(n) => n,
+            Err(crate::vm::numeric::ArithFail::NotNumeric) => return Err(operand_err()),
+            Err(fail) => return Err(self.arith_error(fail, span)),
+        };
+        let b = match crate::vm::numeric::int_operand(rhs) {
+            Ok(n) => n,
+            Err(crate::vm::numeric::ArithFail::NotNumeric) => return Err(operand_err()),
+            Err(fail) => return Err(self.arith_error(fail, span)),
+        };
+        match crate::vm::numeric::checked_int_op(op, a, b) {
+            Ok(n) => Ok(PhpValue::Int(n)),
+            Err(crate::vm::numeric::ArithFail::NotNumeric) => {
+                crate::vm::numeric::float_binary(op, lhs, rhs).map_err(|fail| match fail {
+                    crate::vm::numeric::ArithFail::NotNumeric => operand_err(),
+                    other => self.arith_error(other, span),
+                })
+            }
+            Err(fail) => Err(self.arith_error(fail, span)),
+        }
+    }
+
     fn constant_to_value(c: &Constant) -> PhpValue {
         match c {
             Constant::Null => PhpValue::Null,
             Constant::Bool(b) => PhpValue::Bool(*b),
-            Constant::Int(n) => {
-                if let Ok(narrow) = i32::try_from(*n) {
-                    PhpValue::Int(narrow)
-                } else {
-                    PhpValue::RustInt {
-                        kind: RustIntKind::I64,
-                        value: *n as i128,
-                    }
-                }
-            }
-            Constant::Float(f) => PhpValue::Float(*f as f32),
-            Constant::RustInt { kind, value } => PhpValue::RustInt {
-                kind: *kind,
-                value: *value,
-            },
-            Constant::RustFloat { kind, value } => PhpValue::RustFloat {
-                kind: *kind,
-                value: *value,
-            },
+            Constant::Int(n) => PhpValue::Int(*n),
+            Constant::Float(f) => crate::vm::numeric::php_to_decimal(&PhpValue::Float64(*f))
+                .and_then(|d| crate::vm::numeric::narrow_decimal(d).ok())
+                .unwrap_or(PhpValue::Float64(*f)),
+            Constant::Decimal(raw) => crate::vm::numeric::decimal_from_literal(raw)
+                .and_then(|d| crate::vm::numeric::narrow_decimal(d).ok())
+                .unwrap_or_else(|| PhpValue::string(raw.clone())),
             Constant::String(s) => PhpValue::string(s.clone()),
             Constant::Bytes(b) => PhpValue::bytes(b.clone()),
             Constant::Type(ty) => PhpValue::string(ty.to_string()),
@@ -10777,7 +10606,7 @@ impl VM {
                 } else {
                     b.iter()
                         .enumerate()
-                        .map(|(i, v)| (PhpValue::Int(i as i32), v.clone()))
+                        .map(|(i, v)| (PhpValue::Int(i as i64), v.clone()))
                         .collect()
                 }
             }
@@ -10819,19 +10648,3 @@ impl From<BytecodeChunk> for IrModule {
     }
 }
 
-fn clamp_rust_int(kind: RustIntKind, val: i128) -> i128 {
-    match kind {
-        RustIntKind::I8 => (val as i8) as i128,
-        RustIntKind::I16 => (val as i16) as i128,
-        RustIntKind::I32 => (val as i32) as i128,
-        RustIntKind::I64 => (val as i64) as i128,
-        RustIntKind::I128 => val,
-        RustIntKind::Isize => (val as isize) as i128,
-        RustIntKind::U8 => (val as u8) as i128,
-        RustIntKind::U16 => (val as u16) as i128,
-        RustIntKind::U32 => (val as u32) as i128,
-        RustIntKind::U64 => (val as u64) as i128,
-        RustIntKind::U128 => val,
-        RustIntKind::Usize => (val as usize) as i128,
-    }
-}

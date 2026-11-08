@@ -1,7 +1,7 @@
 use crate::lexer::span::Span;
 use crate::type_system::{
     error::{TypeError, TypeErrorKind},
-    types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy},
+    types::{CollectionSubtype, RhpType, TypeHierarchy},
 };
 use std::collections::HashMap;
 
@@ -58,7 +58,7 @@ impl TypeEnvironment {
             }
         }
 
-        let inferred = init_type.cloned().unwrap_or_else(|| declared_type.clone());
+        let inferred = declared_type.clone();
         self.vars.insert(
             var_name.clone(),
             VariableBinding {
@@ -194,22 +194,15 @@ pub fn resolve_facade_static_call(
         "Int" => match method {
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
             | "u128" | "usize" => {
-                if let Some(first_arg) = arg_types.first() {
-                    if !first_arg.is_assignable_to(&RhpType::Int, hierarchy) {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ArgumentTypeMismatch {
-                                callable_name: format!("Int::{}", method),
-                                param_name: "$value".to_string(),
-                                arg_index: 1,
-                                expected: "int".to_string(),
-                                found: first_arg.to_string(),
-                            },
-                            call_span,
-                        ));
-                    }
-                }
-                let kind = RustIntKind::from_name(method).unwrap_or(RustIntKind::I32);
-                Ok(RhpType::RustInt(kind))
+                Err(TypeError::new(
+                    TypeErrorKind::Custom {
+                        message: format!(
+                            "Int::{}() is not a declaration. Use int for i64, or a stored width inferred from a schema",
+                            method
+                        ),
+                    },
+                    call_span,
+                ))
             }
             "compare" => Ok(RhpType::Bool),
             "random" | "max" | "min" | "abs" | "clamp" => Ok(RhpType::Int),
@@ -220,40 +213,15 @@ pub fn resolve_facade_static_call(
             "compare" => Ok(RhpType::Bool),
             "format" => Ok(RhpType::String),
             "abs" | "min" | "max" | "random" => Ok(RhpType::Float),
-            "f32" => {
-                if let Some(first_arg) = arg_types.first() {
-                    if !first_arg.is_assignable_to(&RhpType::Float, hierarchy) {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ArgumentTypeMismatch {
-                                callable_name: "Float::f32".to_string(),
-                                param_name: "$value".to_string(),
-                                arg_index: 1,
-                                expected: "float".to_string(),
-                                found: first_arg.to_string(),
-                            },
-                            call_span,
-                        ));
-                    }
-                }
-                Ok(RhpType::RustFloat(RustFloatKind::F32))
-            }
-            "f64" | "i64" => {
-                if let Some(first_arg) = arg_types.first() {
-                    if !first_arg.is_assignable_to(&RhpType::Float, hierarchy) {
-                        return Err(TypeError::new(
-                            TypeErrorKind::ArgumentTypeMismatch {
-                                callable_name: format!("Float::{}", method),
-                                param_name: "$value".to_string(),
-                                arg_index: 1,
-                                expected: "float".to_string(),
-                                found: first_arg.to_string(),
-                            },
-                            call_span,
-                        ));
-                    }
-                }
-                Ok(RhpType::RustFloat(RustFloatKind::F64))
-            }
+            "f32" | "f64" | "i64" => Err(TypeError::new(
+                TypeErrorKind::Custom {
+                    message: format!(
+                        "Float::{}() is not a declaration. Use float",
+                        method
+                    ),
+                },
+                call_span,
+            )),
             _ => Ok(RhpType::Float),
         },
 
@@ -911,15 +879,15 @@ pub fn resolve_builtin_fluent_method(
 ) -> Option<RhpType> {
     match receiver_type {
         // Fluent numeric APIs (`Int::i64()->random()->add()->subtract()`, `Float::f64()->toDecimal(2)`)
-        RhpType::Int | RhpType::RustInt(_) => match method {
+        RhpType::Int | RhpType::I8 | RhpType::I32 | RhpType::U64 | RhpType::I128 => match method {
             "random" | "add" | "subtract" | "sub" | "multiply" | "mul" | "divide" | "div" | "abs" | "clamp" | "round" | "floor" | "ceil" | "ciel" => {
-                Some(receiver_type.clone())
+                Some(RhpType::Int)
             }
-            "toDecimal" => Some(RhpType::RustFloat(RustFloatKind::F64)),
+            "toDecimal" => Some(RhpType::Float),
             "toString" => Some(RhpType::String),
             _ => None,
         },
-        RhpType::Float | RhpType::RustFloat(_) => match method {
+        RhpType::Float => match method {
             "toDecimal" | "round" | "floor" | "ceil" | "ciel" | "add" | "subtract" | "sub" | "multiply" | "mul" | "divide" | "div"
             | "bAdd" | "bSub" | "bMul" | "bDiv"
             | "abs" | "random" => Some(receiver_type.clone()),

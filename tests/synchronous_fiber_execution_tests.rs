@@ -297,7 +297,7 @@ fn test_worker_pool_request_fibers_and_telemetry() {
         let val = resp.to_php_value();
         if let PhpValue::Dict(d) = val {
             let map = d.borrow();
-            let expected_id = ((i + 1) as i32) * 10;
+            let expected_id = ((i + 1) as i64) * 10;
             assert_eq!(map.get("order_id"), Some(&PhpValue::Int(expected_id)));
             assert_eq!(map.get("status"), Some(&PhpValue::Int(200)));
         } else {

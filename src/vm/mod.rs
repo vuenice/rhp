@@ -17,6 +17,7 @@ pub use time as carbon;
 pub mod crypto;
 pub mod csv;
 pub mod decimal;
+pub mod numeric;
 pub mod encoding;
 pub mod engine;
 pub mod error;
@@ -210,17 +211,12 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Literal(lit) => match lit {
             Literal::Null => Ok(PhpValue::Null),
             Literal::Bool(b) => Ok(PhpValue::Bool(*b)),
-            Literal::Int { value, .. } => {
-                if let Ok(narrow) = i32::try_from(*value) {
-                    Ok(PhpValue::Int(narrow))
-                } else {
-                    Ok(PhpValue::RustInt {
-                        kind: crate::type_system::types::RustIntKind::I64,
-                        value: *value as i128,
-                    })
-                }
+            Literal::Int { value, .. } => Ok(PhpValue::Int(*value)),
+            Literal::Float { raw, value } => {
+                let stored = crate::vm::numeric::decimal_from_literal(raw)
+                    .and_then(|decimal| crate::vm::numeric::narrow_decimal(decimal).ok());
+                Ok(stored.unwrap_or(PhpValue::Float64(*value)))
             }
-            Literal::Float { value, .. } => Ok(PhpValue::Float(*value as f32)),
             Literal::String { value, .. } => Ok(PhpValue::string(value.clone())),
             Literal::InterpolatedString { parts, .. } => {
                 let mut out = String::new();
@@ -241,10 +237,10 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Unary { op, expr: inner, .. } => {
             let v = eval_expr(inner, env)?;
             match op {
-                UnaryOp::Plus => Ok(PhpValue::Int(v.to_i32().unwrap_or(0))),
-                UnaryOp::Neg => Ok(PhpValue::Int(-v.to_i32().unwrap_or(0))),
+                UnaryOp::Plus => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
+                UnaryOp::Neg => Ok(PhpValue::Int(-v.to_i64().unwrap_or(0))),
                 UnaryOp::Not => Ok(PhpValue::Bool(!v.is_truthy())),
-                UnaryOp::BitNot => Ok(PhpValue::Int(!v.to_i32().unwrap_or(0))),
+                UnaryOp::BitNot => Ok(PhpValue::Int(!v.to_i64().unwrap_or(0))),
                 _ => Ok(v),
             }
         }
@@ -253,13 +249,13 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             let rhs = eval_expr(right, env)?;
             match op {
                 BinaryOp::Add => Ok(PhpValue::Int(
-                    lhs.to_i32().unwrap_or(0).wrapping_add(rhs.to_i32().unwrap_or(0)),
+                    (lhs.to_i32().unwrap_or(0).wrapping_add(rhs.to_i32().unwrap_or(0))) as i64,
                 )),
                 BinaryOp::Sub => Ok(PhpValue::Int(
-                    lhs.to_i32().unwrap_or(0).wrapping_sub(rhs.to_i32().unwrap_or(0)),
+                    (lhs.to_i32().unwrap_or(0).wrapping_sub(rhs.to_i32().unwrap_or(0))) as i64,
                 )),
                 BinaryOp::Mul => Ok(PhpValue::Int(
-                    lhs.to_i32().unwrap_or(0).wrapping_mul(rhs.to_i32().unwrap_or(0)),
+                    (lhs.to_i32().unwrap_or(0).wrapping_mul(rhs.to_i32().unwrap_or(0))) as i64,
                 )),
                 BinaryOp::Div => {
                     let b = rhs.to_i32().unwrap_or(0);
@@ -267,7 +263,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                         return Err(RuntimeError::new(RuntimeErrorKind::DivisionByZero, node.span));
                     }
                     if lhs.to_i32().unwrap_or(0) % b == 0 {
-                        Ok(PhpValue::Int(lhs.to_i32().unwrap_or(0) / b))
+                        Ok(PhpValue::Int(lhs.to_i64().unwrap_or(0) / (b) as i64))
                     } else {
                         Ok(PhpValue::Float((lhs.to_i32().unwrap_or(0) as f32) / (b as f32)))
                     }
@@ -319,7 +315,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
         ExprKind::Cast { kind, expr: inner } => {
             let v = eval_expr(inner, env)?;
             match kind {
-                CastType::Int => Ok(PhpValue::Int(v.to_i32().unwrap_or(0))),
+                CastType::Int => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
                 CastType::Float => Ok(PhpValue::Float(v.to_f32().unwrap_or(0.0))),
                 CastType::String => Ok(PhpValue::string(v.to_php_string())),
                 CastType::Bool => Ok(PhpValue::Bool(v.is_truthy())),
@@ -332,7 +328,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     "int" | "Int" => {
                         if let Some(first) = args.first() {
                             let v = eval_expr(&first.value, env)?;
-                            return Ok(PhpValue::Int(v.to_i32().unwrap_or(0)));
+                            return Ok(PhpValue::Int(v.to_i64().unwrap_or(0)));
                         }
                         return Ok(PhpValue::Int(0));
                     }

@@ -2,7 +2,7 @@ use rhp::{
     clear_log_history, clear_runtime_closure_macros, clear_tier2_plugins, get_facades_by_tier,
     get_recorded_logs, is_native_or_plugin_facade, is_static_facade, is_static_only, parse,
     register_tier2_plugin, register_tier2_plugin_handler, run_source, run_source_with_vm,
-    FacadeTier, ParseErrorKind, PhpValue, PluginFacade, RuntimeErrorKind, RustIntKind,
+    FacadeTier, ParseErrorKind, PhpValue, PluginFacade, RuntimeErrorKind,
 };
 
 #[test]
@@ -24,7 +24,7 @@ fn test_tier1_native_facades_execution() {
 
     // 2. Int & Float Facades
     let src_num = r#"
-        $i64Val = Int::i64(9999);
+        $i64Val = 9999;
         $minVal = Int::min(10, 50);
         $maxVal = Int::max(10, 50);
         $clamped = Int::clamp(150, 0, 100);
@@ -38,10 +38,7 @@ fn test_tier1_native_facades_execution() {
     let (vm_num, _) = run_source_with_vm(src_num).expect("Int & Float facades execution should succeed");
     assert_eq!(
         vm_num.get_main_variable("$i64Val"),
-        Some(&PhpValue::RustInt {
-            kind: RustIntKind::I64,
-            value: 9999,
-        })
+        Some(&PhpValue::Int(9999))
     );
     assert_eq!(vm_num.get_main_variable("$minVal"), Some(&PhpValue::Int(10)));
     assert_eq!(vm_num.get_main_variable("$maxVal"), Some(&PhpValue::Int(50)));

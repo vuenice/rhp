@@ -25,7 +25,7 @@ use crate::lexer::{
     span::Span,
 };
 use crate::type_system::{
-    types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind},
+    types::{CollectionSubtype, RhpType},
     TypeCheckResult,
 };
 
@@ -225,7 +225,6 @@ impl ChunkBuilder {
     }
 
     /// Intern a 64-bit float into the chunk's constant pool.
-    #[allow(dead_code)]
     fn intern_float(&mut self, value: f64) -> ConstantId {
         let bits = value.to_bits();
         if let Some(&id) = self.float_pool.get(&bits) {
@@ -234,6 +233,13 @@ impl ChunkBuilder {
         let id = ConstantId(self.chunk.constants.len() as u32);
         self.chunk.constants.push(Constant::Float(value));
         self.float_pool.insert(bits, id);
+        id
+    }
+
+    fn intern_decimal(&mut self, raw: &str) -> ConstantId {
+        let cleaned: String = raw.chars().filter(|c| *c != '_').collect();
+        let id = ConstantId(self.chunk.constants.len() as u32);
+        self.chunk.constants.push(Constant::Decimal(cleaned));
         id
     }
 
@@ -1395,8 +1401,26 @@ impl<'a> IrLowerer<'a> {
                             b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
                         }
                     }
-                    Literal::Float { value, .. } => {
-                        b.emit(OpCode::LoadFloat { dst, bits: (*value as f32).to_bits() }, expr.span);
+                    Literal::Float { raw, value } => {
+                        let stored = crate::vm::numeric::decimal_from_literal(raw)
+                            .and_then(|decimal| crate::vm::numeric::narrow_decimal(decimal).ok());
+                        match stored {
+                            Some(crate::vm::value::PhpValue::Float(f)) => {
+                                b.emit(OpCode::LoadFloat { dst, bits: f.to_bits() }, expr.span);
+                            }
+                            Some(crate::vm::value::PhpValue::Float64(f)) => {
+                                let const_id = b.intern_float(f);
+                                b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                            }
+                            _ => {
+                                let const_id = if crate::vm::numeric::decimal_from_literal(raw).is_some() {
+                                    b.intern_decimal(raw)
+                                } else {
+                                    b.intern_float(*value)
+                                };
+                                b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                            }
+                        }
                     }
                     Literal::String { value, .. } => {
                         let const_id = b.intern_string(value);
@@ -1809,48 +1833,7 @@ impl<'a> IrLowerer<'a> {
                         }
                     }
 
-                    // 2. Native Rust Integer Wrappers (`Int::i64()`, `Int::u32()`, etc.)
-                    if target_name == "Int" {
-                        if let Some(int_kind) = RustIntKind::from_name(method_name) {
-                            let src = if let Some(first_arg) = args.first() {
-                                Some(self.lower_expr(b, &first_arg.value, None)?)
-                            } else {
-                                None
-                            };
-                            b.emit(
-                                OpCode::WrapRustInt {
-                                    dst,
-                                    src,
-                                    kind: int_kind,
-                                },
-                                expr.span,
-                            );
-                            return Ok(dst);
-                        }
-                    }
-
-                    // 3. Native Rust Float Wrappers (`Float::f64()`, `Float::f32()`, `Float::i64()`)
-                    if target_name == "Float" {
-                        let float_kind = match method_name {
-                            "f32" => Some(RustFloatKind::F32),
-                            "f64" | "i64" => Some(RustFloatKind::F64),
-                            _ => None,
-                        };
-                        if let Some(fk) = float_kind {
-                            let src = if let Some(first_arg) = args.first() {
-                                Some(self.lower_expr(b, &first_arg.value, None)?)
-                            } else {
-                                None
-                            };
-                            b.emit(
-                                OpCode::WrapRustFloat { dst, src, kind: fk },
-                                expr.span,
-                            );
-                            return Ok(dst);
-                        }
-                    }
-
-                    // 4. Legacy PHP function bridge (`phpFun::array_merge` -> canonical `Arr::merge`)
+                    // 2. Legacy PHP function bridge (`phpFun::array_merge` -> canonical `Arr::merge`)
                     if target_name == "phpFun" {
                         let (resolved_facade, resolved_method) =
                             if let Some(mapping) = get_legacy_php_function(method_name) {
