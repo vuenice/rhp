@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use crate::ir::{lower_typed_program, lower_typed_program_with_base, CompilationError, IrModule};
 use crate::lexer::span::Span;
-use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::type_system::{
     parse_and_check, parse_and_check_with_file_id, parse_and_check_with_hierarchy, TypeHierarchy,
 };
@@ -33,10 +32,14 @@ use crate::vm::ExecutionError;
 pub enum FrozenValue {
     Null,
     Bool(bool),
-    Int(i32),
+    Int(i64),
+    I8(i8),
+    I32(i32),
+    U64(u64),
+    I128(i128),
     Float(f32),
-    RustInt { kind: RustIntKind, value: i128 },
-    RustFloat { kind: RustFloatKind, value: f64 },
+    Float64(f64),
+    Decimal(String),
     String(String),
     Bytes(Vec<u8>),
     List(Vec<FrozenValue>),
@@ -56,15 +59,13 @@ impl FrozenValue {
             PhpValue::Null => FrozenValue::Null,
             PhpValue::Bool(b) => FrozenValue::Bool(*b),
             PhpValue::Int(n) => FrozenValue::Int(*n),
+            PhpValue::I8(n) => FrozenValue::I8(*n),
+            PhpValue::I32(n) => FrozenValue::I32(*n),
+            PhpValue::U64(n) => FrozenValue::U64(*n),
+            PhpValue::I128(n) => FrozenValue::I128(*n),
             PhpValue::Float(f) => FrozenValue::Float(*f),
-            PhpValue::RustInt { kind, value } => FrozenValue::RustInt {
-                kind: *kind,
-                value: *value,
-            },
-            PhpValue::RustFloat { kind, value } => FrozenValue::RustFloat {
-                kind: *kind,
-                value: *value,
-            },
+            PhpValue::Float64(f) => FrozenValue::Float64(*f),
+            PhpValue::Decimal(d) => FrozenValue::Decimal(d.to_string()),
             PhpValue::String(s) => match s {
                 crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
                 crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
@@ -125,15 +126,15 @@ impl FrozenValue {
             FrozenValue::Null => PhpValue::Null,
             FrozenValue::Bool(b) => PhpValue::Bool(*b),
             FrozenValue::Int(n) => PhpValue::Int(*n),
+            FrozenValue::I8(n) => PhpValue::I8(*n),
+            FrozenValue::I32(n) => PhpValue::I32(*n),
+            FrozenValue::U64(n) => PhpValue::U64(*n),
+            FrozenValue::I128(n) => PhpValue::I128(*n),
             FrozenValue::Float(f) => PhpValue::Float(*f),
-            FrozenValue::RustInt { kind, value } => PhpValue::RustInt {
-                kind: *kind,
-                value: *value,
-            },
-            FrozenValue::RustFloat { kind, value } => PhpValue::RustFloat {
-                kind: *kind,
-                value: *value,
-            },
+            FrozenValue::Float64(f) => PhpValue::Float64(*f),
+            FrozenValue::Decimal(raw) => crate::vm::numeric::decimal_from_literal(raw)
+                .map(|d| PhpValue::Decimal(Box::new(d)))
+                .unwrap_or_else(|| PhpValue::string(raw.clone())),
             FrozenValue::String(s) => PhpValue::string(s.clone()),
             FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
             FrozenValue::List(items) => {
@@ -194,7 +195,7 @@ impl From<&PhpValue> for FrozenValue {
 
 impl From<i32> for FrozenValue {
     fn from(n: i32) -> Self {
-        FrozenValue::Int(n)
+        FrozenValue::Int(n as i64)
     }
 }
 

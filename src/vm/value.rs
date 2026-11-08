@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 
 use crate::ir::opcode::{ClassId, FunctionId};
 use crate::ir::ClosureCategory;
-use crate::type_system::types::{CollectionSubtype, RhpType, RustFloatKind, RustIntKind, TypeHierarchy};
+use crate::type_system::types::{CollectionSubtype, RhpType, TypeHierarchy};
 use crate::vm::parent_process::FrozenValue;
 
 /// String value representation in RHP supporting Utf8 and Bytes subtypes.
@@ -534,8 +534,8 @@ impl VmObject {
 ///
 /// Implements Technical Point #7 of the RHP Architecture Specification:
 /// - Represents primitive scalars directly with zero heap indirection (`Null`, `Bool`, `Int`, `Float`).
-/// - Standard integer defaults to `i32` and standard float defaults to `f32`.
-/// - Native Rust numeric subtypes (`i8`..`u128`, `f32`, `f64`) are held with exact bit-level precision.
+/// - Standard integer is `i64` and standard float storage is exact `f32`, exact `f64`, or `Decimal`.
+/// - Stored integer widths (`i8`, `i32`, `u64`, `i128`) are inline values, never `Rc`.
 /// - Strings utilize Small-String-Optimization (`RhpString`) for zero heap allocations on <= 23 bytes.
 /// - Standard arrays and subtyped collections are heap-allocated with reference-counting.
 /// - Objects, Closures, and Futures pass by reference handles (`Rc<RefCell<...>>`).
@@ -544,16 +544,22 @@ pub enum PhpValue {
     #[default]
     Null,
     Bool(bool),
-    Int(i32),
+    /// Default `int`. Arithmetic results are always this variant.
+    Int(i64),
+    /// Stored `i8`. Not a legal destination for integer arithmetic.
+    I8(i8),
+    /// Stored `i32`. Not a legal destination for integer arithmetic.
+    I32(i32),
+    /// Stored `u64`. Not a legal destination for integer arithmetic.
+    U64(u64),
+    /// Stored `i128`. Not a legal destination for integer arithmetic.
+    I128(i128),
+    /// Exact `f32`.
     Float(f32),
-    RustInt {
-        kind: RustIntKind,
-        value: i128,
-    },
-    RustFloat {
-        kind: RustFloatKind,
-        value: f64,
-    },
+    /// Exact `f64` that is not exact in `f32`.
+    Float64(f64),
+    /// Base-10 value that is not exact in binary floating point.
+    Decimal(Box<crate::vm::decimal::Decimal>),
     String(RhpString),
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
@@ -1003,9 +1009,11 @@ impl PhpValue {
             Self::Null => "null",
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
-            Self::Float(_) => "float",
-            Self::RustInt { kind, .. } => kind.as_str(),
-            Self::RustFloat { kind, .. } => kind.as_str(),
+            Self::I8(_) => "i8",
+            Self::I32(_) => "i32",
+            Self::U64(_) => "u64",
+            Self::I128(_) => "i128",
+            Self::Float(_) | Self::Float64(_) | Self::Decimal(_) => "float",
             Self::String(s) => match s {
                 StrValue::Utf8 { .. } => "string",
                 StrValue::Bytes(_) => "bytes",
@@ -1043,9 +1051,13 @@ impl PhpValue {
             Self::Null => false,
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
+            Self::I8(n) => *n != 0,
+            Self::I32(n) => *n != 0,
+            Self::U64(n) => *n != 0,
+            Self::I128(n) => *n != 0,
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
-            Self::RustInt { value, .. } => *value != 0,
-            Self::RustFloat { value, .. } => *value != 0.0 && !value.is_nan(),
+            Self::Float64(fl) => *fl != 0.0 && !fl.is_nan(),
+            Self::Decimal(d) => !d.is_zero(),
             Self::String(s) => match s {
                 StrValue::Utf8 { s, .. } => !s.is_empty() && &**s != "0",
                 StrValue::Bytes(b) => !b.is_empty() && &**b != b"0",
@@ -1097,9 +1109,32 @@ impl PhpValue {
             Self::Null
                 | Self::Bool(_)
                 | Self::Int(_)
+                | Self::I8(_)
+                | Self::I32(_)
+                | Self::U64(_)
+                | Self::I128(_)
                 | Self::Float(_)
-                | Self::RustInt { .. }
-                | Self::RustFloat { .. }
+                | Self::Float64(_)
+        )
+    }
+
+    /// Full two's-complement bits of an integer value. `u64` fits in `i128`.
+    pub fn signed_bits(&self) -> Option<i128> {
+        match self {
+            Self::Int(n) => Some(*n as i128),
+            Self::I8(n) => Some(*n as i128),
+            Self::I32(n) => Some(*n as i128),
+            Self::U64(n) => Some(*n as i128),
+            Self::I128(n) => Some(*n),
+            Self::Bool(b) => Some(if *b { 1 } else { 0 }),
+            _ => None,
+        }
+    }
+
+    pub fn is_integer_value(&self) -> bool {
+        matches!(
+            self,
+            Self::Int(_) | Self::I8(_) | Self::I32(_) | Self::U64(_) | Self::I128(_)
         )
     }
 
@@ -1111,24 +1146,26 @@ impl PhpValue {
     }
 
     pub fn to_i32(&self) -> Option<i32> {
+        if let Some(bits) = self.signed_bits() {
+            return i32::try_from(bits).ok();
+        }
         match self {
-            Self::Int(n) => Some(*n),
-            Self::Bool(b) => Some(if *b { 1 } else { 0 }),
             Self::Float(f) => Some(*f as i32),
-            Self::RustInt { value, .. } => Some(*value as i32),
-            Self::RustFloat { value, .. } => Some(*value as i32),
+            Self::Float64(f) => Some(*f as i32),
+            Self::Decimal(d) => d.to_string().parse::<i32>().ok(),
             Self::String(s) => s.trim().parse::<i32>().ok(),
             _ => None,
         }
     }
 
     pub fn to_i64(&self) -> Option<i64> {
+        if let Some(bits) = self.signed_bits() {
+            return i64::try_from(bits).ok();
+        }
         match self {
-            Self::Int(n) => Some(*n as i64),
-            Self::Bool(b) => Some(if *b { 1 } else { 0 }),
             Self::Float(f) => Some(*f as i64),
-            Self::RustInt { value, .. } => Some(*value as i64),
-            Self::RustFloat { value, .. } => Some(*value as i64),
+            Self::Float64(f) => Some(*f as i64),
+            Self::Decimal(d) => d.to_string().parse::<i64>().ok(),
             Self::String(s) => s.trim().parse::<i64>().ok(),
             _ => None,
         }
@@ -1137,24 +1174,28 @@ impl PhpValue {
     pub fn to_f32(&self) -> Option<f32> {
         match self {
             Self::Float(f) => Some(*f),
-            Self::Int(n) => Some(*n as f32),
+            Self::Float64(f) => Some(*f as f32),
+            Self::Decimal(d) => Some(d.to_f32()),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-            Self::RustInt { value, .. } => Some(*value as f32),
-            Self::RustFloat { value, .. } => Some(*value as f32),
-            Self::String(s) => s.trim().parse::<f32>().ok(),
-            _ => None,
+            other => other.to_i64().map(|n| n as f32).or_else(|| match other {
+                Self::String(s) => s.trim().parse::<f32>().ok(),
+                _ => None,
+            }),
         }
     }
 
     pub fn to_f64(&self) -> Option<f64> {
         match self {
             Self::Float(f) => Some(*f as f64),
-            Self::Int(n) => Some(*n as f64),
+            Self::Float64(f) => Some(*f),
+            Self::Decimal(d) => Some(d.to_f64()),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-            Self::RustInt { value, .. } => Some(*value as f64),
-            Self::RustFloat { value, .. } => Some(*value),
-            Self::String(s) => s.trim().parse::<f64>().ok(),
-            _ => None,
+            other => other.to_i64().map(|n| n as f64).or_else(|| match other {
+                Self::U64(n) => Some(*n as f64),
+                Self::I128(n) => Some(*n as f64),
+                Self::String(s) => s.trim().parse::<f64>().ok(),
+                _ => None,
+            }),
         }
     }
 
@@ -1163,15 +1204,13 @@ impl PhpValue {
             Self::Null => String::new(),
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
-            Self::Float(fl) => {
-                if fl.fract() == 0.0 && !fl.is_infinite() && !fl.is_nan() {
-                    fl.to_string()
-                } else {
-                    fl.to_string()
-                }
-            }
-            Self::RustInt { value, .. } => value.to_string(),
-            Self::RustFloat { value, .. } => value.to_string(),
+            Self::I8(n) => n.to_string(),
+            Self::I32(n) => n.to_string(),
+            Self::U64(n) => n.to_string(),
+            Self::I128(n) => n.to_string(),
+            Self::Float(fl) => fl.to_string(),
+            Self::Float64(fl) => fl.to_string(),
+            Self::Decimal(d) => d.to_string(),
             Self::String(s) => s.to_string(),
             Self::Array(_) => "Array".to_string(),
             Self::List(_) => "Arr::list".to_string(),
@@ -1216,9 +1255,13 @@ impl PhpValue {
             Self::Null => String::new(),
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
+            Self::I8(n) => n.to_string(),
+            Self::I32(n) => n.to_string(),
+            Self::U64(n) => n.to_string(),
+            Self::I128(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
-            Self::RustInt { value, .. } => value.to_string(),
-            Self::RustFloat { value, .. } => value.to_string(),
+            Self::Float64(fl) => fl.to_string(),
+            Self::Decimal(d) => d.to_string(),
             Self::String(s) => s.to_string(),
             Self::Array(arr) => {
                 let borrowed = arr.borrow();
@@ -1323,6 +1366,10 @@ impl PhpValue {
             (Self::Null, Self::Null) => true,
             (Self::Bool(x), Self::Bool(y)) => x == y,
             (Self::Int(x), Self::Int(y)) => x == y,
+            (Self::I8(x), Self::I8(y)) => x == y,
+            (Self::I32(x), Self::I32(y)) => x == y,
+            (Self::U64(x), Self::U64(y)) => x == y,
+            (Self::I128(x), Self::I128(y)) => x == y,
             (Self::Float(x), Self::Float(y)) => {
                 compare_floats_by_max_decimal_point(
                     *x as f64,
@@ -1331,59 +1378,12 @@ impl PhpValue {
                     &y.to_string(),
                 )
             }
-            (
-                Self::RustInt {
-                    kind: k1,
-                    value: v1,
-                },
-                Self::RustInt {
-                    kind: k2,
-                    value: v2,
-                },
-            ) => k1 == k2 && v1 == v2,
-            (
-                Self::RustFloat {
-                    kind: k1,
-                    value: v1,
-                },
-                Self::RustFloat {
-                    kind: k2,
-                    value: v2,
-                },
-            ) => {
-                let s1 = if *k1 == RustFloatKind::F32 {
-                    (*v1 as f32).to_string()
-                } else {
-                    v1.to_string()
-                };
-                let s2 = if *k2 == RustFloatKind::F32 {
-                    (*v2 as f32).to_string()
-                } else {
-                    v2.to_string()
-                };
-                compare_floats_by_max_decimal_point(*v1, &s1, *v2, &s2)
+            (Self::Float64(x), Self::Float64(y)) => {
+                compare_floats_by_max_decimal_point(*x, &x.to_string(), *y, &y.to_string())
             }
-            (
-                Self::Float(x),
-                Self::RustFloat { kind, value: v2 },
-            ) => {
-                let s2 = if *kind == RustFloatKind::F32 {
-                    (*v2 as f32).to_string()
-                } else {
-                    v2.to_string()
-                };
-                compare_floats_by_max_decimal_point(*x as f64, &x.to_string(), *v2, &s2)
-            }
-            (
-                Self::RustFloat { kind, value: v1 },
-                Self::Float(y),
-            ) => {
-                let s1 = if *kind == RustFloatKind::F32 {
-                    (*v1 as f32).to_string()
-                } else {
-                    v1.to_string()
-                };
-                compare_floats_by_max_decimal_point(*v1, &s1, *y as f64, &y.to_string())
+            (Self::Decimal(x), Self::Decimal(y)) => x == y,
+            (Self::Float(x), Self::Float64(y)) | (Self::Float64(y), Self::Float(x)) => {
+                compare_floats_by_max_decimal_point(*x as f64, &x.to_string(), *y, &y.to_string())
             }
             (Self::String(x), Self::String(y)) => x == y,
             (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
@@ -1444,18 +1444,18 @@ impl PhpValue {
             RhpType::Void | RhpType::Never => false,
             RhpType::Null => matches!(self, Self::Null),
             RhpType::Bool => matches!(self, Self::Bool(_)),
-            RhpType::Int => matches!(self, Self::Int(_) | Self::RustInt { .. }),
-            RhpType::Float => matches!(self, Self::Float(_) | Self::RustFloat { .. } | Self::Int(_)),
-            RhpType::RustInt(kind) => match self {
-                Self::RustInt { kind: k, .. } => k == kind,
-                Self::Int(_) => true,
-                _ => false,
-            },
-            RhpType::RustFloat(kind) => match self {
-                Self::RustFloat { kind: k, .. } => k == kind,
-                Self::Float(_) | Self::Int(_) => true,
-                _ => false,
-            },
+            RhpType::Int => self.to_i64().is_some() && self.is_integer_value(),
+            RhpType::Float => matches!(
+                self,
+                Self::Float(_) | Self::Float64(_) | Self::Decimal(_) | Self::Int(_)
+            ),
+            RhpType::I8 => self.signed_bits().and_then(|n| i8::try_from(n).ok()).is_some()
+                && self.is_integer_value(),
+            RhpType::I32 => self.signed_bits().and_then(|n| i32::try_from(n).ok()).is_some()
+                && self.is_integer_value(),
+            RhpType::U64 => self.signed_bits().and_then(|n| u64::try_from(n).ok()).is_some()
+                && self.is_integer_value(),
+            RhpType::I128 => self.is_integer_value(),
             RhpType::String => matches!(self, Self::String(StrValue::Utf8 { .. })),
             RhpType::Bytes => matches!(self, Self::String(StrValue::Bytes(_))),
             RhpType::Array(inner) => {
@@ -1986,40 +1986,17 @@ impl PartialEq for PhpValue {
                     &b.to_string(),
                 )
             }
+            (Self::Float64(a), Self::Float64(b)) => {
+                compare_floats_by_max_decimal_point(*a, &a.to_string(), *b, &b.to_string())
+            }
+            (Self::Decimal(a), Self::Decimal(b)) => a == b,
+            (left, right)
+                if left.is_integer_value() && right.is_integer_value() =>
+            {
+                left.signed_bits() == right.signed_bits()
+            }
             (Self::Int(a), Self::Float(b)) => (*a as f32) == *b,
             (Self::Float(a), Self::Int(b)) => *a == (*b as f32),
-            (Self::RustInt { value: a, .. }, Self::RustInt { value: b, .. }) => a == b,
-            (Self::RustInt { value: a, .. }, Self::Int(b)) => *a == (*b as i128),
-            (Self::Int(a), Self::RustInt { value: b, .. }) => (*a as i128) == *b,
-            (Self::RustFloat { kind: k1, value: a }, Self::RustFloat { kind: k2, value: b }) => {
-                let s1 = if *k1 == RustFloatKind::F32 {
-                    (*a as f32).to_string()
-                } else {
-                    a.to_string()
-                };
-                let s2 = if *k2 == RustFloatKind::F32 {
-                    (*b as f32).to_string()
-                } else {
-                    b.to_string()
-                };
-                compare_floats_by_max_decimal_point(*a, &s1, *b, &s2)
-            }
-            (Self::RustFloat { kind, value: a }, Self::Float(b)) => {
-                let s1 = if *kind == RustFloatKind::F32 {
-                    (*a as f32).to_string()
-                } else {
-                    a.to_string()
-                };
-                compare_floats_by_max_decimal_point(*a, &s1, *b as f64, &b.to_string())
-            }
-            (Self::Float(a), Self::RustFloat { kind, value: b }) => {
-                let s2 = if *kind == RustFloatKind::F32 {
-                    (*b as f32).to_string()
-                } else {
-                    b.to_string()
-                };
-                compare_floats_by_max_decimal_point(*a as f64, &a.to_string(), *b, &s2)
-            }
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Array(a) | Self::List(a), Self::Array(b) | Self::List(b)) => {
                 *a.borrow() == *b.borrow()
@@ -2040,12 +2017,12 @@ impl PartialOrd for PhpValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
+            (Self::Float64(a), Self::Float64(b)) => a.partial_cmp(b),
             (Self::Int(a), Self::Float(b)) => (*a as f32).partial_cmp(b),
             (Self::Float(a), Self::Int(b)) => a.partial_cmp(&(*b as f32)),
-            (Self::RustInt { value: a, .. }, Self::RustInt { value: b, .. }) => a.partial_cmp(b),
-            (Self::RustInt { value: a, .. }, Self::Int(b)) => a.partial_cmp(&(*b as i128)),
-            (Self::Int(a), Self::RustInt { value: b, .. }) => (*a as i128).partial_cmp(b),
-            (Self::RustFloat { value: a, .. }, Self::RustFloat { value: b, .. }) => a.partial_cmp(b),
+            (left, right) if left.is_integer_value() && right.is_integer_value() => {
+                left.signed_bits().partial_cmp(&right.signed_bits())
+            }
             (Self::String(a), Self::String(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
             _ => None,
@@ -2067,17 +2044,33 @@ impl Hash for PhpValue {
                 2u8.hash(state);
                 (*n as i128).hash(state);
             }
-            Self::RustInt { value, .. } => {
+            Self::I8(n) => {
                 2u8.hash(state);
-                value.hash(state);
+                (*n as i128).hash(state);
+            }
+            Self::I32(n) => {
+                2u8.hash(state);
+                (*n as i128).hash(state);
+            }
+            Self::U64(n) => {
+                2u8.hash(state);
+                (*n as i128).hash(state);
+            }
+            Self::I128(n) => {
+                2u8.hash(state);
+                n.hash(state);
             }
             Self::Float(fl) => {
                 3u8.hash(state);
                 fl.to_bits().hash(state);
             }
-            Self::RustFloat { value, .. } => {
-                3u8.hash(state);
-                (*value as f32).to_bits().hash(state);
+            Self::Float64(fl) => {
+                4u8.hash(state);
+                fl.to_bits().hash(state);
+            }
+            Self::Decimal(d) => {
+                5u8.hash(state);
+                d.to_string().hash(state);
             }
             Self::String(s) => {
                 6u8.hash(state);
@@ -2155,9 +2148,13 @@ impl fmt::Debug for PhpValue {
             Self::Null => write!(f, "null"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::Int(n) => write!(f, "{}", n),
+            Self::I8(n) => write!(f, "{}", n),
+            Self::I32(n) => write!(f, "{}", n),
+            Self::U64(n) => write!(f, "{}", n),
+            Self::I128(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
-            Self::RustInt { kind, value } => write!(f, "{}_{}", value, kind),
-            Self::RustFloat { kind, value } => write!(f, "{:?}_{}", value, kind),
+            Self::Float64(fl) => write!(f, "{:?}", fl),
+            Self::Decimal(d) => write!(f, "{}", d),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Array(arr) => write!(f, "Array({:?})", arr.borrow()),
             Self::List(list) => write!(f, "Arr::list({:?})", list.borrow()),
@@ -2188,7 +2185,7 @@ impl From<bool> for PhpValue {
 impl From<i32> for PhpValue {
     #[inline]
     fn from(n: i32) -> Self {
-        PhpValue::Int(n)
+        PhpValue::Int((n) as i64)
     }
 }
 

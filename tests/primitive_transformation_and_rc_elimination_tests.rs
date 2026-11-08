@@ -18,8 +18,8 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(dev_int, PhpValue::Int(123_i32));
-    assert_eq!(dev_int.to_i32(), Some(123_i32));
+    assert_eq!(dev_int, PhpValue::Int(123_i64));
+    assert_eq!(dev_int.to_i64(), Some(123_i64));
     assert_eq!(dev_int.requires_rc(), false);
     assert_eq!(dev_int.is_scalar_primitive(), true);
 
@@ -78,7 +78,7 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(build_int, PhpValue::Int(123_i32));
+    assert_eq!(build_int, PhpValue::Int(123_i64));
 
     let build_float = execute(
         RunMode::Build {
@@ -117,16 +117,27 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
 
 #[test]
 fn test_build_mode_emits_direct_native_opcodes_without_constant_pool() {
-    // Verify float literal emits OpCode::LoadFloat directly without constant pool indirection
-    let expr_float = parse_expr("2.718").unwrap();
-    let chunk_float = compile_to_bytecode(&expr_float).unwrap();
+    // An exact binary float stays a LoadFloat. 2.718 is not exact, so it is a Decimal constant.
+    let expr_exact = parse_expr("2.5").unwrap();
+    let chunk_exact = compile_to_bytecode(&expr_exact).unwrap();
     assert_eq!(
-        chunk_float.instructions[0],
+        chunk_exact.instructions[0],
         OpCode::LoadFloat {
             dst: Reg(0),
-            bits: 2.718_f32.to_bits(),
+            bits: 2.5_f32.to_bits(),
         }
     );
+    let expr_float = parse_expr("2.718").unwrap();
+    let chunk_float = compile_to_bytecode(&expr_float).unwrap();
+    match chunk_float.instructions[0] {
+        OpCode::LoadConst { const_id, .. } => {
+            assert!(matches!(
+                chunk_float.constants[const_id.0 as usize],
+                rhp::Constant::Decimal(_)
+            ));
+        }
+        other => panic!("inexact float should be a decimal constant, got {other:?}"),
+    }
 
     // Verify int literal emits OpCode::LoadInt directly
     let expr_int = parse_expr("42").unwrap();
@@ -215,8 +226,8 @@ fn test_zero_rc_overhead_for_all_primitives() {
     assert!(!float_val.is_shared());
 
     // Verify RhpType native Rust mapping and Rc check
-    assert_eq!(RhpType::Int.to_native_rust_type(), "i32");
-    assert_eq!(RhpType::Float.to_native_rust_type(), "f32");
+    assert_eq!(RhpType::Int.to_native_rust_type(), "i64");
+    assert_eq!(RhpType::Float.to_native_rust_type(), "f64");
     assert_eq!(RhpType::Bool.to_native_rust_type(), "bool");
     assert_eq!(RhpType::Null.to_native_rust_type(), "None");
 

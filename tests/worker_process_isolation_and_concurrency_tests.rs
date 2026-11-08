@@ -63,7 +63,7 @@ fn test_multi_threaded_worker_pool_concurrency() {
 
     for (i, resp) in responses.into_iter().enumerate() {
         assert_eq!(resp.status, WorkerResponseStatus::Success);
-        let subtotal = (i as i32) * 100;
+        let subtotal = (i as i64) * 100;
         let expected = subtotal + 10 + (subtotal * 15) / 100;
         assert_eq!(
             resp.to_php_value(),

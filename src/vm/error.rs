@@ -40,6 +40,12 @@ pub enum RuntimeErrorKind {
     #[error("DivisionByZeroError: Division or modulo by zero")]
     DivisionByZero,
 
+    #[error("ArithmeticError: numeric result does not fit in i64")]
+    IntegerOverflow,
+
+    #[error("ArithmeticError: decimal result exceeds {digits} digits")]
+    DecimalOverflow { digits: usize },
+
     #[error("TypeError: Unsupported operand types for '{op}': {lhs_type} and {rhs_type}")]
     InvalidBinaryOperands {
         op: String,

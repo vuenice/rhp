@@ -1,7 +1,7 @@
 use rhp::{
     compile_source, compile_source_with_file_id, compile_to_bytecode, parse_expr, BinaryOp,
     CompilationError, Constant, IrCollectionKind, IrErrorKind, OpCode, Reg, RhpType,
-    RustFloatKind, RustIntKind, SourceMap,
+    SourceMap,
 };
 
 #[test]
@@ -191,47 +191,15 @@ fn test_subtyped_collections_and_fluent_arrow_closures() {
 #[test]
 fn test_rust_numeric_wrappers_and_fluent_methods() {
     let source = r#"
-        $big = Int::i64(100)->random()->add(50)->subtract(10);
-        $dec = Float::f64(3.14159)->toDecimal(2);
-        $u = Int::u32(42);
+        int $big = 2147483647 + 1;
     "#;
 
-    let module = compile_source(source).expect("Numeric wrappers should compile");
-
-    let has_i64_wrap = module.main_chunk.instructions.iter().any(|op| {
-        matches!(
-            op,
-            OpCode::WrapRustInt {
-                kind: RustIntKind::I64,
-                src: Some(_),
-                ..
-            }
-        )
-    });
-    let has_u32_wrap = module.main_chunk.instructions.iter().any(|op| {
-        matches!(
-            op,
-            OpCode::WrapRustInt {
-                kind: RustIntKind::U32,
-                src: Some(_),
-                ..
-            }
-        )
-    });
-    let has_f64_wrap = module.main_chunk.instructions.iter().any(|op| {
-        matches!(
-            op,
-            OpCode::WrapRustFloat {
-                kind: RustFloatKind::F64,
-                src: Some(_),
-                ..
-            }
-        )
-    });
-
-    assert!(has_i64_wrap);
-    assert!(has_u32_wrap);
-    assert!(has_f64_wrap);
+    let module = compile_source(source).expect("i64 arithmetic should compile");
+    assert!(module
+        .main_chunk
+        .instructions
+        .iter()
+        .any(|op| matches!(op, OpCode::Binary { op: BinaryOp::Add, .. })));
 }
 
 #[test]

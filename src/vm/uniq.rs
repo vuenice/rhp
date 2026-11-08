@@ -25,7 +25,6 @@ use std::cell::RefCell;
 use indexmap::IndexMap;
 use sha1::{Digest, Sha1};
 
-use crate::type_system::types::RustIntKind;
 use crate::vm::error::RuntimeErrorKind;
 use crate::vm::facade::{get_arg_str, FacadeResult};
 use crate::vm::value::PhpValue;
@@ -324,7 +323,7 @@ pub fn parse_uuid_info(s: &str) -> Result<PhpValue, RuntimeErrorKind> {
     map.insert("hex".to_string(), PhpValue::string(hex_str));
 
     let ver = (bytes[6] >> 4) as i32;
-    map.insert("version".to_string(), PhpValue::Int(ver));
+    map.insert("version".to_string(), PhpValue::Int((ver) as i64));
 
     let var_byte = bytes[8];
     let variant = if (var_byte & 0x80) == 0 {
@@ -347,12 +346,9 @@ pub fn parse_uuid_info(s: &str) -> Result<PhpValue, RuntimeErrorKind> {
             | (bytes[5] as u64);
         let val = ts_ms as i64;
         let ts_val = if let Ok(narrow) = i32::try_from(val) {
-            PhpValue::Int(narrow)
+            PhpValue::Int((narrow) as i64)
         } else {
-            PhpValue::RustInt {
-                kind: RustIntKind::I64,
-                value: val as i128,
-            }
+            PhpValue::Int((val as i128) as i64)
         };
         map.insert("timestamp_ms".to_string(), ts_val);
     }
@@ -433,7 +429,7 @@ pub fn dispatch_uniq(method: &str, args: &[PhpValue]) -> FacadeResult {
             let s = get_arg_str(args, 0, "Uniq::version")?;
             if let Some(bytes) = parse_uuid_bytes(&s) {
                 let ver = (bytes[6] >> 4) as i32;
-                Ok(PhpValue::Int(ver))
+                Ok(PhpValue::Int((ver) as i64))
             } else {
                 Ok(PhpValue::Null)
             }

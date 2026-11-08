@@ -84,7 +84,7 @@ fn test_shift_jis_japanese_support_and_str_facade_constructors() {
         assert_eq!(b[0].to_php_string(), "こんにちは世界");
         assert_eq!(b[1].to_php_string(), "こんにちは世界");
         assert_eq!(b[2].to_php_string(), "こんにちは世界");
-        assert_eq!(b[3], PhpValue::Int(sjis_bytes.len() as i32));
+        assert_eq!(b[3], PhpValue::Int(sjis_bytes.len() as i64));
         assert_eq!(b[4].to_php_string(), "こんにちは世界");
     } else {
         panic!("expected list return");

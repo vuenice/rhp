@@ -18,7 +18,6 @@ use chrono::{
 };
 
 use crate::lexer::span::Span;
-use crate::type_system::types::RustIntKind;
 use crate::vm::error::{RuntimeError, RuntimeErrorKind};
 use crate::vm::facade::{get_arg_str, register_runtime_closure_macro, FacadeResult};
 use crate::vm::value::{PhpValue, VmObject};
@@ -1426,20 +1425,20 @@ impl CarbonDate {
         let iso = self.to_iso_string();
         obj.set_property("formatted", PhpValue::string(&formatted));
         obj.set_property("iso", PhpValue::string(&iso));
-        obj.set_property("year", PhpValue::Int(self.year()));
-        obj.set_property("month", PhpValue::Int(self.month() as i32));
-        obj.set_property("day", PhpValue::Int(self.day() as i32));
-        obj.set_property("hour", PhpValue::Int(self.hour() as i32));
-        obj.set_property("minute", PhpValue::Int(self.minute() as i32));
-        obj.set_property("second", PhpValue::Int(self.second() as i32));
-        obj.set_property("micro", PhpValue::Int(self.micro() as i32));
-        obj.set_property("timestamp", PhpValue::RustInt { value: self.timestamp() as i128, kind: RustIntKind::I64 });
+        obj.set_property("year", PhpValue::Int((self.year()) as i64));
+        obj.set_property("month", PhpValue::Int(self.month() as i64));
+        obj.set_property("day", PhpValue::Int(self.day() as i64));
+        obj.set_property("hour", PhpValue::Int(self.hour() as i64));
+        obj.set_property("minute", PhpValue::Int(self.minute() as i64));
+        obj.set_property("second", PhpValue::Int(self.second() as i64));
+        obj.set_property("micro", PhpValue::Int(self.micro() as i64));
+        obj.set_property("timestamp", PhpValue::Int(self.timestamp()));
         obj.set_property("timezone", PhpValue::string(&self.tz_name));
-        obj.set_property("dayOfWeek", PhpValue::Int(self.day_of_week() as i32));
-        obj.set_property("dayOfYear", PhpValue::Int(self.day_of_year() as i32));
-        obj.set_property("weekOfYear", PhpValue::Int(self.week_of_year() as i32));
-        obj.set_property("quarter", PhpValue::Int(self.quarter() as i32));
-        obj.set_property("daysInMonth", PhpValue::Int(self.days_in_month() as i32));
+        obj.set_property("dayOfWeek", PhpValue::Int(self.day_of_week() as i64));
+        obj.set_property("dayOfYear", PhpValue::Int(self.day_of_year() as i64));
+        obj.set_property("weekOfYear", PhpValue::Int(self.week_of_year() as i64));
+        obj.set_property("quarter", PhpValue::Int(self.quarter() as i64));
+        obj.set_property("daysInMonth", PhpValue::Int(self.days_in_month() as i64));
     }
 }
 
@@ -1469,7 +1468,7 @@ pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
         }
         PhpValue::String(s) => CarbonDate::parse(s, None),
         PhpValue::Int(n) => Ok(CarbonDate::create_from_timestamp(*n as i64, 0, None)),
-        PhpValue::RustInt { value, .. } => Ok(CarbonDate::create_from_timestamp(*value as i64, 0, None)),
+        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Ok(CarbonDate::create_from_timestamp(value.to_i64().unwrap_or(0), 0, None)),
         _ => Err("Invalid value provided for Time date conversion".to_string()),
     }
 }
@@ -1644,7 +1643,7 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(v) => {
                     let s = match v {
                         PhpValue::Int(i) => i.to_string(),
-                        PhpValue::RustInt { value, .. } => value.to_string(),
+                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_string(),
                         other => other.to_php_string(),
                     };
                     CarbonDate::parse(&s, None).map_err(|e| RuntimeErrorKind::Custom { message: e })?
@@ -1816,29 +1815,26 @@ pub fn exec_time_instance_method(
         }
 
         // --- Getters & Queries ---
-        "getTimestamp" | "timestamp" => Ok(PhpValue::Int(current.timestamp() as i32)),
-        "getTimestampMs" | "timestampMs" => Ok(PhpValue::RustInt {
-            value: current.timestamp_ms() as i128,
-            kind: RustIntKind::I64,
-        }),
+        "getTimestamp" | "timestamp" => Ok(PhpValue::Int(current.timestamp() as i64)),
+        "getTimestampMs" | "timestampMs" => Ok(PhpValue::Int(current.timestamp_ms())),
         "getTimezone" | "timezoneName" | "getTimezoneName" => {
             Ok(PhpValue::string(current.timezone_name()))
         }
-        "year" => Ok(PhpValue::Int(current.year())),
-        "month" => Ok(PhpValue::Int(current.month() as i32)),
-        "day" => Ok(PhpValue::Int(current.day() as i32)),
-        "hour" => Ok(PhpValue::Int(current.hour() as i32)),
-        "minute" => Ok(PhpValue::Int(current.minute() as i32)),
-        "second" => Ok(PhpValue::Int(current.second() as i32)),
-        "micro" | "microsecond" => Ok(PhpValue::Int(current.micro() as i32)),
-        "millisecond" => Ok(PhpValue::Int(current.millisecond() as i32)),
-        "dayOfWeek" => Ok(PhpValue::Int(current.day_of_week() as i32)),
-        "dayOfWeekIso" => Ok(PhpValue::Int(current.day_of_week_iso() as i32)),
-        "dayOfYear" => Ok(PhpValue::Int(current.day_of_year() as i32)),
-        "weekOfYear" => Ok(PhpValue::Int(current.week_of_year() as i32)),
-        "quarter" => Ok(PhpValue::Int(current.quarter() as i32)),
-        "daysInMonth" => Ok(PhpValue::Int(current.days_in_month() as i32)),
-        "age" => Ok(PhpValue::Int(current.age())),
+        "year" => Ok(PhpValue::Int((current.year()) as i64)),
+        "month" => Ok(PhpValue::Int(current.month() as i64)),
+        "day" => Ok(PhpValue::Int(current.day() as i64)),
+        "hour" => Ok(PhpValue::Int(current.hour() as i64)),
+        "minute" => Ok(PhpValue::Int(current.minute() as i64)),
+        "second" => Ok(PhpValue::Int(current.second() as i64)),
+        "micro" | "microsecond" => Ok(PhpValue::Int(current.micro() as i64)),
+        "millisecond" => Ok(PhpValue::Int(current.millisecond() as i64)),
+        "dayOfWeek" => Ok(PhpValue::Int(current.day_of_week() as i64)),
+        "dayOfWeekIso" => Ok(PhpValue::Int(current.day_of_week_iso() as i64)),
+        "dayOfYear" => Ok(PhpValue::Int(current.day_of_year() as i64)),
+        "weekOfYear" => Ok(PhpValue::Int(current.week_of_year() as i64)),
+        "quarter" => Ok(PhpValue::Int(current.quarter() as i64)),
+        "daysInMonth" => Ok(PhpValue::Int(current.days_in_month() as i64)),
+        "age" => Ok(PhpValue::Int((current.age()) as i64)),
 
         // --- Comparisons ---
         "isToday" => Ok(PhpValue::Bool(current.is_today())),
@@ -1915,42 +1911,42 @@ pub fn exec_time_instance_method(
         "diffInSeconds" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_seconds(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_seconds(&other, abs) as i64))
         }
         "diffInMinutes" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_minutes(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_minutes(&other, abs) as i64))
         }
         "diffInHours" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_hours(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_hours(&other, abs) as i64))
         }
         "diffInDays" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_days(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_days(&other, abs) as i64))
         }
         "diffInWeeks" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_weeks(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_weeks(&other, abs) as i64))
         }
         "diffInMonths" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_months(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_months(&other, abs) as i64))
         }
         "diffInQuarters" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_quarters(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_quarters(&other, abs) as i64))
         }
         "diffInYears" => {
             let other = parse_arg_date_or_now(args, 0, &current.tz_name, span)?;
             let abs = args.get(1).and_then(|v| v.to_bool()).unwrap_or(true);
-            Ok(PhpValue::Int(current.diff_in_years(&other, abs) as i32))
+            Ok(PhpValue::Int(current.diff_in_years(&other, abs) as i64))
         }
         "diffForHumans" => {
             let other = if args.is_empty() || args[0].is_null() {

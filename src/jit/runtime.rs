@@ -73,10 +73,14 @@ impl NativeSlot {
         match val {
             PhpValue::Null => Self::new_null(),
             PhpValue::Bool(b) => Self::new_bool(*b),
-            PhpValue::Int(n) => Self::new_int(*n as i64),
-            PhpValue::RustInt { value, .. } => Self::new_int(*value as i64),
+            PhpValue::Int(n) => Self::new_int(*n),
+            PhpValue::I8(n) => Self::new_int(*n as i64),
+            PhpValue::I32(n) => Self::new_int(*n as i64),
+            PhpValue::U64(n) => Self::new_int(*n as i64),
+            PhpValue::I128(n) => Self::new_int(*n as i64),
             PhpValue::Float(f) => Self::new_float(*f as f64),
-            PhpValue::RustFloat { value, .. } => Self::new_float(*value),
+            PhpValue::Float64(f) => Self::new_float(*f),
+            PhpValue::Decimal(d) => Self::new_float(d.to_f64()),
             _ => Self {
                 int_val: 0,
                 float_val: 0.0,
@@ -91,26 +95,17 @@ impl NativeSlot {
         match self.tag {
             TAG_NULL => PhpValue::Null,
             TAG_BOOL => PhpValue::Bool(self.int_val != 0),
-            TAG_INT => {
-                if let Some(PhpValue::RustInt { kind, .. }) = original {
-                    PhpValue::RustInt {
-                        kind: *kind,
-                        value: self.int_val as i128,
-                    }
-                } else {
-                    PhpValue::Int(self.int_val as i32)
-                }
-            }
-            TAG_FLOAT => {
-                if let Some(PhpValue::RustFloat { kind, .. }) = original {
-                    PhpValue::RustFloat {
-                        kind: *kind,
-                        value: self.float_val,
-                    }
-                } else {
-                    PhpValue::Float(self.float_val as f32)
-                }
-            }
+            TAG_INT => match original {
+                Some(PhpValue::I8(_)) => PhpValue::I8(self.int_val as i8),
+                Some(PhpValue::I32(_)) => PhpValue::I32(self.int_val as i32),
+                Some(PhpValue::U64(_)) => PhpValue::U64(self.int_val as u64),
+                Some(PhpValue::I128(_)) => PhpValue::I128(self.int_val as i128),
+                _ => PhpValue::Int(self.int_val),
+            },
+            TAG_FLOAT => match original {
+                Some(PhpValue::Float64(_)) | Some(PhpValue::Decimal(_)) => PhpValue::Float64(self.float_val),
+                _ => PhpValue::Float(self.float_val as f32),
+            },
             TAG_OTHER => original.cloned().unwrap_or(PhpValue::Null),
             _ => PhpValue::Null,
         }

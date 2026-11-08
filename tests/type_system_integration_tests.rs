@@ -1,6 +1,6 @@
 use rhp::{
     parse_and_check, parse_and_check_with_file_id, CollectionSubtype, FrontendError, RhpType,
-    RustFloatKind, RustIntKind, SourceMap, TypeErrorKind,
+    SourceMap, TypeErrorKind,
 };
 
 #[test]
@@ -339,44 +339,34 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
 #[test]
 fn test_extended_rust_numeric_types_and_fluent_wrappers() {
     let source = r#"
-        function computeMetrics(i64 $bigId, u32 $counter, f64 $ratio): f64 {
-            $generatedId = Int::i64(9223372036854775807)->random()->add()->subtract();
-            $precisePrice = Float::f64(99.99)->toDecimal(2);
-            $converted = Float::i64()->toDecimal(2);
-            u64 $u64Val = Int::u64(42);
-            return $precisePrice * $ratio;
+        function computeMetrics(int $bigId, u64 $counter, float $ratio): float {
+            int $generatedId = $bigId + 1;
+            u64 $u64Val = 42;
+            return $ratio;
         }
     "#;
 
-    let typed = parse_and_check(source).expect("Extended Rust numeric types must type-check");
+    let typed = parse_and_check(source).expect("int is i64 and float is the only float declaration");
 
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$bigId"),
-        Some(&RhpType::RustInt(RustIntKind::I64))
+        Some(&RhpType::Int)
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$counter"),
-        Some(&RhpType::RustInt(RustIntKind::U32))
+        Some(&RhpType::U64)
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$ratio"),
-        Some(&RhpType::RustFloat(RustFloatKind::F64))
+        Some(&RhpType::Float)
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$generatedId"),
-        Some(&RhpType::RustInt(RustIntKind::I64))
-    );
-    assert_eq!(
-        typed.type_info.inferred_var_type("computeMetrics", "$precisePrice"),
-        Some(&RhpType::RustFloat(RustFloatKind::F64))
-    );
-    assert_eq!(
-        typed.type_info.inferred_var_type("computeMetrics", "$converted"),
-        Some(&RhpType::RustFloat(RustFloatKind::F64))
+        Some(&RhpType::Int)
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$u64Val"),
-        Some(&RhpType::RustInt(RustIntKind::U64))
+        Some(&RhpType::U64)
     );
 }
 

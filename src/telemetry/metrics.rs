@@ -43,7 +43,7 @@ impl HistogramSummary {
     pub fn to_php_value(&self) -> PhpValue {
         let mut map = IndexMap::new();
         map.insert("name".to_string(), PhpValue::string(self.name.clone()));
-        map.insert("count".to_string(), PhpValue::Int(self.count as i32));
+        map.insert("count".to_string(), PhpValue::Int(self.count as i64));
         map.insert("sum".to_string(), PhpValue::Float(self.sum as f32));
         map.insert("min".to_string(), PhpValue::Float(self.min as f32));
         map.insert("max".to_string(), PhpValue::Float(self.max as f32));
@@ -63,7 +63,7 @@ impl HistogramSummary {
         let buckets: Vec<PhpValue> = self
             .bucket_counts
             .iter()
-            .map(|&c| PhpValue::Int(c as i32))
+            .map(|&c| PhpValue::Int(c as i64))
             .collect();
         map.insert("bucket_counts".to_string(), PhpValue::list(buckets));
 

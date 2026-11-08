@@ -189,7 +189,7 @@ fn test_data_race_elimination_across_concurrent_worker_threads() {
         assert_eq!(resp.status, WorkerResponseStatus::Success);
         // Each worker VM starts with isolated CoW copy of $globalCounter (1000)
         // 1000 + (i + 1) + i = 1000 + 2 * i + 1
-        let expected = 1000 + (i as i32 + 1) + (i as i32);
+        let expected = 1000 + (i as i64 + 1) + (i as i64);
         assert_eq!(
             resp.to_php_value(),
             PhpValue::Int(expected),

@@ -313,7 +313,7 @@ fn test_float_comparison_checks_maximum_decimal_point() {
 
         // 5. Cross Float and Float::f64 (RustFloat) with matching decimal point
         $f32Val = 3.14;
-        $f64Val = Float::f64(3.14);
+        $f64Val = 3.14;
         $c12 = ($f32Val == $f64Val);
 
         // 6. Signed zero
