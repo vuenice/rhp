@@ -1,0 +1,30 @@
+---
+description: How to explain an RHP bug or design choice. Every such answer states the problem, each option with pros and cons, one suggestion, and RHP code.
+alwaysApply: true
+---
+
+# Problem briefs
+
+When the user asks what is wrong, whether a bug is still real, or which fix to take, use this shape. Match the user's language (Hindi or English). Keep each section short.
+
+## Current Problem
+
+What the code does today, in `src/`, and what breaks for the programmer. Name the type or opcode. Do not describe a fix here.
+
+## Possible solutions
+
+Two or three real options. For each one:
+
+- What it changes.
+- Pros.
+- Cons.
+
+Skip options the user already closed.
+
+## Suggested solution
+
+One option, and the one case it still does not cover.
+
+## RHP code
+
+Two snippets, labeled **Problem** and **Solution**. Use real RHP (`list $a = []`, `Arr::set`, `int`, `float`, `string`). Show the bad result and the result after the suggestion.
