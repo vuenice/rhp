@@ -24,7 +24,6 @@ export const docsNavigation: DocNavSection[] = [
       item("Installation", "getting-started/installation"),
       item("Hello World", "getting-started/hello-world"),
       item("Core Architecture", "getting-started/core-architecture"),
-      item("Project Structure", "getting-started/project-structure"),
       item("CLI Reference", "getting-started/cli-reference"),
     ]
   },

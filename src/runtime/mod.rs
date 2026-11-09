@@ -24,6 +24,7 @@ pub mod reactor;
 pub mod task;
 pub mod supervisor;
 pub mod types;
+pub mod websocket;
 pub mod worker;
 
 // Re-export the most used surface area
@@ -37,6 +38,12 @@ pub use task::{TaskId, TaskJob, TaskKind, TaskQueueSender, TaskWorker};
 pub use types::{
     ActiveFiberEntry, CancelReason, FiberDiagState, IpcMessage, LogLevel, LogRecord, RequestId,
     WorkerKind,
+};
+pub use websocket::{
+    build_upgrade_response, compute_sec_websocket_accept, get_websocket_hub, is_websocket_upgrade,
+    next_connection_id, read_frame, write_close, write_frame, write_ping, write_pong,
+    write_text, TcpWebSocketSender, WebSocketError, WebSocketFrame, WebSocketHub, WebSocketOpcode,
+    WebSocketSender,
 };
 pub use worker::{fiber_yield_io, run_worker, ResumeSignal, YieldCause};
 

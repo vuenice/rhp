@@ -129,6 +129,13 @@ pub struct ParsedRequest {
     pub body: Vec<u8>,
 }
 
+impl ParsedRequest {
+    /// Check whether this parsed request is requesting an RFC 6455 WebSocket upgrade.
+    pub fn is_websocket_upgrade(&self) -> Option<String> {
+        crate::runtime::websocket::is_websocket_upgrade(&self.headers)
+    }
+}
+
 /// Parse a minimal HTTP/1.1 request from a raw byte buffer.
 pub fn parse_http_request(buf: &[u8]) -> Option<ParsedRequest> {
     let sep = find_double_crlf(buf)?;
@@ -179,8 +186,8 @@ fn find_double_crlf(buf: &[u8]) -> Option<usize> {
 
 /// Run a synchronous reactor accept loop on a bound [`TcpListener`].
 ///
-/// Accepts client streams, parses HTTP/1.1 frames, dispatches requests to
-/// workers via [`WorkerRouter`], and returns 503 if overloaded.
+/// Accepts client streams, parses HTTP/1.1 frames, handles WebSocket upgrades,
+/// dispatches requests to workers via [`WorkerRouter`], and returns 503 if overloaded.
 pub fn run_reactor_simple(
     listener: TcpListener,
     router: WorkerRouter,
@@ -214,6 +221,34 @@ pub fn run_reactor_simple(
         let request_id = RequestId::next();
         handle.total_requests.fetch_add(1, Ordering::Relaxed);
 
+        // Check if this request is an RFC 6455 WebSocket Upgrade
+        if let Some(sec_ws_key) = req.is_websocket_upgrade() {
+            let accept_key = crate::runtime::websocket::compute_sec_websocket_accept(&sec_ws_key);
+            let resp = crate::runtime::websocket::build_upgrade_response(&accept_key);
+            if stream.write_all(resp.as_bytes()).is_ok() && stream.flush().is_ok() {
+                let conn_id = crate::runtime::websocket::next_connection_id();
+                let hub = crate::runtime::websocket::get_websocket_hub();
+                if let Ok(cloned) = stream.try_clone() {
+                    let sender = std::sync::Arc::new(crate::runtime::websocket::TcpWebSocketSender::new(cloned));
+                    hub.register(conn_id, sender);
+                }
+
+                // Notify worker tier of the new WebSocket connection
+                let _ = router.route(IpcMessage::WsUpgrade {
+                    conn_id,
+                    uri: req.uri.clone(),
+                    headers: req.headers.clone(),
+                });
+
+                // Spawn connection session handler thread to keep reactor accept loop responsive
+                let router_clone = router.clone();
+                std::thread::spawn(move || {
+                    handle_reactor_websocket_session(stream, conn_id, router_clone);
+                });
+            }
+            continue;
+        }
+
         let dispatch = IpcMessage::DispatchRequest {
             request_id,
             method: req.method,
@@ -228,4 +263,61 @@ pub fn run_reactor_simple(
             handle.total_shed.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+/// Handle persistent WebSocket framing loop for an upgraded connection in the Master Reactor.
+pub fn handle_reactor_websocket_session(
+    mut stream: std::net::TcpStream,
+    conn_id: u64,
+    router: WorkerRouter,
+) {
+    let hub = crate::runtime::websocket::get_websocket_hub();
+
+    loop {
+        match crate::runtime::websocket::read_frame(&mut stream) {
+            Ok(frame) => match frame.opcode {
+                crate::runtime::websocket::WebSocketOpcode::Ping => {
+                    // RFC 6455 §5.5.2: MUST respond with Pong containing identical payload
+                    let _ = crate::runtime::websocket::write_pong(&mut stream, &frame.payload);
+                }
+                crate::runtime::websocket::WebSocketOpcode::Pong => {
+                    // Ignore unsolicited heartbeats
+                }
+                crate::runtime::websocket::WebSocketOpcode::Close => {
+                    // RFC 6455 §5.5.1: Reply with Close frame and terminate
+                    let (code, reason) = frame.parse_close_payload();
+                    let _ = crate::runtime::websocket::write_close(&mut stream, code, &reason);
+                    let _ = router.route(IpcMessage::WsClose {
+                        conn_id,
+                        code,
+                        reason,
+                    });
+                    break;
+                }
+                crate::runtime::websocket::WebSocketOpcode::Text
+                | crate::runtime::websocket::WebSocketOpcode::Binary => {
+                    // Forward incoming data frame to worker coroutine fiber
+                    let _ = router.route(IpcMessage::WsFrame {
+                        conn_id,
+                        opcode: frame.opcode as u8,
+                        payload: frame.payload,
+                    });
+                }
+                crate::runtime::websocket::WebSocketOpcode::Continuation => {
+                    // Fragmented frames
+                }
+            },
+            Err(_) => {
+                // Connection error or client disconnected abruptly
+                let _ = router.route(IpcMessage::WsClose {
+                    conn_id,
+                    code: 1006,
+                    reason: "Abnormal Closure".to_string(),
+                });
+                break;
+            }
+        }
+    }
+
+    hub.unregister(conn_id);
 }
