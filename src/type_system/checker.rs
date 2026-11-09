@@ -2290,19 +2290,6 @@ impl TypeChecker {
                             }
                         }
                         (expected, Some(found_ty)) => {
-                            if expected.is_narrow_integer()
-                                && opt_expr.as_ref().is_some_and(|e| expr_is_integer_arith(e))
-                            {
-                                return Err(TypeError::new(
-                                    TypeErrorKind::Custom {
-                                        message: format!(
-                                            "integer arithmetic result must be stored in int (i64), not {}",
-                                            expected
-                                        ),
-                                    },
-                                    stmt.span,
-                                ));
-                            }
                             if !found_ty.is_assignable_to(expected, Some(&self.result.hierarchy)) {
                                 return Err(TypeError::new(
                                     TypeErrorKind::ReturnTypeMismatch {
@@ -2718,17 +2705,6 @@ impl TypeChecker {
                                 TypeErrorKind::InvalidUnaryOperation {
                                     op: op.to_string(),
                                     operand_type: operand_ty.to_string(),
-                                },
-                                expr.span,
-                            ));
-                        }
-                        if operand_ty.is_narrow_integer() {
-                            return Err(TypeError::new(
-                                TypeErrorKind::Custom {
-                                    message: format!(
-                                        "integer arithmetic result must be stored in int (i64), not {}",
-                                        operand_ty
-                                    ),
                                 },
                                 expr.span,
                             ));
@@ -3810,29 +3786,6 @@ impl TypeChecker {
         match &target.kind {
             // 1. Variable assignment `$x = ...`
             ExprKind::Variable(var) => {
-                if let Some(existing) = env.get_type(var.name) {
-                    let arith_store = existing.is_narrow_integer()
-                        && (matches!(
-                            op,
-                            AssignOp::AddAssign
-                                | AssignOp::SubAssign
-                                | AssignOp::MulAssign
-                                | AssignOp::DivAssign
-                                | AssignOp::ModAssign
-                                | AssignOp::PowAssign
-                        ) || rhs_expr.is_some_and(expr_is_integer_arith));
-                    if arith_store {
-                        return Err(TypeError::new(
-                            TypeErrorKind::Custom {
-                                message: format!(
-                                    "integer arithmetic result must be stored in int (i64), not {}",
-                                    existing
-                                ),
-                            },
-                            span,
-                        ));
-                    }
-                }
                 env.assign_inferred(
                 var.name,
                 effective_rhs_ty,
@@ -4362,33 +4315,6 @@ impl<'s> crate::ast::visitor::AstVisitor<'s> for ThisFinder {
         }
         crate::ast::visitor::walk_expr(self, expr);
     }
-}
-
-fn expr_is_integer_arith(expr: &Expr<'_>) -> bool {
-    match &expr.kind {
-        ExprKind::Binary { op, left, right } => {
-            matches!(
-                op,
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod | BinaryOp::Pow
-            ) && !expr_mentions_float(left)
-                && !expr_mentions_float(right)
-        }
-        ExprKind::Unary { op, .. } => matches!(
-            op,
-            UnaryOp::PreInc
-                | UnaryOp::PostInc
-                | UnaryOp::PreDec
-                | UnaryOp::PostDec
-                | UnaryOp::Neg
-                | UnaryOp::Plus
-        ),
-        ExprKind::Grouping(inner) => expr_is_integer_arith(inner),
-        _ => false,
-    }
-}
-
-fn expr_mentions_float(expr: &Expr<'_>) -> bool {
-    matches!(expr.kind, ExprKind::Literal(Literal::Float { .. }))
 }
 
 fn expr_contains_this(expr: &Expr<'_>) -> bool {

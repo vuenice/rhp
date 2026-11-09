@@ -339,9 +339,9 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
 #[test]
 fn test_extended_rust_numeric_types_and_fluent_wrappers() {
     let source = r#"
-        function computeMetrics(int $bigId, u64 $counter, float $ratio): float {
+        function computeMetrics(int $bigId, int $counter, float $ratio): float {
             int $generatedId = $bigId + 1;
-            u64 $u64Val = 42;
+            int $stored = 42;
             return $ratio;
         }
     "#;
@@ -354,7 +354,7 @@ fn test_extended_rust_numeric_types_and_fluent_wrappers() {
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$counter"),
-        Some(&RhpType::U64)
+        Some(&RhpType::Int)
     );
     assert_eq!(
         typed.type_info.inferred_var_type("computeMetrics", "$ratio"),
@@ -365,8 +365,8 @@ fn test_extended_rust_numeric_types_and_fluent_wrappers() {
         Some(&RhpType::Int)
     );
     assert_eq!(
-        typed.type_info.inferred_var_type("computeMetrics", "$u64Val"),
-        Some(&RhpType::U64)
+        typed.type_info.inferred_var_type("computeMetrics", "$stored"),
+        Some(&RhpType::Int)
     );
 }
 

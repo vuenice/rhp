@@ -879,7 +879,7 @@ pub fn resolve_builtin_fluent_method(
 ) -> Option<RhpType> {
     match receiver_type {
         // Fluent numeric APIs (`Int::i64()->random()->add()->subtract()`, `Float::f64()->toDecimal(2)`)
-        RhpType::Int | RhpType::I8 | RhpType::I32 | RhpType::U64 | RhpType::I128 => match method {
+        RhpType::Int => match method {
             "random" | "add" | "subtract" | "sub" | "multiply" | "mul" | "divide" | "div" | "abs" | "clamp" | "round" | "floor" | "ceil" | "ciel" => {
                 Some(RhpType::Int)
             }

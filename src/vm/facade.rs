@@ -687,7 +687,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                         }),
                     },
                 },
-                PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => {
+                PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => {
                     Ok(PhpValue::string(val.to_php_string()))
                 }
                 other => Err(RuntimeErrorKind::TypeError {
@@ -934,10 +934,6 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                     let s = n.to_string();
                     !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
                 }
-                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => {
-                    let s = value.to_string();
-                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
-                }
                 _ => false,
             };
             Ok(PhpValue::Bool(is_match))
@@ -970,10 +966,6 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
                 PhpValue::Int(n) => {
                     let s = n.to_string();
-                    !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric())
-                }
-                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => {
-                    let s = value.to_string();
                     !s.is_empty() && s.bytes().all(|c| c.is_ascii_alphanumeric())
                 }
                 _ => false,
@@ -2840,7 +2832,7 @@ pub fn php_value_is_empty(val: &PhpValue) -> bool {
     match val {
         PhpValue::Null => true,
         PhpValue::Bool(b) => !b,
-        PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => false,
+        PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => false,
         PhpValue::String(s) => s.is_empty(),
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().is_empty(),
         PhpValue::Dict(d) => d.borrow().is_empty(),
@@ -2863,9 +2855,6 @@ pub fn execute_exit_signal(args: &[PhpValue]) -> FacadeResult {
             PhpValue::Int(i) => {
                 exit_code = *i;
             }
-            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => {
-                exit_code = (value.to_i32().unwrap_or(0)) as i64;
-            }
             _ => {
                 exit_code = 0;
             }
@@ -2886,9 +2875,6 @@ pub fn execute_process_exit(args: &[PhpValue]) -> FacadeResult {
             }
             PhpValue::Int(i) => {
                 exit_code = *i;
-            }
-            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => {
-                exit_code = (value.to_i32().unwrap_or(0)) as i64;
             }
             _ => {
                 exit_code = 0;
@@ -3688,7 +3674,6 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
                 })?;
                 let uid = match user_val {
                     PhpValue::Int(uid) => *uid as libc::uid_t,
-                    ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_i64().unwrap_or(0) as libc::uid_t,
                     PhpValue::String(s) => {
                         let user_str = s.to_str_lossy();
                         if let Ok(uid_num) = user_str.parse::<libc::uid_t>() {
@@ -3715,7 +3700,6 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
                 let gid = if let Some(g_val) = args.get(2) {
                     match g_val {
                         PhpValue::Int(gid) => *gid as libc::gid_t,
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_i64().unwrap_or(0) as libc::gid_t,
                         PhpValue::String(s) => {
                             let grp_str = s.to_str_lossy();
                             if let Ok(gid_num) = grp_str.parse::<libc::gid_t>() {
@@ -5116,8 +5100,7 @@ pub fn to_int_loose(v: &PhpValue) -> Option<i64> {
         PhpValue::Int(n) => Some(*n as i64),
         PhpValue::Bool(b) => Some(if *b { 1 } else { 0 }),
         PhpValue::Float(f) => Some(*f as i64),
-        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0)),
-        ref value @ (PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) => Some(value.to_i64().unwrap_or(0)),
+        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => Some(value.to_i64().unwrap_or(0)),
         PhpValue::String(s) => {
             let trimmed = s.trim();
             trimmed.parse::<i64>().ok().or_else(|| trimmed.parse::<f64>().ok().map(|f| f as i64))
@@ -5139,38 +5122,9 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
                 _ => Ok(PhpValue::Bool(false)),
             }
         }
-        "i64" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((val as i128) as i64))
-        }
-        "u64" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::U64((val as i128) as u64))
-        }
-        "i32" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::I32((val as i128) as i32))
-        }
-        "u32" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((val as i128) as i64))
-        }
-        "i16" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((val as i128) as i64))
-        }
-        "u16" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((val as i128) as i64))
-        }
-        "i8" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::I8((val as i128) as i8))
-        }
-        "u8" => {
-            let val = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-            Ok(PhpValue::Int((val as i128) as i64))
-        }
+        "i64" | "i32" | "i16" | "i8" | "u64" | "u32" | "u16" | "u8" => Err(RuntimeErrorKind::Custom {
+            message: format!("Int::{}() is not a type. The only integer type is int (i64)", method),
+        }),
         "abs" => {
             let val = args.first().and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Int::abs".to_string(),
@@ -5276,10 +5230,6 @@ pub fn to_float_loose(v: &PhpValue) -> Option<f64> {
         PhpValue::Float(f) => Some(*f as f64),
         PhpValue::Int(n) => Some(*n as f64),
         PhpValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        PhpValue::I8(n) => Some(*n as f64),
-        PhpValue::I32(n) => Some(*n as f64),
-        PhpValue::U64(n) => Some(*n as f64),
-        PhpValue::I128(n) => Some(*n as f64),
         PhpValue::Float64(f) => Some(*f),
         PhpValue::Decimal(d) => Some(d.to_f64()),
         PhpValue::String(s) => s.trim().parse::<f64>().ok(),
@@ -7876,8 +7826,7 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
         PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
         PhpValue::Int(n) => n.to_string(),
         PhpValue::Float(fl) => fl.to_string(),
-        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_string(),
-        ref value @ (PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
+        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
         PhpValue::String(s) => {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
@@ -8018,8 +7967,7 @@ pub fn php_value_to_json_canonical(val: &PhpValue) -> String {
         PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
         PhpValue::Int(n) => n.to_string(),
         PhpValue::Float(fl) => fl.to_string(),
-        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_string(),
-        ref value @ (PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
+        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
         PhpValue::String(s) => {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
@@ -8488,7 +8436,7 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
         "null" => Ok(PhpValue::Bool(val.is_null())),
         "int" | "integer" => Ok(PhpValue::Bool(matches!(
             val,
-            PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)
+            PhpValue::Int(_)
         ))),
         "bool" | "boolean" => Ok(PhpValue::Bool(matches!(val, PhpValue::Bool(_)))),
         "float" | "double" | "real" => Ok(PhpValue::Bool(matches!(
@@ -8497,7 +8445,7 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
         ))),
         "numeric" => {
             let res = match val {
-                PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_) => true,
+                PhpValue::Int(_) => true,
                 PhpValue::Float(f) => !f.is_nan() && !f.is_infinite(),
                 PhpValue::Float64(f) => !f.is_nan() && !f.is_infinite(),
                 PhpValue::Decimal(_) => true,
@@ -8517,7 +8465,7 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
                 val,
                 PhpValue::Int(_)
                     | PhpValue::Float(_)
-                    | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)
+
                     | PhpValue::Float64(_) | PhpValue::Decimal(_)
                     | PhpValue::Bool(_)
                     | PhpValue::String(_)
@@ -8586,10 +8534,6 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Null => "null".to_string(),
                 PhpValue::Bool(_) => "bool".to_string(),
                 PhpValue::Int(_) => "int".to_string(),
-                PhpValue::I8(_) => "i8".to_string(),
-                PhpValue::I32(_) => "i32".to_string(),
-                PhpValue::U64(_) => "u64".to_string(),
-                PhpValue::I128(_) => "i128".to_string(),
                 PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => "float".to_string(),
                 PhpValue::String(s) => match s {
                     crate::vm::value::StrValue::Utf8 { .. } => "string".to_string(),
