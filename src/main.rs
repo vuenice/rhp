@@ -31,11 +31,13 @@ fn print_help() {
             "    delete <NAME|ID|all>             Stop and remove application instance from supervisor\n",
             "    logs <NAME|ID> [OPTIONS]         Display recent logs for managed application\n\n",
             "PACKAGE MANAGEMENT:\n",
+            "    package <SUBCOMMAND>             Manage, initialize, audit, or inspect RHP packages\n",
+            "    audit [PATH] [OPTIONS]           Audit package safety (safe/unsafe) and network egress\n",
             "    add <PACKAGE> [OPTIONS]          Add dependency to rhp.toml and lockfile (Git URL, GitHub 'owner/repo', or local path)\n",
             "    remove <PACKAGE>                 Remove dependency from rhp.toml and vendor/\n",
             "    install [OPTIONS]                Install all dependencies from lockfile (for CI and fresh clones)\n",
             "    update [PACKAGE]                 Update dependencies within version constraints\n",
-            "    init [NAME]                      Initialize a new rhp.toml manifest in current directory\n",
+            "    init [NAME] [OPTIONS]            Initialize a new rhp.toml manifest (--type=rhp|native-rust|wasm|hybrid)\n",
             "    list                             List installed dependencies\n\n",
             "ONE-TIME SCRIPT EXECUTION:\n",
             "    rhp ./script.rhp [OPTIONS]       Execute script directly in Production Mode (file must end with .rhp)\n\n",
@@ -133,6 +135,12 @@ fn main() {
         }
         "lint" => {
             handle_run_lint(&args[2..]);
+        }
+        "audit" => {
+            rhp::pkg::handle_audit(&root_dir, &args[2..]);
+        }
+        "package" | "pkg" => {
+            rhp::pkg::cli::handle_package_command(&root_dir, &args[2..]);
         }
         "add" => {
             rhp::pkg::handle_add(&root_dir, &args[2..]);
@@ -1013,6 +1021,25 @@ fn serve_http_connection(
         }
     }
 
+    // RFC 6455 WebSocket Upgrade Pipeline:
+    if let Some(sec_ws_key) = rhp::is_websocket_upgrade(&raw_headers) {
+        let accept_key = rhp::compute_sec_websocket_accept(&sec_ws_key);
+        let upgrade_resp = rhp::build_upgrade_response(&accept_key);
+        let _ = stream.write_all(upgrade_resp.as_bytes());
+        let _ = stream.flush();
+
+        let conn_id = rhp::next_connection_id();
+        let hub = rhp::get_websocket_hub();
+        if let Ok(cloned) = stream.try_clone() {
+            let sender = std::sync::Arc::new(rhp::TcpWebSocketSender::new(cloned));
+            hub.register(conn_id, sender);
+        }
+
+        handle_main_websocket_session(stream, conn_id, script_path);
+        hub.unregister(conn_id);
+        return;
+    }
+
     let mut body_bytes = vec![0u8; content_length];
     if content_length > 0 {
         let _ = reader.read_exact(&mut body_bytes);
@@ -1228,6 +1255,64 @@ fn serve_http_connection(
 
     let _ = stream.write_all(http_resp.as_bytes());
     let _ = stream.flush();
+}
+
+/// Handle an active WebSocket session in the standalone/dev server.
+fn handle_main_websocket_session(
+    stream: &mut std::net::TcpStream,
+    conn_id: u64,
+    script_path: &str,
+) {
+    loop {
+        match rhp::read_frame(stream) {
+            Ok(frame) => match frame.opcode {
+                rhp::WebSocketOpcode::Ping => {
+                    let _ = rhp::write_pong(stream, &frame.payload);
+                }
+                rhp::WebSocketOpcode::Pong => {}
+                rhp::WebSocketOpcode::Close => {
+                    let (code, reason) = frame.parse_close_payload();
+                    let _ = rhp::write_close(stream, code, &reason);
+                    break;
+                }
+                rhp::WebSocketOpcode::Text | rhp::WebSocketOpcode::Binary => {
+                    let msg_text = String::from_utf8_lossy(&frame.payload).into_owned();
+
+                    // If an RHP script is provided and can be read, invoke it with the WebSocket message
+                    if let Ok(raw_source) = std::fs::read_to_string(script_path) {
+                        let source = resolve_autoloaded_source(Path::new(script_path), &raw_source);
+                        let mut req = rhp::WorkerRequest::new(&source);
+                        req = req
+                            .with_server("REQUEST_METHOD", "WEBSOCKET")
+                            .with_server("HTTP_UPGRADE", "websocket")
+                            .with_server("WEBSOCKET_MESSAGE", &msg_text)
+                            .with_server("WEBSOCKET_CONN_ID", &conn_id.to_string())
+                            .with_post("message", rhp::FrozenValue::from_php_value(&rhp::PhpValue::string(&msg_text)))
+                            .with_post("conn_id", rhp::FrozenValue::from_php_value(&rhp::PhpValue::Int(conn_id as i64)));
+
+                        let canonical_path = std::fs::canonicalize(script_path)
+                            .unwrap_or_else(|_| std::path::PathBuf::from(script_path))
+                            .to_string_lossy()
+                            .to_string();
+
+                        if let Ok(state) = rhp::ParentProcess::boot_with_path(&source, &canonical_path) {
+                            let resp = rhp::execute_isolated_request(&state, &req, 0);
+                            let out = resp.output();
+                            if !out.is_empty() {
+                                let _ = rhp::write_text(stream, out);
+                            }
+                        }
+                    } else {
+                        // Fallback: Echo message
+                        let reply = format!("{{\"event\":\"echo\",\"message\":{}}}", serde_json::to_string(&msg_text).unwrap_or_default());
+                        let _ = rhp::write_text(stream, &reply);
+                    }
+                }
+                rhp::WebSocketOpcode::Continuation => {}
+            },
+            Err(_) => break,
+        }
+    }
 }
 
 #[cfg(test)]

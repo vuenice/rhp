@@ -596,6 +596,7 @@ pub fn dispatch_facade_call(
         "Path" => dispatch_path(method, args),
         "Socket" => dispatch_socket(method, args),
         "Binary" => dispatch_binary(method, args),
+        "WebSocket" | "Ws" => dispatch_websocket(method, args),
         _ => {
             if let Some((in_proc_fn, is_blocking)) =
                 crate::vm::rust_loader::get_in_process_native_function(facade, method)
@@ -8898,6 +8899,135 @@ pub fn dispatch_binary(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Binary".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
+// WebSocket Facade
+// =========================================================================
+
+pub fn dispatch_websocket(method: &str, args: &[PhpValue]) -> FacadeResult {
+    let hub = crate::runtime::websocket::get_websocket_hub();
+
+    match method {
+        // WebSocket::isUpgrade() -> bool
+        "isUpgrade" | "is_upgrade" => {
+            let from_headers = REQUEST_HEADERS.with(|cell| {
+                for (k, v) in cell.borrow().iter() {
+                    if k.eq_ignore_ascii_case("upgrade") && v.eq_ignore_ascii_case("websocket") {
+                        return true;
+                    }
+                }
+                false
+            });
+            let from_server = REQUEST_SERVER.with(|cell| {
+                for (k, v) in cell.borrow().iter() {
+                    if k.eq_ignore_ascii_case("http_upgrade") && v.eq_ignore_ascii_case("websocket") {
+                        return true;
+                    }
+                    if k.eq_ignore_ascii_case("request_method") && v.eq_ignore_ascii_case("websocket") {
+                        return true;
+                    }
+                }
+                false
+            });
+            Ok(PhpValue::Bool(from_headers || from_server))
+        }
+
+        // WebSocket::acceptKey(string $key) -> string
+        "acceptKey" | "accept_key" => {
+            let key = get_arg_str(args, 0, "WebSocket::acceptKey")?;
+            let accept = crate::runtime::websocket::compute_sec_websocket_accept(&key);
+            Ok(PhpValue::string(accept))
+        }
+
+        // WebSocket::broadcast(string $channel_or_msg, ?string $message = null) -> int
+        "broadcast" => {
+            let count = if args.len() >= 2 {
+                let channel = get_arg_str(args, 0, "WebSocket::broadcast")?;
+                let message = get_arg_str(args, 1, "WebSocket::broadcast")?;
+                hub.broadcast_channel(&channel, &message)
+            } else if let Some(msg_val) = args.first() {
+                let message = msg_val.to_php_string();
+                hub.broadcast(&message)
+            } else {
+                0
+            };
+            Ok(PhpValue::Int(count as i64))
+        }
+
+        // WebSocket::broadcastTo(string $channel, string $message) -> int
+        "broadcastTo" | "broadcast_to" | "to" => {
+            let channel = get_arg_str(args, 0, "WebSocket::broadcastTo")?;
+            let message = get_arg_str(args, 1, "WebSocket::broadcastTo")?;
+            let count = hub.broadcast_channel(&channel, &message);
+            Ok(PhpValue::Int(count as i64))
+        }
+
+        // WebSocket::send(int $connId, string $message) -> bool
+        "send" | "sendTo" | "send_to" => {
+            let conn_id = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                    callable: "WebSocket::send".to_string(),
+                    passed: args.len(),
+                    expected: 2,
+                })? as u64;
+            let message = get_arg_str(args, 1, "WebSocket::send")?;
+            match hub.send_text(conn_id, &message) {
+                Ok(sent) => Ok(PhpValue::Bool(sent)),
+                Err(_) => Ok(PhpValue::Bool(false)),
+            }
+        }
+
+        // WebSocket::clients() -> int
+        "clients" | "activeClients" | "count" => {
+            let count = hub.active_connection_count();
+            Ok(PhpValue::Int(count as i64))
+        }
+
+        // WebSocket::connectionIds() -> array
+        "connectionIds" | "clientIds" | "ids" => {
+            let ids = hub.active_connection_ids();
+            let php_ids: Vec<PhpValue> = ids.into_iter().map(|id| PhpValue::Int(id as i64)).collect();
+            Ok(PhpValue::list(php_ids))
+        }
+
+        // WebSocket::channels() -> array
+        "channels" | "activeChannels" => {
+            let chans = hub.active_channels();
+            let php_chans: Vec<PhpValue> = chans.into_iter().map(PhpValue::string).collect();
+            Ok(PhpValue::list(php_chans))
+        }
+
+        // WebSocket::subscribe(int $connId, string $channel) -> bool
+        "subscribe" => {
+            let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
+            let channel = get_arg_str(args, 1, "WebSocket::subscribe")?;
+            hub.subscribe(conn_id, &channel);
+            Ok(PhpValue::Bool(true))
+        }
+
+        // WebSocket::unsubscribe(int $connId, string $channel) -> bool
+        "unsubscribe" => {
+            let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
+            let channel = get_arg_str(args, 1, "WebSocket::unsubscribe")?;
+            hub.unsubscribe(conn_id, &channel);
+            Ok(PhpValue::Bool(true))
+        }
+
+        // WebSocket::close(int $connId, int $code = 1000, string $reason = "") -> bool
+        "close" | "disconnect" => {
+            let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
+            hub.unregister(conn_id);
+            Ok(PhpValue::Bool(true))
+        }
+
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "WebSocket".to_string(),
             method: method.to_string(),
         }),
     }
