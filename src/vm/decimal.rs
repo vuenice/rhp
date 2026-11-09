@@ -126,10 +126,6 @@ impl Decimal {
             crate::vm::value::PhpValue::Float64(f) => Self::from_f64(*f),
             crate::vm::value::PhpValue::Decimal(d) => Some((**d).clone()),
             crate::vm::value::PhpValue::Int(n) => Some(Self::from_i64(*n)),
-            crate::vm::value::PhpValue::I8(n) => Some(Self::from_i64(*n as i64)),
-            crate::vm::value::PhpValue::I32(n) => Some(Self::from_i64(*n as i64)),
-            crate::vm::value::PhpValue::U64(n) => Self::from_str_exact(&n.to_string()),
-            crate::vm::value::PhpValue::I128(n) => Self::from_str_exact(&n.to_string()),
             crate::vm::value::PhpValue::String(s) => Self::from_str_exact(s.as_str()),
             _ => None,
         }

@@ -276,10 +276,10 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
         PhpValue::Null
         | PhpValue::Bool(_)
         | PhpValue::Int(_)
-        | PhpValue::I8(_)
-        | PhpValue::I32(_)
-        | PhpValue::U64(_)
-        | PhpValue::I128(_)
+
+
+
+
         | PhpValue::Float(_)
         | PhpValue::Float64(_) => std::mem::size_of::<PhpValue>(),
         PhpValue::Decimal(d) => std::mem::size_of::<PhpValue>() + d.digit_count() + 16,

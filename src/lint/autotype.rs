@@ -603,10 +603,6 @@ fn rhp_type_to_syntax_name(ty: &RhpType) -> Option<String> {
         RhpType::Collection(CollectionSubtype::Set(_)) => Some("set".to_string()),
         RhpType::Collection(CollectionSubtype::HashMap(_, _)) => Some("hashMap".to_string()),
         RhpType::Class(cls) => Some(cls.clone()),
-        RhpType::I8 => Some("i8".to_string()),
-        RhpType::I32 => Some("i32".to_string()),
-        RhpType::U64 => Some("u64".to_string()),
-        RhpType::I128 => Some("i128".to_string()),
         _ => None,
     }
 }

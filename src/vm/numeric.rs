@@ -118,10 +118,6 @@ pub fn php_to_decimal(value: &PhpValue) -> Option<Decimal> {
         PhpValue::Float(f) => Decimal::from_f32(*f),
         PhpValue::Float64(f) => Decimal::from_f64(*f),
         PhpValue::Int(n) => Some(Decimal::from_i64(*n)),
-        PhpValue::I8(n) => Some(Decimal::from_i64(*n as i64)),
-        PhpValue::I32(n) => Some(Decimal::from_i64(*n as i64)),
-        PhpValue::U64(n) => Decimal::from_str_exact(&n.to_string()),
-        PhpValue::I128(n) => Decimal::from_str_exact(&n.to_string()),
         PhpValue::Bool(b) => Some(Decimal::from_i64(if *b { 1 } else { 0 })),
         PhpValue::String(s) => Decimal::from_str_exact(s.trim()),
         _ => None,
@@ -139,10 +135,6 @@ pub fn is_float_like(value: &PhpValue) -> bool {
 pub fn int_operand(value: &PhpValue) -> Result<i64, ArithFail> {
     match value {
         PhpValue::Int(n) => Ok(*n),
-        PhpValue::I8(n) => Ok(*n as i64),
-        PhpValue::I32(n) => Ok(*n as i64),
-        PhpValue::U64(n) => i64::try_from(*n).map_err(|_| ArithFail::Overflow),
-        PhpValue::I128(n) => i64::try_from(*n).map_err(|_| ArithFail::Overflow),
         PhpValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
         PhpValue::String(s) => s.trim().parse::<i64>().map_err(|_| ArithFail::NotNumeric),
         PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => Err(ArithFail::NotNumeric),
@@ -259,10 +251,6 @@ pub fn fits_stored_width(value: &PhpValue, width: &str) -> Option<PhpValue> {
     let bits = value.signed_bits()?;
     match width {
         "i64" => i64::try_from(bits).ok().map(PhpValue::Int),
-        "i8" => i8::try_from(bits).ok().map(PhpValue::I8),
-        "i32" => i32::try_from(bits).ok().map(PhpValue::I32),
-        "u64" => u64::try_from(bits).ok().map(PhpValue::U64),
-        "i128" => Some(PhpValue::I128(bits)),
         _ => None,
     }
 }

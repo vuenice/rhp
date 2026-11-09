@@ -1577,10 +1577,6 @@ impl VM {
                         }
                     } else if let Some(width) = match &expected_ty {
                         RhpType::Int => Some("i64"),
-                        RhpType::I8 => Some("i8"),
-                        RhpType::I32 => Some("i32"),
-                        RhpType::U64 => Some("u64"),
-                        RhpType::I128 => Some("i128"),
                         _ => None,
                     } {
                         if let Some(stored) = crate::vm::numeric::fits_stored_width(actual_val, width) {
@@ -1820,10 +1816,6 @@ impl VM {
                             PhpValue::List(arr) => {
                                 let maybe_idx = match &k {
                                     PhpValue::Int(i) => Some(*i),
-                                    PhpValue::I8(i) => Some(*i as i64),
-                                    PhpValue::I32(i) => Some(*i as i64),
-                                    PhpValue::U64(i) => i64::try_from(*i).ok(),
-                                    PhpValue::I128(i) => i64::try_from(*i).ok(),
                                     PhpValue::Float(f) => Some(*f as i64),
                                     PhpValue::String(s) => s.trim().parse::<i64>().ok(),
                                     _ => None,
@@ -2333,7 +2325,6 @@ impl VM {
                             let cb = staged.first().map(|a| a.value.clone()).unwrap_or(PhpValue::Null);
                             let levels = staged.get(1).and_then(|a| match &a.value {
                                 PhpValue::Int(i) => Some(*i as i32),
-                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                                 _ => None,
                             });
                             let prev = self.set_error_handler(cb, levels);
@@ -2356,7 +2347,6 @@ impl VM {
                             let msg = staged.first().map(|a| a.value.to_php_string()).unwrap_or_default();
                             let level = staged.get(1).and_then(|a| match &a.value {
                                 PhpValue::Int(i) => Some(*i as i32),
-                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                                 _ => None,
                             });
                             let res = self.trigger_error(&msg, level, span)?;
@@ -4722,7 +4712,6 @@ impl VM {
                                 exit_code = 0;
                             }
                             PhpValue::Int(i) => exit_code = *i,
-                            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                             _ => exit_code = 0,
                         }
                     }
@@ -4746,7 +4735,6 @@ impl VM {
                                     exit_code = 0;
                                 }
                                 PhpValue::Int(i) => exit_code = *i,
-                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                                 _ => exit_code = 0,
                             }
                         }
@@ -4771,7 +4759,6 @@ impl VM {
                     let callback = args.first().cloned().unwrap_or(PhpValue::Null);
                     let error_levels = args.get(1).and_then(|v| match v {
                         PhpValue::Int(i) => Some(*i as i32),
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let prev = self.set_error_handler(callback, error_levels);
@@ -4794,7 +4781,6 @@ impl VM {
                     let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let level = args.get(1).and_then(|v| match v {
                         PhpValue::Int(i) => Some(*i as i32),
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let res = self.trigger_error(&msg, level, span)?;
@@ -4815,7 +4801,6 @@ impl VM {
                                 exit_code = 0;
                             }
                             PhpValue::Int(i) => exit_code = *i,
-                            ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                             _ => exit_code = 0,
                         }
                     }
@@ -4839,7 +4824,6 @@ impl VM {
                                     exit_code = 0;
                                 }
                                 PhpValue::Int(i) => exit_code = *i,
-                                ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => exit_code = value.to_i64().unwrap_or(0),
                                 _ => exit_code = 0,
                             }
                         }
@@ -4864,7 +4848,6 @@ impl VM {
                     let callback = args.first().cloned().unwrap_or(PhpValue::Null);
                     let error_levels = args.get(1).and_then(|v| match v {
                         PhpValue::Int(i) => Some(*i as i32),
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let prev = self.set_error_handler(callback, error_levels);
@@ -4887,7 +4870,6 @@ impl VM {
                     let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let level = args.get(1).and_then(|v| match v {
                         PhpValue::Int(i) => Some(*i as i32),
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Some(value.to_i64().unwrap_or(0) as i32),
                         _ => None,
                     });
                     let res = self.trigger_error(&msg, level, span)?;
@@ -10267,10 +10249,10 @@ impl VM {
         match op {
             IrUnaryOp::Plus => match src {
                 PhpValue::Int(_)
-                | PhpValue::I8(_)
-                | PhpValue::I32(_)
-                | PhpValue::U64(_)
-                | PhpValue::I128(_)
+
+
+
+
                 | PhpValue::Float(_)
                 | PhpValue::Float64(_)
                 | PhpValue::Decimal(_) => Ok(src.clone()),

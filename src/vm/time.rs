@@ -1468,7 +1468,6 @@ pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
         }
         PhpValue::String(s) => CarbonDate::parse(s, None),
         PhpValue::Int(n) => Ok(CarbonDate::create_from_timestamp(*n as i64, 0, None)),
-        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => Ok(CarbonDate::create_from_timestamp(value.to_i64().unwrap_or(0), 0, None)),
         _ => Err("Invalid value provided for Time date conversion".to_string()),
     }
 }
@@ -1643,7 +1642,6 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(v) => {
                     let s = match v {
                         PhpValue::Int(i) => i.to_string(),
-                        ref value @ (PhpValue::Int(_) | PhpValue::I8(_) | PhpValue::I32(_) | PhpValue::U64(_) | PhpValue::I128(_)) => value.to_string(),
                         other => other.to_php_string(),
                     };
                     CarbonDate::parse(&s, None).map_err(|e| RuntimeErrorKind::Custom { message: e })?

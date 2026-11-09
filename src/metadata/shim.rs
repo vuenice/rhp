@@ -309,14 +309,7 @@ pub fn extract_url_param_names(path: &str) -> Vec<String> {
 fn is_scalar_type(ty: &RhpType) -> bool {
     matches!(
         ty,
-        RhpType::Int
-            | RhpType::String
-            | RhpType::Float
-            | RhpType::Bool
-            | RhpType::I8
-            | RhpType::I32
-            | RhpType::U64
-            | RhpType::I128
+        RhpType::Int | RhpType::String | RhpType::Float | RhpType::Bool
     )
 }
 
@@ -349,7 +342,7 @@ fn parse_scalar_param(
     target_type: &RhpType,
 ) -> Result<PhpValue, DispatchError> {
     match target_type {
-        RhpType::Int | RhpType::I8 | RhpType::I32 | RhpType::U64 | RhpType::I128 => {
+        RhpType::Int => {
             val_str
                 .parse::<i64>()
                 .map(|n| PhpValue::Int(n as i64))

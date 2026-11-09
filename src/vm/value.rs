@@ -544,16 +544,8 @@ pub enum PhpValue {
     #[default]
     Null,
     Bool(bool),
-    /// Default `int`. Arithmetic results are always this variant.
+    /// The only integer. Stored as `i64`.
     Int(i64),
-    /// Stored `i8`. Not a legal destination for integer arithmetic.
-    I8(i8),
-    /// Stored `i32`. Not a legal destination for integer arithmetic.
-    I32(i32),
-    /// Stored `u64`. Not a legal destination for integer arithmetic.
-    U64(u64),
-    /// Stored `i128`. Not a legal destination for integer arithmetic.
-    I128(i128),
     /// Exact `f32`.
     Float(f32),
     /// Exact `f64` that is not exact in `f32`.
@@ -1009,10 +1001,6 @@ impl PhpValue {
             Self::Null => "null",
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
-            Self::I8(_) => "i8",
-            Self::I32(_) => "i32",
-            Self::U64(_) => "u64",
-            Self::I128(_) => "i128",
             Self::Float(_) | Self::Float64(_) | Self::Decimal(_) => "float",
             Self::String(s) => match s {
                 StrValue::Utf8 { .. } => "string",
@@ -1051,10 +1039,6 @@ impl PhpValue {
             Self::Null => false,
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
-            Self::I8(n) => *n != 0,
-            Self::I32(n) => *n != 0,
-            Self::U64(n) => *n != 0,
-            Self::I128(n) => *n != 0,
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
             Self::Float64(fl) => *fl != 0.0 && !fl.is_nan(),
             Self::Decimal(d) => !d.is_zero(),
@@ -1106,26 +1090,14 @@ impl PhpValue {
     pub fn is_scalar_primitive(&self) -> bool {
         matches!(
             self,
-            Self::Null
-                | Self::Bool(_)
-                | Self::Int(_)
-                | Self::I8(_)
-                | Self::I32(_)
-                | Self::U64(_)
-                | Self::I128(_)
-                | Self::Float(_)
-                | Self::Float64(_)
+            Self::Null | Self::Bool(_) | Self::Int(_) | Self::Float(_) | Self::Float64(_)
         )
     }
 
-    /// Full two's-complement bits of an integer value. `u64` fits in `i128`.
+    /// Two's-complement bits of an `int` (`i64`).
     pub fn signed_bits(&self) -> Option<i128> {
         match self {
             Self::Int(n) => Some(*n as i128),
-            Self::I8(n) => Some(*n as i128),
-            Self::I32(n) => Some(*n as i128),
-            Self::U64(n) => Some(*n as i128),
-            Self::I128(n) => Some(*n),
             Self::Bool(b) => Some(if *b { 1 } else { 0 }),
             _ => None,
         }
@@ -1134,7 +1106,7 @@ impl PhpValue {
     pub fn is_integer_value(&self) -> bool {
         matches!(
             self,
-            Self::Int(_) | Self::I8(_) | Self::I32(_) | Self::U64(_) | Self::I128(_)
+            Self::Int(_)
         )
     }
 
@@ -1191,8 +1163,6 @@ impl PhpValue {
             Self::Decimal(d) => Some(d.to_f64()),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             other => other.to_i64().map(|n| n as f64).or_else(|| match other {
-                Self::U64(n) => Some(*n as f64),
-                Self::I128(n) => Some(*n as f64),
                 Self::String(s) => s.trim().parse::<f64>().ok(),
                 _ => None,
             }),
@@ -1204,10 +1174,6 @@ impl PhpValue {
             Self::Null => String::new(),
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
-            Self::I8(n) => n.to_string(),
-            Self::I32(n) => n.to_string(),
-            Self::U64(n) => n.to_string(),
-            Self::I128(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::Float64(fl) => fl.to_string(),
             Self::Decimal(d) => d.to_string(),
@@ -1255,10 +1221,6 @@ impl PhpValue {
             Self::Null => String::new(),
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
-            Self::I8(n) => n.to_string(),
-            Self::I32(n) => n.to_string(),
-            Self::U64(n) => n.to_string(),
-            Self::I128(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::Float64(fl) => fl.to_string(),
             Self::Decimal(d) => d.to_string(),
@@ -1366,10 +1328,6 @@ impl PhpValue {
             (Self::Null, Self::Null) => true,
             (Self::Bool(x), Self::Bool(y)) => x == y,
             (Self::Int(x), Self::Int(y)) => x == y,
-            (Self::I8(x), Self::I8(y)) => x == y,
-            (Self::I32(x), Self::I32(y)) => x == y,
-            (Self::U64(x), Self::U64(y)) => x == y,
-            (Self::I128(x), Self::I128(y)) => x == y,
             (Self::Float(x), Self::Float(y)) => {
                 compare_floats_by_max_decimal_point(
                     *x as f64,
@@ -1449,13 +1407,6 @@ impl PhpValue {
                 self,
                 Self::Float(_) | Self::Float64(_) | Self::Decimal(_) | Self::Int(_)
             ),
-            RhpType::I8 => self.signed_bits().and_then(|n| i8::try_from(n).ok()).is_some()
-                && self.is_integer_value(),
-            RhpType::I32 => self.signed_bits().and_then(|n| i32::try_from(n).ok()).is_some()
-                && self.is_integer_value(),
-            RhpType::U64 => self.signed_bits().and_then(|n| u64::try_from(n).ok()).is_some()
-                && self.is_integer_value(),
-            RhpType::I128 => self.is_integer_value(),
             RhpType::String => matches!(self, Self::String(StrValue::Utf8 { .. })),
             RhpType::Bytes => matches!(self, Self::String(StrValue::Bytes(_))),
             RhpType::Array(inner) => {
@@ -2044,22 +1995,6 @@ impl Hash for PhpValue {
                 2u8.hash(state);
                 (*n as i128).hash(state);
             }
-            Self::I8(n) => {
-                2u8.hash(state);
-                (*n as i128).hash(state);
-            }
-            Self::I32(n) => {
-                2u8.hash(state);
-                (*n as i128).hash(state);
-            }
-            Self::U64(n) => {
-                2u8.hash(state);
-                (*n as i128).hash(state);
-            }
-            Self::I128(n) => {
-                2u8.hash(state);
-                n.hash(state);
-            }
             Self::Float(fl) => {
                 3u8.hash(state);
                 fl.to_bits().hash(state);
@@ -2148,10 +2083,6 @@ impl fmt::Debug for PhpValue {
             Self::Null => write!(f, "null"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::Int(n) => write!(f, "{}", n),
-            Self::I8(n) => write!(f, "{}", n),
-            Self::I32(n) => write!(f, "{}", n),
-            Self::U64(n) => write!(f, "{}", n),
-            Self::I128(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
             Self::Float64(fl) => write!(f, "{:?}", fl),
             Self::Decimal(d) => write!(f, "{}", d),
