@@ -1,0 +1,64 @@
+---
+description: Int and float equality versus Hash. One i64, one f64, same-type ==, NaN equals NaN. Decimal stays a separate value.
+globs: src/vm/value.rs,src/vm/numeric.rs,src/vm/decimal.rs
+alwaysApply: false
+---
+
+# Number equality and hash
+
+## Current Problem
+
+`src/vm/value.rs` implements `Eq` for every `PhpValue`, but `==` and `Hash` disagree.
+
+- `PartialEq` treats `Int(1)` and `Float(1.0)` as equal (`i64 as f32`). `Hash` tags them `2` and `3`, so a set can miss a key that `==` calls present. Language `==` (`strict_eq`) already refuses this pair.
+- `Float` is `f32` and `Float64` is `f64`. `Hash` uses `to_bits()` with different tags. Decimal-string compare can call two floats equal when the bits differ, including `+0.0` and `-0.0`.
+- Any NaN compares unequal to itself, so `Eq` is not reflexive.
+- `int` is already only `i64`. Width tags (`RustInt`, `u32` vs `i64`) are gone.
+
+`HashMap` is out of scope. `Arr::set` still needs this contract.
+
+## Possible solutions
+
+**A. Same-type `==` only, leave `f32` / `f64` / decimal-string compare as they are.**
+- Pros: `Int(1)` and `Float(1.0)` stop colliding. Small diff.
+- Cons: `+0.0` and `-0.0` still compare equal and hash apart. NaN is still not equal to itself. `Float` and `Float64` stay two types.
+
+**B. One `Float(f64)`. Bits decide equality and hash. Constructor maps `-0.0` to `+0.0` and every NaN to one `NaN` value where `NaN == NaN`. `Decimal` stays a different value and is not equal to `float`.**
+- Pros: one float, same rule as `int`/`i64`. Set lookup matches `==`. `Eq` becomes reflexive. `f32` values that are exact fit in `f64`.
+- Cons: `0.1` stored as `Decimal` is not equal to `0.1` stored as `f64`. Every float must be built in that constructor; `PhpValue::Float(-0.0)` or a raw NaN skips it and brings the bug back. Old decimal-string matches become false. `f32()` only rounds, then stores `f64`.
+
+## Suggested solution
+
+**B.** `==` requires the same runtime type: `int` with `int`, `float` with `float`, `Decimal` with `Decimal`. Hash the `f64` bits. Do not compare `int` and `float` by casting.
+
+## RHP code
+
+Problem — set lookup and `==` disagree:
+
+```php
+$set = Arr::set([]);
+$set->add(1);
+print($set->contains(1.0)); // miss or false positive: Int == Float, hashes differ
+
+float $z = 0.0;
+float $nz = -0.0;
+print($z == $nz); // true today via decimal text, two hashes
+```
+
+Solution — same type, one float, one NaN:
+
+```php
+print(1 == 1.0);   // false
+print(1.0 == 1.0); // true
+
+$set = Arr::set([]);
+$set->add(1);
+print($set->contains(1));   // true
+print($set->contains(1.0)); // false
+
+float $z = -0.0;     // stored as +0.0
+print($z == 0.0);    // true, one hash
+
+float $n = float("NaN");
+print($n == $n);     // true
+```
