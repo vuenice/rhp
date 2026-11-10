@@ -105,7 +105,7 @@ function processUsers(list $userIds, dict $options): list {
 
 * **Compile-Time Verification:** RHP's two-pass type checker validates arguments against declared parameter signatures.
 * **Runtime Guard (`OpCode::AssertType`):** The bytecode compiler injects `OpCode::AssertType` boundary assertions into the function prologue, validating the underlying collection subtype before executing the function body.
-* **Return Type Inference for Void Functions:** When a function omits an explicit return type and contains no value returns (`return <expr>;`), the type checker automatically infers `void`. Functions that return a value must specify an explicit return type hint.
+* **Return Types Come from the Linter:** `rhp run lint` inserts the return type. A body with no value return becomes `: void`. When every path returns the same collection or scalar, that type is written (`: list`, `: dict`, `: int`). A function that already has a return type is left unchanged. Constructors and destructors are not given one.
 
 ---
 

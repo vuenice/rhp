@@ -385,6 +385,20 @@ To guarantee maximum CPU cache density, deterministic ordering, and SIMD/AES-acc
 
 ---
 
+## Empty Arrays and Who Chooses the Collection
+
+An untyped `$items = []` starts as `PhpValue::EmptyArray`. That value has no heap buffer. The first write promotes it:
+
+| First write | Runtime value |
+| :--- | :--- |
+| `$items[] = $val` or `$items[0] = $val` | `list` (`Vec`) |
+| `$items['name'] = $val` | `dict` (`IndexMap`) |
+| `$items[999] = $val` or any other non-sequential key | `hashMap` |
+
+If nothing is written, reads behave as both an empty list and an empty dict: `count($items) == 0`, `empty($items)` is true, `foreach` runs zero times, and an index read is `null`. Copying does not share the promotion: `$b = $a; $b[] = 1` leaves `$a` empty.
+
+`rhp run lint` is mandatory and writes the collection type before the compiler runs. The compiler builds the collection named in the source (`list $items = []` lowers to `NewCollection` for a list). It does not inspect literal keys and decide `dict` or `hashMap` on its own. See [Linter and Static Typing](/docs/tooling/linter#2-array-classification-list-dict-hashmap-set-array).
+
 ## The Permissive `array` Parent Type vs. Explicit Subtypes
 
 RHP achieves the best of both worlds: full backward compatibility for dynamic PHP codebases alongside Rust-grade performance and memory layout optimization.
@@ -394,7 +408,7 @@ Under the hood, `RhpType::Array` serves as the **permissive parent datatype** fo
 
 | Syntax | Compiled Type | Underlying Rust Structure | Type Flexibility |
 | :--- | :--- | :--- | :--- |
-| `$arr = [];` | `RhpType::Array` | Dynamic `PhpValue::Array` | **Dynamic:** Freely reassignable across list, dict, and set |
+| `$arr = [];` | `RhpType::Array` until the linter writes a subtype | `PhpValue::EmptyArray` until the first write | **Dynamic:** First write promotes to list, dict, or hashMap |
 | `array $arr = [];` | `RhpType::Array` | Unified collection parent | **Permissive:** Accepts any collection variant interchangeably |
 | `list $arr = [];` | `CollectionSubtype::List` | Contiguous `Rc<Vec<Value>>` | **Strict:** Sequential integer-indexed lists only |
 | `dict $arr = [];` | `CollectionSubtype::Dict` | `Rc<IndexMap<Key, Value, ahash::RandomState>>` | **Strict:** Insertion-ordered string-keyed dictionaries only |

@@ -18,7 +18,7 @@ By default, running `rhp run lint` executes in fix-and-report mode:
 2. **Automated Copy-by-Reference for Mutated Arrays:** Automatically updates function and method array parameters (`array`, `list`, `dict`, `hashMap`, `set`) to copy-by-reference (`&$param`) whenever the array is mutated inside the function, updating callers in the same file.
 3. **Auto-Assignment of Collection Calls:** Automatically assigns pure, unassigned collection transformations (such as `$x->map();` and `Arr::list($z)->map();`) back to the target variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
 4. **Parameter Order Normalization (Required Before Optional):** Automatically reorganizes parameter signatures across functions, methods, closures, and arrow functions so required parameters precede optional ones.
-5. **Automated Type Inference:** Automatically prepends optimal type annotations before untyped variables, class properties, and parameter defaults wherever statically determinable.
+5. **Automated Type Inference:** Writes `array`, `list`, `dict`, `set`, and `hashMap` on variables, class properties, parameters that have defaults, and function return types. The linter is mandatory, so the compiler uses the written type and does not choose a collection kind from the shape of an array literal.
 6. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
 7. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
 
@@ -85,27 +85,41 @@ float $ratio = 3.14159;
 bool $is_active = true;
 ```
 
-### 2. Array Classification (`list`, `dict`, `hashMap`, `array`)
+### 2. Array Classification (`list`, `dict`, `hashMap`, `set`, `array`)
 
-When an array literal is initialized at declaration time, RHP inspects the element keys to assign specialized, high-performance collection types:
+The linter owns collection classification. A bare array literal stays an `array` in the compiler. `list`, `dict`, `set`, and `hashMap` appear only when the linter (or the programmer) writes them.
+
+When an array literal is initialized at declaration time, the linter inspects the element keys:
 
 - **`list`:** Sequential integer-indexed elements or unkeyed arrays (`[1, 2, 3]`, `['apple', 'banana']`).
 - **`dict`:** Non-empty arrays where all keys are string literals (`['name' => 'Alice', 'role' => 'admin']`).
 - **`hashMap`:** Non-empty arrays where keys are integers, non-string scalars, or complex expressions (`[1 => 'first', 2 => 'second']`).
-- **`array`:** Empty array declarations (`[]`) where keys and element types cannot yet be determined.
+- **`set`:** A call to `Arr::set(...)`. A unique unkeyed literal stays a `list`. Append (`$items[] =`) always means a list.
+- **`array`:** An empty `[]` whose later writes do not agree on one kind.
+
+An empty `[]` is refined from the first write in the same scope:
+
+- `$items[] = $val` or `$items[0] = $val` becomes `list`.
+- `$items['name'] = $val` becomes `dict`.
+- `$items[999] = $val`, or any other non-sequential key, becomes `hashMap`.
+- A later write that conflicts with that first kind (a string key after a list write, or a dynamic key) stays `array`.
 
 ```php
 // BEFORE LINTING:
 $tags = ['php', 'rust', 'rhp'];
 $user = ['id' => 'u1', 'active' => true];
 $lookup = [100 => 'Pending', 200 => 'Success'];
+$unique = Arr::set([1, 2, 2]);
 $buffer = [];
+$buffer[] = 'first';
 
 // AFTER 'rhp run lint':
 list $tags = ['php', 'rust', 'rhp'];
 dict $user = ['id' => 'u1', 'active' => true];
 hashMap $lookup = [100 => 'Pending', 200 => 'Success'];
-array $buffer = [];
+set $unique = Arr::set([1, 2, 2]);
+list $buffer = [];
+$buffer[] = 'first';
 ```
 
 ### 3. Function & Method Parameter Defaults
@@ -124,7 +138,37 @@ function configure(int $timeout = 30, string $name = 'default', dict $options = 
 }
 ```
 
-### 4. Class Property Defaults
+An empty-array default is refined from writes in the function body, using the same first-write rules as variables. A parameter with no default is left untyped, and the linter still reports `missing-parameter-type`.
+
+### 4. Return Types
+
+When a function or method has no return type, the linter inserts one after the parameter list:
+
+- Every path returns the same type: that type is written (`: list`, `: dict`, `: array`, `: int`, and so on).
+- The body returns nothing: `: void`.
+- Returned expressions disagree, a path does not return, or the expression type is unknown: nothing is inserted, and `missing-return-type` stays.
+- A return type that is already written is left alone.
+- `__construct` and `__destruct` get no return type.
+
+```php
+// BEFORE LINTING:
+function tags() {
+    return ['php', 'rust'];
+}
+
+function noop() {
+}
+
+// AFTER 'rhp run lint':
+function tags(): list {
+    return ['php', 'rust'];
+}
+
+function noop(): void {
+}
+```
+
+### 5. Class Property Defaults
 
 Class properties with default values are automatically typed:
 
@@ -144,7 +188,7 @@ class ServiceConfig {
 }
 ```
 
-### 5. Preservation of User-Written Types & Ambiguity Handling
+### 6. Preservation of User-Written Types & Ambiguity Handling
 
 - **Existing Types Preserved:** If the developer already wrote an explicit type annotation (e.g. `int $count = "not an int";`), the linter **never overwrites** the author's declared type. Instead, the static type checker emits a type mismatch diagnostic for the developer to resolve.
 - **Ambiguous or Dynamic Variables:** When a variable is initialized to a dynamic expression whose type cannot be statically resolved, or when a variable is reassigned to incompatible types within the same scope, the linter leaves the variable untyped without error ("whenever not possible, no issue").

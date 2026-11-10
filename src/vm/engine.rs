@@ -1340,18 +1340,25 @@ impl VM {
                     regs[dst.index()] = val;
                 }
                 OpCode::NewArray { dst, capacity } => {
-                    regs[dst.index()] =
-                        PhpValue::Array(Rc::new(RefCell::new(Vec::with_capacity(capacity as usize))));
+                    regs[dst.index()] = if capacity == 0 {
+                        PhpValue::EmptyArray
+                    } else {
+                        PhpValue::Array(Rc::new(RefCell::new(Vec::with_capacity(capacity as usize))))
+                    };
                 }
                 OpCode::ArrayPush { array, value } => {
                     let v = regs[value.index()].clone();
                     let target = &mut regs[array.index()];
-                    target.ensure_array_mut();
-                    match target {
-                        PhpValue::Array(arr) | PhpValue::List(arr) => {
-                            arr.borrow_mut().push(v);
+                    if matches!(target, PhpValue::EmptyArray) {
+                        *target = PhpValue::promote_empty_append(v);
+                    } else {
+                        target.ensure_array_mut();
+                        match target {
+                            PhpValue::Array(arr) | PhpValue::List(arr) => {
+                                arr.borrow_mut().push(v);
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
                 OpCode::Return { value } => {
@@ -1516,7 +1523,7 @@ impl VM {
                         CastType::String => PhpValue::string(val.to_php_string()),
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
                         CastType::Array => match val {
-                            PhpValue::Array(_) | PhpValue::List(_) => val,
+                            PhpValue::EmptyArray | PhpValue::Array(_) | PhpValue::List(_) => val,
                             PhpValue::Null => PhpValue::list(Vec::new()),
                             other => PhpValue::list(vec![other]),
                         },
@@ -1694,9 +1701,13 @@ impl VM {
                 // 4. Standard Arrays & Subtyped Collections
                 // -----------------------------------------------------------------
                 OpCode::NewArray { dst, capacity } => {
-                    self.registers[base_reg + dst.index()] = PhpValue::Array(Rc::new(
-                        RefCell::new(Vec::with_capacity(capacity as usize)),
-                    ));
+                    self.registers[base_reg + dst.index()] = if capacity == 0 {
+                        PhpValue::EmptyArray
+                    } else {
+                        PhpValue::Array(Rc::new(RefCell::new(Vec::with_capacity(
+                            capacity as usize,
+                        ))))
+                    };
                 }
 
                 OpCode::NewCollection { dst, kind, source } => {
@@ -1789,6 +1800,9 @@ impl VM {
                             if let PhpValue::List(arr) = &self.registers[target_idx] {
                                 arr.borrow_mut().push(val);
                             }
+                        }
+                        PhpValue::EmptyArray => {
+                            self.registers[target_idx] = PhpValue::promote_empty_append(val);
                         }
                         PhpValue::Array(_) => {
                             self.registers[target_idx].ensure_array_mut();
@@ -1930,6 +1944,9 @@ impl VM {
                                     }
                                 }
                             }
+                            PhpValue::EmptyArray => {
+                                self.registers[target_idx] = PhpValue::promote_empty_index(&k, v);
+                            }
                             PhpValue::Array(_) => {
                                 self.registers[target_idx].ensure_array_mut();
                                 if let PhpValue::Array(arr) = &self.registers[target_idx] {
@@ -2048,6 +2065,11 @@ impl VM {
                                 arr.borrow_mut().extend(items);
                             }
                         }
+                        PhpValue::EmptyArray => {
+                            if !items.is_empty() {
+                                self.registers[target_idx] = PhpValue::list(items);
+                            }
+                        }
                         PhpValue::Array(_) => {
                             self.registers[target_idx].ensure_array_mut();
                             if let PhpValue::Array(arr) = &self.registers[target_idx] {
@@ -2117,6 +2139,7 @@ impl VM {
                                 PhpValue::Null
                             }
                         }
+                        PhpValue::EmptyArray => PhpValue::Null,
                         PhpValue::Array(arr) => {
                             let i = idx_val.to_i64().unwrap_or(-1);
                             let b = arr.borrow();
@@ -4160,6 +4183,10 @@ impl VM {
         match iter_source {
             PhpValue::List(list) => Ok(ActiveIterator::List {
                 items: list.clone(),
+                cursor: 0,
+            }),
+            PhpValue::EmptyArray => Ok(ActiveIterator::List {
+                items: Rc::new(RefCell::new(Vec::new())),
                 cursor: 0,
             }),
             PhpValue::Array(arr) => Ok(ActiveIterator::List {
@@ -6941,7 +6968,8 @@ impl VM {
             }
 
             // 4. Sequential list & generic collection methods (`Arr::list()->map()->filter()->reduce()`, etc.)
-            PhpValue::List(_)
+            PhpValue::EmptyArray
+            | PhpValue::List(_)
             | PhpValue::Array(_) => {
                 let items = Self::extract_items(receiver);
                 match method {
@@ -6950,7 +6978,11 @@ impl VM {
                             None => true,
                             Some(sub) => {
                                 let clean = sub.to_php_string().trim().to_lowercase().replace(['-', '_', ' '], "");
-                                clean == "list" || clean == "array"
+                                if matches!(receiver, PhpValue::EmptyArray) {
+                                    matches!(clean.as_str(), "list" | "dict" | "dictionary" | "array")
+                                } else {
+                                    clean == "list" || clean == "array"
+                                }
                             }
                         };
                         Ok(PhpValue::Bool(ok))
@@ -10720,6 +10752,7 @@ impl VM {
 
     fn extract_items(val: &PhpValue) -> Vec<PhpValue> {
         match val {
+            PhpValue::EmptyArray => Vec::new(),
             PhpValue::Array(a) | PhpValue::List(a) => a.borrow().clone(),
             PhpValue::Set(s) => s.borrow().iter().cloned().collect(),
             PhpValue::Dict(d) => d.borrow().values().cloned().collect(),

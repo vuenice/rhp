@@ -549,6 +549,10 @@ pub enum PhpValue {
     /// The only float. Stored as `f64`.
     Float(f64),
     String(RhpString),
+    /// Untyped `[]` before the first write. No heap buffer.
+    /// A later read treats it as both an empty list and an empty dict.
+    /// The first write promotes it to `List`, `Dict`, or `HashMap`.
+    EmptyArray,
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
     Dict(Rc<RefCell<IndexMap<String, PhpValue>>>),
@@ -911,7 +915,28 @@ impl PhpValue {
         Self::String(StrValue::new_bytes(b))
     }
 
+    /// Empty untyped array literal. Promotion happens on the first write.
     #[inline]
+    pub fn empty_array() -> Self {
+        Self::EmptyArray
+    }
+
+    /// First indexed write into an empty array.
+    /// `0` becomes a list, a string key becomes a dict, anything else becomes a hash map.
+    pub fn promote_empty_index(key: &PhpValue, value: PhpValue) -> Self {
+        match key {
+            Self::Int(0) => Self::list(vec![value]),
+            Self::String(s) => Self::dict([(s.to_string(), value)]),
+            other => Self::hash_map([(other.clone(), value)]),
+        }
+    }
+
+    /// First append (`$items[] = $val`) into an empty array. Always a list.
+    #[inline]
+    pub fn promote_empty_append(value: PhpValue) -> Self {
+        Self::list(vec![value])
+    }
+
     pub fn array(items: Vec<PhpValue>) -> Self {
         let bytes = 32 + items.capacity() * std::mem::size_of::<PhpValue>();
         crate::vm::memory::record_alloc(bytes);
@@ -1019,6 +1044,7 @@ impl PhpValue {
                 StrValue::Utf8 { .. } => "string",
                 StrValue::Bytes(_) => "bytes",
             },
+            Self::EmptyArray => "array",
             Self::Array(_) => "array",
             Self::List(_) => "Arr::list",
             Self::Dict(_) => "Arr::dict",
@@ -1057,6 +1083,7 @@ impl PhpValue {
                 StrValue::Utf8 { s, .. } => !s.is_empty() && &**s != "0",
                 StrValue::Bytes(b) => !b.is_empty() && &**b != b"0",
             },
+            Self::EmptyArray => false,
             Self::Array(arr) => !arr.borrow().is_empty(),
             Self::List(list) => !list.borrow().is_empty(),
             Self::Dict(dict) => !dict.borrow().is_empty(),
@@ -1179,6 +1206,7 @@ impl PhpValue {
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::String(s) => s.to_string(),
+            Self::EmptyArray => "Array".to_string(),
             Self::Array(_) => "Array".to_string(),
             Self::List(_) => "Arr::list".to_string(),
             Self::Dict(_) => "Arr::dict".to_string(),
@@ -1224,6 +1252,7 @@ impl PhpValue {
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::String(s) => s.to_string(),
+            Self::EmptyArray => "Array\n(\n)".to_string(),
             Self::Array(arr) => {
                 let borrowed = arr.borrow();
                 if borrowed.is_empty() {
@@ -1339,6 +1368,7 @@ impl PhpValue {
                 }
             }
             (Self::String(x), Self::String(y)) => x == y,
+            (Self::EmptyArray, Self::EmptyArray) => true,
             (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
                 let a = x.borrow();
                 let b = y.borrow();
@@ -1378,7 +1408,8 @@ impl PhpValue {
                 if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
                     matches!(
                         self,
-                        Self::Array(_)
+                        Self::EmptyArray
+                            | Self::Array(_)
                             | Self::List(_)
                             | Self::Dict(_)
                             | Self::Set(_)
@@ -1386,6 +1417,7 @@ impl PhpValue {
                     )
                 } else {
                     match self {
+                        Self::EmptyArray => true,
                         Self::Array(a) | Self::List(a) => {
                             a.borrow().iter().all(|v| v.matches_type_contract(inner, hierarchy))
                         }
@@ -1403,6 +1435,8 @@ impl PhpValue {
                 }
             }
             RhpType::Collection(col) => match (col, self) {
+                (CollectionSubtype::List(_), Self::EmptyArray)
+                | (CollectionSubtype::Dict(_), Self::EmptyArray) => true,
                 (CollectionSubtype::List(inner), Self::List(arr) | Self::Array(arr)) => {
                     if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
                         true
@@ -1439,7 +1473,12 @@ impl PhpValue {
                 _ => false,
             },
             RhpType::Iterable(_) => match self {
-                Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_) => true,
+                Self::EmptyArray
+                | Self::Array(_)
+                | Self::List(_)
+                | Self::Dict(_)
+                | Self::Set(_)
+                | Self::HashMap(_) => true,
                 Self::Object(obj) => {
                     let obj_cls = &obj.borrow().class_name;
                     if let Some(h) = hierarchy {
@@ -1588,7 +1627,7 @@ impl PhpValue {
     pub fn is_array(&self) -> bool {
         matches!(
             self,
-            Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)
+            Self::EmptyArray | Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)
         )
     }
 
@@ -1949,6 +1988,9 @@ impl Hash for PhpValue {
                 6u8.hash(state);
                 s.hash(state);
             }
+            Self::EmptyArray => {
+                15u8.hash(state);
+            }
             Self::Object(obj) => {
                 7u8.hash(state);
                 Rc::as_ptr(obj).hash(state);
@@ -2023,6 +2065,7 @@ impl fmt::Debug for PhpValue {
             Self::Int(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
             Self::String(s) => write!(f, "\"{}\"", s),
+            Self::EmptyArray => write!(f, "EmptyArray"),
             Self::Array(arr) => write!(f, "Array({:?})", arr.borrow()),
             Self::List(list) => write!(f, "Arr::list({:?})", list.borrow()),
             Self::Dict(dict) => write!(f, "Arr::dict({:?})", dict.borrow()),

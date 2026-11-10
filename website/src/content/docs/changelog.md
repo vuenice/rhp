@@ -5,6 +5,11 @@ section: "Community"
 order: 2
 ---
 
+## Unreleased
+
+- **Empty arrays:** An untyped `[]` stays `PhpValue::EmptyArray` until the first write, which promotes it to `list`, `dict`, or `hashMap`. An unread empty array reads as both an empty list and an empty dict.
+- **Linter collection types:** `rhp run lint` writes `array`, `list`, `dict`, `set`, and `hashMap` on variables, defaulted parameters, and return types. The compiler uses that written type and does not classify a bare array literal from its keys.
+
 ## v0.1.0-alpha (October 2026) - Initial Release
 
 Welcome to the initial public release of RHP!
