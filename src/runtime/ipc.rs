@@ -28,6 +28,11 @@ impl IpcReceiver {
     pub async fn recv(&mut self) -> Option<IpcMessage> {
         self.0.recv().await
     }
+
+    /// Receive the next IPC message synchronously (blocking current thread).
+    pub fn blocking_recv(&mut self) -> Option<IpcMessage> {
+        self.0.blocking_recv()
+    }
 }
 
 /// Create a linked `(IpcSender, IpcReceiver)` pair.

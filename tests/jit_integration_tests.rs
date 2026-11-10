@@ -163,12 +163,12 @@ fn test_hot_loop_with_bitwise_and_modulo_arithmetic() {
     "#;
 
     let (_, _val) = run_source_with_vm(source).expect("Source execution should succeed");
-    let mut expected_accum = 0i32;
+    let mut expected_accum = 0i64;
     for i in 0..200i32 {
         let m = i % 7;
         let s = m << 2;
         let mask = s & 12;
-        expected_accum += mask;
+        expected_accum += mask as i64;
     }
 
     let typed = parse_and_check(source).expect("Parsing should succeed");

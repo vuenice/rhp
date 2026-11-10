@@ -18,8 +18,8 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(dev_int, PhpValue::Int(123_i32));
-    assert_eq!(dev_int.to_i32(), Some(123_i32));
+    assert_eq!(dev_int, PhpValue::Int(123_i64));
+    assert_eq!(dev_int.to_i64(), Some(123_i64));
     assert_eq!(dev_int.requires_rc(), false);
     assert_eq!(dev_int.is_scalar_primitive(), true);
 
@@ -33,8 +33,8 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(dev_float, PhpValue::Float(3.14_f32));
-    assert_eq!(dev_float.to_f32(), Some(3.14_f32));
+    assert_eq!(dev_float, PhpValue::Float(3.14_f64));
+    assert_eq!(dev_float.to_f64(), Some(3.14_f64));
     assert_eq!(dev_float.requires_rc(), false);
     assert_eq!(dev_float.is_scalar_primitive(), true);
 
@@ -78,7 +78,7 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(build_int, PhpValue::Int(123_i32));
+    assert_eq!(build_int, PhpValue::Int(123_i64));
 
     let build_float = execute(
         RunMode::Build {
@@ -89,7 +89,7 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
         &mut env,
     )
     .unwrap();
-    assert_eq!(build_float, PhpValue::Float(3.14_f32));
+    assert_eq!(build_float, PhpValue::Float(3.14_f64));
 
     let build_bool = execute(
         RunMode::Build {
@@ -117,14 +117,22 @@ fn test_dev_and_build_direct_transformations_int_float_bool_null() {
 
 #[test]
 fn test_build_mode_emits_direct_native_opcodes_without_constant_pool() {
-    // Verify float literal emits OpCode::LoadFloat directly without constant pool indirection
+    let expr_exact = parse_expr("2.5").unwrap();
+    let chunk_exact = compile_to_bytecode(&expr_exact).unwrap();
+    assert_eq!(
+        chunk_exact.instructions[0],
+        OpCode::LoadFloat {
+            dst: Reg(0),
+            bits: 2.5_f64.to_bits(),
+        }
+    );
     let expr_float = parse_expr("2.718").unwrap();
     let chunk_float = compile_to_bytecode(&expr_float).unwrap();
     assert_eq!(
         chunk_float.instructions[0],
         OpCode::LoadFloat {
             dst: Reg(0),
-            bits: 2.718_f32.to_bits(),
+            bits: 2.718_f64.to_bits(),
         }
     );
 
@@ -215,8 +223,8 @@ fn test_zero_rc_overhead_for_all_primitives() {
     assert!(!float_val.is_shared());
 
     // Verify RhpType native Rust mapping and Rc check
-    assert_eq!(RhpType::Int.to_native_rust_type(), "i32");
-    assert_eq!(RhpType::Float.to_native_rust_type(), "f32");
+    assert_eq!(RhpType::Int.to_native_rust_type(), "i64");
+    assert_eq!(RhpType::Float.to_native_rust_type(), "f64");
     assert_eq!(RhpType::Bool.to_native_rust_type(), "bool");
     assert_eq!(RhpType::Null.to_native_rust_type(), "None");
 
@@ -249,5 +257,48 @@ fn test_script_execution_with_cased_and_primitive_hints() {
     "#;
 
     let (vm, _) = rhp::run_source_with_vm(source).expect("Script execution should pass");
-    assert_eq!(vm.get_main_variable("$result"), Some(&PhpValue::Float(25.0_f32)));
+    assert_eq!(vm.get_main_variable("$result"), Some(&PhpValue::Float(25.0_f64)));
 }
+
+#[test]
+fn test_native_f64_float_operations_and_ieee754_semantics() {
+    // 1. IEEE-754 precision: 0.1 + 0.2 is strictly 0.30000000000000004 without decimal rounding
+    let source = r#"
+        $sum = 0.1 + 0.2;
+        $sub = 1.0 - 0.9;
+        $mul = 2.5 * 4.0;
+        $div = 7.0 / 2.0;
+        $pow = 2.0 ** 3.0;
+        $mod = 5.5 % 2.0;
+    "#;
+
+    let (vm, _) = rhp::run_source_with_vm(source).expect("Float operations should succeed");
+    assert_eq!(vm.get_main_variable("$sum"), Some(&PhpValue::Float(0.1_f64 + 0.2_f64)));
+    assert_eq!(vm.get_main_variable("$sum"), Some(&PhpValue::Float(0.30000000000000004_f64)));
+    assert_eq!(vm.get_main_variable("$sub"), Some(&PhpValue::Float(1.0_f64 - 0.9_f64)));
+    assert_eq!(vm.get_main_variable("$mul"), Some(&PhpValue::Float(10.0_f64)));
+    assert_eq!(vm.get_main_variable("$div"), Some(&PhpValue::Float(3.5_f64)));
+    assert_eq!(vm.get_main_variable("$pow"), Some(&PhpValue::Float(8.0_f64)));
+    assert_eq!(vm.get_main_variable("$mod"), Some(&PhpValue::Float(1.5_f64)));
+
+    // 2. Value equality and canonicalization: -0.0 and +0.0 have the same bits
+    let pos_zero = PhpValue::float(0.0);
+    let neg_zero = PhpValue::float(-0.0);
+    assert_eq!(pos_zero, neg_zero);
+    if let (PhpValue::Float(a), PhpValue::Float(b)) = (&pos_zero, &neg_zero) {
+        assert_eq!(a.to_bits(), b.to_bits());
+        assert_eq!(a.to_bits(), 0.0_f64.to_bits());
+    } else {
+        panic!("Expected Float variants");
+    }
+
+    // 3. Facade Float helper operations
+    let source_facade = r#"
+        $b_add = Float::bAdd(0.1, 0.2);
+        $add = Float::add(0.1, 0.2);
+    "#;
+    let (vm2, _) = rhp::run_source_with_vm(source_facade).expect("Float facade should succeed");
+    assert_eq!(vm2.get_main_variable("$b_add"), Some(&PhpValue::Float(0.30000000000000004_f64)));
+    assert_eq!(vm2.get_main_variable("$add"), Some(&PhpValue::Float(0.30000000000000004_f64)));
+}
+

@@ -4,123 +4,6 @@ use crate::type_system::error::{TypeError, TypeErrorKind};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Native Rust signed and unsigned integer types supported alongside default `int` (`i32`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RustIntKind {
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
-    Isize,
-    U8,
-    U16,
-    U32,
-    U64,
-    U128,
-    Usize,
-}
-
-impl RustIntKind {
-    /// Parse a Rust integer type name (`i8`..`i128`, `u8`..`u128`, `isize`, `usize`).
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "i8" => Some(Self::I8),
-            "i16" => Some(Self::I16),
-            "i32" => Some(Self::I32),
-            "i64" => Some(Self::I64),
-            "i128" => Some(Self::I128),
-            "isize" => Some(Self::Isize),
-            "u8" => Some(Self::U8),
-            "u16" => Some(Self::U16),
-            "u32" => Some(Self::U32),
-            "u64" => Some(Self::U64),
-            "u128" => Some(Self::U128),
-            "usize" => Some(Self::Usize),
-            _ => None,
-        }
-    }
-
-    /// Canonical name of the Rust integer type.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::I8 => "i8",
-            Self::I16 => "i16",
-            Self::I32 => "i32",
-            Self::I64 => "i64",
-            Self::I128 => "i128",
-            Self::Isize => "isize",
-            Self::U8 => "u8",
-            Self::U16 => "u16",
-            Self::U32 => "u32",
-            Self::U64 => "u64",
-            Self::U128 => "u128",
-            Self::Usize => "usize",
-        }
-    }
-
-    /// Returns true if this integer type is signed.
-    pub fn is_signed(&self) -> bool {
-        matches!(
-            self,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::Isize
-        )
-    }
-
-    /// Bit width of the integer type (64 assumed for pointer-sized `isize`/`usize`).
-    pub fn bit_width(&self) -> u32 {
-        match self {
-            Self::I8 | Self::U8 => 8,
-            Self::I16 | Self::U16 => 16,
-            Self::I32 | Self::U32 => 32,
-            Self::I64 | Self::U64 | Self::Isize | Self::Usize => 64,
-            Self::I128 | Self::U128 => 128,
-        }
-    }
-}
-
-impl fmt::Display for RustIntKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-/// Native Rust floating-point types supported alongside default `float`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RustFloatKind {
-    F32,
-    F64,
-}
-
-impl RustFloatKind {
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "f32" => Some(Self::F32),
-            "f64" => Some(Self::F64),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::F32 => "f32",
-            Self::F64 => "f64",
-        }
-    }
-
-    pub fn bit_width(&self) -> u32 {
-        match self {
-            Self::F32 => 32,
-            Self::F64 => 64,
-        }
-    }
-}
-
-impl fmt::Display for RustFloatKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
 
 /// Explicit high-performance collection subtypes backed by Rust data structures (`Arr::*`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -204,14 +87,10 @@ impl fmt::Display for CollectionSubtype {
 /// Semantic type representation in the RHP Medium/Gradual Type System.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RhpType {
-    /// Default integer primitive (`int`, standard `i32` semantics).
+    /// The only integer (`int`), stored as `i64`.
     Int,
-    /// Default float primitive (`float`).
+    /// Default float declaration (`float`). Runtime storage is exact `f32`, exact `f64`, or `Decimal`.
     Float,
-    /// Explicit native Rust integer type (`i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`..`usize`).
-    RustInt(RustIntKind),
-    /// Explicit native Rust float type (`f32`, `f64`).
-    RustFloat(RustFloatKind),
     /// UTF-8 string primitive (`string`, Utf8 subtype).
     String,
     /// Raw binary data subtype (`bytes`).
@@ -280,8 +159,16 @@ impl RhpType {
             TypeHintKind::Named(ident) => {
                 let name = ident.name;
                 match name {
-                    "int" | "Int" => Ok(RhpType::Int),
-                    "float" | "Float" => Ok(RhpType::Float),
+                    "int" | "Int" | "i64" => Ok(RhpType::Int),
+                    "i8" | "i16" | "i32" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                    | "u128" | "usize" => Err(TypeError::new(
+                        TypeErrorKind::InvalidTypeAnnotation {
+                            type_name: name.to_string(),
+                            reason: "the only integer type is int (i64)".to_string(),
+                        },
+                        hint.span,
+                    )),
+                    "float" | "Float" | "f32" | "f64" => Ok(RhpType::Float),
                     "string" => Ok(RhpType::String),
                     "bytes" | "Bytes" => Ok(RhpType::Bytes),
                     "bool" | "Bool" | "true" | "false" => Ok(RhpType::Bool),
@@ -323,13 +210,6 @@ impl RhpType {
                         ))
                     }
                     other => {
-                        let clean = other.strip_prefix('\\').unwrap_or(other);
-                        if let Some(int_kind) = RustIntKind::from_name(clean) {
-                            return Ok(RhpType::RustInt(int_kind));
-                        }
-                        if let Some(float_kind) = RustFloatKind::from_name(clean) {
-                            return Ok(RhpType::RustFloat(float_kind));
-                        }
                         let resolved = resolver(other);
                         let clean_resolved = resolved.strip_prefix('\\').unwrap_or(&resolved);
                         Ok(RhpType::Class(clean_resolved.to_string()))
@@ -403,35 +283,33 @@ impl RhpType {
         }
     }
 
-    /// Returns true if this type is any integer type (`int` or `RustInt`).
+    /// Returns true if this type is `int` (`i64`).
     pub fn is_integer(&self) -> bool {
-        matches!(self, RhpType::Int | RhpType::RustInt(_))
+        matches!(self, RhpType::Int)
     }
 
-    /// Returns true if this type is any floating-point type (`float` or `RustFloat`).
+    /// Returns true if this type is the `float` declaration.
     pub fn is_float(&self) -> bool {
-        matches!(self, RhpType::Float | RhpType::RustFloat(_))
+        matches!(self, RhpType::Float)
     }
 
-    /// Returns true if this type is numeric (`int`, `float`, `RustInt`, or `RustFloat`).
+    /// Returns true if this type is numeric (`int` or `float`).
     pub fn is_numeric(&self) -> bool {
         self.is_integer() || self.is_float()
     }
 
     /// Direct native Rust transformation type name:
-    /// - `Int` -> `i32`
-    /// - `Float` -> `f32`
+    /// - `Int` -> `i64`
+    /// - `Float` -> `f64`
     /// - `Bool` -> `bool`
     /// - `Null` -> `None`
     /// - Primitives require zero `Rc<>` overhead.
     pub fn to_native_rust_type(&self) -> &'static str {
         match self {
-            RhpType::Int => "i32",
-            RhpType::Float => "f32",
+            RhpType::Int => "i64",
+            RhpType::Float => "f64",
             RhpType::Bool => "bool",
             RhpType::Null => "None",
-            RhpType::RustInt(k) => k.as_str(),
-            RhpType::RustFloat(k) => k.as_str(),
             RhpType::Void => "()",
             _ => "PhpValue",
         }
@@ -446,8 +324,6 @@ impl RhpType {
                 | RhpType::Float
                 | RhpType::Bool
                 | RhpType::Null
-                | RhpType::RustInt(_)
-                | RhpType::RustFloat(_)
         )
     }
 
@@ -565,7 +441,7 @@ impl RhpType {
     /// Implements RHP's Medium/Gradual Type System rules:
     /// - Strict verification when static types are known (`int`, `float`, `string`, `bool`, classes, collections).
     /// - Gradual compatibility when source or target is `Mixed` or `Dynamic`.
-    /// - Safe numeric widening (`int` -> `float`, literal `int` -> `RustInt`/`RustFloat`).
+    /// - Safe numeric widening (`int` -> `float`).
     /// - Subtype polymorphism for `Collection` -> `array`/`iterable`, `Tuple` -> `array`/`iterable`,
     ///   and class/interface inheritance hierarchies.
     pub fn is_assignable_to(&self, target: &RhpType, hierarchy: Option<&TypeHierarchy>) -> bool {
@@ -638,23 +514,7 @@ impl RhpType {
         }
 
         match (self, target) {
-            // Numeric compatibility:
-            // 1. Standard `int` widens to `float`, `RustInt`, or `RustFloat`
-            (RhpType::Int, RhpType::Float | RhpType::RustInt(_) | RhpType::RustFloat(_)) => true,
-            // 2. `RustInt` is compatible with `int`, `float`, `RustFloat`, or widening same-signedness `RustInt`
-            (RhpType::RustInt(_), RhpType::Int | RhpType::Float | RhpType::RustFloat(_)) => true,
-            (RhpType::RustInt(src_k), RhpType::RustInt(dst_k)) => {
-                src_k == dst_k
-                    || (src_k.is_signed() == dst_k.is_signed()
-                        && src_k.bit_width() <= dst_k.bit_width())
-            }
-            // 3. `Float` and `RustFloat` are mutually compatible
-            (RhpType::Float, RhpType::RustFloat(_)) | (RhpType::RustFloat(_), RhpType::Float) => {
-                true
-            }
-            (RhpType::RustFloat(src_f), RhpType::RustFloat(dst_f)) => {
-                src_f == dst_f || src_f.bit_width() <= dst_f.bit_width()
-            }
+            (RhpType::Int, RhpType::Float) => true,
 
             // Array, Tuple, Collection, and Iterable compatibility:
             (RhpType::Array(src_el), RhpType::Array(dst_el)) => {
@@ -926,11 +786,7 @@ impl RhpType {
                     && v1.is_strictly_comparable_to(v2, hierarchy)
             }
 
-            // Rust numeric types:
-            (RhpType::RustInt(k1), RhpType::RustInt(k2)) => k1 == k2,
-            (RhpType::Int, RhpType::RustInt(_)) | (RhpType::RustInt(_), RhpType::Int) => true,
-            (RhpType::RustFloat(_), RhpType::RustFloat(_)) => true,
-            (RhpType::Float, RhpType::RustFloat(_)) | (RhpType::RustFloat(_), RhpType::Float) => true,
+            (RhpType::Int, RhpType::Int) => true,
 
             _ => false,
         }
@@ -942,8 +798,6 @@ impl fmt::Display for RhpType {
         match self {
             RhpType::Int => write!(f, "int"),
             RhpType::Float => write!(f, "float"),
-            RhpType::RustInt(k) => write!(f, "{}", k),
-            RhpType::RustFloat(k) => write!(f, "{}", k),
             RhpType::String => write!(f, "string"),
             RhpType::Bytes => write!(f, "bytes"),
             RhpType::Bool => write!(f, "bool"),

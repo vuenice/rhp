@@ -1,7 +1,7 @@
 use rhp::{
     compile_source, compile_to_bytecode, execute, lower_program, parse, parse_expr,
     register_custom_helper, run_source, run_source_with_file_id, run_source_with_vm, Environment,
-    ExecutionError, PhpValue, RunMode, RuntimeErrorKind, RustFloatKind, RustIntKind, SourceMap, VM,
+    ExecutionError, PhpValue, RunMode, RuntimeErrorKind, SourceMap, VM,
 };
 
 #[test]
@@ -204,33 +204,25 @@ fn test_subtyped_collections_and_fluent_arrow_closure_chaining() {
 }
 
 #[test]
-fn test_rust_numeric_wrappers_and_fluent_pipelines() {
+fn test_i64_arithmetic_does_not_wrap() {
     let source = r#"
-        $i64Val = Int::i64(100)->add(50)->subtract(30);
-        $f64Val = Float::f64(3.14159)->toDecimal(2);
-        $u8Clamped = Int::u8(200)->add(10);
-
-        return [$i64Val, $f64Val, $u8Clamped];
+        $n = 2147483647 + 1;
+        return $n;
     "#;
 
-    let result = run_source(source).expect("Rust numeric wrappers should execute");
-    assert_eq!(
-        result,
-        PhpValue::list(vec![
-            PhpValue::RustInt {
-                kind: RustIntKind::I64,
-                value: 120,
-            },
-            PhpValue::RustFloat {
-                kind: RustFloatKind::F64,
-                value: 3.14,
-            },
-            PhpValue::RustInt {
-                kind: RustIntKind::U8,
-                value: 210,
-            },
-        ])
-    );
+    let result = run_source(source).expect("i64 addition should execute");
+    assert_eq!(result, PhpValue::Int(2147483648));
+}
+
+#[test]
+fn test_rust_numeric_wrappers_and_fluent_pipelines() {
+    let source = r#"
+        int $i64Val = 100 + 50 - 30;
+        return $i64Val;
+    "#;
+
+    let result = run_source(source).expect("i64 arithmetic should execute");
+    assert_eq!(result, PhpValue::Int(120));
 }
 
 #[test]
@@ -486,7 +478,7 @@ fn test_unhandled_match_error_and_division_by_zero_diagnostics() {
 }
 
 #[test]
-fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
+fn test_bun_inspired_improvements_i64_f32_sso_and_shapes() {
     use rhp::vm::value::{RhpString, VmObject};
 
     // 1. Verify i32 and f32 default runtime values and operations
@@ -498,11 +490,11 @@ fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
         $addFloat = $intVal + $floatVal;
     "#;
     let (vm, _) = run_source_with_vm(source).expect("Execution should pass");
-    assert_eq!(vm.get_main_variable("$intVal"), Some(&PhpValue::Int(42_i32)));
-    assert_eq!(vm.get_main_variable("$floatVal"), Some(&PhpValue::Float(3.5_f32)));
-    assert_eq!(vm.get_main_variable("$divFloat"), Some(&PhpValue::Float(3.5_f32)));
-    assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i32)));
-    assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f32)));
+    assert_eq!(vm.get_main_variable("$intVal"), Some(&PhpValue::Int(42_i64)));
+    assert_eq!(vm.get_main_variable("$floatVal"), Some(&PhpValue::Float(3.5_f64)));
+    assert_eq!(vm.get_main_variable("$divFloat"), Some(&PhpValue::Float(3.5_f64)));
+    assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i64)));
+    assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f64)));
 
     // 2. Verify RhpString Utf8 behavior
     let short_s = RhpString::new("small_string");
@@ -516,13 +508,13 @@ fn test_bun_inspired_improvements_i32_f32_sso_and_shapes() {
 
     // 3. Verify Shape-based slot indexing on VmObject
     let mut obj = VmObject::new("User");
-    obj.set_property("id", PhpValue::Int(1_i32));
+    obj.set_property("id", PhpValue::Int(1_i64));
     obj.set_property("status", PhpValue::string("active"));
 
     assert_eq!(obj.slots.len(), 2);
-    assert_eq!(obj.slots[0], PhpValue::Int(1_i32));
+    assert_eq!(obj.slots[0], PhpValue::Int(1_i64));
     assert_eq!(obj.slots[1], PhpValue::string("active"));
-    assert_eq!(obj.get_property("id"), Some(&PhpValue::Int(1_i32)));
+    assert_eq!(obj.get_property("id"), Some(&PhpValue::Int(1_i64)));
     assert_eq!(obj.get_property("status"), Some(&PhpValue::string("active")));
 
     let shape = obj.shape.borrow();

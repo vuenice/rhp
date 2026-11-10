@@ -89,6 +89,36 @@ pub enum IpcMessage {
     DiagnosticDump,
     /// Worker → Manager: response to a diagnostic dump.
     DiagnosticDumpResponse(Vec<ActiveFiberEntry>),
+    /// Master → Worker: WebSocket upgrade handshake requested by client.
+    WsUpgrade {
+        conn_id: u64,
+        uri: String,
+        headers: Vec<(String, String)>,
+    },
+    /// Master → Worker: Inbound WebSocket data frame received from client.
+    WsFrame {
+        conn_id: u64,
+        opcode: u8,
+        payload: Vec<u8>,
+    },
+    /// Worker → Master: Outbound WebSocket frame to send to client.
+    WsSend {
+        conn_id: u64,
+        opcode: u8,
+        payload: Vec<u8>,
+    },
+    /// Worker → Master: Broadcast WebSocket frame to a specific channel or all clients.
+    WsBroadcast {
+        channel: Option<String>,
+        opcode: u8,
+        payload: Vec<u8>,
+    },
+    /// Master ↔ Worker: WebSocket connection closed.
+    WsClose {
+        conn_id: u64,
+        code: u16,
+        reason: String,
+    },
 }
 
 /// Minimal log record forwarded from a worker's ring buffer to the master log collector.

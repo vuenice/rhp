@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use crate::ir::{lower_typed_program, lower_typed_program_with_base, CompilationError, IrModule};
 use crate::lexer::span::Span;
-use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::type_system::{
     parse_and_check, parse_and_check_with_file_id, parse_and_check_with_hierarchy, TypeHierarchy,
 };
@@ -33,10 +32,8 @@ use crate::vm::ExecutionError;
 pub enum FrozenValue {
     Null,
     Bool(bool),
-    Int(i32),
-    Float(f32),
-    RustInt { kind: RustIntKind, value: i128 },
-    RustFloat { kind: RustFloatKind, value: f64 },
+    Int(i64),
+    Float(f64),
     String(String),
     Bytes(Vec<u8>),
     List(Vec<FrozenValue>),
@@ -57,14 +54,6 @@ impl FrozenValue {
             PhpValue::Bool(b) => FrozenValue::Bool(*b),
             PhpValue::Int(n) => FrozenValue::Int(*n),
             PhpValue::Float(f) => FrozenValue::Float(*f),
-            PhpValue::RustInt { kind, value } => FrozenValue::RustInt {
-                kind: *kind,
-                value: *value,
-            },
-            PhpValue::RustFloat { kind, value } => FrozenValue::RustFloat {
-                kind: *kind,
-                value: *value,
-            },
             PhpValue::String(s) => match s {
                 crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
                 crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
@@ -125,15 +114,7 @@ impl FrozenValue {
             FrozenValue::Null => PhpValue::Null,
             FrozenValue::Bool(b) => PhpValue::Bool(*b),
             FrozenValue::Int(n) => PhpValue::Int(*n),
-            FrozenValue::Float(f) => PhpValue::Float(*f),
-            FrozenValue::RustInt { kind, value } => PhpValue::RustInt {
-                kind: *kind,
-                value: *value,
-            },
-            FrozenValue::RustFloat { kind, value } => PhpValue::RustFloat {
-                kind: *kind,
-                value: *value,
-            },
+            FrozenValue::Float(f) => PhpValue::float(*f),
             FrozenValue::String(s) => PhpValue::string(s.clone()),
             FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
             FrozenValue::List(items) => {
@@ -194,7 +175,7 @@ impl From<&PhpValue> for FrozenValue {
 
 impl From<i32> for FrozenValue {
     fn from(n: i32) -> Self {
-        FrozenValue::Int(n)
+        FrozenValue::Int(n as i64)
     }
 }
 
@@ -206,6 +187,12 @@ impl From<bool> for FrozenValue {
 
 impl From<f32> for FrozenValue {
     fn from(f: f32) -> Self {
+        FrozenValue::Float(f as f64)
+    }
+}
+
+impl From<f64> for FrozenValue {
+    fn from(f: f64) -> Self {
         FrozenValue::Float(f)
     }
 }

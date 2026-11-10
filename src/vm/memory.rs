@@ -74,27 +74,27 @@ impl MemoryStats {
         let mut map = IndexMap::new();
         map.insert(
             "allocated_bytes".to_string(),
-            PhpValue::Int(self.allocated_bytes as i32),
+            PhpValue::Int(self.allocated_bytes as i64),
         );
         map.insert(
             "peak_bytes".to_string(),
-            PhpValue::Int(self.peak_bytes as i32),
+            PhpValue::Int(self.peak_bytes as i64),
         );
         map.insert(
             "total_allocations".to_string(),
-            PhpValue::Int(self.total_allocations as i32),
+            PhpValue::Int(self.total_allocations as i64),
         );
         map.insert(
             "total_deallocations".to_string(),
-            PhpValue::Int(self.total_deallocations as i32),
+            PhpValue::Int(self.total_deallocations as i64),
         );
         map.insert(
             "cow_detachments".to_string(),
-            PhpValue::Int(self.cow_detachments as i32),
+            PhpValue::Int(self.cow_detachments as i64),
         );
         map.insert(
             "live_objects".to_string(),
-            PhpValue::Int(self.live_objects as i32),
+            PhpValue::Int(self.live_objects as i64),
         );
         map.insert("gc_runs".to_string(), PhpValue::Int(0));
         map.insert("gc_pause_ms".to_string(), PhpValue::Float(0.0));
@@ -103,15 +103,15 @@ impl MemoryStats {
         let arena_stats = crate::vm::arena::get_global_arena_stats();
         map.insert(
             "arena_allocated_bytes".to_string(),
-            PhpValue::Int(arena_stats.allocated_bytes as i32),
+            PhpValue::Int(arena_stats.allocated_bytes as i64),
         );
         map.insert(
             "arena_capacity_bytes".to_string(),
-            PhpValue::Int(arena_stats.capacity_bytes as i32),
+            PhpValue::Int(arena_stats.capacity_bytes as i64),
         );
         map.insert(
             "arena_reset_count".to_string(),
-            PhpValue::Int(arena_stats.reset_count as i32),
+            PhpValue::Int(arena_stats.reset_count as i64),
         );
         map.insert(
             "model".to_string(),
@@ -273,12 +273,10 @@ pub fn reset_memory_tracker() {
 /// Recursively estimate the heap memory footprint (in bytes) of a [`PhpValue`].
 pub fn estimate_value_size(val: &PhpValue) -> usize {
     match val {
-        PhpValue::Null | PhpValue::Bool(_) | PhpValue::Int(_) | PhpValue::Float(_) => {
-            std::mem::size_of::<PhpValue>()
-        }
-        PhpValue::RustInt { .. } | PhpValue::RustFloat { .. } => {
-            std::mem::size_of::<PhpValue>() + 8
-        }
+        PhpValue::Null
+        | PhpValue::Bool(_)
+        | PhpValue::Int(_)
+        | PhpValue::Float(_) => std::mem::size_of::<PhpValue>(),
         PhpValue::String(s) => {
             if s.is_inline() {
                 std::mem::size_of::<PhpValue>()

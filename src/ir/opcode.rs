@@ -4,7 +4,7 @@ use std::fmt;
 use crate::ast::{expr::BinaryOp, types::CastType};
 use crate::ir::ClosureCategory;
 use crate::lexer::span::Span;
-use crate::type_system::types::{RhpType, RustFloatKind, RustIntKind};
+use crate::type_system::types::RhpType;
 
 /// Virtual register identifier in the register-based Bytecode VM (`r0`..`r65535`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -154,12 +154,10 @@ pub enum Constant {
     Bool(bool),
     /// Standard 64-bit integer literal or wide integer constant.
     Int(i64),
-    /// Standard 64-bit floating-point literal.
+    /// Floating-point literal that is exact in `f64` but not in `f32`.
     Float(f64),
-    /// Explicit native Rust integer value (`i8`..`u128`).
-    RustInt { kind: RustIntKind, value: i128 },
-    /// Explicit native Rust float value (`f32`, `f64`).
-    RustFloat { kind: RustFloatKind, value: f64 },
+    /// Decimal literal that is not exact in binary floating point.
+    Decimal(String),
     /// Interned UTF-8 string literal, identifier, or symbol name.
     String(String),
     /// Interned raw bytes literal.
@@ -175,8 +173,7 @@ impl fmt::Display for Constant {
             Self::Bool(b) => write!(f, "{}", b),
             Self::Int(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
-            Self::RustInt { kind, value } => write!(f, "{}_{}", value, kind),
-            Self::RustFloat { kind, value } => write!(f, "{:?}_{}", value, kind),
+            Self::Decimal(s) => write!(f, "{}", s),
             Self::String(s) => write!(f, "{:?}", s),
             Self::Bytes(b) => write!(f, "b{:?}", b),
             Self::Type(ty) => write!(f, "<type:{}>", ty),
@@ -202,8 +199,8 @@ pub enum OpCode {
     /// `dst = value` (inline 32-bit signed integer immediate)
     LoadInt { dst: Reg, value: i32 },
 
-    /// `dst = value` (inline 32-bit floating point immediate stored as raw IEEE-754 bits)
-    LoadFloat { dst: Reg, bits: u32 },
+    /// `dst = value` (inline 64-bit floating point immediate stored as raw IEEE-754 bits)
+    LoadFloat { dst: Reg, bits: u64 },
 
     /// `dst = constants[const_id]`
     LoadConst { dst: Reg, const_id: ConstantId },
@@ -236,20 +233,6 @@ pub enum OpCode {
 
     /// Enforce a Medium/Gradual Type System contract on `reg` against `constants[type_const]`.
     AssertType { reg: Reg, type_const: ConstantId },
-
-    /// Wrap a register value into an explicit native Rust integer subtype (`Int::i64()`, `Int::u32()`, etc.).
-    WrapRustInt {
-        dst: Reg,
-        src: Option<Reg>,
-        kind: RustIntKind,
-    },
-
-    /// Wrap a register value into an explicit native Rust float subtype (`Float::f64()`, `Float::f32()`).
-    WrapRustFloat {
-        dst: Reg,
-        src: Option<Reg>,
-        kind: RustFloatKind,
-    },
 
     // =========================================================================
     // 3. Control Flow & Linear Branching
@@ -529,7 +512,7 @@ impl fmt::Display for OpCode {
             OpCode::LoadNull { dst } => write!(f, "LOAD_NULL       {}", dst),
             OpCode::LoadBool { dst, value } => write!(f, "LOAD_BOOL       {}, {}", dst, value),
             OpCode::LoadInt { dst, value } => write!(f, "LOAD_INT        {}, {}", dst, value),
-            OpCode::LoadFloat { dst, bits } => write!(f, "LOAD_FLOAT      {}, {}", dst, f32::from_bits(*bits)),
+            OpCode::LoadFloat { dst, bits } => write!(f, "LOAD_FLOAT      {}, {}", dst, f64::from_bits(*bits)),
             OpCode::LoadConst { dst, const_id } => {
                 write!(f, "LOAD_CONST      {}, {}", dst, const_id)
             }
@@ -549,14 +532,6 @@ impl fmt::Display for OpCode {
             OpCode::AssertType { reg, type_const } => {
                 write!(f, "ASSERT_TYPE     {}, {}", reg, type_const)
             }
-            OpCode::WrapRustInt { dst, src, kind } => match src {
-                Some(s) => write!(f, "WRAP_RUST_INT   {}, {}, {}", dst, s, kind),
-                None => write!(f, "WRAP_RUST_INT   {}, {}", dst, kind),
-            },
-            OpCode::WrapRustFloat { dst, src, kind } => match src {
-                Some(s) => write!(f, "WRAP_RUST_FLOAT {}, {}, {}", dst, s, kind),
-                None => write!(f, "WRAP_RUST_FLOAT {}, {}", dst, kind),
-            },
             OpCode::Jump { target } => write!(f, "JUMP            @{:04}", target),
             OpCode::JumpIfTrue { cond, target } => {
                 write!(f, "JUMP_IF_TRUE    {}, @{:04}", cond, target)

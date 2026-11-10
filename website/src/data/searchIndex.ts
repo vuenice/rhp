@@ -32,13 +32,6 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["architecture", "runtime", "supervisor", "pre-fork", "index.rhp", "arena", "zero-gc", "worker pool", "boot phase", "rhp.toml"]
   },
   {
-    title: "Project Structure",
-    section: "Getting Started",
-    description: "Standard directory layout, entrypoint conventions, and config files for RHP apps.",
-    url: "/docs/getting-started/project-structure",
-    keywords: ["project", "directory", "structure", "layout", "config", "src", "rhp.json"]
-  },
-  {
     title: "CLI Reference",
     section: "Getting Started",
     description: "Comprehensive command-line options: rhp run dev, rhp run build, and rhp run lint.",

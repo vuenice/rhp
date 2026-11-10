@@ -632,18 +632,24 @@ fn test_arr_macro_registration_and_dict_execution() {
             'Authorization' => 'Bearer token123',
         ])->toHeaderLine();
 
-        return Arr::list([$upper, $headers]);
+        return Arr::dict(['upper' => $upper, 'headers' => $headers]);
     "#;
 
     let res = run_source(source).expect("Macro execution on Dict must succeed");
     assert_eq!(
         res,
-        PhpValue::list(vec![
-            PhpValue::dict(vec![
-                ("greeting".to_string(), PhpValue::string("HELLO")),
-                ("farewell".to_string(), PhpValue::string("GOODBYE")),
-            ]),
-            PhpValue::string("Content-Type: application/json\nAuthorization: Bearer token123"),
+        PhpValue::dict(vec![
+            (
+                "upper".to_string(),
+                PhpValue::dict(vec![
+                    ("greeting".to_string(), PhpValue::string("HELLO")),
+                    ("farewell".to_string(), PhpValue::string("GOODBYE")),
+                ]),
+            ),
+            (
+                "headers".to_string(),
+                PhpValue::string("Content-Type: application/json\nAuthorization: Bearer token123"),
+            ),
         ])
     );
 }
@@ -740,3 +746,89 @@ fn test_dict_lowercase_type_hint_and_local_scope() {
         ])
     );
 }
+
+#[test]
+fn test_dict_strict_string_keys_and_heterogeneous_values() {
+    clear_runtime_closure_macros();
+
+    // 1. Valid string keys and heterogeneous values succeed
+    let source_ok = r#"
+        $d = Arr::dict();
+        $d['int_val'] = 42;
+        $d['str_val'] = "hello";
+        $d['float_val'] = 3.14;
+        $d['bool_val'] = true;
+        return $d;
+    "#;
+    let res = run_source(source_ok).expect("String keys and heterogeneous values must succeed");
+    assert_eq!(
+        res,
+        PhpValue::dict(vec![
+            ("int_val".to_string(), PhpValue::Int(42)),
+            ("str_val".to_string(), PhpValue::string("hello")),
+            ("float_val".to_string(), PhpValue::float(3.14)),
+            ("bool_val".to_string(), PhpValue::Bool(true)),
+        ])
+    );
+
+    // 2. Integer key in index get
+    let source_int_get = r#"
+        $d = Arr::dict(['a' => 1]);
+        return $d[0];
+    "#;
+    let err = run_source(source_int_get).expect_err("Integer key get must fail");
+    assert!(
+        err.to_string().contains("Dict key must be a string, got int"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 3. Integer key in index set
+    let source_int_set = r#"
+        $d = Arr::dict();
+        $d[1] = "val";
+    "#;
+    let err = run_source(source_int_set).expect_err("Integer key set must fail");
+    assert!(
+        err.to_string().contains("Dict key must be a string, got int"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 4. Float key in index get
+    let source_float_get = r#"
+        $d = Arr::dict(['a' => 1]);
+        return $d[2.5];
+    "#;
+    let err = run_source(source_float_get).expect_err("Float key get must fail");
+    assert!(
+        err.to_string().contains("Dict key must be a string, got float"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 5. Float key in index set
+    let source_float_set = r#"
+        $d = Arr::dict();
+        $d[1.5] = "val";
+    "#;
+    let err = run_source(source_float_set).expect_err("Float key set must fail");
+    assert!(
+        err.to_string().contains("Dict key must be a string, got float"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 6. Bool key in index set
+    let source_bool_set = r#"
+        $d = Arr::dict();
+        $d[true] = "val";
+    "#;
+    let err = run_source(source_bool_set).expect_err("Bool key set must fail");
+    assert!(
+        err.to_string().contains("Dict key must be a string, got bool"),
+        "Unexpected error: {:?}",
+        err
+    );
+}
+

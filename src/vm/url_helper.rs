@@ -33,7 +33,7 @@ pub fn parse_url_components(url_str: &str) -> Option<IndexMap<String, PhpValue>>
         }
 
         if let Some(port) = parsed.port() {
-            map.insert("port".to_string(), PhpValue::Int(port as i32));
+            map.insert("port".to_string(), PhpValue::Int(port as i64));
         }
 
         let user = parsed.username();
@@ -112,7 +112,7 @@ fn parse_relative_url(url_str: &str, map: &mut IndexMap<String, PhpValue>) {
             let host_only = &user_host[..colon];
             if let Ok(port_num) = user_host[colon + 1..].parse::<i32>() {
                 map.insert("host".to_string(), PhpValue::string(host_only));
-                map.insert("port".to_string(), PhpValue::Int(port_num));
+                map.insert("port".to_string(), PhpValue::Int((port_num) as i64));
             } else {
                 map.insert("host".to_string(), PhpValue::string(user_host));
             }

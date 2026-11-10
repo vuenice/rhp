@@ -251,6 +251,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Binary",
         "Binary data manipulation, hex encoding/decoding, and cryptographic byte generation facade (bin2hex, hex2bin, randomBytes, toHex, fromHex)",
     ),
+    FacadeInfo::native(
+        "WebSocket",
+        "High-performance RFC 6455 real-time WebSocket facade (isUpgrade, send, broadcast, clients, channels, subscribe, unsubscribe, close, acceptKey)",
+    ),
+    FacadeInfo::native(
+        "Ws",
+        "Canonical alias for WebSocket facade",
+    ),
 ];
 
 /// Reserved global helper intrinsics that the Pratt parser statically rewrites

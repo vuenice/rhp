@@ -552,11 +552,11 @@ fn test_float_round_floor_ceil_ciel_helpers() {
         $g_ceil = ceil(3.1);
         $g_ciel = ciel(3.1);
 
-        // 4. Fluent calls on Float::f64 wrapper
-        $w_round = Float::f64($pi)->round(2)->toFloat();
-        $w_floor = Float::f64(3.9)->floor()->toFloat();
-        $w_ceil = Float::f64(3.1)->ceil()->toFloat();
-        $w_ciel = Float::f64(3.1)->ciel()->toFloat();
+        // 4. The same helpers on a float value
+        $w_round = $pi->round(2);
+        $w_floor = (3.9)->floor();
+        $w_ceil = (3.1)->ceil();
+        $w_ciel = (3.1)->ciel();
 
         return [
             $r1, $r2, $f1, $f2, $c1, $c2,

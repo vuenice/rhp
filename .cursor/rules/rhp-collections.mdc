@@ -1,0 +1,58 @@
+---
+description: List and set identity, self-insert, and hash bugs. List and set hold only int, float, and string. HashMap is out of scope.
+globs: src/vm/**/*.rs,src/type_system/**/*.rs,src/ir/**/*.rs
+alwaysApply: false
+---
+
+# List and set identity
+
+## Current Problem
+
+`List`, `Dict`, and `Set` are `Rc<RefCell<_>>` in `src/vm/value.rs`. `PhpValue::clone` copies the `Rc`, so `$a[] = $b` stores the same box. `$a[] = $a` makes a cycle. `PartialEq` calls `borrow()` and panics if that box is already open, or recurses until the stack overflows. `Hash` uses `try_borrow` and, on failure, hashes only the type tag, so one list has two hashes. A set element that is later mutated changes bucket and `contains` misses it. `Arr::hashMap` has the same key bug. Do not design for it now.
+
+## Possible solutions
+
+**A. Reject only `$a[] = $a`.**
+- Pros: stops the direct cycle.
+- Cons: `$a[] = $b; $b[] = $a` remains. Shared `Rc` still panics on `==`. Mutating a set element still changes its hash.
+
+**B. `cow_clone` on every push, and a deep snapshot when adding to a set.**
+- Pros: `$a[] = $b` then `$b[] = 2` leaves `$a[0]` unchanged. The set keeps its own buffers, so a later write cannot move the hash.
+- Cons: nested lists stay shared unless every level is copied. Objects copied by pointer can still change if their hash ever depends on fields. `chunk()` and `flatten()` still need lists of lists.
+
+**C. List and set elements are only `int`, `float`, and `string`. Anything else is a `dict`.**
+- Pros: a list cannot contain itself, so the cycle and the re-entrant hash disappear. Set keys are copied scalars, so later writes do not move the bucket. Matches the decision already made.
+- Cons: `chunk()`, grouped rows, and lists of lists are dicts (or rejected), not lists. Dict values can still be shared boxes, so dict equality can still panic. `Arr::hashMap` stays unsupported.
+
+## Suggested solution
+
+**C**, plus copy the scalar on push and on `Arr::set` add (do not share the caller's `Rc`). Compare two values that are the same box as equal without borrowing twice. Dict may hold lists, sets, and other dicts. A list or set that receives one of those is a type error: use `dict`.
+
+## RHP code
+
+Problem — push shares the box, then compare panics:
+
+```php
+list $a = [];
+$a[] = $a;
+print($a === $a); // panic: list is already borrowed
+```
+
+Solution — that push is illegal; scalars copy in:
+
+```php
+list $a = [];
+$a[] = $a; // error: list accepts int, float, string only
+
+list $b = [1];
+list $row = [];
+$row[] = $b; // error: use dict
+
+dict $row = ["nums" => $b];
+
+list $ids = [1];
+$set = Arr::set([]);
+$set->add(1);
+$ids[] = 2;
+print($set->contains(1)); // true
+```

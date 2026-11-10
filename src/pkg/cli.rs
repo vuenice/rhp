@@ -220,8 +220,95 @@ pub fn handle_update(root_dir: &Path, args: &[String]) {
 }
 
 pub fn handle_init(root_dir: &Path, args: &[String]) {
-    let custom_name = args.first().and_then(|s| if s.starts_with('-') { None } else { Some(s.as_str()) });
-    match init_project(root_dir, custom_name) {
+    let mut custom_name: Option<String> = None;
+    let mut package_type = super::manifest::PackageType::Rhp;
+    let mut safety = super::manifest::PackageSafety::Safe;
+    let mut has_type_flag = false;
+
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--help" || arg == "-h" {
+            println!("Usage: rhp init [PACKAGE_NAME] [--type=rhp|native-rust|wasm|hybrid] [--safety=safe|unsafe]");
+            println!("\nExamples:");
+            println!("    rhp init");
+            println!("    rhp init my-package");
+            println!("    rhp init my-mongo --type=native-rust --safety=unsafe");
+            println!("    rhp init my-filter --type=wasm");
+            println!("    rhp init my-driver --type=hybrid");
+            process::exit(0);
+        } else if let Some(val) = arg.strip_prefix("--type=") {
+            if let Some(t) = super::manifest::PackageType::from_str_loose(val) {
+                package_type = t;
+                has_type_flag = true;
+            }
+        } else if arg == "--type" {
+            if let Some(next) = iter.next() {
+                if let Some(t) = super::manifest::PackageType::from_str_loose(next) {
+                    package_type = t;
+                    has_type_flag = true;
+                }
+            }
+        } else if let Some(val) = arg.strip_prefix("--safety=") {
+            if let Some(s) = super::manifest::PackageSafety::from_str_loose(val) {
+                safety = s;
+            }
+        } else if arg == "--safety" {
+            if let Some(next) = iter.next() {
+                if let Some(s) = super::manifest::PackageSafety::from_str_loose(next) {
+                    safety = s;
+                }
+            }
+        } else if !arg.starts_with('-') && custom_name.is_none() {
+            custom_name = Some(arg.clone());
+        }
+    }
+
+    if has_type_flag || (custom_name.is_some() && package_type != super::manifest::PackageType::Rhp) {
+        let (target, name) = if let Some(ref raw_name) = custom_name {
+            let p = Path::new(raw_name);
+            let dir = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                root_dir.join(raw_name)
+            };
+            let pkg_ident = p.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(raw_name.as_str())
+                .to_string();
+            (dir, pkg_ident)
+        } else {
+            let ident = root_dir.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("my-package")
+                .to_string();
+            (root_dir.to_path_buf(), ident)
+        };
+
+        let opts = super::scaffold::ScaffoldOptions {
+            name: name.clone(),
+            package_type,
+            safety,
+            description: Some(format!("{} package", package_type.as_str())),
+        };
+
+        match super::scaffold::scaffold_package(&target, &opts) {
+            Ok(()) => {
+                println!("✨ Initialized {} [{}] (safety: {}) in '{}'", name, package_type.as_str(), safety.as_str(), target.display());
+                if package_type == super::manifest::PackageType::NativeRust {
+                    println!("🚀 Built with Typed C-ABI and Opaque Handle registry.");
+                } else if package_type == super::manifest::PackageType::Wasm {
+                    println!("🛡️  Configured with sandboxed WebAssembly execution and MessagePack marshalling.");
+                }
+                process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Error scaffolding package: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+
+    match init_project(root_dir, custom_name.as_deref()) {
         Ok(path) => {
             println!("✨ Created '{}'", path.display());
             println!("💡 Run 'rhp add <package>' to add your first dependency.");
@@ -229,6 +316,79 @@ pub fn handle_init(root_dir: &Path, args: &[String]) {
         }
         Err(e) => {
             eprintln!("Error initializing project: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+pub fn handle_audit(root_dir: &Path, args: &[String]) {
+    let mut target_path = root_dir.to_path_buf();
+    let mut as_json = false;
+
+    for arg in args {
+        if arg == "--help" || arg == "-h" {
+            println!("Usage: rhp audit [PATH] [--json]");
+            println!("\nAudits package and dependencies for security, safety compliance, and network egress.");
+            process::exit(0);
+        } else if arg == "--json" {
+            as_json = true;
+        } else if !arg.starts_with('-') {
+            target_path = Path::new(arg).to_path_buf();
+        }
+    }
+
+    match super::audit::audit_package(&target_path) {
+        Ok(report) => {
+            if as_json {
+                let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+                println!("{}", json);
+            } else {
+                print!("{}", super::audit::format_audit_report(&report));
+            }
+
+            if report.is_clean() {
+                process::exit(0);
+            } else {
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Audit failed: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+pub fn handle_package_command(root_dir: &Path, args: &[String]) {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
+        println!("Usage: rhp package <SUBCOMMAND>");
+        println!("\nSubcommands:");
+        println!("    init <NAME> [--type=...] [--safety=...]  Scaffold a new RHP or native package");
+        println!("    audit [PATH] [--json]                   Audit safety rules and network egress");
+        println!("    gen-types [PATH]                        Generate .d.rhp static type definitions");
+        println!("    list                                    List installed dependencies");
+        process::exit(0);
+    }
+
+    match args[0].as_str() {
+        "init" => handle_init(root_dir, &args[1..]),
+        "audit" => handle_audit(root_dir, &args[1..]),
+        "gen-types" | "types" => {
+            let target = args.get(1).map(Path::new).unwrap_or(root_dir);
+            match super::types::generate_type_declarations(target) {
+                Ok(path) => {
+                    println!("📝 Generated type signatures at '{}'", path.display());
+                    process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to generate type signatures: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        "list" | "ls" => handle_list(root_dir),
+        _ => {
+            eprintln!("Unknown package subcommand: '{}'. Run 'rhp package --help' for usage.", args[0]);
             process::exit(1);
         }
     }
@@ -245,7 +405,9 @@ pub fn handle_list(root_dir: &Path) {
 
     match Manifest::load_from_file(&manifest_path) {
         Ok(m) => {
-            println!("📦 Project: {} (v{})", m.package.name, m.package.version);
+            let pkg_type = m.package.package_type().as_str();
+            let safety = if m.package.is_safe() { "safe" } else { "unsafe" };
+            println!("📦 Project: {} (v{}) [type: {}, safety: {}]", m.package.name, m.package.version, pkg_type, safety);
             if m.dependencies.is_empty() {
                 println!("  No dependencies installed.");
             } else {

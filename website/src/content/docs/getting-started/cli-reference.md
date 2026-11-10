@@ -2,7 +2,7 @@
 title: "CLI Reference"
 description: "Complete command-line interface documentation for the rhp binary."
 section: "Getting Started"
-order: 5
+order: 4
 ---
 
 ## Overview

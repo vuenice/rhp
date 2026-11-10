@@ -171,7 +171,7 @@ impl Frame {
         let mut map = indexmap::IndexMap::new();
         if !self.file.is_empty() {
             map.insert("file".to_string(), PhpValue::string(&self.file));
-            map.insert("line".to_string(), PhpValue::Int(self.line as i32));
+            map.insert("line".to_string(), PhpValue::Int(self.line as i64));
         }
         map.insert("function".to_string(), PhpValue::string(&self.function));
         if let Some(ref cls) = self.class {

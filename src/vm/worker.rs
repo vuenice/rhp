@@ -31,7 +31,6 @@ use indexmap::IndexMap;
 use crate::ir::lower_typed_program_with_base;
 use crate::lexer::span::Span;
 use crate::type_system::parse_and_check_with_hierarchy;
-use crate::type_system::types::{RustFloatKind, RustIntKind};
 use crate::vm::arena::RequestDropStats;
 use crate::vm::engine::VM;
 use crate::vm::fiber::{enter_fiber, Fiber, FiberId, FiberStats};
@@ -1697,16 +1696,6 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
             buf.push(3);
             buf.extend_from_slice(&f.to_le_bytes());
         }
-        FrozenValue::RustInt { kind, value } => {
-            buf.push(4);
-            buf.push(rust_int_kind_to_u8(*kind));
-            buf.extend_from_slice(&value.to_le_bytes());
-        }
-        FrozenValue::RustFloat { kind, value } => {
-            buf.push(5);
-            buf.push(rust_float_kind_to_u8(*kind));
-            buf.extend_from_slice(&value.to_le_bytes());
-        }
         FrozenValue::String(s) => {
             buf.push(6);
             write_string(buf, s);
@@ -1776,34 +1765,14 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
             Ok(FrozenValue::Bool(b))
         }
         2 => {
-            let mut b = [0u8; 4];
-            copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::Int(i32::from_le_bytes(b)))
-        }
-        3 => {
-            let mut b = [0u8; 4];
-            copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::Float(f32::from_le_bytes(b)))
-        }
-        4 => {
-            let kind_u8 = read_u8(data, cursor)?;
-            let kind = u8_to_rust_int_kind(kind_u8)?;
-            let mut b = [0u8; 16];
-            copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::RustInt {
-                kind,
-                value: i128::from_le_bytes(b),
-            })
-        }
-        5 => {
-            let kind_u8 = read_u8(data, cursor)?;
-            let kind = u8_to_rust_float_kind(kind_u8)?;
             let mut b = [0u8; 8];
             copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::RustFloat {
-                kind,
-                value: f64::from_le_bytes(b),
-            })
+            Ok(FrozenValue::Int(i64::from_le_bytes(b)))
+        }
+        3 => {
+            let mut b = [0u8; 8];
+            copy_slice(data, cursor, &mut b)?;
+            Ok(FrozenValue::Float(f64::from_le_bytes(b)))
         }
         6 => {
             let s = read_string(data, cursor)?;
@@ -1910,62 +1879,6 @@ fn copy_slice(data: &[u8], cursor: &mut usize, dest: &mut [u8]) -> Result<(), Wo
     dest.copy_from_slice(&data[*cursor..*cursor + len]);
     *cursor += len;
     Ok(())
-}
-
-fn rust_int_kind_to_u8(kind: RustIntKind) -> u8 {
-    match kind {
-        RustIntKind::I8 => 0,
-        RustIntKind::I16 => 1,
-        RustIntKind::I32 => 2,
-        RustIntKind::I64 => 3,
-        RustIntKind::I128 => 4,
-        RustIntKind::U8 => 5,
-        RustIntKind::U16 => 6,
-        RustIntKind::U32 => 7,
-        RustIntKind::U64 => 8,
-        RustIntKind::U128 => 9,
-        RustIntKind::Usize => 10,
-        RustIntKind::Isize => 11,
-    }
-}
-
-fn u8_to_rust_int_kind(b: u8) -> Result<RustIntKind, WorkerError> {
-    match b {
-        0 => Ok(RustIntKind::I8),
-        1 => Ok(RustIntKind::I16),
-        2 => Ok(RustIntKind::I32),
-        3 => Ok(RustIntKind::I64),
-        4 => Ok(RustIntKind::I128),
-        5 => Ok(RustIntKind::U8),
-        6 => Ok(RustIntKind::U16),
-        7 => Ok(RustIntKind::U32),
-        8 => Ok(RustIntKind::U64),
-        9 => Ok(RustIntKind::U128),
-        10 => Ok(RustIntKind::Usize),
-        11 => Ok(RustIntKind::Isize),
-        _ => Err(WorkerError::SerializationError(format!(
-            "Invalid RustIntKind tag: {}",
-            b
-        ))),
-    }
-}
-
-fn rust_float_kind_to_u8(kind: RustFloatKind) -> u8 {
-    match kind {
-        RustFloatKind::F32 => 0,
-        RustFloatKind::F64 => 1,
-    }
-}
-
-fn u8_to_rust_float_kind(b: u8) -> Result<RustFloatKind, WorkerError> {
-    match b {
-        0 => Ok(RustFloatKind::F32),
-        1 => Ok(RustFloatKind::F64),
-        _ => Err(WorkerError::SerializationError(format!(
-            "Invalid RustFloatKind tag: {}",
-            b
-        ))),
-    }
 }
 
 static RAND_STATE: AtomicU64 = AtomicU64::new(123456789);

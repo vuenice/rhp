@@ -83,8 +83,8 @@ pub use parser::{
 pub use type_system::{
     check_program, check_program_with_hierarchy, parse_and_check, parse_and_check_with_file_id,
     parse_and_check_with_hierarchy, parse_and_check_with_path, ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FrontendError,
-    FunctionSignature, InterfaceTypeInfo, ParamSignature, PropertyTypeInfo, RhpType, RustFloatKind,
-    RustIntKind, TypeCheckResult, TypeChecker, TypeEnvironment, TypeError, TypeErrorKind,
+    FunctionSignature, InterfaceTypeInfo, ParamSignature, PropertyTypeInfo, RhpType,
+    TypeCheckResult, TypeChecker, TypeEnvironment, TypeError, TypeErrorKind,
     TypeHierarchy, TypedProgram, VariableBinding,
 };
 pub use jit::{
@@ -108,7 +108,7 @@ pub use vm::{
     run_source_with_vm, run_source_with_vm_and_jit, serialize_response, set_fiber_local, suspend_for_io, with_current_fiber, CallFrame,
     EngineState, Environment, ExecutionError, FacadeResult, Fiber, FiberContext, FiberId,
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, FrozenValue, IndexMap,
-    IoKind, IoWaitInfo, LogRecord, ParentProcess, PhpValue, PluginFacade, parse_json_value, RunMode, RuntimeError,
+    IoKind, IoWaitInfo, LogRecord, ParentProcess, PhpValue, StrictEq, PluginFacade, parse_json_value, RunMode, RuntimeError,
     RuntimeErrorKind, SchedulerStats, StackTraceEntry, Tier2PluginHandler, Value, VmClosure,
     VmFuture, FutureState, VmObject, WorkerError, WorkerHandle, WorkerModel, WorkerPayload, WorkerPool,
     WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats, WorkerRequest, WorkerResponse,

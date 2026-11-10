@@ -136,10 +136,8 @@ impl AttributeValue {
         match val {
             PhpValue::String(s) => Self::String(s.to_string()),
             PhpValue::Bool(b) => Self::Bool(*b),
-            PhpValue::Int(i) => Self::Int(*i as i64),
-            PhpValue::Float(f) => Self::Float(*f as f64),
-            PhpValue::RustInt { value, .. } => Self::Int(*value as i64),
-            PhpValue::RustFloat { value, .. } => Self::Float(*value),
+            PhpValue::Int(i) => Self::Int(*i),
+            PhpValue::Float(f) => Self::Float(*f),
             PhpValue::List(l) => {
                 let items: Vec<AttributeValue> =
                     l.borrow().iter().map(Self::from_php_value).collect();
@@ -158,8 +156,8 @@ impl AttributeValue {
         match self {
             Self::String(s) => PhpValue::string(s.clone()),
             Self::Bool(b) => PhpValue::Bool(*b),
-            Self::Int(i) => PhpValue::Int(*i as i32),
-            Self::Float(f) => PhpValue::Float(*f as f32),
+            Self::Int(i) => PhpValue::Int(*i as i64),
+            Self::Float(f) => PhpValue::float(*f),
             Self::Array(arr) => {
                 let list: Vec<PhpValue> = arr.iter().map(|item| item.to_php_value()).collect();
                 PhpValue::list(list)
@@ -215,7 +213,7 @@ impl SpanEvent {
         map.insert("name".to_string(), PhpValue::string(self.name.clone()));
         map.insert(
             "timestamp_unix_nano".to_string(),
-            PhpValue::Int((self.timestamp_unix_nano / 1_000_000) as i32),
+            PhpValue::Int((self.timestamp_unix_nano / 1_000_000) as i64),
         );
         let mut attrs_map = IndexMap::new();
         for (k, v) in &self.attributes {
@@ -393,17 +391,17 @@ impl Span {
         }
         map.insert(
             "start_time_unix_nano".to_string(),
-            PhpValue::Int((self.start_time_unix_nano / 1_000_000) as i32),
+            PhpValue::Int((self.start_time_unix_nano / 1_000_000) as i64),
         );
         if let Some(end) = self.end_time_unix_nano {
             map.insert(
                 "end_time_unix_nano".to_string(),
-                PhpValue::Int((end / 1_000_000) as i32),
+                PhpValue::Int((end / 1_000_000) as i64),
             );
         }
         map.insert(
             "duration_ms".to_string(),
-            PhpValue::Float((self.duration_nanos() as f32) / 1_000_000.0),
+            PhpValue::Float((self.duration_nanos() as f64) / 1_000_000.0),
         );
 
         let mut attrs_map = IndexMap::new();

@@ -14,6 +14,12 @@ pub const ALT_MANIFEST_FILENAME: &str = "rpm.toml";
 pub struct Manifest {
     pub package: PackageMetadata,
     #[serde(default)]
+    pub capabilities: Option<CapabilitiesConfig>,
+    #[serde(default)]
+    pub native: Option<NativeConfig>,
+    #[serde(default)]
+    pub exports: Option<ExportsConfig>,
+    #[serde(default)]
     pub dependencies: BTreeMap<String, Dependency>,
     #[serde(default, rename = "dev-dependencies")]
     pub dev_dependencies: BTreeMap<String, Dependency>,
@@ -21,6 +27,104 @@ pub struct Manifest {
     pub autoload: AutoloadConfig,
     #[serde(default)]
     pub export: Option<AutoloadConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageType {
+    #[default]
+    Rhp,
+    NativeRust,
+    Wasm,
+    Hybrid,
+}
+
+impl PackageType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PackageType::Rhp => "rhp",
+            PackageType::NativeRust => "native-rust",
+            PackageType::Wasm => "wasm",
+            PackageType::Hybrid => "hybrid",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "rhp" | "pure" | "pure-rhp" => Some(PackageType::Rhp),
+            "native-rust" | "native" | "rust" => Some(PackageType::NativeRust),
+            "wasm" | "webassembly" => Some(PackageType::Wasm),
+            "hybrid" => Some(PackageType::Hybrid),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageSafety {
+    #[default]
+    Safe,
+    Unsafe,
+}
+
+impl PackageSafety {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PackageSafety::Safe => "safe",
+            PackageSafety::Unsafe => "unsafe",
+        }
+    }
+
+    pub fn is_safe(&self) -> bool {
+        matches!(self, PackageSafety::Safe)
+    }
+
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "safe" => Some(PackageSafety::Safe),
+            "unsafe" => Some(PackageSafety::Unsafe),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CapabilitiesConfig {
+    #[serde(default)]
+    pub network: Vec<String>,
+    #[serde(default)]
+    pub filesystem: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct NativeConfig {
+    #[serde(default, rename = "crate-name")]
+    pub crate_name: Option<String>,
+    #[serde(default, rename = "target-dir")]
+    pub target_dir: Option<String>,
+    #[serde(default, rename = "abi-version")]
+    pub abi_version: Option<u32>,
+    #[serde(default, rename = "entry-symbol")]
+    pub entry_symbol: Option<String>,
+    #[serde(default, rename = "thread-safe")]
+    pub thread_safe: Option<bool>,
+    #[serde(default, rename = "execution-target")]
+    pub execution_target: Option<String>, // "native" | "wasm"
+    #[serde(default)]
+    pub marshalling: Option<String>, // "typed-c-abi" | "msgpack" | "cbor"
+    #[serde(default)]
+    pub facade: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ExportsConfig {
+    #[serde(default)]
+    pub facades: Vec<String>,
+    #[serde(default)]
+    pub namespaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,6 +141,22 @@ pub struct PackageMetadata {
     pub license: Option<String>,
     #[serde(default)]
     pub repository: Option<String>,
+    #[serde(default, rename = "type")]
+    pub package_type: Option<PackageType>,
+    #[serde(default)]
+    pub safety: Option<PackageSafety>,
+    #[serde(default, rename = "rhp-version")]
+    pub rhp_version: Option<String>,
+}
+
+impl PackageMetadata {
+    pub fn is_safe(&self) -> bool {
+        self.safety.unwrap_or(PackageSafety::Safe).is_safe()
+    }
+
+    pub fn package_type(&self) -> PackageType {
+        self.package_type.unwrap_or(PackageType::Rhp)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,7 +287,13 @@ impl Manifest {
                 authors: vec![],
                 license: Some("MIT".to_string()),
                 repository: None,
+                package_type: Some(PackageType::Rhp),
+                safety: Some(PackageSafety::Safe),
+                rhp_version: Some(">=0.8.0".to_string()),
             },
+            capabilities: None,
+            native: None,
+            exports: None,
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
             autoload: AutoloadConfig {

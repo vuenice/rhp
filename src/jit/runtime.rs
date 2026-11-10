@@ -73,10 +73,8 @@ impl NativeSlot {
         match val {
             PhpValue::Null => Self::new_null(),
             PhpValue::Bool(b) => Self::new_bool(*b),
-            PhpValue::Int(n) => Self::new_int(*n as i64),
-            PhpValue::RustInt { value, .. } => Self::new_int(*value as i64),
-            PhpValue::Float(f) => Self::new_float(*f as f64),
-            PhpValue::RustFloat { value, .. } => Self::new_float(*value),
+            PhpValue::Int(n) => Self::new_int(*n),
+            PhpValue::Float(f) => Self::new_float(*f),
             _ => Self {
                 int_val: 0,
                 float_val: 0.0,
@@ -91,26 +89,8 @@ impl NativeSlot {
         match self.tag {
             TAG_NULL => PhpValue::Null,
             TAG_BOOL => PhpValue::Bool(self.int_val != 0),
-            TAG_INT => {
-                if let Some(PhpValue::RustInt { kind, .. }) = original {
-                    PhpValue::RustInt {
-                        kind: *kind,
-                        value: self.int_val as i128,
-                    }
-                } else {
-                    PhpValue::Int(self.int_val as i32)
-                }
-            }
-            TAG_FLOAT => {
-                if let Some(PhpValue::RustFloat { kind, .. }) = original {
-                    PhpValue::RustFloat {
-                        kind: *kind,
-                        value: self.float_val,
-                    }
-                } else {
-                    PhpValue::Float(self.float_val as f32)
-                }
-            }
+            TAG_INT => PhpValue::Int(self.int_val),
+            TAG_FLOAT => PhpValue::float(self.float_val),
             TAG_OTHER => original.cloned().unwrap_or(PhpValue::Null),
             _ => PhpValue::Null,
         }

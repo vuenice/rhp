@@ -49,23 +49,23 @@ impl RequestArenaStats {
         let mut map = IndexMap::new();
         map.insert(
             "allocated_bytes".to_string(),
-            PhpValue::Int(self.allocated_bytes as i32),
+            PhpValue::Int(self.allocated_bytes as i64),
         );
         map.insert(
             "peak_bytes".to_string(),
-            PhpValue::Int(self.peak_bytes as i32),
+            PhpValue::Int(self.peak_bytes as i64),
         );
         map.insert(
             "capacity_bytes".to_string(),
-            PhpValue::Int(self.capacity_bytes as i32),
+            PhpValue::Int(self.capacity_bytes as i64),
         );
         map.insert(
             "reset_count".to_string(),
-            PhpValue::Int(self.reset_count as i32),
+            PhpValue::Int(self.reset_count as i64),
         );
         map.insert(
             "chunk_count".to_string(),
-            PhpValue::Int(self.chunk_count as i32),
+            PhpValue::Int(self.chunk_count as i64),
         );
         map.insert("zero_gc_drop".to_string(), PhpValue::Bool(true));
         PhpValue::dict_from_map(map)

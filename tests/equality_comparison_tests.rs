@@ -109,6 +109,10 @@ fn test_strict_type_comparison_enforcement() {
         "null == false;",
         "42 != '42';",
         "true != 0;",
+        "1 == 1.0;",
+        "1.0 == 1;",
+        "1 != 1.0;",
+        "1.0 != 1;",
     ];
 
     for code in invalid_cases {
@@ -313,7 +317,7 @@ fn test_float_comparison_checks_maximum_decimal_point() {
 
         // 5. Cross Float and Float::f64 (RustFloat) with matching decimal point
         $f32Val = 3.14;
-        $f64Val = Float::f64(3.14);
+        $f64Val = 3.14;
         $c12 = ($f32Val == $f64Val);
 
         // 6. Signed zero
@@ -348,3 +352,39 @@ fn test_float_comparison_checks_maximum_decimal_point() {
         ])
     );
 }
+
+#[test]
+fn test_strict_eq_and_hash_invariants() {
+    use std::collections::{HashMap, HashSet};
+    use std::hash::{Hash, Hasher};
+
+    fn calculate_hash<T: Hash>(t: &T) -> u64 {
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        t.hash(&mut s);
+        s.finish()
+    }
+
+    // 1. Int(1) and Float(1.0) must NOT be equal
+    let i1 = PhpValue::Int(1);
+    let f1 = PhpValue::Float(1.0);
+    assert_ne!(i1, f1);
+    assert!(!i1.strict_eq(&f1));
+    assert!(!f1.strict_eq(&i1));
+
+    // 2. HashMap must not confuse Int(1) and Float(1.0)
+    let mut map = HashMap::new();
+    map.insert(i1.clone(), "int_one");
+    assert_eq!(map.get(&i1), Some(&"int_one"));
+    assert_eq!(map.get(&f1), None);
+
+    // 3. Values that are strictly equal must have identical hashes
+    let f_zero = PhpValue::Float(0.0);
+    let f_neg_zero = PhpValue::Float(-0.0);
+    assert_eq!(f_zero, f_neg_zero);
+    assert_eq!(calculate_hash(&f_zero), calculate_hash(&f_neg_zero));
+
+    let mut set = HashSet::new();
+    set.insert(f_zero);
+    assert!(set.contains(&f_neg_zero));
+}
+

@@ -2690,7 +2690,11 @@ impl TypeChecker {
                                 expr.span,
                             ));
                         }
-                        operand_ty
+                        if operand_ty.is_float() {
+                            RhpType::Float
+                        } else {
+                            RhpType::Int
+                        }
                     }
                     UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec => {
                         if matches!(
@@ -2705,7 +2709,7 @@ impl TypeChecker {
                                 expr.span,
                             ));
                         }
-                        operand_ty
+                        RhpType::Int
                     }
                     UnaryOp::BitNot => {
                         if operand_ty.is_integer() {
@@ -3647,35 +3651,10 @@ impl TypeChecker {
                     ));
                 }
 
-                if matches!(op, BinaryOp::Mod) {
-                    return Ok(RhpType::Int);
+                if left_ty.is_float() || right_ty.is_float() {
+                    return Ok(RhpType::Float);
                 }
-
-                // Preserve specific Rust numeric types when matching (`i64 + i64 -> i64`, `f64 * f64 -> f64`)
-                match (left_ty, right_ty) {
-                    (RhpType::RustFloat(f1), RhpType::RustFloat(f2)) if f1 == f2 => {
-                        Ok(RhpType::RustFloat(*f1))
-                    }
-                    (RhpType::RustFloat(f), _) | (_, RhpType::RustFloat(f)) => {
-                        Ok(RhpType::RustFloat(*f))
-                    }
-                    (RhpType::Float, _) | (_, RhpType::Float) => Ok(RhpType::Float),
-                    (RhpType::RustInt(i1), RhpType::RustInt(i2)) if i1 == i2 => {
-                        Ok(RhpType::RustInt(*i1))
-                    }
-                    (RhpType::RustInt(i), RhpType::Int) | (RhpType::Int, RhpType::RustInt(i)) => {
-                        Ok(RhpType::RustInt(*i))
-                    }
-                    (RhpType::Int, RhpType::Int) => Ok(RhpType::Int),
-                    (RhpType::Int, RhpType::Mixed | RhpType::Dynamic)
-                    | (RhpType::Mixed | RhpType::Dynamic, RhpType::Int) => Ok(RhpType::Int),
-                    (RhpType::RustInt(i), RhpType::Mixed | RhpType::Dynamic)
-                    | (RhpType::Mixed | RhpType::Dynamic, RhpType::RustInt(i)) => Ok(RhpType::RustInt(*i)),
-                    (RhpType::Mixed | RhpType::Dynamic, RhpType::Mixed | RhpType::Dynamic) => {
-                        Ok(RhpType::Mixed)
-                    }
-                    _ => Ok(RhpType::Float),
-                }
+                Ok(RhpType::Int)
             }
 
             // String concatenation `.`
@@ -3705,11 +3684,7 @@ impl TypeChecker {
             | BinaryOp::BitXor
             | BinaryOp::Shl
             | BinaryOp::Shr => {
-                if let RhpType::RustInt(k) = left_ty {
-                    Ok(RhpType::RustInt(*k))
-                } else {
-                    Ok(RhpType::Int)
-                }
+                Ok(RhpType::Int)
             }
 
             // Strict equality & non-equality comparisons
@@ -3810,12 +3785,14 @@ impl TypeChecker {
 
         match &target.kind {
             // 1. Variable assignment `$x = ...`
-            ExprKind::Variable(var) => env.assign_inferred(
+            ExprKind::Variable(var) => {
+                env.assign_inferred(
                 var.name,
                 effective_rhs_ty,
                 span,
                 Some(&self.result.hierarchy),
-            ),
+            )
+            },
 
             // 2. Array / Tuple destructuring `[$user, $posts] = Future::wait([...])`
             ExprKind::Array(elements) => {

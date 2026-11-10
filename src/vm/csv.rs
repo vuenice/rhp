@@ -377,7 +377,7 @@ pub fn write_stream(val: &PhpValue, data: &[u8]) -> Result<PhpValue, RuntimeErro
     }
     let mut src = stream.source.lock().unwrap();
     match src.write_all(data) {
-        Ok(_) => Ok(PhpValue::Int(data.len() as i32)),
+        Ok(_) => Ok(PhpValue::Int(data.len() as i64)),
         Err(_) => Ok(PhpValue::Bool(false)),
     }
 }
@@ -624,7 +624,7 @@ pub fn csv_fputcsv(
     let bytes = line.as_bytes();
     let mut src = stream.source.lock().unwrap();
     match src.write_all(bytes) {
-        Ok(_) => Ok(PhpValue::Int(bytes.len() as i32)),
+        Ok(_) => Ok(PhpValue::Int(bytes.len() as i64)),
         Err(err) => Err(RuntimeErrorKind::Custom {
             message: format!("fputcsv write error: {}", err),
         }),

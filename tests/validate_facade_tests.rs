@@ -50,7 +50,7 @@ fn test_validate_facade_direct_calls() {
         // Validate::int
         $i1 = Validate::int(42);
         $i2 = Validate::int(0);
-        $i3 = Validate::int(Int::i64(100));
+        $i3 = Validate::int(100);
         $i4 = Validate::int(3.14);
         $i5 = Validate::int("42");
 
@@ -63,7 +63,7 @@ fn test_validate_facade_direct_calls() {
 
         // Validate::float
         $f1 = Validate::float(3.14);
-        $f2 = Validate::float(Float::f64(2.718));
+        $f2 = Validate::float(2.718);
         $f3 = Validate::float(42);
         $f4 = Validate::float("3.14");
 

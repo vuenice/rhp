@@ -603,8 +603,6 @@ fn rhp_type_to_syntax_name(ty: &RhpType) -> Option<String> {
         RhpType::Collection(CollectionSubtype::Set(_)) => Some("set".to_string()),
         RhpType::Collection(CollectionSubtype::HashMap(_, _)) => Some("hashMap".to_string()),
         RhpType::Class(cls) => Some(cls.clone()),
-        RhpType::RustInt(kind) => Some(kind.as_str().to_string()),
-        RhpType::RustFloat(kind) => Some(kind.as_str().to_string()),
         _ => None,
     }
 }

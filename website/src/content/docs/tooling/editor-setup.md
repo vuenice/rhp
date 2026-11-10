@@ -45,7 +45,7 @@ Configure `rhp-lsp` using the standard `lspconfig` helper:
 require'lspconfig'.rhp_lsp.setup{
   cmd = { "rhp", "lsp" },
   filetypes = { "rhp", "php" },
-  root_dir = require('lspconfig.util').root_pattern("rhp.json", ".git"),
+  root_dir = require('lspconfig.util').root_pattern("rhp.toml", ".git"),
 }
 ```
 
