@@ -212,10 +212,8 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             Literal::Null => Ok(PhpValue::Null),
             Literal::Bool(b) => Ok(PhpValue::Bool(*b)),
             Literal::Int { value, .. } => Ok(PhpValue::Int(*value)),
-            Literal::Float { raw, value } => {
-                let stored = crate::vm::numeric::decimal_from_literal(raw)
-                    .and_then(|decimal| crate::vm::numeric::narrow_decimal(decimal).ok());
-                Ok(stored.unwrap_or(PhpValue::Float64(*value)))
+            Literal::Float { value, .. } => {
+                Ok(PhpValue::float(*value))
             }
             Literal::String { value, .. } => Ok(PhpValue::string(value.clone())),
             Literal::InterpolatedString { parts, .. } => {
@@ -262,10 +260,10 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     if b == 0 {
                         return Err(RuntimeError::new(RuntimeErrorKind::DivisionByZero, node.span));
                     }
-                    if lhs.to_i32().unwrap_or(0) % b == 0 {
-                        Ok(PhpValue::Int(lhs.to_i64().unwrap_or(0) / (b) as i64))
+                    if lhs.to_i64().unwrap_or(0) % (b as i64) == 0 {
+                        Ok(PhpValue::Int(lhs.to_i64().unwrap_or(0) / (b as i64)))
                     } else {
-                        Ok(PhpValue::Float((lhs.to_i32().unwrap_or(0) as f32) / (b as f32)))
+                        Ok(PhpValue::float((lhs.to_i64().unwrap_or(0) as f64) / (b as f64)))
                     }
                 }
                 BinaryOp::Concat => {
@@ -316,7 +314,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             let v = eval_expr(inner, env)?;
             match kind {
                 CastType::Int => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
-                CastType::Float => Ok(PhpValue::Float(v.to_f32().unwrap_or(0.0))),
+                CastType::Float => Ok(PhpValue::float(v.to_f64().unwrap_or(0.0))),
                 CastType::String => Ok(PhpValue::string(v.to_php_string())),
                 CastType::Bool => Ok(PhpValue::Bool(v.is_truthy())),
                 _ => Ok(v),
@@ -335,9 +333,9 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     "float" | "Float" => {
                         if let Some(first) = args.first() {
                             let v = eval_expr(&first.value, env)?;
-                            return Ok(PhpValue::Float(v.to_f32().unwrap_or(0.0)));
+                            return Ok(PhpValue::float(v.to_f64().unwrap_or(0.0)));
                         }
-                        return Ok(PhpValue::Float(0.0));
+                        return Ok(PhpValue::float(0.0));
                     }
                     "bool" | "Bool" => {
                         if let Some(first) = args.first() {

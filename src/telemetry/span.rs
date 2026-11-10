@@ -137,9 +137,7 @@ impl AttributeValue {
             PhpValue::String(s) => Self::String(s.to_string()),
             PhpValue::Bool(b) => Self::Bool(*b),
             PhpValue::Int(i) => Self::Int(*i),
-            PhpValue::Float(f) => Self::Float(*f as f64),
-            PhpValue::Float64(f) => Self::Float(*f),
-            PhpValue::Decimal(d) => Self::Float(d.to_f64()),
+            PhpValue::Float(f) => Self::Float(*f),
             PhpValue::List(l) => {
                 let items: Vec<AttributeValue> =
                     l.borrow().iter().map(Self::from_php_value).collect();
@@ -159,7 +157,7 @@ impl AttributeValue {
             Self::String(s) => PhpValue::string(s.clone()),
             Self::Bool(b) => PhpValue::Bool(*b),
             Self::Int(i) => PhpValue::Int(*i as i64),
-            Self::Float(f) => PhpValue::Float(*f as f32),
+            Self::Float(f) => PhpValue::float(*f),
             Self::Array(arr) => {
                 let list: Vec<PhpValue> = arr.iter().map(|item| item.to_php_value()).collect();
                 PhpValue::list(list)
@@ -403,7 +401,7 @@ impl Span {
         }
         map.insert(
             "duration_ms".to_string(),
-            PhpValue::Float((self.duration_nanos() as f32) / 1_000_000.0),
+            PhpValue::Float((self.duration_nanos() as f64) / 1_000_000.0),
         );
 
         let mut attrs_map = IndexMap::new();

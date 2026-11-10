@@ -1318,7 +1318,7 @@ impl VM {
                 OpCode::LoadNull { dst } => regs[dst.index()] = PhpValue::Null,
                 OpCode::LoadBool { dst, value } => regs[dst.index()] = PhpValue::Bool(value),
                 OpCode::LoadInt { dst, value } => regs[dst.index()] = PhpValue::Int(value as i64),
-                OpCode::LoadFloat { dst, bits } => regs[dst.index()] = PhpValue::Float(f32::from_bits(bits)),
+                OpCode::LoadFloat { dst, bits } => regs[dst.index()] = PhpValue::float(f64::from_bits(bits)),
                 OpCode::LoadConst { dst, const_id } => {
                     let c = chunk.get_constant(const_id).ok_or_else(|| {
                         RuntimeError::new(
@@ -1451,7 +1451,7 @@ impl VM {
                 }
 
                 OpCode::LoadFloat { dst, bits } => {
-                    self.registers[base_reg + dst.index()] = PhpValue::Float(f32::from_bits(bits));
+                    self.registers[base_reg + dst.index()] = PhpValue::float(f64::from_bits(bits));
                 }
 
                 OpCode::LoadConst { dst, const_id } => {
@@ -1512,7 +1512,7 @@ impl VM {
                     let val = self.registers[base_reg + src.index()].clone();
                     let casted = match kind {
                         CastType::Int => PhpValue::Int(val.to_i64().unwrap_or(0)),
-                        CastType::Float => PhpValue::Float(val.to_f32().unwrap_or(0.0)),
+                        CastType::Float => PhpValue::float(val.to_f64().unwrap_or(0.0)),
                         CastType::String => PhpValue::string(val.to_php_string()),
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
                         CastType::Array => match val {
@@ -1707,6 +1707,22 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_items)
                                 .unwrap_or_default();
+                            if let Some(first) = items.first() {
+                                for item in &items[1..] {
+                                    if !first.same_type_as(item) {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "All elements in a list must have the same type, found {} and {}",
+                                                    first.type_name(),
+                                                    item.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                }
+                            }
                             PhpValue::list(items)
                         }
                         IrCollectionKind::Dict => {
@@ -1721,6 +1737,22 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_items)
                                 .unwrap_or_default();
+                            if let Some(first) = items.first() {
+                                for item in &items[1..] {
+                                    if !first.same_type_as(item) {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "All elements in a set must have the same type, found {} and {}",
+                                                    first.type_name(),
+                                                    item.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                }
+                            }
                             PhpValue::set(items)
                         }
                         IrCollectionKind::HashMap => {
@@ -1736,63 +1768,86 @@ impl VM {
 
                 OpCode::ArrayPush { array, value } => {
                     let val = self.registers[base_reg + value.index()].clone();
-                    let target = &mut self.registers[base_reg + array.index()];
-                    let is_valid = match target {
-                        PhpValue::List(_) => {
-                            target.ensure_list_mut();
-                            if let PhpValue::List(arr) = target {
+                    let target_idx = base_reg + array.index();
+                    match &self.registers[target_idx] {
+                        PhpValue::List(arr) => {
+                            if let Some(first) = arr.borrow().first() {
+                                if !first.same_type_as(&val) {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "All elements in a list must have the same type, found {} and {}",
+                                                first.type_name(),
+                                                val.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                            self.registers[target_idx].ensure_list_mut();
+                            if let PhpValue::List(arr) = &self.registers[target_idx] {
                                 arr.borrow_mut().push(val);
                             }
-                            true
                         }
                         PhpValue::Array(_) => {
-                            target.ensure_array_mut();
-                            if let PhpValue::Array(arr) = target {
+                            self.registers[target_idx].ensure_array_mut();
+                            if let PhpValue::Array(arr) = &self.registers[target_idx] {
                                 arr.borrow_mut().push(val);
                             }
-                            true
                         }
-                        PhpValue::Set(_) => {
-                            target.ensure_set_mut();
-                            if let PhpValue::Set(set) = target {
+                        PhpValue::Set(set) => {
+                            if let Some(first) = set.borrow().iter().next() {
+                                if !first.same_type_as(&val) {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "All elements in a set must have the same type, found {} and {}",
+                                                first.type_name(),
+                                                val.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                            self.registers[target_idx].ensure_set_mut();
+                            if let PhpValue::Set(set) = &self.registers[target_idx] {
                                 set.borrow_mut().insert(val);
                             }
-                            true
                         }
                         PhpValue::Dict(_) => {
-                            target.ensure_dict_mut();
-                            if let PhpValue::Dict(dict) = target {
+                            self.registers[target_idx].ensure_dict_mut();
+                            if let PhpValue::Dict(dict) = &self.registers[target_idx] {
                                 let mut b = dict.borrow_mut();
                                 let next_key = b.len().to_string();
                                 b.insert(next_key, val);
                             }
-                            true
                         }
                         PhpValue::HashMap(_) => {
-                            target.ensure_hash_map_mut();
-                            if let PhpValue::HashMap(map) = target {
+                            self.registers[target_idx].ensure_hash_map_mut();
+                            if let PhpValue::HashMap(map) = &self.registers[target_idx] {
                                 let next_key = PhpValue::Int(map.borrow().len() as i64);
                                 map.borrow_mut().insert(next_key, val);
                             }
-                            true
                         }
-                        _ => false,
-                    };
-                    if !is_valid {
-                        let type_name = self.registers[base_reg + array.index()].type_name().to_string();
-                        return Err(self.make_error(
-                            RuntimeErrorKind::InvalidIndexTarget { type_name },
-                            span,
-                        ));
+                        other => {
+                            let type_name = other.type_name().to_string();
+                            return Err(self.make_error(
+                                RuntimeErrorKind::InvalidIndexTarget { type_name },
+                                span,
+                            ));
+                        }
                     }
                 }
 
                 OpCode::ArraySet { array, key, value } => {
                     let k = self.registers[base_reg + key.index()].clone();
                     let v = self.registers[base_reg + value.index()].clone();
+                    let target_idx = base_reg + array.index();
 
                     // Check if setting a string key on a plain `Array` should upgrade it to `Dict`
-                    let upgrade_to_dict = match (&self.registers[base_reg + array.index()], &k) {
+                    let upgrade_to_dict = match (&self.registers[target_idx], &k) {
                         (PhpValue::Array(arr), PhpValue::String(_)) => {
                             let mut map = IndexMap::new();
                             for (i, item) in arr.borrow().iter().enumerate() {
@@ -1807,112 +1862,158 @@ impl VM {
                     };
 
                     if let Some(mut map) = upgrade_to_dict {
-                        let k_str = k.to_php_string();
+                        let k_str = match &k {
+                            PhpValue::String(s) => s.to_string(),
+                            other => {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::TypeError {
+                                        message: format!(
+                                            "Dict key must be a string, got {}",
+                                            other.type_name()
+                                        ),
+                                    },
+                                    span,
+                                ));
+                            }
+                        };
                         map.insert(k_str, v);
-                        self.registers[base_reg + array.index()] = PhpValue::dict_from_map(map);
+                        self.registers[target_idx] = PhpValue::dict_from_map(map);
                     } else {
-                        let mut undefined_key: Option<String> = None;
-                        let is_valid = match &mut self.registers[base_reg + array.index()] {
+                        match &self.registers[target_idx] {
                             PhpValue::List(arr) => {
-                                let maybe_idx = match &k {
-                                    PhpValue::Int(i) => Some(*i),
-                                    PhpValue::Float(f) => Some(*f as i64),
-                                    PhpValue::String(s) => s.trim().parse::<i64>().ok(),
-                                    _ => None,
+                                let idx = match &k {
+                                    PhpValue::Int(i) if *i >= 0 => *i,
+                                    PhpValue::Int(i) => {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!("List index must be a non-negative integer, got negative integer: {}", i),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                    other => {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "List index must be a non-negative integer, got {}",
+                                                    other.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
                                 };
-                                match maybe_idx {
-                                    Some(idx) => {
-                                        if Rc::strong_count(arr) > 1 {
-                                            let cloned = arr.borrow().clone();
-                                            *arr = Rc::new(RefCell::new(cloned));
-                                        }
-                                        let mut b = arr.borrow_mut();
-                                        if idx >= 0 && (idx as usize) < b.len() {
-                                            b[idx as usize] = v;
-                                        } else if idx >= 0 && (idx as usize) == b.len() {
-                                            b.push(v);
-                                        } else if idx >= 0 {
-                                            b.resize(idx as usize, PhpValue::Null);
-                                            b.push(v);
-                                        } else {
-                                            undefined_key = Some(idx.to_string());
-                                        }
-                                        true
-                                    }
-                                    None => {
-                                        undefined_key = Some(k.to_php_string());
-                                        true
+                                if let Some(first) = arr.borrow().first() {
+                                    if !first.same_type_as(&v) {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "All elements in a list must have the same type, found {} and {}",
+                                                    first.type_name(),
+                                                    v.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
                                     }
                                 }
+                                self.registers[target_idx].ensure_list_mut();
+                                if let PhpValue::List(arr) = &self.registers[target_idx] {
+                                    let mut b = arr.borrow_mut();
+                                    if (idx as usize) < b.len() {
+                                        b[idx as usize] = v;
+                                    } else if (idx as usize) == b.len() {
+                                        b.push(v);
+                                    } else {
+                                        b.resize(idx as usize, PhpValue::Null);
+                                        b.push(v);
+                                    }
+                                }
                             }
-                            PhpValue::Array(arr) => {
-                                if Rc::strong_count(arr) > 1 {
-                                    let cloned = arr.borrow().clone();
-                                    *arr = Rc::new(RefCell::new(cloned));
+                            PhpValue::Array(_) => {
+                                self.registers[target_idx].ensure_array_mut();
+                                if let PhpValue::Array(arr) = &self.registers[target_idx] {
+                                    let idx = k.to_i64().unwrap_or(0);
+                                    let mut b = arr.borrow_mut();
+                                    if idx >= 0 && (idx as usize) < b.len() {
+                                        b[idx as usize] = v;
+                                    } else if idx >= 0 && (idx as usize) == b.len() {
+                                        b.push(v);
+                                    } else if idx >= 0 {
+                                        b.resize(idx as usize, PhpValue::Null);
+                                        b.push(v);
+                                    }
                                 }
-                                let idx = k.to_i64().unwrap_or(0);
-                                let mut b = arr.borrow_mut();
-                                if idx >= 0 && (idx as usize) < b.len() {
-                                    b[idx as usize] = v;
-                                } else if idx >= 0 && (idx as usize) == b.len() {
-                                    b.push(v);
-                                } else if idx >= 0 {
-                                    b.resize(idx as usize, PhpValue::Null);
-                                    b.push(v);
-                                }
-                                true
                             }
-                            PhpValue::Dict(dict) => {
-                                if Rc::strong_count(dict) > 1 {
-                                    let cloned = dict.borrow().clone();
-                                    *dict = Rc::new(RefCell::new(cloned));
+                            PhpValue::Dict(_) => {
+                                let k_str = match &k {
+                                    PhpValue::String(s) => s.to_string(),
+                                    other => {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "Dict key must be a string, got {}",
+                                                    other.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                };
+                                self.registers[target_idx].ensure_dict_mut();
+                                if let PhpValue::Dict(dict) = &self.registers[target_idx] {
+                                    dict.borrow_mut().insert(k_str, v);
                                 }
-                                let k_str = k.to_php_string();
-                                dict.borrow_mut().insert(k_str, v);
-                                true
                             }
-                            PhpValue::HashMap(map) => {
-                                if Rc::strong_count(map) > 1 {
-                                    let cloned = map.borrow().clone();
-                                    *map = Rc::new(RefCell::new(cloned));
+                            PhpValue::HashMap(_) => {
+                                self.registers[target_idx].ensure_hash_map_mut();
+                                if let PhpValue::HashMap(map) = &self.registers[target_idx] {
+                                    map.borrow_mut().insert(k, v);
                                 }
-                                map.borrow_mut().insert(k, v);
-                                true
                             }
                             PhpValue::Set(set) => {
-                                if Rc::strong_count(set) > 1 {
-                                    let cloned = set.borrow().clone();
-                                    *set = Rc::new(RefCell::new(cloned));
-                                }
                                 if v.is_truthy() {
-                                    set.borrow_mut().insert(k);
+                                    if let Some(first) = set.borrow().iter().next() {
+                                        if !first.same_type_as(&k) {
+                                            return Err(self.make_error(
+                                                RuntimeErrorKind::TypeError {
+                                                    message: format!(
+                                                        "All elements in a set must have the same type, found {} and {}",
+                                                        first.type_name(),
+                                                        k.type_name()
+                                                    ),
+                                                },
+                                                span,
+                                            ));
+                                        }
+                                    }
+                                    self.registers[target_idx].ensure_set_mut();
+                                    if let PhpValue::Set(set) = &self.registers[target_idx] {
+                                        set.borrow_mut().insert(k);
+                                    }
                                 } else {
-                                    set.borrow_mut().remove(&k);
+                                    self.registers[target_idx].ensure_set_mut();
+                                    if let PhpValue::Set(set) = &self.registers[target_idx] {
+                                        set.borrow_mut().remove(&k);
+                                    }
                                 }
-                                true
                             }
-                            PhpValue::String(s) => {
+                            PhpValue::String(_) => {
                                 let idx = k.to_i64().unwrap_or(-1);
                                 if idx >= 0 {
                                     let repl_char = v.to_php_string().chars().next().unwrap_or('\0');
-                                    s.set_char(idx as usize, repl_char);
+                                    if let PhpValue::String(s) = &mut self.registers[target_idx] {
+                                        s.set_char(idx as usize, repl_char);
+                                    }
                                 }
-                                true
                             }
-                            _ => false,
-                        };
-                        if let Some(bad_key) = undefined_key {
-                            return Err(self.make_error(
-                                RuntimeErrorKind::UndefinedIndex { key: bad_key },
-                                span,
-                            ));
-                        }
-                        if !is_valid {
-                            let type_name = self.registers[base_reg + array.index()].type_name().to_string();
-                            return Err(self.make_error(
-                                RuntimeErrorKind::InvalidIndexTarget { type_name },
-                                span,
-                            ));
+                            other => {
+                                let type_name = other.type_name().to_string();
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::InvalidIndexTarget { type_name },
+                                    span,
+                                ));
+                            }
                         }
                     }
                 }
@@ -1923,17 +2024,55 @@ impl VM {
                 } => {
                     let src_val = self.registers[base_reg + src_array.index()].clone();
                     let items = Self::extract_items(&src_val);
-                    let target = &mut self.registers[base_reg + dst_array.index()];
-                    match target {
-                        PhpValue::Array(_) | PhpValue::List(_) => {
-                            target.ensure_array_mut();
-                            if let PhpValue::Array(arr) | PhpValue::List(arr) = target {
+                    let target_idx = base_reg + dst_array.index();
+                    match &self.registers[target_idx] {
+                        PhpValue::List(arr) => {
+                            if let Some(first) = arr.borrow().first() {
+                                for item in &items {
+                                    if !first.same_type_as(item) {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "All elements in a list must have the same type, found {} and {}",
+                                                    first.type_name(),
+                                                    item.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                }
+                            }
+                            self.registers[target_idx].ensure_list_mut();
+                            if let PhpValue::List(arr) = &self.registers[target_idx] {
                                 arr.borrow_mut().extend(items);
                             }
                         }
-                        PhpValue::Set(_) => {
-                            target.ensure_set_mut();
-                            if let PhpValue::Set(set) = target {
+                        PhpValue::Array(_) => {
+                            self.registers[target_idx].ensure_array_mut();
+                            if let PhpValue::Array(arr) = &self.registers[target_idx] {
+                                arr.borrow_mut().extend(items);
+                            }
+                        }
+                        PhpValue::Set(set) => {
+                            if let Some(first) = set.borrow().iter().next() {
+                                for item in &items {
+                                    if !first.same_type_as(item) {
+                                        return Err(self.make_error(
+                                            RuntimeErrorKind::TypeError {
+                                                message: format!(
+                                                    "All elements in a set must have the same type, found {} and {}",
+                                                    first.type_name(),
+                                                    item.type_name()
+                                                ),
+                                            },
+                                            span,
+                                        ));
+                                    }
+                                }
+                            }
+                            self.registers[target_idx].ensure_set_mut();
+                            if let PhpValue::Set(set) = &self.registers[target_idx] {
                                 let mut b = set.borrow_mut();
                                 for item in items {
                                     b.insert(item);
@@ -1948,7 +2087,37 @@ impl VM {
                     let arr_val = &self.registers[base_reg + array.index()];
                     let idx_val = &self.registers[base_reg + index.index()];
                     let fetched = match arr_val {
-                        PhpValue::Array(arr) | PhpValue::List(arr) => {
+                        PhpValue::List(arr) => {
+                            let i = match idx_val {
+                                PhpValue::Int(n) if *n >= 0 => *n,
+                                PhpValue::Int(n) => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!("List index must be a non-negative integer, got negative integer: {}", n),
+                                        },
+                                        span,
+                                    ));
+                                }
+                                other => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "List index must be a non-negative integer, got {}",
+                                                other.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            };
+                            let b = arr.borrow();
+                            if (i as usize) < b.len() {
+                                b[i as usize].clone()
+                            } else {
+                                PhpValue::Null
+                            }
+                        }
+                        PhpValue::Array(arr) => {
                             let i = idx_val.to_i64().unwrap_or(-1);
                             let b = arr.borrow();
                             if i >= 0 && (i as usize) < b.len() {
@@ -1961,7 +2130,20 @@ impl VM {
                             PhpValue::Bool(set.borrow().contains(idx_val))
                         }
                         PhpValue::Dict(dict) => {
-                            let key_str = idx_val.to_php_string();
+                            let key_str = match idx_val {
+                                PhpValue::String(s) => s.to_string(),
+                                other => {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "Dict key must be a string, got {}",
+                                                other.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            };
                             if let Some(v) = dict.borrow().get(&key_str) {
                                 v.clone()
                             } else {
@@ -5955,7 +6137,7 @@ impl VM {
                         for item in dict.borrow().values() {
                             if let Some(fl) = item.to_f64() {
                                 if item.to_i64().is_none()
-                                    || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_))
+                                    || matches!(item, PhpValue::Float(_))
                                 {
                                     is_float = true;
                                 }
@@ -5966,21 +6148,21 @@ impl VM {
                             }
                         }
                         if is_float {
-                            Ok(PhpValue::Float(float_sum as f32))
+                            Ok(PhpValue::float(float_sum))
                         } else {
-                            Ok(PhpValue::Int(int_sum as i64))
+                            Ok(PhpValue::Int(int_sum))
                         }
                     }
                     "avg" | "average" => {
                         let b = dict.borrow();
                         if b.is_empty() {
-                            Ok(PhpValue::Float(0.0))
+                            Ok(PhpValue::float(0.0))
                         } else {
                             let mut sum = 0.0f64;
                             for item in b.values() {
                                 sum += item.to_f64().unwrap_or(0.0);
                             }
-                            Ok(PhpValue::Float((sum / b.len() as f64) as f32))
+                            Ok(PhpValue::float(sum / b.len() as f64))
                         }
                     }
                     "min" => {
@@ -6059,6 +6241,22 @@ impl VM {
                     }
                     "add" | "push" => {
                         let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                        let b = set.borrow();
+                        if let Some(first) = b.iter().next() {
+                            if !first.same_type_as(&val) {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::TypeError {
+                                        message: format!(
+                                            "All elements in a set must have the same type, found {} and {}",
+                                            first.type_name(),
+                                            val.type_name()
+                                        ),
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
+                        drop(b);
                         set.borrow_mut().insert(val);
                         Ok(receiver.clone())
                     }
@@ -6910,6 +7108,20 @@ impl VM {
                     "push" | "add" => {
                         let mut updated = items;
                         for a in args {
+                            if let Some(first) = updated.first() {
+                                if !first.same_type_as(a) {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "All elements in a list must have the same type, found {} and {}",
+                                                first.type_name(),
+                                                a.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
                             updated.push(a.clone());
                         }
                         if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
@@ -6953,6 +7165,22 @@ impl VM {
                         }
                     }
                     "unshift" => {
+                        for a in args {
+                            if let Some(first) = items.first() {
+                                if !first.same_type_as(a) {
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::TypeError {
+                                            message: format!(
+                                                "All elements in a list must have the same type, found {} and {}",
+                                                first.type_name(),
+                                                a.type_name()
+                                            ),
+                                        },
+                                        span,
+                                    ));
+                                }
+                            }
+                        }
                         let mut updated: Vec<PhpValue> = args.to_vec();
                         updated.extend(items);
                         if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
@@ -7124,7 +7352,7 @@ impl VM {
                         let mut int_sum = 0i64;
                         for item in &items {
                             if let Some(fl) = item.to_f64() {
-                                if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) {
+                                if item.to_i64().is_none() || matches!(item, PhpValue::Float(_)) {
                                     is_float = true;
                                 }
                                 float_sum += fl;
@@ -7134,20 +7362,20 @@ impl VM {
                             }
                         }
                         if is_float {
-                            Ok(PhpValue::Float(float_sum as f32))
+                            Ok(PhpValue::float(float_sum))
                         } else {
-                            Ok(PhpValue::Int(int_sum as i64))
+                            Ok(PhpValue::Int(int_sum))
                         }
                     }
                     "avg" | "average" => {
                         if items.is_empty() {
-                            Ok(PhpValue::Float(0.0))
+                            Ok(PhpValue::float(0.0))
                         } else {
                             let mut sum = 0.0f64;
                             for item in &items {
                                 sum += item.to_f64().unwrap_or(0.0);
                             }
-                            Ok(PhpValue::Float((sum / items.len() as f64) as f32))
+                            Ok(PhpValue::float(sum / items.len() as f64))
                         }
                     }
                     "min" => {
@@ -7530,10 +7758,7 @@ impl VM {
                     ),
                     "abs" => val.checked_abs().ok_or(crate::vm::numeric::ArithFail::Overflow),
                     "toInt" => return Ok(PhpValue::Int(val)),
-                    "toFloat" => {
-                        return crate::vm::numeric::narrow_decimal(crate::vm::decimal::Decimal::from_i64(val))
-                            .map_err(|fail| self.arith_error(fail, span));
-                    }
+                    "toFloat" => return Ok(PhpValue::float(val as f64)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -7552,78 +7777,46 @@ impl VM {
             value if crate::vm::numeric::is_float_like(value) => {
                 let val = value.to_f64().unwrap_or(0.0);
                 let extract_f64 = |pv: &PhpValue| pv.to_f64().unwrap_or(0.0);
-                let narrow_f64 = |n: f64| -> Result<PhpValue, RuntimeError> {
-                    match crate::vm::decimal::Decimal::from_f64(n) {
-                        Some(d) => crate::vm::numeric::narrow_decimal(d)
-                            .map_err(|fail| self.arith_error(fail, span)),
-                        None => Ok(PhpValue::Float64(n)),
-                    }
-                };
                 match method {
-                    // Binary format operations (IEEE-754 64-bit float)
-                    "bAdd" => {
+                    // Binary & Decimal format operations (IEEE-754 64-bit float)
+                    "bAdd" | "add" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return narrow_f64(a + b);
+                        return Ok(PhpValue::float(a + b));
                     }
-                    "bSub" => {
+                    "bSub" | "subtract" | "sub" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return narrow_f64(a - b);
+                        return Ok(PhpValue::float(a - b));
                     }
-                    "bMul" => {
+                    "bMul" | "multiply" | "mul" => {
                         let a = extract_f64(receiver);
-                        let b = args.first().map(extract_f64).unwrap_or(0.0);
-                        return narrow_f64(a * b);
+                        let b = args.first().map(extract_f64).unwrap_or(1.0);
+                        return Ok(PhpValue::float(a * b));
                     }
-                    "bDiv" => {
+                    "bDiv" | "divide" | "div" => {
                         let a = extract_f64(receiver);
                         let b = args.first().map(extract_f64).unwrap_or(0.0);
                         if b == 0.0 {
                             return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
                         }
-                        return narrow_f64(a / b);
-                    }
-                    // Arbitrary-precision decimal math
-                    "add" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        return crate::vm::numeric::narrow_decimal(dec_a.add(&dec_b)).map_err(|fail| self.arith_error(fail, span));
-                    }
-                    "subtract" | "sub" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        return crate::vm::numeric::narrow_decimal(dec_a.sub(&dec_b)).map_err(|fail| self.arith_error(fail, span));
-                    }
-                    "multiply" | "mul" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
-                        return crate::vm::numeric::narrow_decimal(dec_a.mul(&dec_b)).map_err(|fail| self.arith_error(fail, span));
-                    }
-                    "divide" | "div" => {
-                        let dec_a = crate::vm::decimal::Decimal::from_php_value(receiver).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        let dec_b = args.first().and_then(crate::vm::decimal::Decimal::from_php_value).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-                        if dec_b.is_zero() {
-                            return Err(self.make_error(RuntimeErrorKind::DivisionByZero, span));
-                        }
-                        let quot = dec_a.div(&dec_b, None).map_err(|_| self.make_error(RuntimeErrorKind::DivisionByZero, span))?;
-                        return crate::vm::numeric::narrow_decimal(quot).map_err(|fail| self.arith_error(fail, span));
+                        return Ok(PhpValue::float(a / b));
                     }
                     "round" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(0).clamp(0, 15);
                         let factor = 10_f64.powi(places);
-                        return narrow_f64((val * factor).round() / factor);
+                        return Ok(PhpValue::float((val * factor).round() / factor));
                     }
                     "toDecimal" => {
                         let places = args.first().and_then(|v| v.to_i32()).unwrap_or(2).clamp(0, 15);
                         let factor = 10_f64.powi(places);
-                        return narrow_f64((val * factor).round() / factor);
+                        return Ok(PhpValue::float((val * factor).round() / factor));
                     }
-                    "floor" => return narrow_f64(val.floor()),
-                    "ceil" | "ciel" => return narrow_f64(val.ceil()),
-                    "abs" => return narrow_f64(val.abs()),
+                    "floor" => return Ok(PhpValue::float(val.floor())),
+                    "ceil" | "ciel" => return Ok(PhpValue::float(val.ceil())),
+                    "abs" => return Ok(PhpValue::float(val.abs())),
                     "toInt" => return Ok(PhpValue::Int(val as i64)),
-                    "toFloat" => return narrow_f64(val),
+                    "toFloat" => return Ok(PhpValue::float(val)),
                     "toString" => return Ok(PhpValue::string(val.to_string())),
                     other => {
                         return Err(self.make_error(
@@ -10248,22 +10441,12 @@ impl VM {
     ) -> Result<PhpValue, RuntimeError> {
         match op {
             IrUnaryOp::Plus => match src {
-                PhpValue::Int(_)
-
-
-
-
-                | PhpValue::Float(_)
-                | PhpValue::Float64(_)
-                | PhpValue::Decimal(_) => Ok(src.clone()),
+                PhpValue::Int(_) | PhpValue::Float(_) => Ok(src.clone()),
                 other => {
                     if let Some(i) = other.to_i64() {
                         Ok(PhpValue::Int(i))
                     } else if let Some(f) = other.to_f64() {
-                        crate::vm::numeric::narrow_decimal(
-                            crate::vm::decimal::Decimal::from_f64(f).unwrap_or_else(crate::vm::decimal::Decimal::zero),
-                        )
-                        .map_err(|fail| self.arith_error(fail, span))
+                        Ok(PhpValue::float(f))
                     } else {
                         Err(self.make_error(
                             RuntimeErrorKind::InvalidUnaryOperand {
@@ -10507,12 +10690,11 @@ impl VM {
             Constant::Null => PhpValue::Null,
             Constant::Bool(b) => PhpValue::Bool(*b),
             Constant::Int(n) => PhpValue::Int(*n),
-            Constant::Float(f) => crate::vm::numeric::php_to_decimal(&PhpValue::Float64(*f))
-                .and_then(|d| crate::vm::numeric::narrow_decimal(d).ok())
-                .unwrap_or(PhpValue::Float64(*f)),
-            Constant::Decimal(raw) => crate::vm::numeric::decimal_from_literal(raw)
-                .and_then(|d| crate::vm::numeric::narrow_decimal(d).ok())
-                .unwrap_or_else(|| PhpValue::string(raw.clone())),
+            Constant::Float(f) => PhpValue::float(*f),
+            Constant::Decimal(raw) => raw
+                .parse::<f64>()
+                .map(PhpValue::float)
+                .unwrap_or_else(|_| PhpValue::string(raw.clone())),
             Constant::String(s) => PhpValue::string(s.clone()),
             Constant::Bytes(b) => PhpValue::bytes(b.clone()),
             Constant::Type(ty) => PhpValue::string(ty.to_string()),

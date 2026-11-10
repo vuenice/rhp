@@ -74,9 +74,7 @@ impl NativeSlot {
             PhpValue::Null => Self::new_null(),
             PhpValue::Bool(b) => Self::new_bool(*b),
             PhpValue::Int(n) => Self::new_int(*n),
-            PhpValue::Float(f) => Self::new_float(*f as f64),
-            PhpValue::Float64(f) => Self::new_float(*f),
-            PhpValue::Decimal(d) => Self::new_float(d.to_f64()),
+            PhpValue::Float(f) => Self::new_float(*f),
             _ => Self {
                 int_val: 0,
                 float_val: 0.0,
@@ -92,10 +90,7 @@ impl NativeSlot {
             TAG_NULL => PhpValue::Null,
             TAG_BOOL => PhpValue::Bool(self.int_val != 0),
             TAG_INT => PhpValue::Int(self.int_val),
-            TAG_FLOAT => match original {
-                Some(PhpValue::Float64(_)) | Some(PhpValue::Decimal(_)) => PhpValue::Float64(self.float_val),
-                _ => PhpValue::Float(self.float_val as f32),
-            },
+            TAG_FLOAT => PhpValue::float(self.float_val),
             TAG_OTHER => original.cloned().unwrap_or(PhpValue::Null),
             _ => PhpValue::Null,
         }

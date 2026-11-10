@@ -274,7 +274,7 @@ fn test_in_process_native_function_blocking_dispatch() {
     let code = r#"
         $h = Argon2Native::hash("super_secret_p@ss");
         $v = Argon2Native::verify("super_secret_p@ss", $h);
-        return Arr::list([$h, $v]);
+        return Arr::list([$h, $v ? "true" : "false"]);
     "#;
 
     let (res, stats) = run_source_in_fiber(code, "in_process_blocking_fiber")
@@ -284,7 +284,7 @@ fn test_in_process_native_function_blocking_dispatch() {
         PhpValue::List(items) => {
             let b = items.borrow();
             assert_eq!(b[0], PhpValue::string("argon2id_hash_of_super_secret_p@ss"));
-            assert_eq!(b[1], PhpValue::Bool(true));
+            assert_eq!(b[1], PhpValue::string("true"));
         }
         other => panic!("Expected List, got {:?}", other),
     }
@@ -338,7 +338,7 @@ fn test_tier2_plugin_blocking_escape_hatch() {
     register_tier2_plugin(ImageMagickPlugin);
 
     let code = r#"
-        $dim = ImageMagick::dimensions();
+        $dim = string(ImageMagick::dimensions());
         $filtered = ImageMagick::heavyFilter("photo.jpg");
         return Arr::list([$dim, $filtered]);
     "#;
@@ -349,7 +349,7 @@ fn test_tier2_plugin_blocking_escape_hatch() {
     match res {
         PhpValue::List(items) => {
             let b = items.borrow();
-            assert_eq!(b[0], PhpValue::Int(1080));
+            assert_eq!(b[0], PhpValue::string("1080"));
             assert_eq!(b[1], PhpValue::string("filtered_photo.jpg"));
         }
         other => panic!("Expected List, got {:?}", other),

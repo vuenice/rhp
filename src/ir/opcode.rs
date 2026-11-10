@@ -199,8 +199,8 @@ pub enum OpCode {
     /// `dst = value` (inline 32-bit signed integer immediate)
     LoadInt { dst: Reg, value: i32 },
 
-    /// `dst = value` (inline 32-bit floating point immediate stored as raw IEEE-754 bits)
-    LoadFloat { dst: Reg, bits: u32 },
+    /// `dst = value` (inline 64-bit floating point immediate stored as raw IEEE-754 bits)
+    LoadFloat { dst: Reg, bits: u64 },
 
     /// `dst = constants[const_id]`
     LoadConst { dst: Reg, const_id: ConstantId },
@@ -512,7 +512,7 @@ impl fmt::Display for OpCode {
             OpCode::LoadNull { dst } => write!(f, "LOAD_NULL       {}", dst),
             OpCode::LoadBool { dst, value } => write!(f, "LOAD_BOOL       {}, {}", dst, value),
             OpCode::LoadInt { dst, value } => write!(f, "LOAD_INT        {}, {}", dst, value),
-            OpCode::LoadFloat { dst, bits } => write!(f, "LOAD_FLOAT      {}, {}", dst, f32::from_bits(*bits)),
+            OpCode::LoadFloat { dst, bits } => write!(f, "LOAD_FLOAT      {}, {}", dst, f64::from_bits(*bits)),
             OpCode::LoadConst { dst, const_id } => {
                 write!(f, "LOAD_CONST      {}, {}", dst, const_id)
             }
