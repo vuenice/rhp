@@ -21,7 +21,7 @@ pub use env::{
 pub use error::{TypeError, TypeErrorKind};
 pub use types::{
     ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FunctionSignature, InterfaceTypeInfo,
-    ParamSignature, PropertyTypeInfo, RhpType, RustFloatKind, TypeHierarchy,
+    ParamSignature, PropertyTypeInfo, RhpType, TypeHierarchy,
 };
 
 use crate::ast::Program;

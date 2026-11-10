@@ -50,9 +50,6 @@ struct ChunkBuilder {
     string_pool: HashMap<String, ConstantId>,
     /// Deduplication map for 64-bit integer constants (`i64 -> ConstantId`).
     int_pool: HashMap<i64, ConstantId>,
-    /// Deduplication map for float bit patterns (`u64 -> ConstantId`).
-    #[allow(dead_code)]
-    float_pool: HashMap<u64, ConstantId>,
     /// Deduplication map for semantic `RhpType` constants (`RhpType -> ConstantId`).
     type_pool: HashMap<RhpType, ConstantId>,
     /// Variables declared `global $var;` in this scope.
@@ -79,7 +76,6 @@ impl ChunkBuilder {
             chunk: BytecodeChunk::new(),
             string_pool: HashMap::new(),
             int_pool: HashMap::new(),
-            float_pool: HashMap::new(),
             type_pool: HashMap::new(),
             globals: HashSet::new(),
             loop_stack: Vec::new(),
@@ -224,24 +220,7 @@ impl ChunkBuilder {
         id
     }
 
-    /// Intern a 64-bit float into the chunk's constant pool.
-    fn intern_float(&mut self, value: f64) -> ConstantId {
-        let bits = value.to_bits();
-        if let Some(&id) = self.float_pool.get(&bits) {
-            return id;
-        }
-        let id = ConstantId(self.chunk.constants.len() as u32);
-        self.chunk.constants.push(Constant::Float(value));
-        self.float_pool.insert(bits, id);
-        id
-    }
 
-    fn intern_decimal(&mut self, raw: &str) -> ConstantId {
-        let cleaned: String = raw.chars().filter(|c| *c != '_').collect();
-        let id = ConstantId(self.chunk.constants.len() as u32);
-        self.chunk.constants.push(Constant::Decimal(cleaned));
-        id
-    }
 
     /// Intern a semantic `RhpType` into the chunk's constant pool for runtime boundary checks.
     fn intern_type(&mut self, rhp_type: RhpType) -> ConstantId {
@@ -1401,26 +1380,8 @@ impl<'a> IrLowerer<'a> {
                             b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
                         }
                     }
-                    Literal::Float { raw, value } => {
-                        let stored = crate::vm::numeric::decimal_from_literal(raw)
-                            .and_then(|decimal| crate::vm::numeric::narrow_decimal(decimal).ok());
-                        match stored {
-                            Some(crate::vm::value::PhpValue::Float(f)) => {
-                                b.emit(OpCode::LoadFloat { dst, bits: f.to_bits() }, expr.span);
-                            }
-                            Some(crate::vm::value::PhpValue::Float64(f)) => {
-                                let const_id = b.intern_float(f);
-                                b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
-                            }
-                            _ => {
-                                let const_id = if crate::vm::numeric::decimal_from_literal(raw).is_some() {
-                                    b.intern_decimal(raw)
-                                } else {
-                                    b.intern_float(*value)
-                                };
-                                b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
-                            }
-                        }
+                    Literal::Float { value, .. } => {
+                        b.emit(OpCode::LoadFloat { dst, bits: value.to_bits() }, expr.span);
                     }
                     Literal::String { value, .. } => {
                         let const_id = b.intern_string(value);

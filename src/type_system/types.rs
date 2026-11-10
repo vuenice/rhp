@@ -4,42 +4,6 @@ use crate::type_system::error::{TypeError, TypeErrorKind};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Native Rust floating-point types supported alongside default `float`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RustFloatKind {
-    F32,
-    F64,
-}
-
-impl RustFloatKind {
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "f32" => Some(Self::F32),
-            "f64" => Some(Self::F64),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::F32 => "f32",
-            Self::F64 => "f64",
-        }
-    }
-
-    pub fn bit_width(&self) -> u32 {
-        match self {
-            Self::F32 => 32,
-            Self::F64 => 64,
-        }
-    }
-}
-
-impl fmt::Display for RustFloatKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
 
 /// Explicit high-performance collection subtypes backed by Rust data structures (`Arr::*`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -477,7 +441,7 @@ impl RhpType {
     /// Implements RHP's Medium/Gradual Type System rules:
     /// - Strict verification when static types are known (`int`, `float`, `string`, `bool`, classes, collections).
     /// - Gradual compatibility when source or target is `Mixed` or `Dynamic`.
-    /// - Safe numeric widening (`int` -> `float`, literal `int` -> `RustInt`/`RustFloat`).
+    /// - Safe numeric widening (`int` -> `float`).
     /// - Subtype polymorphism for `Collection` -> `array`/`iterable`, `Tuple` -> `array`/`iterable`,
     ///   and class/interface inheritance hierarchies.
     pub fn is_assignable_to(&self, target: &RhpType, hierarchy: Option<&TypeHierarchy>) -> bool {

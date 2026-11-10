@@ -355,7 +355,7 @@ fn parse_scalar_param(
         RhpType::Float => {
             val_str
                 .parse::<f64>()
-                .map(|f| PhpValue::Float(f as f32))
+                .map(PhpValue::float)
                 .map_err(|_| DispatchError::ValidationError {
                     param_name: param_name.to_string(),
                     expected: "float".to_string(),

@@ -49,7 +49,11 @@ fn test_synchronous_by_default_linear_ergonomics() {
         $postId = $post->id;
         $httpStatus = $response->status;
 
-        return Arr::list([$upperContent, $postId, $httpStatus]);
+        return Arr::dict([
+            'content' => $upperContent,
+            'postId' => $postId,
+            'status' => $httpStatus,
+        ]);
         "#,
         test_path
     );
@@ -59,17 +63,17 @@ fn test_synchronous_by_default_linear_ergonomics() {
 
     // Verify sequential return values
     match result {
-        PhpValue::List(items_rc) => {
-            let items = items_rc.borrow();
-            assert_eq!(items.len(), 3);
+        PhpValue::Dict(dict_rc) => {
+            let dict = dict_rc.borrow();
+            assert_eq!(dict.len(), 3);
             assert_eq!(
-                items[0],
-                PhpValue::string("RHP SYNCHRONOUS FIBER CONTENT")
+                dict.get("content"),
+                Some(&PhpValue::string("RHP SYNCHRONOUS FIBER CONTENT"))
             );
-            assert_eq!(items[1], PhpValue::Int(42));
-            assert_eq!(items[2], PhpValue::Int(200));
+            assert_eq!(dict.get("postId"), Some(&PhpValue::Int(42)));
+            assert_eq!(dict.get("status"), Some(&PhpValue::Int(200)));
         }
-        other => panic!("Expected List return, got {:?}", other),
+        other => panic!("Expected Dict return, got {:?}", other),
     }
 
     // Verify fiber telemetry captured all sequential I/O operations
@@ -182,7 +186,12 @@ fn test_fiber_context_prepopulation_and_isolation() {
         Fiber::context("status", "processed");
         $newStatus = Fiber::context("status");
 
-        return Arr::list([$tenant, $auth, $missing, $newStatus]);
+        return Arr::dict([
+            'tenant' => $tenant,
+            'auth' => $auth,
+            'missing' => $missing,
+            'status' => $newStatus,
+        ]);
     "#;
 
     let mut ctx = IndexMap::new();
@@ -192,14 +201,14 @@ fn test_fiber_context_prepopulation_and_isolation() {
     let (result, _) = run_source_in_fiber_with_context(source, "context_fiber", ctx)
         .expect("Context-populated fiber should succeed");
 
-    if let PhpValue::List(items_rc) = result {
-        let items = items_rc.borrow();
-        assert_eq!(items[0], PhpValue::string("enterprise-alpha"));
-        assert_eq!(items[1], PhpValue::Int(994));
-        assert_eq!(items[2], PhpValue::Null);
-        assert_eq!(items[3], PhpValue::string("processed"));
+    if let PhpValue::Dict(dict_rc) = result {
+        let dict = dict_rc.borrow();
+        assert_eq!(dict.get("tenant"), Some(&PhpValue::string("enterprise-alpha")));
+        assert_eq!(dict.get("auth"), Some(&PhpValue::Int(994)));
+        assert_eq!(dict.get("missing"), Some(&PhpValue::Null));
+        assert_eq!(dict.get("status"), Some(&PhpValue::string("processed")));
     } else {
-        panic!("Expected List, got {:?}", result);
+        panic!("Expected Dict, got {:?}", result);
     }
 }
 

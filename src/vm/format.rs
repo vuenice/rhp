@@ -410,14 +410,7 @@ pub fn php_value_to_format_string(val: &PhpValue) -> String {
         PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
         PhpValue::Null => "null".to_string(),
         PhpValue::Int(n) => n.to_string(),
-        PhpValue::Float(f) => {
-            if f.fract() == 0.0 && !f.is_infinite() && !f.is_nan() {
-                f.to_string()
-            } else {
-                f.to_string()
-            }
-        }
-        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
+        PhpValue::Float(f) => f.to_string(),
         PhpValue::String(s) => s.to_string(),
         _ => val.to_php_string(),
     }
