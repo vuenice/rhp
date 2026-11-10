@@ -1318,6 +1318,8 @@ impl PhpValue {
     // =========================================================================
     // Strict & Loose Equality
     // =========================================================================
+    // Strict Equality (StrictEq)
+    // =========================================================================
 
     /// Strict equality comparison (`==` and `!=`):
     /// Returns `true` if and only if types and values strictly match without type coercion.
@@ -1344,7 +1346,7 @@ impl PhpValue {
                 compare_floats_by_max_decimal_point(*x as f64, &x.to_string(), *y, &y.to_string())
             }
             (Self::String(x), Self::String(y)) => x == y,
-            (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
+            (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
                 let a = x.borrow();
                 let b = y.borrow();
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.strict_eq(v2))
@@ -1361,33 +1363,6 @@ impl PhpValue {
             (Self::Future(x), Self::Future(y)) => Rc::ptr_eq(x, y),
             (Self::Resource(x), Self::Resource(y)) => Arc::ptr_eq(x, y),
             _ => false,
-        }
-    }
-
-    /// Loose equality comparison (`==`):
-    /// First performs strict type checking. If that succeeds (returns `true`),
-    /// it returns `true`. If strict type checking fails or returns `false`,
-    /// it converts both sides to string and compares them again.
-    pub fn loose_eq(&self, other: &Self) -> bool {
-        if self.strict_eq(other) {
-            return true;
-        }
-        match (self, other) {
-            (Self::Array(x), Self::Array(y)) | (Self::List(x), Self::List(y)) => {
-                let a = x.borrow();
-                let b = y.borrow();
-                a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.loose_eq(v2))
-            }
-            (Self::Dict(x), Self::Dict(y)) => {
-                let a = x.borrow();
-                let b = y.borrow();
-                a.len() == b.len() && a.iter().all(|(k, v1)| b.get(k).map_or(false, |v2| v1.loose_eq(v2)))
-            }
-            (Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_), _)
-            | (_, Self::Array(_) | Self::List(_) | Self::Dict(_) | Self::Set(_) | Self::HashMap(_)) => {
-                false
-            }
-            _ => self.to_php_string() == other.to_php_string(),
         }
     }
 
@@ -1923,43 +1898,23 @@ impl PhpValue {
     }
 }
 
+/// Trait representing strict equality comparison where types and values must strictly match.
+pub trait StrictEq {
+    /// Returns `true` if and only if types and values strictly match without type coercion.
+    fn strict_eq(&self, other: &Self) -> bool;
+}
+
+impl StrictEq for PhpValue {
+    #[inline]
+    fn strict_eq(&self, other: &Self) -> bool {
+        self.strict_eq(other)
+    }
+}
+
 impl PartialEq for PhpValue {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Null, Self::Null) => true,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::Int(a), Self::Int(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => {
-                compare_floats_by_max_decimal_point(
-                    *a as f64,
-                    &a.to_string(),
-                    *b as f64,
-                    &b.to_string(),
-                )
-            }
-            (Self::Float64(a), Self::Float64(b)) => {
-                compare_floats_by_max_decimal_point(*a, &a.to_string(), *b, &b.to_string())
-            }
-            (Self::Decimal(a), Self::Decimal(b)) => a == b,
-            (left, right)
-                if left.is_integer_value() && right.is_integer_value() =>
-            {
-                left.signed_bits() == right.signed_bits()
-            }
-            (Self::Int(a), Self::Float(b)) => (*a as f32) == *b,
-            (Self::Float(a), Self::Int(b)) => *a == (*b as f32),
-            (Self::String(a), Self::String(b)) => a == b,
-            (Self::Array(a) | Self::List(a), Self::Array(b) | Self::List(b)) => {
-                *a.borrow() == *b.borrow()
-            }
-            (Self::Dict(a), Self::Dict(b)) => *a.borrow() == *b.borrow(),
-            (Self::Set(a), Self::Set(b)) => *a.borrow() == *b.borrow(),
-            (Self::HashMap(a), Self::HashMap(b)) => *a.borrow() == *b.borrow(),
-            (Self::Object(a), Self::Object(b)) => Rc::ptr_eq(a, b),
-            (Self::Closure(a), Self::Closure(b)) => Rc::ptr_eq(a, b),
-            (Self::Future(a), Self::Future(b)) => Rc::ptr_eq(a, b),
-            _ => false,
-        }
+        self.strict_eq(other)
     }
 }
 
@@ -1969,11 +1924,6 @@ impl PartialOrd for PhpValue {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
             (Self::Float64(a), Self::Float64(b)) => a.partial_cmp(b),
-            (Self::Int(a), Self::Float(b)) => (*a as f32).partial_cmp(b),
-            (Self::Float(a), Self::Int(b)) => a.partial_cmp(&(*b as f32)),
-            (left, right) if left.is_integer_value() && right.is_integer_value() => {
-                left.signed_bits().partial_cmp(&right.signed_bits())
-            }
             (Self::String(a), Self::String(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
             _ => None,
@@ -1997,11 +1947,25 @@ impl Hash for PhpValue {
             }
             Self::Float(fl) => {
                 3u8.hash(state);
-                fl.to_bits().hash(state);
+                let normalized = if fl.is_nan() {
+                    f32::NAN
+                } else if *fl == 0.0 {
+                    0.0f32
+                } else {
+                    *fl
+                };
+                normalized.to_bits().hash(state);
             }
             Self::Float64(fl) => {
                 4u8.hash(state);
-                fl.to_bits().hash(state);
+                let normalized = if fl.is_nan() {
+                    f64::NAN
+                } else if *fl == 0.0 {
+                    0.0f64
+                } else {
+                    *fl
+                };
+                normalized.to_bits().hash(state);
             }
             Self::Decimal(d) => {
                 5u8.hash(state);

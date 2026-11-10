@@ -10417,11 +10417,6 @@ impl VM {
         a.strict_eq(b)
     }
 
-    #[allow(dead_code)]
-    #[inline]
-    fn loose_eq(a: &PhpValue, b: &PhpValue) -> bool {
-        a.loose_eq(b)
-    }
 
     // =========================================================================
     // Internal Utilities
