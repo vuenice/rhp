@@ -1836,7 +1836,9 @@ impl<'a> IrLowerer<'a> {
                     // 2. Legacy PHP function bridge (`phpFun::array_merge` -> canonical `Arr::merge`)
                     if target_name == "phpFun" {
                         let (resolved_facade, resolved_method) =
-                            if let Some(mapping) = get_legacy_php_function(method_name) {
+                            if matches!(method_name, "abs" | "min" | "max") {
+                                ("phpFun", method_name)
+                            } else if let Some(mapping) = get_legacy_php_function(method_name) {
                                 (mapping.rhp_facade, mapping.rhp_method)
                             } else {
                                 ("phpFun", method_name)
