@@ -491,10 +491,10 @@ fn test_bun_inspired_improvements_i64_f32_sso_and_shapes() {
     "#;
     let (vm, _) = run_source_with_vm(source).expect("Execution should pass");
     assert_eq!(vm.get_main_variable("$intVal"), Some(&PhpValue::Int(42_i64)));
-    assert_eq!(vm.get_main_variable("$floatVal"), Some(&PhpValue::Float(3.5_f32)));
-    assert_eq!(vm.get_main_variable("$divFloat"), Some(&PhpValue::Float(3.5_f32)));
+    assert_eq!(vm.get_main_variable("$floatVal"), Some(&PhpValue::Float(3.5_f64)));
+    assert_eq!(vm.get_main_variable("$divFloat"), Some(&PhpValue::Float(3.5_f64)));
     assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i64)));
-    assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f32)));
+    assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f64)));
 
     // 2. Verify RhpString Utf8 behavior
     let short_s = RhpString::new("small_string");

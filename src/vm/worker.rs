@@ -1696,14 +1696,6 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
             buf.push(3);
             buf.extend_from_slice(&f.to_le_bytes());
         }
-        FrozenValue::Float64(value) => {
-            buf.push(5);
-            buf.extend_from_slice(&value.to_le_bytes());
-        }
-        FrozenValue::Decimal(s) => {
-            buf.push(16);
-            write_string(buf, s);
-        }
         FrozenValue::String(s) => {
             buf.push(6);
             write_string(buf, s);
@@ -1778,16 +1770,10 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
             Ok(FrozenValue::Int(i64::from_le_bytes(b)))
         }
         3 => {
-            let mut b = [0u8; 4];
-            copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::Float(f32::from_le_bytes(b)))
-        }
-        5 => {
             let mut b = [0u8; 8];
             copy_slice(data, cursor, &mut b)?;
-            Ok(FrozenValue::Float64(f64::from_le_bytes(b)))
+            Ok(FrozenValue::Float(f64::from_le_bytes(b)))
         }
-        16 => Ok(FrozenValue::Decimal(read_string(data, cursor)?)),
         6 => {
             let s = read_string(data, cursor)?;
             Ok(FrozenValue::String(s))

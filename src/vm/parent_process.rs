@@ -33,9 +33,7 @@ pub enum FrozenValue {
     Null,
     Bool(bool),
     Int(i64),
-    Float(f32),
-    Float64(f64),
-    Decimal(String),
+    Float(f64),
     String(String),
     Bytes(Vec<u8>),
     List(Vec<FrozenValue>),
@@ -56,8 +54,6 @@ impl FrozenValue {
             PhpValue::Bool(b) => FrozenValue::Bool(*b),
             PhpValue::Int(n) => FrozenValue::Int(*n),
             PhpValue::Float(f) => FrozenValue::Float(*f),
-            PhpValue::Float64(f) => FrozenValue::Float64(*f),
-            PhpValue::Decimal(d) => FrozenValue::Decimal(d.to_string()),
             PhpValue::String(s) => match s {
                 crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
                 crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
@@ -118,11 +114,7 @@ impl FrozenValue {
             FrozenValue::Null => PhpValue::Null,
             FrozenValue::Bool(b) => PhpValue::Bool(*b),
             FrozenValue::Int(n) => PhpValue::Int(*n),
-            FrozenValue::Float(f) => PhpValue::Float(*f),
-            FrozenValue::Float64(f) => PhpValue::Float64(*f),
-            FrozenValue::Decimal(raw) => crate::vm::numeric::decimal_from_literal(raw)
-                .map(|d| PhpValue::Decimal(Box::new(d)))
-                .unwrap_or_else(|| PhpValue::string(raw.clone())),
+            FrozenValue::Float(f) => PhpValue::float(*f),
             FrozenValue::String(s) => PhpValue::string(s.clone()),
             FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
             FrozenValue::List(items) => {
@@ -195,6 +187,12 @@ impl From<bool> for FrozenValue {
 
 impl From<f32> for FrozenValue {
     fn from(f: f32) -> Self {
+        FrozenValue::Float(f as f64)
+    }
+}
+
+impl From<f64> for FrozenValue {
+    fn from(f: f64) -> Self {
         FrozenValue::Float(f)
     }
 }

@@ -251,9 +251,7 @@ impl JitCompiler {
                     }
                 }
                 OpCode::LoadFloat { dst, bits } => {
-                    let fl = f32::from_bits(bits);
-                    let f_bits = (fl as f64).to_bits() as i64;
-                    let v = builder.ins().iconst(types::I64, f_bits);
+                    let v = builder.ins().iconst(types::I64, bits as i64);
                     builder.def_var(vars[dst.index()], v);
                     if let Some(next) = next_block {
                         builder.ins().jump(next, &[]);

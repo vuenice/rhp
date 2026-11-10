@@ -161,59 +161,68 @@ fn test_list_math_search_and_chunk_helpers() {
 
         // Chunks and Flatten
         $chunked = Arr::list([1, 2, 3, 4, 5, 6, 7])->chunk(3);
-        $flattened = Arr::list([1, [2, [3, 4]], 5])->flatten();
+        $flattened = Arr::list([[1], [2, 3], [4, 5]])->flatten();
 
         // Concat
         $merged = Arr::list([1, 2])->concat([3, 4], [5]);
 
-        return [
-            $sum,
-            $avg,
-            $min,
-            $max,
-            $count,
-            $isEmpty,
-            $isNotEmpty,
-            $hasVal,
-            $missingVal,
-            $chunked,
-            $flattened,
-            $merged,
-        ];
+        return Arr::dict([
+            'sum' => $sum,
+            'avg' => $avg,
+            'min' => $min,
+            'max' => $max,
+            'count' => $count,
+            'isEmpty' => $isEmpty,
+            'isNotEmpty' => $isNotEmpty,
+            'hasVal' => $hasVal,
+            'missingVal' => $missingVal,
+            'chunked' => $chunked,
+            'flattened' => $flattened,
+            'merged' => $merged,
+        ]);
     "#;
 
     let res = run_source(source).expect("Math and chunk operations should succeed");
     assert_eq!(
         res,
-        PhpValue::list(vec![
-            PhpValue::Int(125),
-            PhpValue::Float(25.0),
-            PhpValue::Int(5),
-            PhpValue::Int(45),
-            PhpValue::Int(5),
-            PhpValue::Bool(false),
-            PhpValue::Bool(true),
-            PhpValue::Bool(true),
-            PhpValue::Bool(false),
-            PhpValue::list(vec![
-                PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]),
-                PhpValue::list(vec![PhpValue::Int(4), PhpValue::Int(5), PhpValue::Int(6)]),
-                PhpValue::list(vec![PhpValue::Int(7)]),
-            ]),
-            PhpValue::list(vec![
-                PhpValue::Int(1),
-                PhpValue::Int(2),
-                PhpValue::Int(3),
-                PhpValue::Int(4),
-                PhpValue::Int(5),
-            ]),
-            PhpValue::list(vec![
-                PhpValue::Int(1),
-                PhpValue::Int(2),
-                PhpValue::Int(3),
-                PhpValue::Int(4),
-                PhpValue::Int(5),
-            ]),
+        PhpValue::dict(vec![
+            ("sum".to_string(), PhpValue::Int(125)),
+            ("avg".to_string(), PhpValue::Float(25.0)),
+            ("min".to_string(), PhpValue::Int(5)),
+            ("max".to_string(), PhpValue::Int(45)),
+            ("count".to_string(), PhpValue::Int(5)),
+            ("isEmpty".to_string(), PhpValue::Bool(false)),
+            ("isNotEmpty".to_string(), PhpValue::Bool(true)),
+            ("hasVal".to_string(), PhpValue::Bool(true)),
+            ("missingVal".to_string(), PhpValue::Bool(false)),
+            (
+                "chunked".to_string(),
+                PhpValue::list(vec![
+                    PhpValue::list(vec![PhpValue::Int(1), PhpValue::Int(2), PhpValue::Int(3)]),
+                    PhpValue::list(vec![PhpValue::Int(4), PhpValue::Int(5), PhpValue::Int(6)]),
+                    PhpValue::list(vec![PhpValue::Int(7)]),
+                ])
+            ),
+            (
+                "flattened".to_string(),
+                PhpValue::list(vec![
+                    PhpValue::Int(1),
+                    PhpValue::Int(2),
+                    PhpValue::Int(3),
+                    PhpValue::Int(4),
+                    PhpValue::Int(5),
+                ])
+            ),
+            (
+                "merged".to_string(),
+                PhpValue::list(vec![
+                    PhpValue::Int(1),
+                    PhpValue::Int(2),
+                    PhpValue::Int(3),
+                    PhpValue::Int(4),
+                    PhpValue::Int(5),
+                ])
+            ),
         ])
     );
 }
@@ -306,16 +315,20 @@ fn test_arr_macro_registration_and_list_execution() {
 
         $doubledSum = Arr::list([10, 20, 30])->sumDoubled();
 
-        return Arr::list([$csvDefault, $csvPipe, $doubledSum]);
+        return Arr::dict([
+            'csv_default' => $csvDefault,
+            'csv_pipe' => $csvPipe,
+            'doubled_sum' => $doubledSum,
+        ]);
     "#;
 
     let res = run_source(source).expect("Macro registration and execution should succeed");
     assert_eq!(
         res,
-        PhpValue::list(vec![
-            PhpValue::string("1,2,3"),
-            PhpValue::string("red|green|blue"),
-            PhpValue::Int(120),
+        PhpValue::dict(vec![
+            ("csv_default".to_string(), PhpValue::string("1,2,3")),
+            ("csv_pipe".to_string(), PhpValue::string("red|green|blue")),
+            ("doubled_sum".to_string(), PhpValue::Int(120)),
         ])
     );
 }
@@ -331,21 +344,28 @@ fn test_list_sequential_index_integrity_and_string_key_rejection() {
         $val2 = $list[2];
         $list[1] = 999;
         $list[] = 40;
-        return [$val0, $val2, $list];
+        return Arr::dict([
+            'val0' => $val0,
+            'val2' => $val2,
+            'list' => $list,
+        ]);
     "#;
 
     let res = run_source(source_valid).expect("Valid indexing should succeed");
     assert_eq!(
         res,
-        PhpValue::list(vec![
-            PhpValue::Int(10),
-            PhpValue::Int(30),
-            PhpValue::list(vec![
-                PhpValue::Int(10),
-                PhpValue::Int(999),
-                PhpValue::Int(30),
-                PhpValue::Int(40),
-            ]),
+        PhpValue::dict(vec![
+            ("val0".to_string(), PhpValue::Int(10)),
+            ("val2".to_string(), PhpValue::Int(30)),
+            (
+                "list".to_string(),
+                PhpValue::list(vec![
+                    PhpValue::Int(10),
+                    PhpValue::Int(999),
+                    PhpValue::Int(30),
+                    PhpValue::Int(40),
+                ])
+            ),
         ])
     );
 
@@ -358,7 +378,7 @@ fn test_list_sequential_index_integrity_and_string_key_rejection() {
 
     let err = run_source(source_invalid_key).expect_err("Non-numeric key on Arr::list must fail");
     assert!(
-        err.to_string().contains("Undefined index or key 'non_numeric_key'"),
+        err.to_string().contains("List index must be a non-negative integer"),
         "Unexpected error: {:?}",
         err
     );
@@ -544,4 +564,175 @@ fn test_array_immutable_helper_methods_and_explicit_reassignment() {
         ])
     );
 }
+
+#[test]
+fn test_list_strict_non_negative_integer_keys() {
+    clear_runtime_closure_macros();
+
+    // 1. Valid non-negative integer keys succeed
+    let source_ok = r#"
+        $list = Arr::list([10, 20, 30]);
+        $val = $list[0];
+        $list[1] = 99;
+        return Arr::dict(['val' => $val, 'list' => $list]);
+    "#;
+    let res = run_source(source_ok).expect("Valid non-negative integer keys must succeed");
+    assert_eq!(
+        res,
+        PhpValue::dict(vec![
+            ("val".to_string(), PhpValue::Int(10)),
+            (
+                "list".to_string(),
+                PhpValue::list(vec![PhpValue::Int(10), PhpValue::Int(99), PhpValue::Int(30)])
+            ),
+        ])
+    );
+
+    // 2. Negative integer key in index get
+    let source_neg_get = r#"
+        $list = Arr::list([10, 20, 30]);
+        return $list[-1];
+    "#;
+    let err = run_source(source_neg_get).expect_err("Negative integer get must fail");
+    assert!(
+        err.to_string().contains("List index must be a non-negative integer, got negative integer: -1"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 3. Negative integer key in index set
+    let source_neg_set = r#"
+        $list = Arr::list([10, 20, 30]);
+        $list[-2] = 50;
+    "#;
+    let err = run_source(source_neg_set).expect_err("Negative integer set must fail");
+    assert!(
+        err.to_string().contains("List index must be a non-negative integer, got negative integer: -2"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 4. String key in index get
+    let source_str_get = r#"
+        $list = Arr::list([10, 20, 30]);
+        return $list["foo"];
+    "#;
+    let err = run_source(source_str_get).expect_err("String key get must fail");
+    assert!(
+        err.to_string().contains("List index must be a non-negative integer, got string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 5. String key in index set
+    let source_str_set = r#"
+        $list = Arr::list([10, 20, 30]);
+        $list["foo"] = 42;
+    "#;
+    let err = run_source(source_str_set).expect_err("String key set must fail");
+    assert!(
+        err.to_string().contains("List index must be a non-negative integer, got string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 6. Float key in index set
+    let source_float_set = r#"
+        $list = Arr::list([10, 20, 30]);
+        $list[1.5] = 42;
+    "#;
+    let err = run_source(source_float_set).expect_err("Float key set must fail");
+    assert!(
+        err.to_string().contains("List index must be a non-negative integer, got float"),
+        "Unexpected error: {:?}",
+        err
+    );
+}
+
+#[test]
+fn test_list_strict_homogeneity() {
+    clear_runtime_closure_macros();
+
+    // 1. Initial list with mixed int and string via type hint
+    let source_init_mixed = r#"
+        list $x = [1, 2, "three"];
+    "#;
+    let err = run_source(source_init_mixed).expect_err("Mixed int and string list literal must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 2. Initial Arr::list with mixed int and float
+    let source_facade_mixed = r#"
+        return Arr::list([1, 2, 3.14]);
+    "#;
+    let err = run_source(source_facade_mixed).expect_err("Mixed int and float list must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found int and float"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 3. Bracket push with mismatching type
+    let source_push_mismatch = r#"
+        $list = Arr::list([10, 20, 30]);
+        $list[] = "forty";
+    "#;
+    let err = run_source(source_push_mismatch).expect_err("Push mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 4. Fluent push with mismatching type
+    let source_fluent_push = r#"
+        $list = Arr::list(["a", "b"]);
+        $list->push(123);
+    "#;
+    let err = run_source(source_fluent_push).expect_err("Fluent push mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found string and int"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 5. Index replacement with mismatching type
+    let source_index_replace = r#"
+        $list = Arr::list([10, 20, 30]);
+        $list[1] = "mismatch";
+    "#;
+    let err = run_source(source_index_replace).expect_err("Index replace mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 6. Dynamic push into empty list establishes element type
+    let source_empty_dynamic = r#"
+        $list = Arr::list();
+        $list[] = 42;
+        $list[] = 84;
+        return $list;
+    "#;
+    let res = run_source(source_empty_dynamic).expect("Empty list dynamic push must succeed");
+    assert_eq!(res, PhpValue::list(vec![PhpValue::Int(42), PhpValue::Int(84)]));
+
+    // 7. Dynamic push second element mismatching empty-started list
+    let source_empty_dynamic_mismatch = r#"
+        $list = Arr::list();
+        $list[] = 42;
+        $list[] = "mismatch";
+    "#;
+    let err = run_source(source_empty_dynamic_mismatch).expect_err("Empty list dynamic mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a list must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+}
+
 

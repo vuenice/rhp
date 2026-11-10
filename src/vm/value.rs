@@ -546,12 +546,8 @@ pub enum PhpValue {
     Bool(bool),
     /// The only integer. Stored as `i64`.
     Int(i64),
-    /// Exact `f32`.
-    Float(f32),
-    /// Exact `f64` that is not exact in `f32`.
-    Float64(f64),
-    /// Base-10 value that is not exact in binary floating point.
-    Decimal(Box<crate::vm::decimal::Decimal>),
+    /// The only float. Stored as `f64`.
+    Float(f64),
     String(RhpString),
     Array(Rc<RefCell<Vec<PhpValue>>>),
     List(Rc<RefCell<Vec<PhpValue>>>),
@@ -889,6 +885,23 @@ impl PhpValue {
     // =========================================================================
 
     #[inline]
+    pub fn float(val: f64) -> Self {
+        let v = if val.is_nan() {
+            f64::NAN
+        } else if val == 0.0 {
+            0.0
+        } else {
+            val
+        };
+        Self::Float(v)
+    }
+
+    #[inline]
+    pub fn same_type_as(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+
+    #[inline]
     pub fn string(s: impl Into<StrValue>) -> Self {
         Self::String(s.into())
     }
@@ -1001,7 +1014,7 @@ impl PhpValue {
             Self::Null => "null",
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
-            Self::Float(_) | Self::Float64(_) | Self::Decimal(_) => "float",
+            Self::Float(_) => "float",
             Self::String(s) => match s {
                 StrValue::Utf8 { .. } => "string",
                 StrValue::Bytes(_) => "bytes",
@@ -1040,8 +1053,6 @@ impl PhpValue {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
-            Self::Float64(fl) => *fl != 0.0 && !fl.is_nan(),
-            Self::Decimal(d) => !d.is_zero(),
             Self::String(s) => match s {
                 StrValue::Utf8 { s, .. } => !s.is_empty() && &**s != "0",
                 StrValue::Bytes(b) => !b.is_empty() && &**b != b"0",
@@ -1090,7 +1101,7 @@ impl PhpValue {
     pub fn is_scalar_primitive(&self) -> bool {
         matches!(
             self,
-            Self::Null | Self::Bool(_) | Self::Int(_) | Self::Float(_) | Self::Float64(_)
+            Self::Null | Self::Bool(_) | Self::Int(_) | Self::Float(_)
         )
     }
 
@@ -1123,8 +1134,6 @@ impl PhpValue {
         }
         match self {
             Self::Float(f) => Some(*f as i32),
-            Self::Float64(f) => Some(*f as i32),
-            Self::Decimal(d) => d.to_string().parse::<i32>().ok(),
             Self::String(s) => s.trim().parse::<i32>().ok(),
             _ => None,
         }
@@ -1136,8 +1145,6 @@ impl PhpValue {
         }
         match self {
             Self::Float(f) => Some(*f as i64),
-            Self::Float64(f) => Some(*f as i64),
-            Self::Decimal(d) => d.to_string().parse::<i64>().ok(),
             Self::String(s) => s.trim().parse::<i64>().ok(),
             _ => None,
         }
@@ -1145,9 +1152,7 @@ impl PhpValue {
 
     pub fn to_f32(&self) -> Option<f32> {
         match self {
-            Self::Float(f) => Some(*f),
-            Self::Float64(f) => Some(*f as f32),
-            Self::Decimal(d) => Some(d.to_f32()),
+            Self::Float(f) => Some(*f as f32),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             other => other.to_i64().map(|n| n as f32).or_else(|| match other {
                 Self::String(s) => s.trim().parse::<f32>().ok(),
@@ -1158,9 +1163,7 @@ impl PhpValue {
 
     pub fn to_f64(&self) -> Option<f64> {
         match self {
-            Self::Float(f) => Some(*f as f64),
-            Self::Float64(f) => Some(*f),
-            Self::Decimal(d) => Some(d.to_f64()),
+            Self::Float(f) => Some(*f),
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             other => other.to_i64().map(|n| n as f64).or_else(|| match other {
                 Self::String(s) => s.trim().parse::<f64>().ok(),
@@ -1175,8 +1178,6 @@ impl PhpValue {
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
-            Self::Float64(fl) => fl.to_string(),
-            Self::Decimal(d) => d.to_string(),
             Self::String(s) => s.to_string(),
             Self::Array(_) => "Array".to_string(),
             Self::List(_) => "Arr::list".to_string(),
@@ -1222,8 +1223,6 @@ impl PhpValue {
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
-            Self::Float64(fl) => fl.to_string(),
-            Self::Decimal(d) => d.to_string(),
             Self::String(s) => s.to_string(),
             Self::Array(arr) => {
                 let borrowed = arr.borrow();
@@ -1331,19 +1330,13 @@ impl PhpValue {
             (Self::Bool(x), Self::Bool(y)) => x == y,
             (Self::Int(x), Self::Int(y)) => x == y,
             (Self::Float(x), Self::Float(y)) => {
-                compare_floats_by_max_decimal_point(
-                    *x as f64,
-                    &x.to_string(),
-                    *y as f64,
-                    &y.to_string(),
-                )
-            }
-            (Self::Float64(x), Self::Float64(y)) => {
-                compare_floats_by_max_decimal_point(*x, &x.to_string(), *y, &y.to_string())
-            }
-            (Self::Decimal(x), Self::Decimal(y)) => x == y,
-            (Self::Float(x), Self::Float64(y)) | (Self::Float64(y), Self::Float(x)) => {
-                compare_floats_by_max_decimal_point(*x as f64, &x.to_string(), *y, &y.to_string())
+                if x.is_nan() && y.is_nan() {
+                    true
+                } else if *x == 0.0 && *y == 0.0 {
+                    true
+                } else {
+                    compare_floats_by_max_decimal_point(*x, &x.to_string(), *y, &y.to_string())
+                }
             }
             (Self::String(x), Self::String(y)) => x == y,
             (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
@@ -1378,10 +1371,7 @@ impl PhpValue {
             RhpType::Null => matches!(self, Self::Null),
             RhpType::Bool => matches!(self, Self::Bool(_)),
             RhpType::Int => self.to_i64().is_some() && self.is_integer_value(),
-            RhpType::Float => matches!(
-                self,
-                Self::Float(_) | Self::Float64(_) | Self::Decimal(_) | Self::Int(_)
-            ),
+            RhpType::Float => matches!(self, Self::Float(_) | Self::Int(_)),
             RhpType::String => matches!(self, Self::String(StrValue::Utf8 { .. })),
             RhpType::Bytes => matches!(self, Self::String(StrValue::Bytes(_))),
             RhpType::Array(inner) => {
@@ -1923,7 +1913,6 @@ impl PartialOrd for PhpValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
-            (Self::Float64(a), Self::Float64(b)) => a.partial_cmp(b),
             (Self::String(a), Self::String(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
             _ => None,
@@ -1948,17 +1937,6 @@ impl Hash for PhpValue {
             Self::Float(fl) => {
                 3u8.hash(state);
                 let normalized = if fl.is_nan() {
-                    f32::NAN
-                } else if *fl == 0.0 {
-                    0.0f32
-                } else {
-                    *fl
-                };
-                normalized.to_bits().hash(state);
-            }
-            Self::Float64(fl) => {
-                4u8.hash(state);
-                let normalized = if fl.is_nan() {
                     f64::NAN
                 } else if *fl == 0.0 {
                     0.0f64
@@ -1966,10 +1944,6 @@ impl Hash for PhpValue {
                     *fl
                 };
                 normalized.to_bits().hash(state);
-            }
-            Self::Decimal(d) => {
-                5u8.hash(state);
-                d.to_string().hash(state);
             }
             Self::String(s) => {
                 6u8.hash(state);
@@ -2048,8 +2022,6 @@ impl fmt::Debug for PhpValue {
             Self::Bool(b) => write!(f, "{}", b),
             Self::Int(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
-            Self::Float64(fl) => write!(f, "{:?}", fl),
-            Self::Decimal(d) => write!(f, "{}", d),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Array(arr) => write!(f, "Array({:?})", arr.borrow()),
             Self::List(list) => write!(f, "Arr::list({:?})", list.borrow()),
@@ -2087,7 +2059,14 @@ impl From<i32> for PhpValue {
 impl From<f32> for PhpValue {
     #[inline]
     fn from(fl: f32) -> Self {
-        PhpValue::Float(fl)
+        PhpValue::float(fl as f64)
+    }
+}
+
+impl From<f64> for PhpValue {
+    #[inline]
+    fn from(fl: f64) -> Self {
+        PhpValue::float(fl)
     }
 }
 

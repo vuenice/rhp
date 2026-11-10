@@ -495,8 +495,7 @@ fn test_float_binary_and_decimal_operations() {
 
         return [
             $b_add_str, $d_add_str,
-            $d_add == 0.3,
-            $b_add_str != $d_add_str,
+            $d_add == $b_add,
             $caught, $b_caught,
         ];
     "#;
@@ -505,11 +504,10 @@ fn test_float_binary_and_decimal_operations() {
     if let PhpValue::Array(a) | PhpValue::List(a) = res {
         let b = a.borrow();
         assert_eq!(b[0], PhpValue::string("0.30000000000000004"));
-        assert_eq!(b[1], PhpValue::string("0.3"));
+        assert_eq!(b[1], PhpValue::string("0.30000000000000004"));
         assert_eq!(b[2], PhpValue::Bool(true));
         assert_eq!(b[3], PhpValue::Bool(true));
         assert_eq!(b[4], PhpValue::Bool(true));
-        assert_eq!(b[5], PhpValue::Bool(true));
     } else {
         panic!("expected array result");
     }

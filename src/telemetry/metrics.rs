@@ -44,19 +44,19 @@ impl HistogramSummary {
         let mut map = IndexMap::new();
         map.insert("name".to_string(), PhpValue::string(self.name.clone()));
         map.insert("count".to_string(), PhpValue::Int(self.count as i64));
-        map.insert("sum".to_string(), PhpValue::Float(self.sum as f32));
-        map.insert("min".to_string(), PhpValue::Float(self.min as f32));
-        map.insert("max".to_string(), PhpValue::Float(self.max as f32));
-        map.insert("avg".to_string(), PhpValue::Float(self.avg as f32));
-        map.insert("p50".to_string(), PhpValue::Float(self.p50 as f32));
-        map.insert("p90".to_string(), PhpValue::Float(self.p90 as f32));
-        map.insert("p95".to_string(), PhpValue::Float(self.p95 as f32));
-        map.insert("p99".to_string(), PhpValue::Float(self.p99 as f32));
+        map.insert("sum".to_string(), PhpValue::float(self.sum));
+        map.insert("min".to_string(), PhpValue::float(self.min));
+        map.insert("max".to_string(), PhpValue::float(self.max));
+        map.insert("avg".to_string(), PhpValue::float(self.avg));
+        map.insert("p50".to_string(), PhpValue::float(self.p50));
+        map.insert("p90".to_string(), PhpValue::float(self.p90));
+        map.insert("p95".to_string(), PhpValue::float(self.p95));
+        map.insert("p99".to_string(), PhpValue::float(self.p99));
 
         let bounds: Vec<PhpValue> = self
             .explicit_bounds
             .iter()
-            .map(|&b| PhpValue::Float(b as f32))
+            .map(|&b| PhpValue::float(b))
             .collect();
         map.insert("explicit_bounds".to_string(), PhpValue::list(bounds));
 
@@ -218,7 +218,7 @@ impl MetricsRegistry {
 
         let mut counters_map = IndexMap::new();
         for (k, v) in &self.counters {
-            counters_map.insert(k.clone(), PhpValue::Float(*v as f32));
+            counters_map.insert(k.clone(), PhpValue::float(*v));
         }
         root.insert(
             "counters".to_string(),
@@ -227,7 +227,7 @@ impl MetricsRegistry {
 
         let mut gauges_map = IndexMap::new();
         for (k, v) in &self.gauges {
-            gauges_map.insert(k.clone(), PhpValue::Float(*v as f32));
+            gauges_map.insert(k.clone(), PhpValue::float(*v));
         }
         root.insert("gauges".to_string(), PhpValue::dict_from_map(gauges_map));
 

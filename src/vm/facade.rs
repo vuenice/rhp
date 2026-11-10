@@ -688,7 +688,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                         }),
                     },
                 },
-                PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => {
+                PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) => {
                     Ok(PhpValue::string(val.to_php_string()))
                 }
                 other => Err(RuntimeErrorKind::TypeError {
@@ -1502,6 +1502,19 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             } else {
                 Vec::new()
             };
+            if let Some(first) = items.first() {
+                for item in &items[1..] {
+                    if !first.same_type_as(item) {
+                        return Err(RuntimeErrorKind::TypeError {
+                            message: format!(
+                                "All elements in a list must have the same type, found {} and {}",
+                                first.type_name(),
+                                item.type_name()
+                            ),
+                        });
+                    }
+                }
+            }
             Ok(PhpValue::list(items))
         }
         "range" => {
@@ -1702,7 +1715,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let mut int_sum = 0i64;
             for item in &items {
                 if let Some(fl) = item.to_f64() {
-                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) {
+                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_)) {
                         is_float = true;
                     }
                     float_sum += fl;
@@ -1712,7 +1725,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
             }
             if is_float {
-                Ok(PhpValue::Float(float_sum as f32))
+                Ok(PhpValue::float(float_sum))
             } else {
                 Ok(PhpValue::Int(int_sum as i64))
             }
@@ -1729,7 +1742,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let mut int_prod = 1i64;
             for item in &items {
                 if let Some(fl) = item.to_f64() {
-                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)) {
+                    if item.to_i64().is_none() || matches!(item, PhpValue::Float(_)) {
                         is_float = true;
                     }
                     float_prod *= fl;
@@ -1739,7 +1752,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
             }
             if is_float {
-                Ok(PhpValue::Float(float_prod as f32))
+                Ok(PhpValue::float(float_prod))
             } else {
                 Ok(PhpValue::Int(int_prod as i64))
             }
@@ -2400,6 +2413,19 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 } else {
                     Vec::new()
                 };
+                if let Some(first) = items.first() {
+                    for item in &items[1..] {
+                        if !first.same_type_as(item) {
+                            return Err(RuntimeErrorKind::TypeError {
+                                message: format!(
+                                    "All elements in a set must have the same type, found {} and {}",
+                                    first.type_name(),
+                                    item.type_name()
+                                ),
+                            });
+                        }
+                    }
+                }
                 Ok(PhpValue::set(items))
             }
         }
@@ -2833,7 +2859,7 @@ pub fn php_value_is_empty(val: &PhpValue) -> bool {
     match val {
         PhpValue::Null => true,
         PhpValue::Bool(b) => !b,
-        PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => false,
+        PhpValue::Int(_) | PhpValue::Float(_) => false,
         PhpValue::String(s) => s.is_empty(),
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().is_empty(),
         PhpValue::Dict(d) => d.borrow().is_empty(),
@@ -2946,7 +2972,7 @@ fn get_disk_space_impl(path: &str, metric: DiskSpaceMetric) -> FacadeResult {
             DiskSpaceMetric::Free => (stat.f_bavail as f64) * block_size,
             DiskSpaceMetric::Total => (stat.f_blocks as f64) * block_size,
         };
-        Ok(PhpValue::Float(bytes as f32))
+        Ok(PhpValue::float(bytes))
     }
 
     #[cfg(windows)]
@@ -2980,7 +3006,7 @@ fn get_disk_space_impl(path: &str, metric: DiskSpaceMetric) -> FacadeResult {
             DiskSpaceMetric::Free => free_bytes_available as f64,
             DiskSpaceMetric::Total => total_bytes as f64,
         };
-        Ok(PhpValue::Float(bytes as f32))
+        Ok(PhpValue::float(bytes))
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -4996,7 +5022,7 @@ fn dispatch_memory(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "isGcFree" => Ok(PhpValue::Bool(crate::vm::memory::is_gc_free())),
         "gcRuns" => Ok(PhpValue::Int(crate::vm::memory::gc_runs() as i64)),
-        "gcPauseMs" => Ok(PhpValue::Float(crate::vm::memory::gc_pause_ms())),
+        "gcPauseMs" => Ok(PhpValue::float(crate::vm::memory::gc_pause_ms() as f64)),
         "cowDetachments" => Ok(PhpValue::Int(crate::vm::memory::cow_detachments() as i64)),
         "liveObjects" => Ok(PhpValue::Int(crate::vm::memory::live_objects() as i64)),
         "stats" => {
@@ -5101,7 +5127,6 @@ pub fn to_int_loose(v: &PhpValue) -> Option<i64> {
         PhpValue::Int(n) => Some(*n as i64),
         PhpValue::Bool(b) => Some(if *b { 1 } else { 0 }),
         PhpValue::Float(f) => Some(*f as i64),
-        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => Some(value.to_i64().unwrap_or(0)),
         PhpValue::String(s) => {
             let trimmed = s.trim();
             trimmed.parse::<i64>().ok().or_else(|| trimmed.parse::<f64>().ok().map(|f| f as i64))
@@ -5228,11 +5253,9 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
 
 pub fn to_float_loose(v: &PhpValue) -> Option<f64> {
     match v {
-        PhpValue::Float(f) => Some(*f as f64),
+        PhpValue::Float(f) => Some(*f),
         PhpValue::Int(n) => Some(*n as f64),
         PhpValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        PhpValue::Float64(f) => Some(*f),
-        PhpValue::Decimal(d) => Some(d.to_f64()),
         PhpValue::String(s) => s.trim().parse::<f64>().ok(),
         PhpValue::Null => Some(0.0),
         _ => None,
@@ -5298,31 +5321,27 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
                 _ => Ok(PhpValue::Bool(false)),
             }
         }
-        "f64" => {
+        "f64" | "f32" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float64((val) as f64))
-        }
-        "f32" => {
-            let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float((val) as f32))
+            Ok(PhpValue::float(val))
         }
         "round" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
             let precision = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0) as i32;
             let factor = 10f64.powi(precision);
-            Ok(PhpValue::Float(((val * factor).round() / factor) as f32))
+            Ok(PhpValue::float((val * factor).round() / factor))
         }
         "floor" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float(val.floor() as f32))
+            Ok(PhpValue::float(val.floor()))
         }
         "ceil" | "ciel" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float(val.ceil() as f32))
+            Ok(PhpValue::float(val.ceil()))
         }
         "abs" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float(val.abs() as f32))
+            Ok(PhpValue::float(val.abs()))
         }
         "format" => {
             let val = args.first().and_then(|v| v.to_f64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
@@ -5347,7 +5366,7 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
                 });
             }
             let min_val = nums.into_iter().min_by(|a, b| a.total_cmp(b)).unwrap();
-            Ok(PhpValue::Float(min_val as f32))
+            Ok(PhpValue::float(min_val))
         }
         "max" => {
             let nums: Vec<f64> = if args.len() == 1 && (matches!(args[0], PhpValue::List(_) | PhpValue::Dict(_) | PhpValue::Array(_) | PhpValue::HashMap(_) | PhpValue::Set(_))) {
@@ -5361,7 +5380,7 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
                 });
             }
             let max_val = nums.into_iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-            Ok(PhpValue::Float(max_val as f32))
+            Ok(PhpValue::float(max_val))
         }
         "random" => {
             let min_v = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);
@@ -5372,7 +5391,7 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
                 });
             }
             if (min_v - max_v).abs() < f64::EPSILON {
-                return Ok(PhpValue::Float(min_v as f32));
+                return Ok(PhpValue::float(min_v));
             }
             let bytes = crate::vm::crypto::random_bytes(8).map_err(|e| RuntimeErrorKind::Custom {
                 message: format!("Float::random failed: {}", e),
@@ -5380,71 +5399,82 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
             let u = u64::from_ne_bytes(bytes.try_into().unwrap_or([0; 8]));
             let factor = (u as f64) / (u64::MAX as f64);
             let res = min_v + factor * (max_v - min_v);
-            Ok(PhpValue::Float(res as f32))
+            Ok(PhpValue::float(res))
         }
         "parse" => {
             let s = get_arg_str(args, 0, "Float::parse")?;
             let val = s.trim().parse::<f64>().unwrap_or(0.0);
-            Ok(PhpValue::Float(val as f32))
+            Ok(PhpValue::float(val))
         }
         "add" => {
-            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let sum = a.add(&b);
             if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let sum = a.add(&b);
                 Ok(PhpValue::string(sum.to_string()))
             } else {
-                Ok(PhpValue::Float(sum.to_f32()))
+                let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                Ok(PhpValue::float(a + b))
             }
         }
         "sub" | "subtract" => {
-            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let diff = a.sub(&b);
             if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let diff = a.sub(&b);
                 Ok(PhpValue::string(diff.to_string()))
             } else {
-                Ok(PhpValue::Float(diff.to_f32()))
+                let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                Ok(PhpValue::float(a - b))
             }
         }
         "mul" | "multiply" => {
-            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
-            let prod = a.mul(&b);
             if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(|| crate::vm::decimal::Decimal::from_i64(1));
+                let prod = a.mul(&b);
                 Ok(PhpValue::string(prod.to_string()))
             } else {
-                Ok(PhpValue::Float(prod.to_f32()))
+                let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(1.0);
+                Ok(PhpValue::float(a * b))
             }
         }
         "div" | "divide" => {
-            let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
-            if b.is_zero() {
-                return Err(RuntimeErrorKind::DivisionByZero);
-            }
-            let scale = args.get(2).and_then(|v| v.to_i64()).map(|s| s.max(0) as usize);
-            let quot = a.div(&b, scale).map_err(|_| RuntimeErrorKind::DivisionByZero)?;
             if args.iter().all(|v| matches!(v, PhpValue::String(_))) {
+                let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                let b = crate::vm::decimal::Decimal::from_php_value(args.get(1).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
+                if b.is_zero() {
+                    return Err(RuntimeErrorKind::DivisionByZero);
+                }
+                let scale = args.get(2).and_then(|v| v.to_i64()).map(|s| s.max(0) as usize);
+                let quot = a.div(&b, scale).map_err(|_| RuntimeErrorKind::DivisionByZero)?;
                 Ok(PhpValue::string(quot.to_string()))
             } else {
-                Ok(PhpValue::Float(quot.to_f32()))
+                let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
+                if b == 0.0 {
+                    return Err(RuntimeErrorKind::DivisionByZero);
+                }
+                Ok(PhpValue::float(a / b))
             }
         }
         "bAdd" => {
             let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
             let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float64((a + b) as f64))
+            Ok(PhpValue::float(a + b))
         }
         "bSub" => {
             let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
             let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float64((a - b) as f64))
+            Ok(PhpValue::float(a - b))
         }
         "bMul" => {
             let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
             let b = args.get(1).and_then(|v| v.to_f64()).unwrap_or(0.0);
-            Ok(PhpValue::Float64((a * b) as f64))
+            Ok(PhpValue::float(a * b))
         }
         "bDiv" => {
             let a = args.get(0).and_then(|v| v.to_f64()).unwrap_or(0.0);
@@ -5452,7 +5482,7 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
             if b == 0.0 {
                 return Err(RuntimeErrorKind::DivisionByZero);
             }
-            Ok(PhpValue::Float64((a / b) as f64))
+            Ok(PhpValue::float(a / b))
         }
         "bccomp" => {
             let a = crate::vm::decimal::Decimal::from_php_value(args.get(0).unwrap_or(&PhpValue::Null)).unwrap_or_else(crate::vm::decimal::Decimal::zero);
@@ -5639,9 +5669,9 @@ fn cast_request_value(val: &PhpValue, target_type: &str) -> PhpValue {
         "float" | "double" | "f32" | "f64" => {
             let trimmed = s.trim();
             if let Ok(f) = trimmed.parse::<f64>() {
-                PhpValue::Float(f as f32)
+                PhpValue::float(f)
             } else {
-                PhpValue::Float(val.to_f32().unwrap_or(0.0))
+                PhpValue::float(val.to_f64().unwrap_or(0.0))
             }
         }
         "bool" | "boolean" => {
@@ -6983,13 +7013,13 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             match val {
-                PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => dispatch_float("abs", args),
+                PhpValue::Float(_) => dispatch_float("abs", args),
                 _ => dispatch_int("abs", args),
             }
         }
         "min" => {
-            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)))
-                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_))));
+            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_)))
+                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_))));
             if is_any_float {
                 dispatch_float("min", args)
             } else {
@@ -6997,8 +7027,8 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         }
         "max" => {
-            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)))
-                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_))));
+            let is_any_float = args.iter().any(|v| matches!(v, PhpValue::Float(_)))
+                || (args.len() == 1 && extract_array_elements(&args[0]).iter().any(|v| matches!(v, PhpValue::Float(_))));
             if is_any_float {
                 dispatch_float("max", args)
             } else {
@@ -7827,7 +7857,6 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
         PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
         PhpValue::Int(n) => n.to_string(),
         PhpValue::Float(fl) => fl.to_string(),
-        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
         PhpValue::String(s) => {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
@@ -7968,7 +7997,6 @@ pub fn php_value_to_json_canonical(val: &PhpValue) -> String {
         PhpValue::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
         PhpValue::Int(n) => n.to_string(),
         PhpValue::Float(fl) => fl.to_string(),
-        ref value @ (PhpValue::Float64(_) | PhpValue::Decimal(_)) => value.to_string(),
         PhpValue::String(s) => {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
@@ -8142,11 +8170,11 @@ fn parse_raw_json(chars: &[char], i: &mut usize) -> Result<PhpValue, String> {
             }
             let num_str: String = chars[start..*i].iter().collect();
             if is_float {
-                let f: f32 = num_str.parse().unwrap_or(0.0);
-                Ok(PhpValue::Float(f))
+                let f: f64 = num_str.parse().unwrap_or(0.0);
+                Ok(PhpValue::float(f))
             } else {
-                let n: i32 = num_str.parse().unwrap_or(0);
-                Ok(PhpValue::Int((n) as i64))
+                let n: i64 = num_str.parse().unwrap_or(0);
+                Ok(PhpValue::Int(n))
             }
         }
         _ => Err("Invalid JSON character".to_string()),
@@ -8442,14 +8470,12 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
         "bool" | "boolean" => Ok(PhpValue::Bool(matches!(val, PhpValue::Bool(_)))),
         "float" | "double" | "real" => Ok(PhpValue::Bool(matches!(
             val,
-            PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_)
+            PhpValue::Float(_)
         ))),
         "numeric" => {
             let res = match val {
                 PhpValue::Int(_) => true,
                 PhpValue::Float(f) => !f.is_nan() && !f.is_infinite(),
-                PhpValue::Float64(f) => !f.is_nan() && !f.is_infinite(),
-                PhpValue::Decimal(_) => true,
                 PhpValue::String(s) => match s {
                     crate::vm::value::StrValue::Utf8 { s, .. } => is_numeric_str(s),
                     crate::vm::value::StrValue::Bytes(b) => match std::str::from_utf8(b) {
@@ -8466,8 +8492,6 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
                 val,
                 PhpValue::Int(_)
                     | PhpValue::Float(_)
-
-                    | PhpValue::Float64(_) | PhpValue::Decimal(_)
                     | PhpValue::Bool(_)
                     | PhpValue::String(_)
             );
@@ -8535,7 +8559,7 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Null => "null".to_string(),
                 PhpValue::Bool(_) => "bool".to_string(),
                 PhpValue::Int(_) => "int".to_string(),
-                PhpValue::Float(_) | PhpValue::Float64(_) | PhpValue::Decimal(_) => "float".to_string(),
+                PhpValue::Float(_) => "float".to_string(),
                 PhpValue::String(s) => match s {
                     crate::vm::value::StrValue::Utf8 { .. } => "string".to_string(),
                     crate::vm::value::StrValue::Bytes(_) => "bytes".to_string(),

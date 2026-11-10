@@ -55,7 +55,7 @@ fn test_set_uniqueness_and_duplicate_elimination() {
 
     let source = r#"
         // 1. Duplicate elimination on initial construction
-        $set = Arr::set([10, 20, 20, 30, 10, 'apple', 'apple', 'banana']);
+        $set = Arr::set([10, 20, 20, 30, 10, 50, 50, 60]);
         $initialCount = $set->count();
 
         // 2. Append duplicate via bracket push syntax
@@ -63,12 +63,12 @@ fn test_set_uniqueness_and_duplicate_elimination() {
         $countAfterPush = $set->count();
 
         // 3. Append duplicate via ->add() method
-        $set->add('apple');
+        $set->add(50);
         $countAfterAddDuplicate = $set->count();
 
         // 4. Add unique new elements
         $set[] = 40;
-        $set->add('cherry');
+        $set->add(70);
         $finalCount = $set->count();
 
         return [$initialCount, $countAfterPush, $countAfterAddDuplicate, $finalCount];
@@ -482,3 +482,78 @@ fn test_set_json_serialization() {
     let res = run_source(source).expect("JSON serialization of Set should succeed");
     assert_eq!(res, PhpValue::string("[42]"));
 }
+
+#[test]
+fn test_set_strict_homogeneity() {
+    clear_runtime_closure_macros();
+
+    // 1. Initial set literal with mixed elements
+    let source_init_mixed = r#"
+        return Arr::set([1, 2, "three"]);
+    "#;
+    let err = run_source(source_init_mixed).expect_err("Mixed set literal must fail");
+    assert!(
+        err.to_string().contains("All elements in a set must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 2. Initial Arr::set with mixed elements
+    let source_facade_mixed = r#"
+        return Arr::set([10, "twenty"]);
+    "#;
+    let err = run_source(source_facade_mixed).expect_err("Mixed Arr::set must fail");
+    assert!(
+        err.to_string().contains("All elements in a set must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 3. Bracket push with mismatching type
+    let source_bracket_push = r#"
+        $s = Arr::set([1, 2]);
+        $s[] = "mismatch";
+    "#;
+    let err = run_source(source_bracket_push).expect_err("Bracket push mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a set must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 4. Fluent add with mismatching type
+    let source_fluent_add = r#"
+        $s = Arr::set(["alpha", "beta"]);
+        $s->add(99);
+    "#;
+    let err = run_source(source_fluent_add).expect_err("Fluent add mismatch must fail");
+    assert!(
+        err.to_string().contains("All elements in a set must have the same type, found string and int"),
+        "Unexpected error: {:?}",
+        err
+    );
+
+    // 5. Dynamic add establishing type on empty set
+    let source_empty_dynamic = r#"
+        $s = Arr::set();
+        $s->add(10);
+        $s->add(20);
+        return $s->count();
+    "#;
+    let res = run_source(source_empty_dynamic).expect("Dynamic add on empty set must succeed");
+    assert_eq!(res, PhpValue::Int(2));
+
+    // 6. Dynamic add mismatching established type
+    let source_empty_mismatch = r#"
+        $s = Arr::set();
+        $s->add(10);
+        $s->add("mismatch");
+    "#;
+    let err = run_source(source_empty_mismatch).expect_err("Dynamic add mismatch on set must fail");
+    assert!(
+        err.to_string().contains("All elements in a set must have the same type, found int and string"),
+        "Unexpected error: {:?}",
+        err
+    );
+}
+
