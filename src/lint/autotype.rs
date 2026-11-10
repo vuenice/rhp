@@ -464,6 +464,20 @@ pub fn infer_expression_type_name(
                         _ => Some("string".to_string()),
                     },
                     "Html" => Some("string".to_string()),
+                    "Duration" | "CarbonInterval" => match method.name {
+                        "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
+                            Some("string".to_string())
+                        }
+                        "total" | "totalYears" | "totalMonths" | "totalWeeks" | "totalDays" | "totalHours"
+                        | "totalMinutes" | "totalSeconds" | "totalMilliseconds" | "totalMicroseconds" => {
+                            Some("float".to_string())
+                        }
+                        "compare" => Some("int".to_string()),
+                        "eq" | "equalTo" | "gt" | "lt" | "gte" | "lte" | "isEmpty" | "isNegative" | "isPositive" => {
+                            Some("bool".to_string())
+                        }
+                        _ => Some("Duration".to_string()),
+                    },
                     "Time" | "Carbon" => match method.name {
                         "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                         | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"

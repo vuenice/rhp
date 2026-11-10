@@ -3455,6 +3455,19 @@ impl VM {
                                 span,
                             ));
                         }
+                    } else if resolved_cls == "Duration" || resolved_cls == "\\Duration"
+                        || resolved_cls == "CarbonInterval" || resolved_cls == "\\CarbonInterval" {
+                        if let Some(val) = crate::vm::duration::get_duration_constant(&c_name) {
+                            self.registers[base_reg + dst.index()] = val;
+                        } else {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::UndefinedClassConstant {
+                                    class: resolved_cls,
+                                    constant: c_name,
+                                },
+                                span,
+                            ));
+                        }
                     } else if let Some(val) = self.class_constants.get(&(resolved_cls.clone(), c_name.clone())) {
                         self.registers[base_reg + dst.index()] = val.clone();
                     } else {
@@ -8388,6 +8401,9 @@ impl VM {
         if class_name == "Time" || class_name == "Carbon" {
             return crate::vm::time::exec_time_instance_method(receiver, method, args, span);
         }
+        if class_name == "Duration" || class_name == "CarbonInterval" {
+            return crate::vm::duration::exec_duration_instance_method(receiver, method, args, span);
+        }
 
         if class_name == "Application" || class_name == "Container"
             || class_name == "Illuminate\\Foundation\\Application"
@@ -10263,6 +10279,11 @@ impl VM {
         let actual_clean = actual_cls.strip_prefix('\\').unwrap_or(actual_cls);
         let target_clean = target_cls.strip_prefix('\\').unwrap_or(target_cls);
         if actual_clean == target_clean || target_clean == "object" {
+            return true;
+        }
+        if (actual_clean == "Duration" && target_clean == "CarbonInterval")
+            || (actual_clean == "CarbonInterval" && target_clean == "Duration")
+        {
             return true;
         }
         if let Some(ref h) = self.type_hierarchy {

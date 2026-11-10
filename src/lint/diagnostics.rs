@@ -429,6 +429,14 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::String,
                     },
                     "Html" => RhpType::String,
+                    "Duration" | "CarbonInterval" => match method.name {
+                        "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => RhpType::String,
+                        "total" | "totalYears" | "totalMonths" | "totalWeeks" | "totalDays" | "totalHours"
+                        | "totalMinutes" | "totalSeconds" | "totalMilliseconds" | "totalMicroseconds" => RhpType::Float,
+                        "compare" => RhpType::Int,
+                        "eq" | "equalTo" | "gt" | "lt" | "gte" | "lte" | "isEmpty" | "isNegative" | "isPositive" => RhpType::Bool,
+                        _ => RhpType::Class("Duration".to_string()),
+                    },
                     "Time" | "Carbon" => match method.name {
                         "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                         | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"

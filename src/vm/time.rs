@@ -836,6 +836,81 @@ impl CarbonDate {
         self.add_microseconds(-micros)
     }
 
+    /// Add a `Duration` / CarbonInterval. Calendar units use `add_years` / `add_months`;
+    /// weeks are 7 days. The interval's `invert` flag subtracts.
+    #[must_use]
+    pub fn add_duration(&self, interval: &crate::vm::duration::DurationInterval) -> Self {
+        let mut cur = self.clone();
+        cur = cur.add_years(interval.signed_years() as i32);
+        cur = cur.add_months(interval.signed_months() as i32);
+        cur = cur.add_days(interval.signed_weeks() * 7 + interval.signed_days());
+        cur = cur.add_hours(interval.signed_hours());
+        cur = cur.add_minutes(interval.signed_minutes());
+        cur = cur.add_seconds(interval.signed_seconds());
+        cur = cur.add_microseconds(interval.signed_microseconds());
+        cur
+    }
+
+    /// Calendar difference from `self` to `other`, as a `Duration`.
+    pub fn diff_interval(&self, other: &CarbonDate) -> crate::vm::duration::DurationInterval {
+        let invert = self.dt > other.dt;
+        let (start, end) = if invert { (other, self) } else { (self, other) };
+        let mut cursor = start.clone();
+        let mut years = 0i64;
+        loop {
+            let next = cursor.add_years(1);
+            if next.dt <= end.dt && next.dt > cursor.dt {
+                cursor = next;
+                years += 1;
+            } else {
+                break;
+            }
+        }
+        let mut months = 0i64;
+        loop {
+            let next = cursor.add_months(1);
+            if next.dt <= end.dt && next.dt > cursor.dt {
+                cursor = next;
+                months += 1;
+            } else {
+                break;
+            }
+        }
+        let mut days = 0i64;
+        loop {
+            let next = cursor.add_days(1);
+            if next.dt <= end.dt && next.dt > cursor.dt {
+                cursor = next;
+                days += 1;
+            } else {
+                break;
+            }
+        }
+        let mut seconds = end.timestamp() - cursor.timestamp();
+        let mut micros = end.micro() as i64 - cursor.micro() as i64;
+        if micros < 0 {
+            micros += 1_000_000;
+            seconds -= 1;
+        }
+        if seconds < 0 {
+            seconds = 0;
+        }
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        let seconds = seconds % 60;
+        crate::vm::duration::DurationInterval {
+            years,
+            months,
+            weeks: 0,
+            days,
+            hours,
+            minutes,
+            seconds,
+            microseconds: micros,
+            invert,
+        }
+    }
+
     #[must_use]
     pub fn start_of_day(&self) -> Self {
         let naive_date = self.dt.date_naive();
@@ -1980,6 +2055,23 @@ pub fn exec_time_instance_method(
         }
 
         // --- Modifiers & Fluent Arithmetic (Mutates and returns $this) ---
+        "add" => {
+            let interval = duration_arg(args, 0, span)?;
+            current = current.add_duration(&interval);
+            current.sync_properties(&mut rc.borrow_mut());
+            Ok(receiver.clone())
+        }
+        "sub" => {
+            let interval = duration_arg(args, 0, span)?;
+            current = current.add_duration(&interval.invert_interval());
+            current.sync_properties(&mut rc.borrow_mut());
+            Ok(receiver.clone())
+        }
+        "diff" | "diffAsDuration" | "diffAsInterval" => {
+            let other = parse_arg_date(args, 0, span)?;
+            let interval = current.diff_interval(&other);
+            Ok(PhpValue::object(interval.to_vm_object()))
+        }
         "addDay" | "addDays" => {
             let n = args.first().and_then(|v| v.to_i64()).unwrap_or(1);
             current = current.add_days(n);
@@ -2335,6 +2427,35 @@ pub fn exec_carbon_instance_method(
     span: Span,
 ) -> Result<PhpValue, RuntimeError> {
     exec_time_instance_method(receiver, method, args, span)
+}
+
+fn duration_arg(
+    args: &[PhpValue],
+    index: usize,
+    span: Span,
+) -> Result<crate::vm::duration::DurationInterval, RuntimeError> {
+    let arg = args.get(index).ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::Custom {
+                message: format!("Missing Duration argument at index {index}"),
+            },
+            span,
+        )
+    })?;
+    if let Some(interval) = crate::vm::duration::interval_from_value(arg) {
+        return Ok(interval);
+    }
+    if let PhpValue::String(s) = arg {
+        return crate::vm::duration::from_string(s).map_err(|e| {
+            RuntimeError::new(RuntimeErrorKind::Custom { message: e }, span)
+        });
+    }
+    Err(RuntimeError::new(
+        RuntimeErrorKind::Custom {
+            message: "Expected a Duration instance".to_string(),
+        },
+        span,
+    ))
 }
 
 fn parse_arg_date(args: &[PhpValue], index: usize, span: Span) -> Result<CarbonDate, RuntimeError> {
