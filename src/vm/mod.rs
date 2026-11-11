@@ -14,6 +14,7 @@
 pub mod arena;
 pub mod time;
 pub use time as carbon;
+pub mod duration;
 pub mod crypto;
 pub mod csv;
 pub mod decimal;

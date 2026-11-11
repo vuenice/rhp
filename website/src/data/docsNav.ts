@@ -85,6 +85,12 @@ export const docsNavigation: DocNavSection[] = [
       item("Changelog", "changelog"),
       item("Frequently Asked Questions", "faq"),
     ]
+  },
+  {
+    title: "Package",
+    items: [
+      item("Package", "package"),
+    ]
   }
 ];
 

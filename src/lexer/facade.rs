@@ -216,6 +216,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Date and time manipulation alias facade for Time",
     ),
     FacadeInfo::native(
+        "Duration",
+        "Static interval helper with CarbonInterval behavior (hours, fromString, cascade, forHumans, spec, total, add, sub, times)",
+    ),
+    FacadeInfo::native(
+        "CarbonInterval",
+        "Interval alias facade for Duration",
+    ),
+    FacadeInfo::native(
         "Ip",
         "Static IPv4 address conversion and utility facade (toLong, fromLong)",
     ),

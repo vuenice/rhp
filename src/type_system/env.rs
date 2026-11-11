@@ -827,6 +827,22 @@ pub fn resolve_facade_static_call(
             "randomBytes" | "random_bytes" | "random" => Ok(RhpType::String),
             _ => Ok(RhpType::Mixed),
         },
+        "Duration" | "CarbonInterval" => match method {
+            "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
+                Ok(RhpType::String)
+            }
+            "total" | "totalYears" | "totalMonths" | "totalWeeks" | "totalDays" | "totalHours"
+            | "totalMinutes" | "totalSeconds" | "totalMilliseconds" | "totalMicroseconds" => {
+                Ok(RhpType::Float)
+            }
+            "compare" => Ok(RhpType::Int),
+            "eq" | "equalTo" | "ne" | "notEqualTo" | "gt" | "greaterThan"
+            | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
+            | "lessThanOrEqualTo" | "between" | "betweenIncluded" | "betweenExcluded"
+            | "isEmpty" | "isNegative" | "isPositive" => Ok(RhpType::Bool),
+            "toArray" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            _ => Ok(RhpType::Class("Duration".to_string())),
+        },
         "Time" | "Carbon" => match method {
             "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
             | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
@@ -1139,6 +1155,22 @@ pub fn resolve_builtin_fluent_method(
                 "isValid" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),
             },
+            "Duration" | "CarbonInterval" => match method {
+                "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
+                    Some(RhpType::String)
+                }
+                "total" | "totalYears" | "totalMonths" | "totalWeeks" | "totalDays" | "totalHours"
+                | "totalMinutes" | "totalSeconds" | "totalMilliseconds" | "totalMicroseconds" => {
+                    Some(RhpType::Float)
+                }
+                "compare" | "get" => Some(RhpType::Int),
+                "eq" | "equalTo" | "ne" | "notEqualTo" | "gt" | "greaterThan"
+                | "gte" | "greaterThanOrEqualTo" | "lt" | "lessThan" | "lte"
+                | "lessThanOrEqualTo" | "between" | "betweenIncluded" | "betweenExcluded"
+                | "isEmpty" | "isNegative" | "isPositive" => Some(RhpType::Bool),
+                "toArray" => Some(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+                _ => Some(RhpType::Class("Duration".to_string())),
+            },
             "Time" | "Carbon" => match method {
                 "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                 | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
@@ -1179,8 +1211,12 @@ pub fn resolve_builtin_fluent_method(
                 | "startOfQuarter" | "endOfQuarter" | "startOfHour" | "endOfHour"
                 | "startOfMinute" | "endOfMinute" | "setYear" | "setMonth" | "setDay"
                 | "setHour" | "setMinute" | "setSecond" | "setTime" | "setDate"
-                | "setTimezone" | "next" | "previous" | "min" | "max" => {
+                | "setTimezone" | "next" | "previous" | "min" | "max"
+                | "add" | "sub" => {
                     Some(RhpType::Class("Time".to_string()))
+                }
+                "diff" | "diffAsDuration" | "diffAsInterval" => {
+                    Some(RhpType::Class("Duration".to_string()))
                 }
                 _ => Some(RhpType::Dynamic),
             },

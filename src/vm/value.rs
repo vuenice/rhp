@@ -1189,7 +1189,7 @@ impl PhpValue {
                 if let Some(ref t) = b.throwable {
                     return t.to_string_representation(&b.class_name);
                 }
-                if b.class_name == "Time" || b.class_name == "Carbon" {
+                if b.class_name == "Time" || b.class_name == "Carbon" || b.class_name == "Duration" {
                     if let Some(formatted) = b.get_property("formatted") {
                         return formatted.to_php_string();
                     }
