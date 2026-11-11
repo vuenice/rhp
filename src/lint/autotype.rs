@@ -15,13 +15,19 @@ use crate::type_system::{
 /// Automatically adds types before untyped variables wherever statically determinable.
 ///
 /// Implements requirements:
-/// - Recognizes `list`, `dict`, or `hashMap` when array is defined at the same time of declaration and not empty:
+/// - Recognizes `list`, `dict`, `set`, or `hashMap` from an untyped array:
 ///   - Sequential integer indexed elements: `list $arr = [1, 2, 3];`
 ///   - String-keyed key-value pairs: `dict $arr = ['name' => 'Alice'];`
 ///   - Complex / non-string keyed pairs: `hashMap $arr = [1 => 'first'];`
-///   - Empty array: `array $arr = [];`
+///   - `Arr::set(...)`: `set`
+///   - Empty array with no write: `array $arr = [];`
+///   - Empty array, first write `$arr[] =` or `$arr[0] =`: `list`
+///   - Empty array, first write `$arr['name'] =`: `dict`
+///   - Empty array, first write `$arr[999] =` or another non-sequential key: `hashMap`
 /// - Infers types for variables defined at declaration time (`$x = '';` -> `string $x = '';`, `$y = 1;` -> `int $y = 1;`)
 /// - Infers types for function/method parameters with default values (`function foo($x = 1)` -> `function foo(int $x = 1)`)
+/// - Infers return types from returned values (`function foo() { return [1]; }` -> `function foo(): list`)
+/// - A function with no return value becomes `: void`
 /// - Infers types for class properties with defaults (`public $user = ['a' => 1];` -> `public dict $user = ['a' => 1];`)
 /// - If types are already written, DOES NOT change them (type mismatches will be reported as errors in typecheck)
 /// - Leaves untyped when ambiguous, dynamic, or reassigned to conflicting types ("whenever not possible no issue")
@@ -78,7 +84,8 @@ fn collect_nested_declarations(
         match &stmt.kind {
             StmtKind::FunctionDecl(func) => {
                 // Infer types for untyped parameters with default values
-                collect_param_edits(&func.params, type_info, edits, source);
+                collect_param_edits(&func.params, func.body.as_deref(), type_info, edits, source);
+                collect_return_type_edit(func, type_info, edits, source);
 
                 if let Some(body) = &func.body {
                     let mut pre_declared = HashSet::new();
@@ -125,7 +132,14 @@ fn collect_nested_declarations(
                         }
                         ClassMemberKind::Method(method) => {
                             // Infer types for untyped parameters with default values
-                            collect_param_edits(&method.function.params, type_info, edits, source);
+                            collect_param_edits(
+                                &method.function.params,
+                                method.function.body.as_deref(),
+                                type_info,
+                                edits,
+                                source,
+                            );
+                            collect_return_type_edit(&method.function, type_info, edits, source);
 
                             if let Some(body) = &method.function.body {
                                 let mut pre_declared = HashSet::new();
@@ -193,6 +207,7 @@ fn collect_nested_declarations(
 /// If already typed, DOES NOT touch them.
 fn collect_param_edits(
     params: &[Param<'_>],
+    body: Option<&[Stmt<'_>]>,
     type_info: Option<&TypeCheckResult>,
     edits: &mut Vec<(usize, String)>,
     source: &str,
@@ -206,6 +221,7 @@ fn collect_param_edits(
         // Defined at declaration time with a default value: infer the parameter type
         if let Some(ref def_val) = param.default_value {
             if let Some(ty_str) = infer_expression_type_name(def_val, type_info, &HashMap::new()) {
+                let ty_str = refine_untyped_array(body.unwrap_or(&[]), param.name.name, &ty_str);
                 let offset = param.name.span.start;
                 if should_insert_type_before(offset, &ty_str, source) {
                     edits.push((offset, format!("{} ", ty_str)));
@@ -223,6 +239,199 @@ fn collect_nested_stmt(
 ) {
     if let StmtKind::Block(stmts) = &stmt.kind {
         collect_nested_declarations(stmts, type_info, edits, source);
+    }
+}
+
+/// Insert `: list` / `: dict` / `: array` / `: void` when the function has no return type.
+fn collect_return_type_edit(
+    func: &crate::ast::stmt::FunctionDecl<'_>,
+    type_info: Option<&TypeCheckResult>,
+    edits: &mut Vec<(usize, String)>,
+    source: &str,
+) {
+    if func.return_type.is_some() || matches!(func.name.name, "__construct" | "__destruct") {
+        return;
+    }
+    let Some(body) = func.body.as_deref() else {
+        return;
+    };
+    let Some(offset) = closing_paren_offset(source, func.name.span.end) else {
+        return;
+    };
+    let mut known = HashMap::new();
+    for param in &func.params {
+        if let Some(ref hint) = param.type_hint {
+            if let Some(simple) = hint.simple_name() {
+                known.insert(param.name.name.to_string(), simple.to_string());
+            }
+        } else if let Some(ref def) = param.default_value {
+            if let Some(t) = infer_expression_type_name(def, type_info, &HashMap::new()) {
+                known.insert(param.name.name.to_string(), t);
+            }
+        }
+    }
+    remember_local_types(body, type_info, &mut known);
+    let Some(ty) = infer_function_return_type(body, type_info, &known) else {
+        return;
+    };
+    edits.push((offset, format!(": {ty}")));
+}
+
+fn closing_paren_offset(source: &str, from: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut i = from;
+    let mut depth = 0i32;
+    let mut seen = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => {
+                depth += 1;
+                seen = true;
+            }
+            b')' => {
+                depth -= 1;
+                if seen && depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn remember_local_types(
+    stmts: &[Stmt<'_>],
+    type_info: Option<&TypeCheckResult>,
+    known: &mut HashMap<String, String>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::VarDecl { var, init: Some(init), .. } => {
+                if let Some(t) = infer_expression_type_name(init, type_info, known) {
+                    known.insert(var.name.to_string(), t);
+                }
+            }
+            StmtKind::Expr(expr) => {
+                if let ExprKind::Assign { target, value, .. } = &expr.kind {
+                    if let ExprKind::Variable(var) = &target.kind {
+                        if let Some(t) = infer_expression_type_name(value, type_info, known) {
+                            known.insert(var.name.to_string(), t);
+                        }
+                    }
+                }
+            }
+            StmtKind::Block(body) | StmtKind::Namespace { body: Some(body), .. } => {
+                remember_local_types(body, type_info, known);
+            }
+            StmtKind::If { then_branch, elseif_branches, else_branch, .. } => {
+                remember_local_types(std::slice::from_ref(then_branch.as_ref()), type_info, known);
+                for branch in elseif_branches {
+                    remember_local_types(std::slice::from_ref(&branch.body), type_info, known);
+                }
+                if let Some(else_branch) = else_branch {
+                    remember_local_types(std::slice::from_ref(else_branch.as_ref()), type_info, known);
+                }
+            }
+            StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } | StmtKind::Loop { body } => {
+                remember_local_types(std::slice::from_ref(body.as_ref()), type_info, known);
+            }
+            StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } | StmtKind::ForIn { body, .. } => {
+                remember_local_types(std::slice::from_ref(body.as_ref()), type_info, known);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn infer_function_return_type(
+    body: &[Stmt<'_>],
+    type_info: Option<&TypeCheckResult>,
+    known: &HashMap<String, String>,
+) -> Option<String> {
+    let mut returns: Vec<Option<String>> = Vec::new();
+    collect_return_types(body, type_info, known, &mut returns);
+    if returns.is_empty() {
+        return Some("void".to_string());
+    }
+    if !always_returns(body) {
+        return None;
+    }
+    let first = returns.first()?.clone()?;
+    if returns.iter().all(|ty| ty.as_deref() == Some(first.as_str())) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+fn collect_return_types(
+    stmts: &[Stmt<'_>],
+    type_info: Option<&TypeCheckResult>,
+    known: &HashMap<String, String>,
+    out: &mut Vec<Option<String>>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Return(expr) => {
+                out.push(expr.as_ref().and_then(|e| infer_expression_type_name(e, type_info, known)));
+            }
+            StmtKind::FunctionDecl(_) | StmtKind::ClassDecl(_) => {}
+            StmtKind::Block(body) | StmtKind::Namespace { body: Some(body), .. } => {
+                collect_return_types(body, type_info, known, out);
+            }
+            StmtKind::If { then_branch, elseif_branches, else_branch, .. } => {
+                collect_return_types(std::slice::from_ref(then_branch.as_ref()), type_info, known, out);
+                for branch in elseif_branches {
+                    collect_return_types(std::slice::from_ref(&branch.body), type_info, known, out);
+                }
+                if let Some(else_branch) = else_branch {
+                    collect_return_types(std::slice::from_ref(else_branch.as_ref()), type_info, known, out);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::ForIn { body, .. }
+            | StmtKind::Loop { body } => {
+                collect_return_types(std::slice::from_ref(body.as_ref()), type_info, known, out);
+            }
+            StmtKind::TryCatch { try_block, catches, finally_block } => {
+                collect_return_types(try_block, type_info, known, out);
+                for catch in catches {
+                    collect_return_types(&catch.body, type_info, known, out);
+                }
+                if let Some(finally_block) = finally_block {
+                    collect_return_types(finally_block, type_info, known, out);
+                }
+            }
+            StmtKind::Switch { cases, .. } => {
+                for case in cases {
+                    collect_return_types(&case.body, type_info, known, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn always_returns(stmts: &[Stmt<'_>]) -> bool {
+    stmts.iter().any(stmt_always_returns)
+}
+
+fn stmt_always_returns(stmt: &Stmt<'_>) -> bool {
+    match &stmt.kind {
+        StmtKind::Return(_) => true,
+        StmtKind::Block(body) => always_returns(body),
+        StmtKind::If { then_branch, elseif_branches, else_branch, .. } => {
+            let else_ok = else_branch.as_ref().is_some_and(|b| stmt_always_returns(b));
+            stmt_always_returns(then_branch)
+                && else_ok
+                && elseif_branches.iter().all(|b| stmt_always_returns(&b.body))
+        }
+        _ => false,
     }
 }
 
@@ -312,16 +521,17 @@ fn collect_scope_edits(
             continue;
         }
 
-        let initial_type = match &first.inferred_type {
-            Some(t) => t,
+        let initial_owned = match &first.inferred_type {
+            Some(t) => refine_untyped_array(stmts, &var_name, t),
             None => continue, // Cannot infer type
         };
+        let initial_type = initial_owned.as_str();
 
         // Check if any subsequent assignments conflict with the initial type
         let mut has_type_conflict = false;
         for next_assign in &var_assigns[1..] {
             if let Some(next_ty) = &next_assign.inferred_type {
-                if next_ty != initial_type {
+                if next_ty.as_str() != initial_type {
                     has_type_conflict = true;
                     break;
                 }
@@ -365,6 +575,204 @@ fn should_insert_type_before(offset: usize, ty_str: &str, source: &str) -> bool 
     }
 
     true
+}
+
+/// A write that reveals what an empty untyped array should become.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmptyWrite {
+    /// `$items[] = $val`
+    Append,
+    /// `$items[0] = $val`
+    IndexZero,
+    /// `$items['name'] = $val`
+    StringKey,
+    /// `$items[999] = $val`. A list can absorb this only after it is already a list.
+    GappedInt,
+    /// Bool, float, null, or another non-string literal key. Always a hash map.
+    Complex,
+    /// Key is not a literal, so the collection cannot be named.
+    Dynamic,
+}
+
+/// Apply the empty-array and set rules on top of a type inferred from the initializer.
+fn refine_untyped_array(stmts: &[Stmt<'_>], var_name: &str, inferred: &str) -> String {
+    if inferred == "array" {
+        if let Some(promoted) = classify_empty_array_writes(stmts, var_name) {
+            return promoted;
+        }
+    }
+    inferred.to_string()
+}
+
+fn classify_empty_array_writes(stmts: &[Stmt<'_>], var_name: &str) -> Option<String> {
+    let mut writes = Vec::new();
+    collect_empty_writes(stmts, var_name, &mut writes);
+    let first = writes.first().copied()?;
+    let kind = match first {
+        EmptyWrite::Append | EmptyWrite::IndexZero => "list",
+        EmptyWrite::StringKey => "dict",
+        EmptyWrite::GappedInt | EmptyWrite::Complex => "hashMap",
+        EmptyWrite::Dynamic => return None,
+    };
+    let compatible = writes.iter().all(|write| match (kind, write) {
+        ("list", EmptyWrite::Append | EmptyWrite::IndexZero | EmptyWrite::GappedInt) => true,
+        ("dict", EmptyWrite::StringKey | EmptyWrite::Append) => true,
+        ("hashMap", _) => true,
+        _ => false,
+    });
+    if compatible {
+        Some(kind.to_string())
+    } else {
+        None
+    }
+}
+
+fn collect_empty_writes(stmts: &[Stmt<'_>], var_name: &str, out: &mut Vec<EmptyWrite>) {
+    for stmt in stmts {
+        walk_stmt_for_writes(stmt, var_name, out);
+    }
+}
+
+fn walk_stmt_for_writes(stmt: &Stmt<'_>, var_name: &str, out: &mut Vec<EmptyWrite>) {
+    match &stmt.kind {
+        StmtKind::Expr(expr) => walk_expr_for_writes(expr, var_name, out),
+        StmtKind::VarDecl { init, .. } => {
+            if let Some(init) = init {
+                walk_expr_for_writes(init, var_name, out);
+            }
+        }
+        StmtKind::Block(body)
+        | StmtKind::Namespace { body: Some(body), .. }
+        | StmtKind::TryCatch { try_block: body, .. } => {
+            collect_empty_writes(body, var_name, out);
+            if let StmtKind::TryCatch { catches, finally_block, .. } = &stmt.kind {
+                for catch in catches {
+                    collect_empty_writes(&catch.body, var_name, out);
+                }
+                if let Some(finally_block) = finally_block {
+                    collect_empty_writes(finally_block, var_name, out);
+                }
+            }
+        }
+        StmtKind::If { condition, then_branch, elseif_branches, else_branch } => {
+            walk_expr_for_writes(condition, var_name, out);
+            walk_stmt_for_writes(then_branch, var_name, out);
+            for branch in elseif_branches {
+                walk_expr_for_writes(&branch.condition, var_name, out);
+                walk_stmt_for_writes(&branch.body, var_name, out);
+            }
+            if let Some(else_branch) = else_branch {
+                walk_stmt_for_writes(else_branch, var_name, out);
+            }
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            walk_expr_for_writes(condition, var_name, out);
+            walk_stmt_for_writes(body, var_name, out);
+        }
+        StmtKind::For { init, condition, update, body } => {
+            for expr in init.iter().chain(condition).chain(update) {
+                walk_expr_for_writes(expr, var_name, out);
+            }
+            walk_stmt_for_writes(body, var_name, out);
+        }
+        StmtKind::Foreach { expr, body, .. } | StmtKind::ForIn { expr, body, .. } => {
+            walk_expr_for_writes(expr, var_name, out);
+            walk_stmt_for_writes(body, var_name, out);
+        }
+        StmtKind::Loop { body } => walk_stmt_for_writes(body, var_name, out),
+        StmtKind::Switch { condition, cases } => {
+            walk_expr_for_writes(condition, var_name, out);
+            for case in cases {
+            if let Some(test) = &case.value {
+                walk_expr_for_writes(test, var_name, out);
+            }
+                collect_empty_writes(&case.body, var_name, out);
+            }
+        }
+        StmtKind::Return(Some(expr)) | StmtKind::Throw(expr) => walk_expr_for_writes(expr, var_name, out),
+        StmtKind::Unset(exprs) | StmtKind::Echo(exprs) => {
+            for expr in exprs {
+                walk_expr_for_writes(expr, var_name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn walk_expr_for_writes(expr: &Expr<'_>, var_name: &str, out: &mut Vec<EmptyWrite>) {
+    if let ExprKind::Assign { target, value, .. } = &expr.kind {
+        if let Some(write) = write_kind(target, var_name) {
+            out.push(write);
+        }
+        walk_expr_for_writes(value, var_name, out);
+        if let ExprKind::ArrayIndex { array, index } = &target.kind {
+            walk_expr_for_writes(array, var_name, out);
+            if let Some(index) = index {
+                walk_expr_for_writes(index, var_name, out);
+            }
+        }
+        return;
+    }
+    match &expr.kind {
+        ExprKind::ArrayIndex { array, index } => {
+            walk_expr_for_writes(array, var_name, out);
+            if let Some(index) = index {
+                walk_expr_for_writes(index, var_name, out);
+            }
+        }
+        ExprKind::Array(elements) => {
+            for element in elements {
+                if let Some(key) = &element.key {
+                    walk_expr_for_writes(key, var_name, out);
+                }
+                walk_expr_for_writes(&element.value, var_name, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } | ExprKind::Ternary { condition: left, if_false: right, .. } => {
+            walk_expr_for_writes(left, var_name, out);
+            walk_expr_for_writes(right, var_name, out);
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => {
+            walk_expr_for_writes(expr, var_name, out);
+        }
+        ExprKind::Call { callee, args } => {
+            walk_expr_for_writes(callee, var_name, out);
+            for arg in args {
+                walk_expr_for_writes(&arg.value, var_name, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } | ExprKind::StaticCall { target: object, args, .. } => {
+            walk_expr_for_writes(object, var_name, out);
+            for arg in args {
+                walk_expr_for_writes(&arg.value, var_name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn write_kind(target: &Expr<'_>, var_name: &str) -> Option<EmptyWrite> {
+    let ExprKind::ArrayIndex { array, index } = &target.kind else {
+        return None;
+    };
+    let ExprKind::Variable(var) = &array.kind else {
+        return None;
+    };
+    if var.name != var_name {
+        return None;
+    }
+    let Some(index) = index else {
+        return Some(EmptyWrite::Append);
+    };
+    Some(match &index.kind {
+        ExprKind::Literal(Literal::Int { value: 0, .. }) => EmptyWrite::IndexZero,
+        ExprKind::Literal(Literal::Int { .. }) => EmptyWrite::GappedInt,
+        ExprKind::Literal(Literal::String { .. }) | ExprKind::Literal(Literal::InterpolatedString { .. }) => {
+            EmptyWrite::StringKey
+        }
+        ExprKind::Literal(_) => EmptyWrite::Complex,
+        _ => EmptyWrite::Dynamic,
+    })
 }
 
 /// Classify an array literal into `list`, `dict`, or `hashMap` when defined and not empty.

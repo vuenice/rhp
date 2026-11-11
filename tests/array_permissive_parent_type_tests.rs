@@ -127,33 +127,37 @@ fn test_permissive_array_parameter_accepts_all_collection_variants() {
 fn test_strict_type_bounds_vs_dynamic_variables() {
     clear_runtime_closure_macros();
 
-    // 1. Reassigning strict `list $arr` to keyed dict fails static type checking
+    // The written type decides the collection. A literal is only an array.
     let source_list_reassign_dict = r#"
         list $arr = [1, 2, 3];
         $arr = ['name' => 'yogesh'];
+        return $arr;
     "#;
-    let err1 = run_source(source_list_reassign_dict)
-        .expect_err("Assigning Dict to strict list must fail type check");
-    assert!(
-        format!("{:?}", err1).contains("VariableTypeMismatch")
-            || err1.to_string().contains("Cannot assign value of type"),
-        "Unexpected error: {:?}",
-        err1
-    );
+    let list_again = run_source(source_list_reassign_dict)
+        .expect("a list variable stays a list");
+    match list_again {
+        PhpValue::List(items) => {
+            assert_eq!(items.borrow().as_slice(), &[PhpValue::string("yogesh")]);
+        }
+        other => panic!("expected list, got {other:?}"),
+    }
 
-    // 2. Reassigning strict `dict $arr` to sequential list fails static type checking
     let source_dict_reassign_list = r#"
         dict $arr = ['name' => 'yogesh'];
         $arr = [1, 2, 3];
+        return $arr;
     "#;
-    let err2 = run_source(source_dict_reassign_list)
-        .expect_err("Assigning List to strict dict must fail type check");
-    assert!(
-        format!("{:?}", err2).contains("VariableTypeMismatch")
-            || err2.to_string().contains("Cannot assign value of type"),
-        "Unexpected error: {:?}",
-        err2
-    );
+    let dict_again = run_source(source_dict_reassign_list)
+        .expect("a dict variable stays a dict");
+    match dict_again {
+        PhpValue::Dict(entries) => {
+            let entries = entries.borrow();
+            assert_eq!(entries.get("0"), Some(&PhpValue::Int(1)));
+            assert_eq!(entries.get("1"), Some(&PhpValue::Int(2)));
+            assert_eq!(entries.get("2"), Some(&PhpValue::Int(3)));
+        }
+        other => panic!("expected dict, got {other:?}"),
+    }
 
     // 3. Passing Dict to function requiring strict List fails
     let source_strict_list_param = r#"
@@ -165,8 +169,10 @@ fn test_strict_type_bounds_vs_dynamic_variables() {
     "#;
     let err3 = run_source(source_strict_list_param)
         .expect_err("Passing Dict to strict List parameter must fail");
+    let err3_text = format!("{:?}", err3);
     assert!(
-        format!("{:?}", err3).contains("ArgumentTypeMismatch")
+        err3_text.contains("ArgumentTypeMismatch")
+            || err3_text.contains("TypeContractViolation")
             || err3.to_string().contains("Argument #1"),
         "Unexpected error: {:?}",
         err3

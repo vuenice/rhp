@@ -68,6 +68,69 @@ $emptyArray = [];
 }
 
 #[test]
+fn test_autotype_promotes_empty_array_from_first_write() {
+    let code = r#"
+$items = [];
+$items[] = 1;
+
+$named = [];
+$named['name'] = 'Ada';
+
+$sparse = [];
+$sparse[999] = 1;
+
+$at_zero = [];
+$at_zero[0] = 'a';
+
+$untouched = [];
+
+$unique = Arr::set([1, 1, 2]);
+"#;
+
+    let typed = add_variable_types(code);
+    assert!(typed.contains("list $items = [];"), "Got: {}", typed);
+    assert!(typed.contains("dict $named = [];"), "Got: {}", typed);
+    assert!(typed.contains("hashMap $sparse = [];"), "Got: {}", typed);
+    assert!(typed.contains("list $at_zero = [];"), "Got: {}", typed);
+    assert!(typed.contains("array $untouched = [];"), "Got: {}", typed);
+    assert!(typed.contains("set $unique = Arr::set([1, 1, 2]);"), "Got: {}", typed);
+}
+
+#[test]
+fn test_autotype_adds_return_types() {
+    let code = r#"
+function ids() {
+    return [1, 2, 3];
+}
+
+function person() {
+    $row = ['name' => 'Ada'];
+    return $row;
+}
+
+function emptyBag() {
+    return [];
+}
+
+function ping() {
+    $n = 1;
+}
+
+function keep(list $items): list {
+    return $items;
+}
+"#;
+
+    let typed = add_variable_types(code);
+    assert!(typed.contains("function ids(): list"), "Got: {}", typed);
+    assert!(typed.contains("function person(): dict"), "Got: {}", typed);
+    assert!(typed.contains("function emptyBag(): array"), "Got: {}", typed);
+    assert!(typed.contains("function ping(): void"), "Got: {}", typed);
+    assert!(typed.contains("function keep(list $items): list"), "Got: {}", typed);
+    assert!(!typed.contains("): list: list"), "Got: {}", typed);
+}
+
+#[test]
 fn test_autotype_infers_default_parameter_types() {
     // If variables or parameters are defined with default values at declaration time, infer their types
     let code = r#"
@@ -200,7 +263,12 @@ function calculate($a, $b) {
 "#;
 
     let res = lint_source(bad_code, "math.rhp");
-    assert!(!res.issues.is_empty(), "Expected issues for missing parameter and return types");
+    assert!(
+        res.formatted_content.contains("function calculate($a, $b): int"),
+        "return type comes from the linter, got: {}",
+        res.formatted_content
+    );
+    assert!(!res.issues.is_empty(), "Expected issues for missing parameter types");
 
     let mut report = rhp::lint::LintReport::new();
     report.files_scanned = 1;
@@ -211,7 +279,7 @@ function calculate($a, $b) {
     let json_output = report.to_json();
     assert!(json_output.contains("\"status\": \"error\""), "Got: {}", json_output);
     assert!(json_output.contains("\"code\": \"missing-parameter-type\""), "Got: {}", json_output);
-    assert!(json_output.contains("\"code\": \"missing-return-type\""), "Got: {}", json_output);
+    assert!(!json_output.contains("\"code\": \"missing-return-type\""), "Got: {}", json_output);
     assert!(json_output.contains("\"file\": \"math.rhp\""), "Got: {}", json_output);
     assert!(json_output.contains("\"line\":"), "Got: {}", json_output);
     assert!(json_output.contains("\"column\":"), "Got: {}", json_output);

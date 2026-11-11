@@ -143,6 +143,7 @@ impl AttributeValue {
                     l.borrow().iter().map(Self::from_php_value).collect();
                 Self::Array(items)
             }
+            PhpValue::EmptyArray => Self::Array(Vec::new()),
             PhpValue::Array(a) => {
                 let items: Vec<AttributeValue> =
                     a.borrow().iter().map(Self::from_php_value).collect();

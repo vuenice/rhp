@@ -44,6 +44,8 @@ pub enum FrozenValue {
         class_name: String,
         properties: Vec<(String, FrozenValue)>,
     },
+    /// Untyped empty array that has not been promoted yet.
+    EmptyArray,
 }
 
 impl FrozenValue {
@@ -58,6 +60,7 @@ impl FrozenValue {
                 crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
                 crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
             },
+            PhpValue::EmptyArray => FrozenValue::EmptyArray,
             PhpValue::Array(items) | PhpValue::List(items) => {
                 let vec = items.borrow().iter().map(Self::from_php_value).collect();
                 FrozenValue::List(vec)
@@ -117,6 +120,7 @@ impl FrozenValue {
             FrozenValue::Float(f) => PhpValue::float(*f),
             FrozenValue::String(s) => PhpValue::string(s.clone()),
             FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
+            FrozenValue::EmptyArray => PhpValue::EmptyArray,
             FrozenValue::List(items) => {
                 PhpValue::list(items.iter().map(Self::to_php_value).collect())
             }

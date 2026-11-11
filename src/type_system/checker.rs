@@ -2752,19 +2752,11 @@ impl TypeChecker {
 
             ExprKind::Array(elements) => {
                 let mut is_keyed = false;
-                let mut all_string_keys = true;
-                let mut key_types = Vec::with_capacity(elements.len());
                 let mut elem_types = Vec::with_capacity(elements.len());
                 for el in elements {
                     if let Some(ref k) = el.key {
                         is_keyed = true;
-                        let kt = self.infer_expr(k, env, ctx, None)?;
-                        if !matches!(kt, RhpType::String) {
-                            all_string_keys = false;
-                        }
-                        key_types.push(kt);
-                    } else {
-                        all_string_keys = false;
+                        self.infer_expr(k, env, ctx, None)?;
                     }
                     elem_types.push(self.infer_expr(&el.value, env, ctx, None)?);
                 }
@@ -2782,6 +2774,8 @@ impl TypeChecker {
                         RhpType::Tuple(elem_types)
                     }
                 } else {
+                    // A bare array literal is an array. list, dict, set, and hashMap
+                    // come from the type the linter wrote, not from the key shape.
                     let mut unified_val: Option<RhpType> = None;
                     for t in &elem_types {
                         unified_val = Some(match unified_val {
@@ -2789,23 +2783,7 @@ impl TypeChecker {
                             Some(prev) => RhpType::unify(&prev, t),
                         });
                     }
-                    let val_ty = unified_val.unwrap_or(RhpType::Mixed);
-                    if all_string_keys {
-                        RhpType::Collection(CollectionSubtype::Dict(Box::new(val_ty)))
-                    } else {
-                        let mut unified_key: Option<RhpType> = None;
-                        for kt in &key_types {
-                            unified_key = Some(match unified_key {
-                                None => kt.clone(),
-                                Some(prev) => RhpType::unify(&prev, kt),
-                            });
-                        }
-                        let key_ty = unified_key.unwrap_or(RhpType::Mixed);
-                        RhpType::Collection(CollectionSubtype::HashMap(
-                            Box::new(key_ty),
-                            Box::new(val_ty),
-                        ))
-                    }
+                    RhpType::Array(Box::new(unified_val.unwrap_or(RhpType::Mixed)))
                 }
             }
 

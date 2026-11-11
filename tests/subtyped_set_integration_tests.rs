@@ -392,6 +392,7 @@ fn test_set_type_boundary_contracts() {
     assert!(
         err2_str.contains("ArgumentTypeMismatch")
             || err2_str.contains("TypeMismatch")
+            || err2_str.contains("TypeContractViolation")
             || err2_str.contains("Cannot assign"),
         "Unexpected error: {:?}",
         err2

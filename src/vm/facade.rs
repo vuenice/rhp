@@ -2447,7 +2447,8 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             let is_match = match subtype_arg.as_deref() {
                 None => matches!(
                     target,
-                    PhpValue::Array(_)
+                    PhpValue::EmptyArray
+                        | PhpValue::Array(_)
                         | PhpValue::List(_)
                         | PhpValue::Dict(_)
                         | PhpValue::Set(_)
@@ -2456,11 +2457,11 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Some(sub) => {
                     let clean = sub.trim().to_lowercase().replace(['-', '_', ' '], "");
                     match clean.as_str() {
-                        "list" => matches!(target, PhpValue::List(_) | PhpValue::Array(_)),
-                        "dict" | "dictionary" => matches!(target, PhpValue::Dict(_)),
+                        "list" => matches!(target, PhpValue::EmptyArray | PhpValue::List(_) | PhpValue::Array(_)),
+                        "dict" | "dictionary" => matches!(target, PhpValue::EmptyArray | PhpValue::Dict(_)),
                         "set" => matches!(target, PhpValue::Set(_)),
                         "hashmap" | "map" => matches!(target, PhpValue::HashMap(_)),
-                        "array" => matches!(target, PhpValue::Array(_)),
+                        "array" => matches!(target, PhpValue::EmptyArray | PhpValue::Array(_)),
                         _ => false,
                     }
                 }
@@ -2469,6 +2470,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "count" | "length" | "size" | "len" => {
             let cnt = match args.first() {
+                Some(PhpValue::EmptyArray) => 0,
                 Some(PhpValue::Array(a) | PhpValue::List(a)) => a.borrow().len(),
                 Some(PhpValue::Dict(d)) => d.borrow().len(),
                 Some(PhpValue::Set(s)) => s.borrow().len(),
@@ -2862,6 +2864,7 @@ pub fn php_value_is_empty(val: &PhpValue) -> bool {
         PhpValue::Bool(b) => !b,
         PhpValue::Int(_) | PhpValue::Float(_) => false,
         PhpValue::String(s) => s.is_empty(),
+        PhpValue::EmptyArray => true,
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().is_empty(),
         PhpValue::Dict(d) => d.borrow().is_empty(),
         PhpValue::Set(s) => s.borrow().is_empty(),
@@ -7367,6 +7370,7 @@ pub fn binary_strncasecmp(s1: &[u8], s2: &[u8], length: usize) -> i32 {
 
 pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
     match val {
+        PhpValue::EmptyArray => Vec::new(),
         PhpValue::Array(a) | PhpValue::List(a) => a.borrow().clone(),
         PhpValue::Set(s) => s.borrow().iter().cloned().collect(),
         PhpValue::Dict(d) => d.borrow().iter().map(|(_, v)| v.clone()).collect(),
@@ -7377,6 +7381,7 @@ pub fn extract_array_elements(val: &PhpValue) -> Vec<PhpValue> {
 
 pub fn flatten_elements(val: &PhpValue, out: &mut Vec<PhpValue>) {
     match val {
+        PhpValue::EmptyArray => {}
         PhpValue::Array(a) | PhpValue::List(a) => {
             for item in a.borrow().iter() {
                 flatten_elements(item, out);
@@ -7862,6 +7867,7 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
         }
+        PhpValue::EmptyArray => "[]".to_string(),
         PhpValue::Array(a) | PhpValue::List(a) => {
             let items: Vec<String> = a.borrow().iter().map(php_value_to_json).collect();
             format!("[{}]", items.join(","))
@@ -7914,7 +7920,8 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
 pub fn is_array_or_collection(v: &PhpValue) -> bool {
     matches!(
         v,
-        PhpValue::Array(_)
+        PhpValue::EmptyArray
+            | PhpValue::Array(_)
             | PhpValue::List(_)
             | PhpValue::Dict(_)
             | PhpValue::Set(_)
@@ -8002,6 +8009,7 @@ pub fn php_value_to_json_canonical(val: &PhpValue) -> String {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
         }
+        PhpValue::EmptyArray => "[]".to_string(),
         PhpValue::Array(a) | PhpValue::List(a) => {
             let items: Vec<String> = a.borrow().iter().map(php_value_to_json_canonical).collect();
             format!("[{}]", items.join(","))
@@ -8565,7 +8573,7 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                     crate::vm::value::StrValue::Utf8 { .. } => "string".to_string(),
                     crate::vm::value::StrValue::Bytes(_) => "bytes".to_string(),
                 },
-                PhpValue::Array(_) => "array".to_string(),
+                PhpValue::EmptyArray | PhpValue::Array(_) => "array".to_string(),
                 PhpValue::List(_) => "Arr::list".to_string(),
                 PhpValue::Dict(_) => "Arr::dict".to_string(),
                 PhpValue::Set(_) => "Arr::set".to_string(),

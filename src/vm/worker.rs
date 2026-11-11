@@ -1747,6 +1747,7 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
                 write_frozen(buf, v);
             }
         }
+        FrozenValue::EmptyArray => buf.push(13),
         FrozenValue::Bytes(b) => {
             buf.push(12);
             let len = b.len() as u32;
@@ -1828,6 +1829,7 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
                 properties: props,
             })
         }
+        13 => Ok(FrozenValue::EmptyArray),
         12 => {
             let len = read_u32(data, cursor)? as usize;
             if *cursor + len > data.len() {

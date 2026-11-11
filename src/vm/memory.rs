@@ -284,6 +284,7 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
                 std::mem::size_of::<PhpValue>() + s.len() + 16
             }
         }
+        PhpValue::EmptyArray => std::mem::size_of::<PhpValue>(),
         PhpValue::Array(items) | PhpValue::List(items) => {
             let b = items.borrow();
             let element_sizes: usize = b.iter().map(estimate_value_size).sum();
