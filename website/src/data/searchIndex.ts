@@ -278,6 +278,15 @@ const rawSearchIndex: SearchItem[] = [
     description: "Answers to common questions about PHP compatibility, Octane vs RHP, types, and facade macro extensibility.",
     url: "/docs/faq",
     keywords: ["faq", "questions", "php comparison", "octane", "swoole", "performance", "extends arr", "macro", "macros", "macroable"]
+  },
+
+  // Package
+  {
+    title: "Package",
+    section: "Package",
+    description: "Learn how to use existing packages, create your own packages in pure RHP or Rust, and understand safety, sandboxing, and native drivers.",
+    url: "/docs/package",
+    keywords: ["package", "packages", "rhp add", "rhp init", "rhp install", "rhp audit", "composer", "cargo", "native-rust", "wasm", "hybrid", "rhp.toml", "safety", "opaque handle", "database driver", "jwt", "mongo", "cassandra"]
   }
 ];
 
