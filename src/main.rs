@@ -19,7 +19,7 @@ fn print_help() {
             "    dev [OPTIONS]                    Execute in Development Mode (e.g. 'rhp dev --file=\"server.rhp\"')\n",
             "    build [OPTIONS]                  Execute in Production Mode (e.g. 'rhp build --file=\"server.rhp\"')\n",
             "    serve [OPTIONS]                  Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
-            "    migrate [PATH] [OPTIONS]         Migrate PHP superglobals and globals to RHP Request/Cookie facades\n",
+            "    migrate [PATH] [OPTIONS]         Migrate PHP code to RHP (dot concatenation, superglobals, cookies, globals)\n",
             "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
             "    check [PATH] [OPTIONS]           Check syntax and type boundary contracts (supports --format=json)\n",
             "    explain <CODE> [OPTIONS]         Explain a compiler diagnostic code (e.g. 'rhp explain RHP0102')\n\n",
@@ -483,6 +483,7 @@ fn handle_run_migrate(sub_args: &[String]) {
                 concat!(
                     "rhp migrate [PATH] [OPTIONS]\n\n",
                     "Migrates legacy PHP scripts to modern RHP conventions:\n",
+                    "  - Replaces '.' and '.=' string concatenation operators with '+' and '+='\n",
                     "  - Adds extra initialization lines when superglobals are used:\n",
                     "      $_GET = Request::query();\n",
                     "      $_POST = Request::body();\n",

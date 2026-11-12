@@ -25,6 +25,7 @@ pub struct MigrateFileResult {
     pub added_lines: Vec<String>,
     pub cookie_set_count: usize,
     pub global_replace_count: usize,
+    pub dot_concat_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -75,6 +76,9 @@ impl MigrateReport {
                     for line in &res.added_lines {
                         out.push_str(&format!("      + {}\n", line));
                     }
+                    if res.dot_concat_count > 0 {
+                        out.push_str(&format!("      ~ {} dot concatenation operator(s) replaced with '+'\n", res.dot_concat_count));
+                    }
                     if res.cookie_set_count > 0 {
                         out.push_str(&format!("      ~ {} cookie set call(s) upgraded to Cookie::set()\n", res.cookie_set_count));
                     }
@@ -103,6 +107,7 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut current = source.to_string();
     let mut cookie_set_count = 0;
     let mut global_replace_count = 0;
+    let mut dot_concat_count = 0;
 
     // Step 1: Replace $_GLOBAL and $GLOBALS with original global values
     let (after_globals, g_count) = replace_globals(&current);
@@ -114,7 +119,12 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     cookie_set_count += c_count;
     current = after_cookies;
 
-    // Step 3: Detect used superglobals outside comments/strings and add extra lines
+    // Step 3: Replace dot concatenation (. and .=) with + and +=
+    let (after_dots, d_count) = replace_dot_operators(&current);
+    dot_concat_count += d_count;
+    current = after_dots;
+
+    // Step 4: Detect used superglobals outside comments/strings and add extra lines
     let (after_lines, added_lines) = add_superglobal_declarations(&current);
     current = after_lines;
 
@@ -126,6 +136,7 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         added_lines,
         cookie_set_count,
         global_replace_count,
+        dot_concat_count,
         original_content: source.to_string(),
         migrated_content: current,
     }
@@ -446,7 +457,143 @@ fn upgrade_cookie_sets(source: &str) -> (String, usize) {
 }
 
 // =========================================================================
-// Step 3: Add extra lines if variables are used
+// Step 3: Replace dot concatenation (. and .=) with + and +=
+// =========================================================================
+
+/// Replace PHP dot concatenation (`.` and `.=`) with `+` and `+=`.
+/// Ignores occurrences in comments and string literals (via mask).
+/// Preserves `...` (ellipsis), `..` (range), and floating point numbers (e.g. `3.14`, `0.5`).
+fn replace_dot_operators(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // 1. Check for `...` (ellipsis / splat)
+        if bytes[i] == b'.' && i + 2 < n && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' {
+            i += 3;
+            continue;
+        }
+
+        // 2. Check for `..` (range)
+        if bytes[i] == b'.' && i + 1 < n && bytes[i + 1] == b'.' {
+            i += 2;
+            continue;
+        }
+
+        // 3. Check for `.=` (dot-assign)
+        if bytes[i] == b'.' && i + 1 < n && bytes[i + 1] == b'=' {
+            // Ensure not preceded by '.'
+            if i > 0 && bytes[i - 1] == b'.' {
+                i += 2;
+                continue;
+            }
+
+            let has_ws_before = i > 0 && bytes[i - 1].is_ascii_whitespace();
+            let has_ws_after = i + 2 < n && bytes[i + 2].is_ascii_whitespace();
+
+            let replacement = match (has_ws_before, has_ws_after) {
+                (true, true) => "+=".to_string(),
+                (false, false) => " += ".to_string(),
+                (false, true) => " +=".to_string(),
+                (true, false) => "+= ".to_string(),
+            };
+
+            edits.push(TextEdit {
+                start: i,
+                end: i + 2,
+                replacement,
+            });
+            i += 2;
+            continue;
+        }
+
+        // 4. Check for standalone `.`
+        if bytes[i] == b'.' {
+            let prev_is_dot = i > 0 && bytes[i - 1] == b'.';
+            let next_is_dot = i + 1 < n && bytes[i + 1] == b'.';
+            if prev_is_dot || next_is_dot {
+                i += 1;
+                continue;
+            }
+
+            // Check if this dot is part of a floating-point number:
+            // a) Digit immediately before AND digit immediately after: e.g. 3.14
+            let prev_is_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+            let next_is_digit = i + 1 < n && bytes[i + 1].is_ascii_digit();
+            if prev_is_digit && next_is_digit {
+                i += 1;
+                continue;
+            }
+
+            // b) Dot immediately followed by a digit (e.g. `.5`):
+            if next_is_digit {
+                let mut p = i;
+                let mut prev_non_ws = None;
+                while p > 0 {
+                    p -= 1;
+                    if !bytes[p].is_ascii_whitespace() {
+                        prev_non_ws = Some(bytes[p]);
+                        break;
+                    }
+                }
+
+                let is_float = match prev_non_ws {
+                    None => true,
+                    Some(b'=' | b'(' | b'[' | b'{' | b',' | b';' | b':' | b'?' | b'!' | b'+' | b'-' | b'*' | b'/' | b'%' | b'<' | b'>' | b'&' | b'|' | b'^' | b'~') => true,
+                    _ => false,
+                };
+
+                if is_float {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // This is a string concatenation operator!
+            let has_ws_before = i > 0 && bytes[i - 1].is_ascii_whitespace();
+            let has_ws_after = i + 1 < n && bytes[i + 1].is_ascii_whitespace();
+
+            let replacement = match (has_ws_before, has_ws_after) {
+                (true, true) => "+".to_string(),
+                (false, false) => " + ".to_string(),
+                (false, true) => " +".to_string(),
+                (true, false) => "+ ".to_string(),
+            };
+
+            edits.push(TextEdit {
+                start: i,
+                end: i + 1,
+                replacement,
+            });
+
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start));
+    let count = edits.len();
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 4: Add extra lines if variables are used
 // =========================================================================
 
 /// Scan code outside comments/strings and add extra lines for used superglobals.

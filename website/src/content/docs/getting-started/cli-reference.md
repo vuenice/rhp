@@ -143,6 +143,45 @@ rhp lint src/ --no-case-change
 
 ---
 
+### `rhp migrate [PATH] [OPTIONS]`
+
+Migrates legacy PHP codebases to modern RHP conventions:
+- Converts PHP string concatenation operators (`.` and `.=`) to modern RHP addition operators (`+` and `+=`).
+- Injects modern Request/Cookie facade initialization statements when superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_FILES`, `$_COOKIE`) are detected:
+  - `$_GET = Request::query();`
+  - `$_POST = Request::body();`
+  - `$_SERVER['REQUEST_METHOD'] = Request::method();`
+  - `$_SERVER['REMOTE_ADDR'] = Request::ip();`
+  - `$_SERVER['HTTP_HOST'] = Request::host();`
+  - `$_FILES = Request::files();`
+  - `$_COOKIE = Cookie::get();`
+- Upgrades legacy cookie modifications (`setcookie(...)`, `setrawcookie(...)`, `$_COOKIE['key'] = $val;`) to `Cookie::set(...)`.
+- Replaces legacy `$GLOBALS['var']` and `$_GLOBAL['var']` with `$var`, and dynamic `$GLOBALS[$k]` with `$$k`.
+
+```bash
+# Migrate a directory or file in-place
+rhp migrate ./app
+rhp migrate script.php
+
+# Dry-run / check mode: preview changes without writing to disk
+rhp migrate ./app --check
+# or alias:
+rhp migrate ./app --dry-run
+
+# Output results as machine-readable JSON
+rhp migrate ./app --format=json
+```
+
+#### Options for `migrate`:
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `PATH` | Target file or directory to migrate | `.` (current directory) |
+| `--check`, `--dry-run` | Check and preview migrations without writing changes to disk | `false` |
+| `--format <human\|json>` | Output format: human-readable summary or JSON report | `human` |
+
+---
+
 ## Package Management
 
 RHP includes a full package manager integrated directly into the `rhp` binary, following modern packaging conventions like Cargo, Go, and Bun. Projects declare dependencies in `rhp.toml` with deterministic resolutions pinned in `rhp.lock`. Installed packages follow standard PHP PSR-4 autoloader conventions.

@@ -1336,11 +1336,22 @@ $client = new Client();
 When porting an existing PHP codebase to RHP, run the automated migration command:
 
 ```bash
-rhp migrate ./app --write
+# Migrate directory or file in-place:
+rhp migrate ./app
+
+# Dry-run check: preview changes without writing to disk:
+rhp migrate ./app --check
+
+# Structured JSON report:
+rhp migrate ./app --format=json
 ```
 
 ### What `rhp migrate` Automatically Rewrites
 
+- **String Concatenation Operators:** Automatically converts PHP dot concatenation (`.` and `.=`) to modern RHP addition operators (`+` and `+=`).
+- **Superglobals to Request Facades:** Injects `$_GET = Request::query();`, `$_POST = Request::body();`, `$_SERVER['REQUEST_METHOD'] = Request::method();`, `$_SERVER['REMOTE_ADDR'] = Request::ip();`, `$_SERVER['HTTP_HOST'] = Request::host();`, `$_FILES = Request::files();`, and `$_COOKIE = Cookie::get();` when legacy superglobals are detected.
+- **Cookie Mutations:** Upgrades `setcookie(...)`, `setrawcookie(...)`, and `$_COOKIE['key'] = $val;` into `Cookie::set(...)`.
+- **Global Variables:** Replaces `$_GLOBAL['var']` and `$GLOBALS['var']` with original global variables (`$var`), and dynamic `$GLOBALS[$k]` with `$$k`.
 - **Strict Comparison Operators:** Automatically converts `===` to `==` and `!==` to `!=`.
 - **Output Buffering:** Simple `ob_start(); ... $html = ob_get_clean();` blocks are automatically transformed into `Output::capture(function() { ... })`.
 - **cURL Calls:** Standard `curl_init()` and `curl_setopt()` chains configured with common options (`CURLOPT_RETURNTRANSFER`, `CURLOPT_HTTPHEADER`, `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT`, `CURLOPT_USERPWD`) are rewritten into expressive `Http::` facade chains.

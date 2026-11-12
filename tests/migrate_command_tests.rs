@@ -50,6 +50,8 @@ fn test_migrate_server_vars_used() {
     assert!(res.migrated_content.contains("$_SERVER['REQUEST_METHOD'] = Request::method();"));
     assert!(res.migrated_content.contains("$_SERVER['REMOTE_ADDR'] = Request::ip();"));
     assert!(res.migrated_content.contains("$_SERVER['HTTP_HOST'] = Request::host();"));
+    assert!(res.migrated_content.contains("echo $method + ' ' + $ip + ' ' + $host;\n"));
+    assert_eq!(res.dot_concat_count, 4);
 }
 
 #[test]
@@ -279,6 +281,7 @@ fn test_cli_migrate_execution() {
     assert!(migrated_content.contains("$_GET = Request::query();"));
     assert!(migrated_content.contains("Cookie::set('pref', 'light');"));
     assert!(migrated_content.contains("$db = $database;"));
+    assert!(migrated_content.contains("echo $user + ' ' + $db;"));
 
     // 3. Test backward-compatible alias `rhp upgrade-php`
     let alias_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
@@ -292,3 +295,123 @@ fn test_cli_migrate_execution() {
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_migrate_dot_concatenation_basic() {
+    let input = concat!(
+        "<?php\n",
+        "$str = 'hello ' . 'world';\n",
+        "$msg = \"count: \" . $count . \" items\";\n",
+        "$tight = $a.$b;\n",
+        "$mixed = $a. $b . $c;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.dot_concat_count, 6);
+    assert!(res.migrated_content.contains("$str = 'hello ' + 'world';"));
+    assert!(res.migrated_content.contains("$msg = \"count: \" + $count + \" items\";"));
+    assert!(res.migrated_content.contains("$tight = $a + $b;"));
+    assert!(res.migrated_content.contains("$mixed = $a + $b + $c;"));
+}
+
+#[test]
+fn test_migrate_dot_assign_operator() {
+    let input = concat!(
+        "<?php\n",
+        "$str = 'init';\n",
+        "$str .= ' more';\n",
+        "$str .= $extra;\n",
+        "$tight.=$b;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.dot_concat_count, 3);
+    assert!(res.migrated_content.contains("$str += ' more';"));
+    assert!(res.migrated_content.contains("$str += $extra;"));
+    assert!(res.migrated_content.contains("$tight += $b;"));
+}
+
+#[test]
+fn test_migrate_preserves_floats() {
+    let input = concat!(
+        "<?php\n",
+        "$pi = 3.14159;\n",
+        "$zero = 0.0;\n",
+        "$half = .5;\n",
+        "$rate = 10.5;\n",
+        "$concat_float = 'pi: ' . 3.14;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    // Only the dot in 'pi: ' . 3.14 should be replaced; the float literals must not be touched
+    assert_eq!(res.dot_concat_count, 1);
+    assert!(res.migrated_content.contains("$pi = 3.14159;"));
+    assert!(res.migrated_content.contains("$zero = 0.0;"));
+    assert!(res.migrated_content.contains("$half = .5;"));
+    assert!(res.migrated_content.contains("$rate = 10.5;"));
+    assert!(res.migrated_content.contains("$concat_float = 'pi: ' + 3.14;"));
+}
+
+#[test]
+fn test_migrate_preserves_ellipsis_and_range() {
+    let input = concat!(
+        "<?php\n",
+        "function variadic(...$args) {\n",
+        "    return [...$args];\n",
+        "}\n",
+        "$range = 1..10;\n",
+        "$str = 'arg: ' . $args[0];\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.dot_concat_count, 1);
+    assert!(res.migrated_content.contains("function variadic(...$args)"));
+    assert!(res.migrated_content.contains("return [...$args];"));
+    assert!(res.migrated_content.contains("$range = 1..10;"));
+    assert!(res.migrated_content.contains("$str = 'arg: ' + $args[0];"));
+}
+
+#[test]
+fn test_migrate_preserves_dots_in_strings_and_comments() {
+    let input = concat!(
+        "<?php\n",
+        "// A comment with a dot. And more dots...\n",
+        "/* Multi-line comment. with dots. */\n",
+        "# Hash comment with dot. here\n",
+        "$file = \"archive.tar.gz\";\n",
+        "$host = 'example.com';\n",
+        "$sql = \"SELECT users.id, users.name FROM users\";\n",
+        "$res = $file . ' from ' . $host;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.dot_concat_count, 2);
+    assert!(res.migrated_content.contains("// A comment with a dot. And more dots..."));
+    assert!(res.migrated_content.contains("/* Multi-line comment. with dots. */"));
+    assert!(res.migrated_content.contains("# Hash comment with dot. here"));
+    assert!(res.migrated_content.contains("$file = \"archive.tar.gz\";"));
+    assert!(res.migrated_content.contains("$host = 'example.com';"));
+    assert!(res.migrated_content.contains("$sql = \"SELECT users.id, users.name FROM users\";"));
+    assert!(res.migrated_content.contains("$res = $file + ' from ' + $host;"));
+}
+
+#[test]
+fn test_migrate_multiline_dot_concatenation() {
+    let input = concat!(
+        "<?php\n",
+        "$query = \"SELECT * FROM users \"\n",
+        "    . \"WHERE active = 1 \"\n",
+        "    . \"ORDER BY id DESC\";\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.dot_concat_count, 2);
+    let expected = concat!(
+        "<?php\n",
+        "$query = \"SELECT * FROM users \"\n",
+        "    + \"WHERE active = 1 \"\n",
+        "    + \"ORDER BY id DESC\";\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
