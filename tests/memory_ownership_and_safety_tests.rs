@@ -98,40 +98,39 @@ fn test_copy_on_write_detachment_and_telemetry_tracking() {
 
     let source = r#"
         $orig = Arr::list([10, 20, 30]);
-        $copy1 = $orig; // Shared buffer (ref_count = 2), zero duplication
-        $copy2 = $orig; // Shared buffer (ref_count = 3), zero duplication
+        $copy1 = $orig;
+        $copy2 = $orig;
 
         $cowsBefore = Memory::cowDetachments();
 
-        // Mutating $copy1 triggers Copy-On-Write detachment of its buffer
+        // Lists are shared. A write through either alias changes the same buffer.
         $copy1[0] = 999;
-
-        // Mutating $copy2 triggers another Copy-On-Write detachment
         $copy2[] = 1000;
 
         $cowsAfter = Memory::cowDetachments();
 
-        return [$orig[0], $copy1[0], $copy2[3], $cowsBefore, $cowsAfter];
+        return [$orig[0], $orig[3], $copy1[0], $copy2[3], $cowsBefore, $cowsAfter];
     "#;
 
     let result = run_source(source).expect("COW detachment execution should succeed");
     let items = result.as_list().expect("Result should be a list");
 
-    assert_eq!(items[0], PhpValue::Int(10)); // Original is untouched
-    assert_eq!(items[1], PhpValue::Int(999)); // Copy 1 has mutated value
-    assert_eq!(items[2], PhpValue::Int(1000)); // Copy 2 has appended value
+    assert_eq!(items[0], PhpValue::Int(999));
+    assert_eq!(items[1], PhpValue::Int(1000));
+    assert_eq!(items[2], PhpValue::Int(999));
+    assert_eq!(items[3], PhpValue::Int(1000));
 
-    let cows_before = match items[3] {
+    let cows_before = match items[4] {
         PhpValue::Int(n) => n as usize,
         _ => 0,
     };
-    let cows_after = match items[4] {
+    let cows_after = match items[5] {
         PhpValue::Int(n) => n as usize,
         _ => 0,
     };
-    assert!(
-        cows_after > cows_before,
-        "Copy-On-Write detachments must be tracked when shared collections are mutated"
+    assert_eq!(
+        cows_after, cows_before,
+        "shared list writes do not detach the buffer"
     );
     assert!(cow_detachments() >= cows_after);
 }

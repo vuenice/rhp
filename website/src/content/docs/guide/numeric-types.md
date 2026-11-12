@@ -1,41 +1,43 @@
 ---
 title: "Numeric Types"
-description: "Complete reference for int, float, Int::, and Float:: — RHP's numeric primitives and supporting facade classes."
+description: "Complete reference for int, float, Int::, and Float:: — RHP's 64-bit numeric primitives and supporting utility facades."
 section: "Language Guide"
 order: 2
 ---
 
 ## Overview
 
-RHP has a deliberate, simple numeric story:
+RHP features a streamlined, high-performance numeric model directly lowered to bare-metal Rust primitives:
 
-| Item | Category | Default Rust storage | Notes |
+| Item | Category | Native Storage | Notes |
 | :--- | :--- | :--- | :--- |
-| `int` | Primitive keyword | **`i32`** | Base datatype. Strict lowercase. |
-| `float` | Primitive keyword | **`i32`** | Base datatype. Strict lowercase. Defaults to 32-bit, **not** `f64`. |
-| `Int` | Static facade class | — | Utility class. Cannot be instantiated. |
-| `Float` | Static facade class | — | Utility class. Cannot be instantiated. |
+| `int` | Primitive keyword | **`i64`** | Signed 64-bit integer. Base whole number type. Strict lowercase. |
+| `float` | Primitive keyword | **`f64`** | IEEE-754 64-bit double precision float. Base decimal type. Strict lowercase. |
+| `Int` | Static utility facade | — | Utility class for random generation, variadic min/max, and comparisons. Cannot be instantiated. |
+| `Float` | Static utility facade | — | Utility class for random generation, variadic min/max, formatting, and epsilon comparisons. Cannot be instantiated. |
 
 > [!IMPORTANT]
-> **Both `int` and `float` default to `i32` (32-bit) storage.**
-> They are separate types with different semantic intent (`int` for whole numbers, `float` for fractional numbers), but both are backed by `i32` internally at runtime unless you opt into a wider type via `Int::i64(...)` or `Float::f64(...)`.
+> **Native 64-Bit Performance Without Boxing:**
+> Both `int` and `float` are lowered directly to Rust `i64` and `f64`. At the bytecode engine level, they are stored inline (unboxed) in register cells (`PhpValue::Int(i64)` and `PhpValue::Float(f64)`). They incur **zero heap allocations** and execute raw CPU arithmetic instructions.
 
 ---
 
-## `int` — The Integer Primitive
+## `int` — 64-Bit Signed Integer
 
-`int` is a reserved lowercase keyword representing a **signed 32-bit integer** (`i32`).
+`int` is a reserved lowercase keyword representing a **signed 64-bit integer** (`i64`), with a range from $-9,223,372,036,854,775,808$ to $9,223,372,036,854,775,807$.
 
 ```php
-int $count = 42;
+int $count    = 42;
 int $negative = -1000;
-int $hex   = 0xFF;         // Hex literal
-int $bin   = 0b1010_0101;  // Binary literal with separator
-int $oct   = 0o755;        // Octal literal
-int $big   = 1_000_000;    // Underscore separator for readability
+int $hex      = 0xFF;         // Hex literal (255)
+int $bin      = 0b1010_0101;  // Binary literal (165)
+int $oct      = 0o755;        // Octal literal (493)
+int $bigId    = 9_223_372_036_854_775_807; // Maximum 64-bit integer
 ```
 
-### Arithmetic
+### High-Performance Arithmetic Operators
+
+Always use native arithmetic operators for mathematical calculations. They compile directly into optimized IR bytecode opcodes (`OpCode::Binary`, `OpCode::Unary`) that run at hardware speed without method dispatch overhead:
 
 ```php
 int $a = 10;
@@ -49,74 +51,141 @@ int $mod  = $a % $b;   // 1
 int $pow  = $a ** $b;  // 1000
 ```
 
-### Conversion
+### Conversions & Fluent Instance Methods
+
+Numeric variables support immutable fluent methods for conversions and sign inspection:
 
 ```php
-int $parsed  = int("42");      // 42
-int $fromBool = int(true);     // 1
-int $fromFloat = int(3.99);    // 3  (truncates — does NOT round)
+int $val = -42;
+
+int $magnitude = $val->abs();       // 42
+string $str    = $val->toString();  // "-42"
+float $decimal = $val->toFloat();   // -42.0
+
+// Explicit functional type casting:
+int $parsed    = int("42");         // 42
+int $fromBool  = int(true);         // 1
+int $fromFloat = int(3.99);         // 3 (truncates)
+```
+
+> [!NOTE]
+> **No Method Calls on Bare Literals:**
+> The compiler restricts calling member methods directly on raw numeric literals (e.g. `0->abs()` or `10->toString()`). Always invoke methods on variables or parenthesized expressions:
+> ```php
+> // ❌ Syntax error:
+> // 42->abs();
+> 
+> // ✅ Valid:
+> int $n = 42;
+> $n->abs();
+> ```
+
+---
+
+## `float` — 64-Bit Floating-Point
+
+`float` is a reserved lowercase keyword representing an **IEEE-754 64-bit double precision float** (`f64`).
+
+```php
+float $rate    = 9.99;
+float $pi      = 3.141592653589793;
+float $exp     = 1.5e10;    // Scientific notation
+float $precise = 0.000001;
+```
+
+### Arithmetic & Decimal Formatting
+
+```php
+float $a = 10.5;
+float $b = 2.5;
+
+float $sum  = $a + $b;   // 13.0
+float $diff = $a - $b;   // 8.0
+float $prod = $a * $b;   // 26.25
+float $div  = $a / $b;   // 4.2
+```
+
+### Fluent Formatting & Rounding Methods
+
+Float variables support clean method chaining for financial and scientific presentation:
+
+```php
+float $price = 1234.5678;
+
+// Fixed decimal representation
+string $formatted = $price->toDecimal(2); // "1234.57"
+
+// Rounding operations
+float $rounded = $price->round(2); // 1234.57
+float $floored = $price->floor();   // 1234.0
+float $ceiled  = $price->ceil();    // 1235.0
+
+// Conversions
+int $truncated = $price->toInt();      // 1234
+string $asStr  = $price->toString();  // "1234.5678"
 ```
 
 ---
 
-## `float` — The Float Primitive
+## `Int` — Static Utility Facade
 
-`float` is a reserved lowercase keyword representing a **32-bit floating-point number** (`i32` storage) by default.
+`Int` is a **static utility class** (PascalCase identifier), not a type keyword. It cannot be instantiated with `new Int()`.
 
-> [!NOTE]
-> Despite being called "float", the default precision is 32-bit (`i32`), not 64-bit (`f64`). If you need full IEEE-754 double precision, use `Float::f64(...)`.
+It provides static utility methods that do not operate on an existing single variable:
 
 ```php
-float $rate    = 9;       // i32 storage — whole numbers are fine
-float $score   = 100;     // i32 storage
-float $partial = 3;       // i32 — fractional values need Float::f32/f64 for precision
+// 1. CSPRNG Cryptographically Secure Random Integer
+int $dice = Int::random(1, 6);
+int $token = Int::random(100000, 999999);
+
+// 2. Variadic Min and Max
+int $lowest  = Int::min(10, 20, 5, 40); // 5
+int $highest = Int::max(10, 20, 5, 40); // 40
+
+// 3. Intentionally Loose Type Comparison
+bool $match = Int::compare(42, "42"); // true
+bool $flag  = Int::compare(1, true);  // true
 ```
 
-### Arithmetic
+> [!CAUTION]
+> `new Int()` is a **fatal compile-time error**:
+> ```text
+> Fatal Error: Cannot instantiate static facade class 'Int'. Use static methods directly.
+> ```
+
+---
+
+## `Float` — Static Utility Facade
+
+`Float` is a **static utility class** (PascalCase identifier), not a type keyword. Like `Int`, it can never be instantiated with `new Float()`.
 
 ```php
-float $a = 10;
-float $b = 3;
+// 1. CSPRNG Random Float in Range [min, max]
+float $chance = Float::random(0.0, 1.0);
 
-float $sum  = $a + $b;   // 13
-float $prod = $a * $b;   // 30
-float $div  = $a / $b;   // 3 (integer result since both are i32)
-```
+// 2. Variadic Min and Max
+float $minVal = Float::min(1.5, 2.8, 0.4); // 0.4
+float $maxVal = Float::max(1.5, 2.8, 0.4); // 2.8
 
-### When to upgrade to `Float::f64`
+// 3. Loose & Epsilon Tolerance Comparisons
+bool $close = Float::compare(1.0001, 1.0002, 0.001); // true (within epsilon)
+bool $loose = Float::compare(3.14, "3.14");           // true
 
-Use the `Float` facade whenever you need:
-- Fractional precision (e.g. `3.14`, `99.99`)
-- Large scientific ranges
-- IEEE-754 rounding semantics
-
-```php
-// Instead of:
-float $pi = 3;  // loses precision — just stores 3
-
-// Use:
-$pi = Float::f64(3.141592653589793);  // Full 64-bit IEEE-754
-```
-
-### Conversion
-
-```php
-float $f = float("3");     // 3.0 (i32 storage)
-float $g = float(true);    // 1
-float $h = float("abc");   // 0 (non-numeric string → 0)
+// 4. Number Formatting with Thousands Separator
+string $display = Float::format(1234567.89, 2, '.', ','); // "1,234,567.89"
 ```
 
 ---
 
 ## Numeric Literal Edge Cases & Strict Validation
 
-RHP's lexer enforces rigorous syntax verification on numeric literals to prevent ambiguities with member access or range operators:
+RHP's lexer enforces rigorous syntax verification on numeric literals to prevent ambiguities with member access (`->`) or range operators (`..`):
 
 ### 1. No Trailing Separators or Decimal Points
 Numeric literals cannot end with an underscore (`_`) or a bare decimal point (`.`):
 ```php
-// ❌ Rejected by lexer:
-// int $a = 10_; // Error: Numeric literal cannot end with a separator or decimal point.
+// ❌ Rejected by compiler:
+// int $a = 10_;   // Error: Numeric literal cannot end with a separator or decimal point.
 // float $b = 10.; // Error: Numeric literal cannot end with a separator or decimal point.
 
 // ✅ Valid:
@@ -124,16 +193,12 @@ int $a = 10;
 float $b = 10.0;
 int $c = 1_000_000;
 ```
-When violated, the compiler halts with:
-```text
-ParseError: Numeric literal cannot end with a separator or decimal point.
-```
 
 ### 2. Leading Dots Disallowed
 Omitting the leading zero in fractional numbers is strictly prohibited. You must write `0.5`, not `.5`:
 ```php
-// ❌ Rejected by compiler:
-// float $half = .5; // Syntax error
+// ❌ Rejected:
+// float $half = .5;
 
 // ✅ Valid:
 float $half = 0.5;
@@ -155,161 +220,14 @@ $sci = 1e6;
 
 ---
 
-## `Int` — Static Facade Class
+## Summary: Idiomatic Numeric Style
 
-`Int` is an **identifier** (capitalized), not a keyword. It is a **static facade class** — meaning it can never be instantiated with `new`. All access is through static method calls (`Int::method(...)`).
-
-> [!CAUTION]
-> `new Int()` is a **fatal compile-time error**:
-> ```
-> Fatal Error: Cannot instantiate static facade class 'Int'. Use static methods directly.
-> ```
-
-### Factory Methods — Extended Rust Integer Types
-
-| Method | Rust Type | Range |
+| Task | Recommended Syntax | Discouraged / Obsolete Syntax |
 | :--- | :--- | :--- |
-| `Int::i8($val)` | `i8` | −128 to 127 |
-| `Int::i16($val)` | `i16` | −32,768 to 32,767 |
-| `Int::i32($val)` | `i32` | −2,147,483,648 to 2,147,483,647 |
-| `Int::i64($val)` | `i64` | −9,223,372,036,854,775,808 to 9,223,372,036,854,775,807 |
-| `Int::i128($val)` | `i128` | ±170 undecillion |
-| `Int::u8($val)` | `u8` | 0 to 255 |
-| `Int::u16($val)` | `u16` | 0 to 65,535 |
-| `Int::u32($val)` | `u32` | 0 to 4,294,967,295 |
-| `Int::u64($val)` | `u64` | 0 to 18,446,744,073,709,551,615 |
-| `Int::u128($val)` | `u128` | 0 to ±340 undecillion |
-| `Int::usize($val)` | `usize` | Platform pointer-width |
-| `Int::isize($val)` | `isize` | Platform pointer-width, signed |
-
-### Usage Examples
-
-```php
-// 64-bit integer for database IDs, timestamps, crypto
-$id        = Int::i64(9_223_372_036_854_775_807);
-$timestamp = Int::i64(1_700_000_000);
-
-// Unsigned types for bitmasks, network ports, memory sizes
-$port    = Int::u16(8080);
-$flags   = Int::u32(0xDEAD_BEEF);
-$memSize = Int::usize(1024 * 1024);  // 1 MiB
-
-// Fluent chaining
-$result = Int::i64()
-    ->random()      // generate random i64
-    ->add(10)
-    ->subtract(3)
-    ->abs();
-
-// Formatting
-$hex = Int::i64(255)->toHex();  // "ff"
-$bin = Int::i32(5)->toBin();    // "101"
-$oct = Int::u32(8)->toOct();    // "10"
-```
-
----
-
-## `Float` — Static Facade Class
-
-`Float` is an **identifier** (capitalized), not a keyword. Like `Int`, it is a **static facade class** — never instantiated with `new`.
-
-> [!CAUTION]
-> `new Float()` is a **fatal compile-time error**:
-> ```
-> Fatal Error: Cannot instantiate static facade class 'Float'. Use static methods directly.
-> ```
-
-### Factory Methods — Extended Rust Float Types
-
-| Method | Rust Type | Precision |
-| :--- | :--- | :--- |
-| `Float::f32($val)` | `f32` | 32-bit IEEE-754 single precision (~7 decimal digits) |
-| `Float::f64($val)` | `f64` | 64-bit IEEE-754 double precision (~15 decimal digits) |
-
-### Usage Examples
-
-```php
-// Single precision (f32) — good for graphics, game physics
-$angle  = Float::f32(1.5707963);   // π/2
-$red    = Float::f32(0.93);
-
-// Double precision (f64) — good for finance, science, GPS coordinates
-$price   = Float::f64(99.99);
-$pi      = Float::f64(3.141592653589793);
-$lat     = Float::f64(37.774929);
-
-// Fluent formatting & rounding
-$formatted = Float::f64(1234567.891)->toDecimal(2);   // "1234567.89"
-$pct       = Float::f64(0.856)->toPercent();           // "85.60%"
-$sci       = Float::f64(0.000012)->toScientific();     // "1.2e-5"
-
-// Arithmetic chaining
-$result = Float::f64(3.14)
-    ->multiply(2.0)
-    ->add(1.0)
-    ->round(4);
-```
-
----
-
-## Choosing the Right Numeric Type
-
-```
-Simple whole numbers (counters, IDs up to ~2 billion)  →  int
-Simple quantities that may need rounding later          →  float  (upgrade to Float::f64)
-Large IDs, timestamps, 64-bit crypto                   →  Int::i64
-Financial values, GPS, scientific computation          →  Float::f64
-Bitmasks, network, buffer sizes                        →  Int::u32 / Int::usize
-Graphics, game physics (OK with ~7 sig figs)           →  Float::f32
-```
-
----
-
-## Int / Float as Type Annotations vs. Identifiers
-
-The lexer disambiguates `int`/`float` (keywords) from `Int`/`Float` (identifiers) purely by capitalization:
-
-```php
-// Type annotation — keywords (lowercase)
-function sum(int $a, float $b): float {
-    return $a + $b;   // both are i32 internally
-}
-
-// Static facade — identifiers (PascalCase)
-$precise = Float::f64(sum(10, 3))->toDecimal(2);
-```
-
-Attempting to use `Int` or `Float` as a type annotation triggers a parse error:
-
-```
-ParseError: 'Int' is not a valid type keyword. Use lowercase 'int' for the primitive type,
-or 'Int::' for static facade methods.
-```
-
----
-
-## Numeric Literal Syntax
-
-RHP supports the following numeric literal forms:
-
-```php
-// Decimal integers (with optional underscore separators)
-$million = 1_000_000;
-$negative = -42;
-
-// Hexadecimal
-$hex = 0xFF;       // 255
-$hex2 = 0xDEAD_BEEF;
-
-// Binary
-$bits = 0b1010_0101;   // 165
-
-// Octal
-$perm = 0o755;         // 493
-
-// Float literals (require Float:: for full precision)
-// Plain float keyword stores these as i32 — use Int::i32() or Float::f64() instead
-$pi = Float::f64(3.14159);
-$exp = Float::f64(1.5e10);    // Scientific notation
-$neg = Float::f64(-0.001);
-```
+| **Integer declaration** | `int $id = 42;` | `Int::i64(42)` (obsolete wrapper) |
+| **Float declaration** | `float $rate = 3.14;` | `Float::f64(3.14)` (obsolete wrapper) |
+| **Basic arithmetic** | `$a + $b`, `$a * $b`, `$a / $b` | `$a->add($b)` (unnecessary method overhead) |
+| **Absolute value** | `$val->abs()` | `Int::abs($val)` |
+| **Decimal formatting** | `$price->toDecimal(2)` | `Float::format(...)` for simple rounding |
+| **Random numbers** | `Int::random($min, $max)` | — |
+| **Epsilon comparison** | `Float::compare($a, $b, $eps)` | — |

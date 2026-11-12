@@ -32,7 +32,7 @@ In a web application, short-lived allocations (request payloads, JSON string sli
 In traditional dynamic languages, cyclic references (e.g. object A referencing object B, which references object A) cannot be freed by reference counting alone, necessitating a cyclic garbage collector.
 
 RHP prevents cycles statically at compile time:
-1. **Pass-By-Reference Forbidden:** `&$var` syntax is eliminated from the language grammar.
+1. **Strictly Controlled Pass-By-Reference:** Function and method parameters that mutate collections require explicit `&$param` annotations (and explicit call-site `&$var`). If omitted, the compiler throws an error and `rhp run lint` automatically inserts `&`. Arbitrary variable aliasing (`$a = &$b`) is forbidden.
 2. **Closure Reference Capture Forbidden:** Closures cannot capture variables by mutable reference (`use (&$var)` is rejected).
 3. **Weak References (`Weak::to`):** Bidirectional graph relationships (e.g., parent-child nodes) must use explicit weak references:
 
@@ -67,17 +67,17 @@ $result = Memory::scope(function(): int {
 
 Rather than using Zend Engine's monolithic `zend_array` (which incurs massive memory overhead with 56-byte hash buckets and separate doubly linked list pointers for iteration order), RHP uses dedicated, cache-conscious Rust structures with `Rc` Copy-On-Write semantics, focusing on three core primitives (`list`, `dict`, `set`) while deferring arbitrary `hashMap` and `tuple` structures:
 
-### 1. `Arr::list`: `Rc<Vec<Value>>`
+### 1. `list`: `Rc<Vec<Value>>`
 - **Contiguous Vector Buffer:** Stored directly as a dense vector of 8-byte `Value` registers, offering direct CPU L1/L2 cache prefetching and sequential $O(1)$ indexing without hash calculations or bucket indirections.
 - **Copy-On-Write (COW):** Parameter passing (`foo($list)`) and assignment (`$copy = $list`) perform an instantaneous $O(1)$ reference count increment (`Rc::clone`). In-place append/mutation uses `Rc::make_mut`—if unshared (`strong_count == 1`), mutation is in-place with zero reallocation.
 
-### 2. `Arr::dict`: `Rc<IndexMap<Key, Value, ahash::RandomState>>`
+### 2. `dict`: `Rc<IndexMap<Key, Value, ahash::RandomState>>`
 - **Hardware AES-Accelerated Hashing (`ahash`):** Powered by `ahash::RandomState`, utilizing host CPU AES-NI instructions for 5x–10x faster key hashing than standard SipHash while remaining DOS-resistant.
 - **Dense Linear Storage:** Keys and values are stored in contiguous vectors indexed by a sparse hash table (`IndexMap`), achieving compact memory layout with near-zero pointer chasing.
 - **Strict Deterministic Ordering:** Iteration order strictly matches insertion order. Updating an existing key modifies its value in-place without altering its slot position in the iteration order.
 - **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` iterates directly across the underlying slice by index cursor, allocating **zero temporary vectors or key-value tuples**.
 
-### 3. `Arr::set`: `Rc<IndexSet<Key, ahash::RandomState>>`
+### 3. `set`: `Rc<IndexSet<Key, ahash::RandomState>>`
 - **Unique Value Buffer:** Backed by `IndexSet` with `ahash::RandomState` for $O(1)$ membership checks, deduplication, and mathematical set operations (`diff`, `intersect`, `union`).
 - **Insertion-Preserved Ordering:** Elements preserve their insertion sequence, enabling deterministic iteration and serializability.
 

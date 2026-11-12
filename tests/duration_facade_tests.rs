@@ -78,8 +78,8 @@ fn test_duration_arithmetic_compare_and_total() {
         return [$sum, $sub, $half, $double, $eq, $gt, $total_hours, $total_days, $fmt, $between, $empty];
     "#;
     let res = run_source(code).expect("duration arithmetic");
-    let PhpValue::Array(items) = res else {
-        panic!("expected array");
+    let (PhpValue::Array(items) | PhpValue::List(items)) = res else {
+        panic!("expected array, got {:?}", res);
     };
     let items = items.borrow();
     assert_eq!(items[0].to_php_string(), "PT2H30M");

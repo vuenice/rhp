@@ -31,7 +31,7 @@ print("User: " + $user->name);
 ```
 
 ### Structs Are Not Present in RHP
-Unlike Rust or C++, RHP intentionally omits the `struct` construct. Structured entity models and composite domain data are represented via typed `class` declarations or high-performance native collections (`dict` / `Arr::dict`).
+Unlike Rust or C++, RHP intentionally omits the `struct` construct. Structured entity models and composite domain data are represented via typed `class` declarations or high-performance native collections (`dict`).
 
 ### Field Initialization Guarantee (Compile-Time Strictness)
 In PHP, reading an uninitialized typed property throws a runtime `Error`. In RHP, this safety guarantee is moved to compile time: **all properties without default values must be initialized upon object creation** (e.g. within `__construct`). Leaving non-nullable properties uninitialized triggers a **Compile Error**.
@@ -493,7 +493,7 @@ Each enum case is initialized as an immutable singleton object in memory. Mutati
 RHP automatically synthesizes standard enum static methods:
 
 #### 1. `Enum::cases(): list<Enum>`
-Available on **all** enums (both pure and backed). Returns a packed list (`Arr::list`) containing all declared cases in declaration order:
+Available on **all** enums (both pure and backed). Returns a packed sequential list (`list`) containing all declared cases in declaration order:
 
 ```php
 $allPlans = PlanType::cases();
@@ -738,7 +738,8 @@ Arr::macro('toCsv', function ($delimiter = ',') {
 });
 
 // Usage anywhere in your application
-$csv = Arr::list([1, 2, 3])->toCsv();
+list $nums = [1, 2, 3];
+$csv = $nums->toCsv();
 ```
 
 ### Why Macros Work Perfectly for RHP

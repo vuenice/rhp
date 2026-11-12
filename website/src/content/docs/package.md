@@ -145,14 +145,11 @@ namespaces = ["Rhp\\MySlugger"]
 <?php
 namespace Rhp\MySlugger;
 
-use Str;
-
 final class MySlugger {
     private function __construct() {}
 
     public static function slugify(string $text): string {
-        $clean = Str::lower($text);
-        return Str::replace(' ', '-', $clean);
+        return $text->lower()->replace(' ', '-');
     }
 }
 ```

@@ -127,16 +127,19 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 ## 3. Special Expression Grammar Constructs
 
 ### Fluent Facade & Method Chaining
-Static facade calls followed by chained instance methods parse seamlessly with high operator precedence:
+Collections, strings, and numeric variables support chained fluent instance methods with high operator precedence:
 
 ```php
-$numbers = Arr::list([1, 2, 3, 4, 5])
+$numbers = [1, 2, 3, 4, 5]
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 4);
 
-$id = Int::i64(9223372036854775807);
-$price = Float::f64(99.99)->toDecimal(2);
-Int::i64()->random()->add()->subtract();
+$title = "  Hello World  ";
+$slug = $title->trim()->lower()->slug();
+
+float $price = 99.99;
+$formatted = $price->toDecimal(2);
+int $dice = Int::random(1, 6);
 ```
 
 ### Static Facade Instantiation Defense

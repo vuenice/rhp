@@ -280,6 +280,9 @@ pub enum OpCode {
     /// Read `dst = array[index]`.
     ArrayGet { dst: Reg, array: Reg, index: Reg },
 
+    /// Remove `key` from a dict or hashmap (`unset($dict[$key])`).
+    UnsetIndex { array: Reg, key: Reg },
+
     // =========================================================================
     // 5. Iteration (`foreach`)
     // =========================================================================
@@ -568,6 +571,9 @@ impl fmt::Display for OpCode {
             } => write!(f, "ARRAY_UNPACK    {}, ...{}", dst_array, src_array),
             OpCode::ArrayGet { dst, array, index } => {
                 write!(f, "ARRAY_GET       {}, {}[{}]", dst, array, index)
+            }
+            OpCode::UnsetIndex { array, key } => {
+                write!(f, "UNSET_INDEX     {}[{}]", array, key)
             }
             OpCode::IterInit { iter_reg, iterable } => {
                 write!(f, "ITER_INIT       {}, {}", iter_reg, iterable)

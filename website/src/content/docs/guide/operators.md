@@ -47,10 +47,10 @@ bool $match = (1.23 == 1.23); // true
 // 1.23 (2 decimals) vs 1.234 (3 decimals) -> compared at 3 decimals (1.230 != 1.234)
 bool $diff = (1.23 == 1.234); // false
 
-// Cross-precision between Float (f32) and Float::f64 (f64)
-float $f32 = 3.14;
-float $f64 = Float::f64(3.14);
-bool $equal = ($f32 == $f64); // true (both verified to 2 decimal places)
+// Float comparison with dynamic decimal precision
+float $valA = 3.14;
+float $valB = 3.140;
+bool $equal = ($valA == $valB); // true (both verified to matching precision)
 ```
 
 ---
@@ -114,8 +114,8 @@ Array::compareJoined([1, 2, 3], ['1', '2', '3'], '-');    // true (custom separa
 
 // 4. Unordered Value Comparison (Strictly supports list and set only)
 // Compares elements irrespective of order; rejects dict/hashmap with runtime error
-$setA = Arr::set([1, 2, 3]);
-$setB = Arr::set([3, 1, 2]);
+set $setA = [1, 2, 3];
+set $setB = [3, 1, 2];
 Array::compareUnordered($listA, $listC); // true (list vs list, order ignored)
 Array::compareUnordered($listA, $setB);  // true (list vs set, order ignored)
 Array::compareUnordered($setA, $setB);   // true (set vs set, order ignored)

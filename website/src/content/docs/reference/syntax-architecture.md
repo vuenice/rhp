@@ -139,7 +139,7 @@ Because `??` binds tighter than `?:`, which binds tighter than `??=`:
 ```php
 // Maximal munch: ... is parsed as a single variadic/spread token
 function collectValues(int ...$numbers): list {
-    return Arr::list([...$numbers]);
+    return [...$numbers];
 }
 
 // Pratt parser precedence hierarchy:
@@ -188,7 +188,7 @@ $emptyVal = null;
 ```
 
 > [!NOTE]
-> Capitalized names like `Int` and `Float` exist only as **Tier 1 static facade classes** (`Int::i64()`, `Float::f64()`), never as primitive type hints.
+> Capitalized names like `Int` and `Float` exist only as **Tier 1 static utility classes** (`Int::random()`, `Float::compare()`), never as primitive type hints.
 
 ---
 

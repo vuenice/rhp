@@ -231,6 +231,10 @@ pub struct VM {
     loop_warned: std::collections::HashSet<(Option<FunctionId>, u32)>,
     /// Total number of cooperative preemption events triggered.
     pub total_preemptions: u64,
+    /// Total number of Functional But In-Place (FBIP) zero-allocation sorts executed on this VM.
+    pub fbip_inplace_sorts: usize,
+    /// Total number of stream pipeline fusions executed on this VM.
+    pub stream_fusions: usize,
 }
 
 impl VM {
@@ -283,6 +287,8 @@ impl VM {
             loop_iterations: HashMap::new(),
             loop_warned: std::collections::HashSet::new(),
             total_preemptions: 0,
+            fbip_inplace_sorts: 0,
+            stream_fusions: 0,
         }
     }
 
@@ -1361,6 +1367,67 @@ impl VM {
                         }
                     }
                 }
+                OpCode::NewCollection { dst, kind, source } => {
+                    let src = source.map(|s| regs[s.index()].clone());
+                    regs[dst.index()] = match kind {
+                        crate::ir::opcode::IrCollectionKind::List => {
+                            PhpValue::list(src.as_ref().map(Self::extract_items).unwrap_or_default())
+                        }
+                        crate::ir::opcode::IrCollectionKind::Dict => PhpValue::dict_from_map(
+                            src.as_ref().map(Self::extract_dict_entries).unwrap_or_default(),
+                        ),
+                        crate::ir::opcode::IrCollectionKind::Set => {
+                            PhpValue::set(src.as_ref().map(Self::extract_items).unwrap_or_default())
+                        }
+                        crate::ir::opcode::IrCollectionKind::HashMap => PhpValue::hash_map(
+                            src.as_ref().map(Self::extract_map_entries).unwrap_or_default(),
+                        ),
+                    };
+                }
+                OpCode::ArraySet { array, key, value } => {
+                    let k = regs[key.index()].clone();
+                    let v = regs[value.index()].clone();
+                    let target = &mut regs[array.index()];
+                    match target {
+                        PhpValue::EmptyArray => {
+                            *target = PhpValue::promote_empty_index(&k, v);
+                        }
+                        PhpValue::List(arr) => {
+                            if let PhpValue::Int(idx) = k {
+                                if idx >= 0 {
+                                    let mut b = arr.borrow_mut();
+                                    if (idx as usize) < b.len() {
+                                        b[idx as usize] = v;
+                                    } else if (idx as usize) == b.len() {
+                                        b.push(v);
+                                    }
+                                }
+                            }
+                        }
+                        PhpValue::Dict(dict) => {
+                            if let PhpValue::String(s) = k {
+                                dict.borrow_mut().insert(s.to_string(), v);
+                            }
+                        }
+                        PhpValue::HashMap(map) => {
+                            if !k.is_unhashable_collection() {
+                                map.borrow_mut().insert(k, v);
+                            }
+                        }
+                        PhpValue::Array(arr) => {
+                            let idx = k.to_i64().unwrap_or(0);
+                            if idx >= 0 {
+                                let mut b = arr.borrow_mut();
+                                if (idx as usize) < b.len() {
+                                    b[idx as usize] = v;
+                                } else if (idx as usize) == b.len() {
+                                    b.push(v);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 OpCode::Return { value } => {
                     return Ok(value.map(|r| regs[r.index()].clone()).unwrap_or(PhpValue::Null));
                 }
@@ -1718,22 +1785,6 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_items)
                                 .unwrap_or_default();
-                            if let Some(first) = items.first() {
-                                for item in &items[1..] {
-                                    if !first.same_type_as(item) {
-                                        return Err(self.make_error(
-                                            RuntimeErrorKind::TypeError {
-                                                message: format!(
-                                                    "All elements in a list must have the same type, found {} and {}",
-                                                    first.type_name(),
-                                                    item.type_name()
-                                                ),
-                                            },
-                                            span,
-                                        ));
-                                    }
-                                }
-                            }
                             PhpValue::list(items)
                         }
                         IrCollectionKind::Dict => {
@@ -1748,6 +1799,9 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_items)
                                 .unwrap_or_default();
+                            for item in &items {
+                                self.reject_unhashable_key(item, span)?;
+                            }
                             if let Some(first) = items.first() {
                                 for item in &items[1..] {
                                     if !first.same_type_as(item) {
@@ -1771,6 +1825,9 @@ impl VM {
                                 .as_ref()
                                 .map(Self::extract_map_entries)
                                 .unwrap_or_default();
+                            for (key, _) in &entries {
+                                self.reject_unhashable_key(key, span)?;
+                            }
                             PhpValue::hash_map(entries)
                         }
                     };
@@ -1782,24 +1839,7 @@ impl VM {
                     let target_idx = base_reg + array.index();
                     match &self.registers[target_idx] {
                         PhpValue::List(arr) => {
-                            if let Some(first) = arr.borrow().first() {
-                                if !first.same_type_as(&val) {
-                                    return Err(self.make_error(
-                                        RuntimeErrorKind::TypeError {
-                                            message: format!(
-                                                "All elements in a list must have the same type, found {} and {}",
-                                                first.type_name(),
-                                                val.type_name()
-                                            ),
-                                        },
-                                        span,
-                                    ));
-                                }
-                            }
-                            self.registers[target_idx].ensure_list_mut();
-                            if let PhpValue::List(arr) = &self.registers[target_idx] {
-                                arr.borrow_mut().push(val);
-                            }
+                            arr.borrow_mut().push(val);
                         }
                         PhpValue::EmptyArray => {
                             self.registers[target_idx] = PhpValue::promote_empty_append(val);
@@ -1811,6 +1851,7 @@ impl VM {
                             }
                         }
                         PhpValue::Set(set) => {
+                            self.reject_unhashable_key(&val, span)?;
                             if let Some(first) = set.borrow().iter().next() {
                                 if !first.same_type_as(&val) {
                                     return Err(self.make_error(
@@ -1894,7 +1935,7 @@ impl VM {
                         self.registers[target_idx] = PhpValue::dict_from_map(map);
                     } else {
                         match &self.registers[target_idx] {
-                            PhpValue::List(arr) => {
+                            PhpValue::List(_) => {
                                 let idx = match &k {
                                     PhpValue::Int(i) if *i >= 0 => *i,
                                     PhpValue::Int(i) => {
@@ -1917,34 +1958,29 @@ impl VM {
                                         ));
                                     }
                                 };
-                                if let Some(first) = arr.borrow().first() {
-                                    if !first.same_type_as(&v) {
+                                self.registers[target_idx].ensure_list_mut();
+                                if let PhpValue::List(arr) = &self.registers[target_idx] {
+                                    let len = arr.borrow().len();
+                                    if (idx as usize) < len {
+                                        arr.borrow_mut()[idx as usize] = v;
+                                    } else if (idx as usize) == len {
+                                        arr.borrow_mut().push(v);
+                                    } else {
                                         return Err(self.make_error(
                                             RuntimeErrorKind::TypeError {
                                                 message: format!(
-                                                    "All elements in a list must have the same type, found {} and {}",
-                                                    first.type_name(),
-                                                    v.type_name()
+                                                    "List index must be in 0..{len}, got {idx}"
                                                 ),
                                             },
                                             span,
                                         ));
                                     }
                                 }
-                                self.registers[target_idx].ensure_list_mut();
-                                if let PhpValue::List(arr) = &self.registers[target_idx] {
-                                    let mut b = arr.borrow_mut();
-                                    if (idx as usize) < b.len() {
-                                        b[idx as usize] = v;
-                                    } else if (idx as usize) == b.len() {
-                                        b.push(v);
-                                    } else {
-                                        b.resize(idx as usize, PhpValue::Null);
-                                        b.push(v);
-                                    }
-                                }
                             }
                             PhpValue::EmptyArray => {
+                                if !matches!(&k, PhpValue::Int(0) | PhpValue::String(_)) {
+                                    self.reject_unhashable_key(&k, span)?;
+                                }
                                 self.registers[target_idx] = PhpValue::promote_empty_index(&k, v);
                             }
                             PhpValue::Array(_) => {
@@ -1983,6 +2019,7 @@ impl VM {
                                 }
                             }
                             PhpValue::HashMap(_) => {
+                                self.reject_unhashable_key(&k, span)?;
                                 self.registers[target_idx].ensure_hash_map_mut();
                                 if let PhpValue::HashMap(map) = &self.registers[target_idx] {
                                     map.borrow_mut().insert(k, v);
@@ -1990,6 +2027,7 @@ impl VM {
                             }
                             PhpValue::Set(set) => {
                                 if v.is_truthy() {
+                                    self.reject_unhashable_key(&k, span)?;
                                     if let Some(first) = set.borrow().iter().next() {
                                         if !first.same_type_as(&k) {
                                             return Err(self.make_error(
@@ -2044,26 +2082,7 @@ impl VM {
                     let target_idx = base_reg + dst_array.index();
                     match &self.registers[target_idx] {
                         PhpValue::List(arr) => {
-                            if let Some(first) = arr.borrow().first() {
-                                for item in &items {
-                                    if !first.same_type_as(item) {
-                                        return Err(self.make_error(
-                                            RuntimeErrorKind::TypeError {
-                                                message: format!(
-                                                    "All elements in a list must have the same type, found {} and {}",
-                                                    first.type_name(),
-                                                    item.type_name()
-                                                ),
-                                            },
-                                            span,
-                                        ));
-                                    }
-                                }
-                            }
-                            self.registers[target_idx].ensure_list_mut();
-                            if let PhpValue::List(arr) = &self.registers[target_idx] {
-                                arr.borrow_mut().extend(items);
-                            }
+                            arr.borrow_mut().extend(items);
                         }
                         PhpValue::EmptyArray => {
                             if !items.is_empty() {
@@ -2077,6 +2096,9 @@ impl VM {
                             }
                         }
                         PhpValue::Set(set) => {
+                            for item in &items {
+                                self.reject_unhashable_key(item, span)?;
+                            }
                             if let Some(first) = set.borrow().iter().next() {
                                 for item in &items {
                                     if !first.same_type_as(item) {
@@ -2103,6 +2125,15 @@ impl VM {
                         }
                         _ => {}
                     }
+                }
+
+                OpCode::UnsetIndex { .. } => {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "unset() cannot remove an element. Use ->remove().".to_string(),
+                        },
+                        span,
+                    ));
                 }
 
                 OpCode::ArrayGet { dst, array, index } => {
@@ -2926,7 +2957,15 @@ impl VM {
                     is_nullsafe,
                 } => {
                     let staged = self.drain_staged_args(arg_count as usize);
-                    let receiver = self.registers[base_reg + object.index()].clone();
+                    let is_reassign = dst == object;
+                    let receiver = if is_reassign {
+                        std::mem::replace(
+                            &mut self.registers[base_reg + object.index()],
+                            PhpValue::Null,
+                        )
+                    } else {
+                        self.registers[base_reg + object.index()].clone()
+                    };
                     if is_nullsafe && receiver.is_null() {
                         self.registers[base_reg + dst.index()] = PhpValue::Null;
                         continue;
@@ -2940,6 +2979,31 @@ impl VM {
                             .to_string()
                     };
 
+                    // ── Optimization 2: Stream Fusion for pure collection pipelines ──────
+                    // For List/Array receivers whose first pipeline method (map, filter,
+                    // reject, take, skip) uses only pure-closure or scalar args, look ahead
+                    // in the bytecode stream and fuse consecutive stages into a single pass.
+                    if matches!(&receiver, PhpValue::List(_) | PhpValue::Array(_))
+                        && Self::is_fuseable_stage(&method_name)
+                        && staged.iter().all(|a| Self::staged_arg_is_pure(a))
+                    {
+                        if let Some((fused_result, final_dst_reg)) = self
+                            .try_execute_fused_pipeline(
+                                &receiver,
+                                &method_name,
+                                &staged,
+                                base_reg,
+                                func_id,
+                                dst,
+                                span,
+                            )?
+                        {
+                            self.registers[base_reg + final_dst_reg.index()] = fused_result;
+                            continue;
+                        }
+                    }
+                    // ── End Stream Fusion ────────────────────────────────────────────────
+
                     if self.dispatch_instance_method(
                         receiver,
                         method_name,
@@ -2952,6 +3016,7 @@ impl VM {
                         continue;
                     }
                 }
+
 
                 OpCode::MethodCallDirect {
                     dst,
@@ -6281,6 +6346,7 @@ impl VM {
                     }
                     "add" | "push" => {
                         let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                        self.reject_unhashable_key(&val, span)?;
                         let b = set.borrow();
                         if let Some(first) = b.iter().next() {
                             if !first.same_type_as(&val) {
@@ -6655,6 +6721,7 @@ impl VM {
                     "put" | "set" => {
                         let key = args.first().cloned().unwrap_or(PhpValue::Null);
                         let val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                        self.reject_unhashable_key(&key, span)?;
                         map.borrow_mut().insert(key, val);
                         Ok(receiver.clone())
                     }
@@ -6984,6 +7051,50 @@ impl VM {
             PhpValue::EmptyArray
             | PhpValue::List(_)
             | PhpValue::Array(_) => {
+                // ── Optimization 1: FBIP (Functional But In-Place) Sort ──────────
+                // When $nums = $nums->sort() or $nums->natsort() is called and the
+                // underlying buffer has no other aliases (strong_count == 1), and no
+                // custom comparator closure is supplied, we mutate the backing buffer
+                // in-place. We do this BEFORE extract_items() to avoid any temporary
+                // vector clone or heap reallocation whatsoever (zero allocation!).
+                match method {
+                    "sort" | "asort" | "usort" | "uasort" => {
+                        let has_comparator = args.first().map_or(false, |a| matches!(a, PhpValue::Closure(_)));
+                        if !has_comparator && receiver.ref_count() == 1 {
+                            if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                                rc.borrow_mut()
+                                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                self.fbip_inplace_sorts += 1;
+                                crate::vm::memory::record_fbip_inplace_sort();
+                                return Ok(receiver.clone());
+                            }
+                        }
+                    }
+                    "natsort" | "natSort" | "sortNatural" => {
+                        if receiver.ref_count() == 1 {
+                            if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                                rc.borrow_mut()
+                                    .sort_by(|a, b| php_value_natural_cmp(a, b, false));
+                                self.fbip_inplace_sorts += 1;
+                                crate::vm::memory::record_fbip_inplace_sort();
+                                return Ok(receiver.clone());
+                            }
+                        }
+                    }
+                    "natcasesort" | "natCaseSort" | "sortNaturalCase" => {
+                        if receiver.ref_count() == 1 {
+                            if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
+                                rc.borrow_mut()
+                                    .sort_by(|a, b| php_value_natural_cmp(a, b, true));
+                                self.fbip_inplace_sorts += 1;
+                                crate::vm::memory::record_fbip_inplace_sort();
+                                return Ok(receiver.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
                 let items = Self::extract_items(receiver);
                 match method {
                     "check" => {
@@ -7153,20 +7264,6 @@ impl VM {
                     "push" | "add" => {
                         let mut updated = items;
                         for a in args {
-                            if let Some(first) = updated.first() {
-                                if !first.same_type_as(a) {
-                                    return Err(self.make_error(
-                                        RuntimeErrorKind::TypeError {
-                                            message: format!(
-                                                "All elements in a list must have the same type, found {} and {}",
-                                                first.type_name(),
-                                                a.type_name()
-                                            ),
-                                        },
-                                        span,
-                                    ));
-                                }
-                            }
                             updated.push(a.clone());
                         }
                         if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
@@ -7210,22 +7307,6 @@ impl VM {
                         }
                     }
                     "unshift" => {
-                        for a in args {
-                            if let Some(first) = items.first() {
-                                if !first.same_type_as(a) {
-                                    return Err(self.make_error(
-                                        RuntimeErrorKind::TypeError {
-                                            message: format!(
-                                                "All elements in a list must have the same type, found {} and {}",
-                                                first.type_name(),
-                                                a.type_name()
-                                            ),
-                                        },
-                                        span,
-                                    ));
-                                }
-                            }
-                        }
                         let mut updated: Vec<PhpValue> = args.to_vec();
                         updated.extend(items);
                         if let PhpValue::List(rc) | PhpValue::Array(rc) = receiver {
@@ -10868,6 +10949,22 @@ impl VM {
         }
     }
 
+    fn reject_unhashable_key(&self, key: &PhpValue, span: Span) -> Result<(), RuntimeError> {
+        if key.is_unhashable_collection() {
+            Err(self.make_error(
+                RuntimeErrorKind::TypeError {
+                    message: format!(
+                        "{} cannot be used as a set element or hashmap key",
+                        key.type_name()
+                    ),
+                },
+                span,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn make_error(&self, kind: RuntimeErrorKind, span: Span) -> RuntimeError {
         let mut trace = Vec::with_capacity(self.frames.len());
         for frame in self.frames.iter().rev() {
@@ -10884,7 +10981,384 @@ impl VM {
         }
         RuntimeError::with_stack_trace(kind, span, trace)
     }
+
+    // =========================================================================
+    // Optimization 2: Stream Fusion for Pure Collection Pipelines
+    // =========================================================================
+
+    /// Returns `true` if `name` is a pure, stateless list pipeline method
+    /// eligible for stream fusion (single-pass execution without intermediate allocations).
+    #[inline]
+    fn is_fuseable_stage(name: &str) -> bool {
+        matches!(name, "map" | "filter" | "reject" | "take" | "skip")
+    }
+
+    /// Returns `true` if a [`StagedArg`] carries a pure closure or a scalar value.
+    ///
+    /// Pure closures (non-capturing or value-capturing) are safe to call repeatedly
+    /// within a fused loop because they cannot mutate external state.  Scalar values
+    /// (int, float, bool, string, null) are always safe.
+    #[inline]
+    fn staged_arg_is_pure(arg: &StagedArg) -> bool {
+        match &arg.value {
+            PhpValue::Closure(c) => c.category.is_pure(),
+            PhpValue::Int(_)
+            | PhpValue::Float(_)
+            | PhpValue::Bool(_)
+            | PhpValue::String(_)
+            | PhpValue::Null => true,
+            _ => false,
+        }
+    }
+
+    /// Attempt to detect and execute a contiguous chain of fuseable pipeline
+    /// [`OpCode::MethodCall`] instructions starting from the *current* one.
+    ///
+    /// # Strategy
+    ///
+    /// Starting from the IP immediately after the current `MethodCall` instruction
+    /// (`self.frames[last].ip`), this function scans ahead for the repeating pattern:
+    ///
+    /// ```text
+    /// PushArg{src=rX}*  MethodCall{object=prev_dst, fuseable}
+    /// ```
+    ///
+    /// For each additional fused stage found:
+    /// - reads the argument register values directly (they are already computed),
+    /// - verifies they are pure (pure closure or scalar),
+    /// - appends the stage to the chain.
+    ///
+    /// If the chain has **at least 2 stages** (the current one plus ≥1 additional),
+    /// executes the entire chain as a **single-pass loop** over the input collection,
+    /// advances `self.frames[last].ip` past all consumed extra instructions, writes
+    /// the result to the **final** destination register, and returns `Some((result, final_dst))`.
+    ///
+    /// Returns `None` when no additional stages are found (normal dispatch proceeds).
+    fn try_execute_fused_pipeline(
+        &mut self,
+        receiver: &PhpValue,
+        first_method: &str,
+        first_staged: &[StagedArg],
+        base_reg: usize,
+        func_id: Option<FunctionId>,
+        first_dst: Reg,
+        span: Span,
+    ) -> Result<Option<(PhpValue, Reg)>, RuntimeError> {
+        // ── Phase 1: Scan ahead, build the chain ─────────────────────────────
+        let frame_idx = self.frames.len() - 1;
+        let scan_start_ip = self.frames[frame_idx].ip; // IP *after* the current MethodCall
+
+        // Chain entries: (method_name, staged_args_snapshot, dst_reg)
+        let mut chain: Vec<(String, Vec<StagedArg>, Reg)> =
+            vec![(first_method.to_string(), first_staged.to_vec(), first_dst)];
+
+        let mut prev_dst = first_dst;
+        let mut extra_ops_consumed: usize = 0;
+
+        let total_instructions = {
+            let chunk = self.chunk_for_func(func_id);
+            chunk.instructions.len()
+        };
+
+        let mut local_regs: HashMap<usize, PhpValue> = HashMap::new();
+        let mut lookahead_upvals: Vec<(String, PhpValue, bool)> = Vec::new();
+        let mut current_stage_args: Vec<StagedArg> = Vec::new();
+        let mut curr_ip = scan_start_ip;
+
+        while curr_ip < total_instructions {
+            let op = {
+                let chunk = self.chunk_for_func(func_id);
+                chunk.instructions[curr_ip]
+            };
+
+            match op {
+                OpCode::LoadNull { dst } => {
+                    local_regs.insert(dst.index(), PhpValue::Null);
+                    curr_ip += 1;
+                }
+                OpCode::LoadBool { dst, value } => {
+                    local_regs.insert(dst.index(), PhpValue::Bool(value));
+                    curr_ip += 1;
+                }
+                OpCode::LoadInt { dst, value } => {
+                    local_regs.insert(dst.index(), PhpValue::Int(value as i64));
+                    curr_ip += 1;
+                }
+                OpCode::LoadFloat { dst, bits } => {
+                    local_regs.insert(dst.index(), PhpValue::Float(f64::from_bits(bits)));
+                    curr_ip += 1;
+                }
+                OpCode::LoadConst { dst, const_id } => {
+                    let chunk = self.chunk_for_func(func_id);
+                    if let Some(c) = chunk.get_constant(const_id) {
+                        let val = match c {
+                            Constant::Null => Some(PhpValue::Null),
+                            Constant::Bool(b) => Some(PhpValue::Bool(*b)),
+                            Constant::Int(i) => Some(PhpValue::Int(*i)),
+                            Constant::Float(f) => Some(PhpValue::Float(*f)),
+                            Constant::String(s) => Some(PhpValue::string(s.clone())),
+                            _ => None,
+                        };
+                        if let Some(v) = val {
+                            local_regs.insert(dst.index(), v);
+                            curr_ip += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                OpCode::Move { dst, src } => {
+                    let val = local_regs
+                        .get(&src.index())
+                        .cloned()
+                        .unwrap_or_else(|| self.registers[base_reg + src.index()].clone());
+                    local_regs.insert(dst.index(), val);
+                    curr_ip += 1;
+                }
+                OpCode::CaptureUpvalue { src, name, is_by_ref } => {
+                    if is_by_ref {
+                        // By-reference captures are impure; abort fusion.
+                        break;
+                    }
+                    let chunk = self.chunk_for_func(func_id);
+                    let upval_name = chunk
+                        .get_string_constant(name)
+                        .unwrap_or_default()
+                        .to_string();
+                    let val = local_regs
+                        .get(&src.index())
+                        .cloned()
+                        .unwrap_or_else(|| self.registers[base_reg + src.index()].clone());
+                    lookahead_upvals.push((upval_name, val, false));
+                    curr_ip += 1;
+                }
+                OpCode::MakeClosure {
+                    dst,
+                    func_id: target_fn,
+                    upvalue_count,
+                    category,
+                } => {
+                    if !category.is_pure() {
+                        // Impure closure: abort fusion
+                        break;
+                    }
+                    let count = upvalue_count as usize;
+                    let start = lookahead_upvals.len().saturating_sub(count);
+                    let captured: Vec<PhpValue> = lookahead_upvals
+                        .drain(start..)
+                        .map(|(_, v, _)| v)
+                        .collect();
+                    let (fn_name, is_static) = self
+                        .module
+                        .get_function(target_fn)
+                        .map(|f| (f.name.clone(), f.is_static))
+                        .unwrap_or_else(|| (format!("fn#{}", target_fn.0), false));
+                    let closure =
+                        PhpValue::closure(target_fn, fn_name, captured, is_static, category);
+                    local_regs.insert(dst.index(), closure);
+                    curr_ip += 1;
+                }
+                OpCode::PushArg {
+                    src,
+                    is_unpack,
+                    is_reference,
+                    is_skipped,
+                    ..
+                } => {
+                    if is_unpack || is_reference {
+                        break;
+                    }
+                    let val = if is_skipped {
+                        PhpValue::Null
+                    } else {
+                        local_regs
+                            .get(&src.index())
+                            .cloned()
+                            .unwrap_or_else(|| self.registers[base_reg + src.index()].clone())
+                    };
+                    if !Self::staged_arg_is_pure(&StagedArg::simple(val.clone())) {
+                        break;
+                    }
+                    current_stage_args.push(StagedArg::simple(val));
+                    curr_ip += 1;
+                }
+                OpCode::MethodCall {
+                    dst,
+                    object,
+                    method,
+                    arg_count,
+                    is_nullsafe,
+                } => {
+                    if is_nullsafe
+                        || object != prev_dst
+                        || arg_count as usize != current_stage_args.len()
+                    {
+                        break;
+                    }
+                    let chunk = self.chunk_for_func(func_id);
+                    let m_name = chunk
+                        .get_string_constant(method)
+                        .unwrap_or_default()
+                        .to_string();
+                    if !Self::is_fuseable_stage(&m_name) {
+                        break;
+                    }
+                    chain.push((m_name, std::mem::take(&mut current_stage_args), dst));
+                    prev_dst = dst;
+                    curr_ip += 1;
+                    extra_ops_consumed = curr_ip - scan_start_ip;
+                }
+                _ => break,
+            }
+        }
+
+        // Only fuse if we detected at least one additional stage beyond the first.
+        if chain.len() < 2 {
+            return Ok(None);
+        }
+
+        // Commit simulated registers to VM register window
+        for (reg_idx, val) in local_regs {
+            self.registers[base_reg + reg_idx] = val;
+        }
+
+        // Record telemetry
+        self.stream_fusions += 1;
+        crate::vm::memory::record_stream_fusion();
+
+        // ── Phase 2: Resolve each stage to a typed descriptor ─────────────────
+        enum FusedStage {
+            Map(Rc<VmClosure>),
+            Filter(Rc<VmClosure>),
+            Reject(Rc<VmClosure>),
+            Take { limit: usize, taken: usize },
+            Skip { count: usize, skipped: usize },
+        }
+
+        let items = Self::extract_items(receiver);
+        let total = items.len();
+
+        let mut resolved: Vec<FusedStage> = Vec::with_capacity(chain.len());
+        for (method, staged, _dst) in &chain {
+            let stage = match method.as_str() {
+                "map" => match staged.first().map(|a| &a.value) {
+                    Some(PhpValue::Closure(cb)) => FusedStage::Map(cb.clone()),
+                    _ => return Ok(None),
+                },
+                "filter" => match staged.first().map(|a| &a.value) {
+                    Some(PhpValue::Closure(cb)) => FusedStage::Filter(cb.clone()),
+                    _ => return Ok(None),
+                },
+                "reject" => match staged.first().map(|a| &a.value) {
+                    Some(PhpValue::Closure(cb)) => FusedStage::Reject(cb.clone()),
+                    _ => return Ok(None),
+                },
+                "take" => {
+                    let limit = staged
+                        .first()
+                        .and_then(|a| a.value.to_i64())
+                        .unwrap_or(0);
+                    let count = if limit >= 0 {
+                        limit as usize
+                    } else {
+                        total.saturating_sub((-limit) as usize)
+                    };
+                    FusedStage::Take {
+                        limit: count,
+                        taken: 0,
+                    }
+                }
+                "skip" => {
+                    let count = staged
+                        .first()
+                        .and_then(|a| a.value.to_i64())
+                        .unwrap_or(0)
+                        .max(0) as usize;
+                    FusedStage::Skip {
+                        count,
+                        skipped: 0,
+                    }
+                }
+                _ => return Ok(None),
+            };
+            resolved.push(stage);
+        }
+
+        let final_dst = chain.last().unwrap().2;
+
+        // If any take stage has limit 0, result is immediately empty!
+        if resolved.iter().any(|s| matches!(s, FusedStage::Take { limit: 0, .. })) {
+            self.frames[frame_idx].ip += extra_ops_consumed;
+            return Ok(Some((PhpValue::list(Vec::new()), final_dst)));
+        }
+
+        // ── Phase 3: Single-pass fused loop ───────────────────────────────────
+        let mut out: Vec<PhpValue> = Vec::new();
+
+        'item: for (global_idx, item) in items.into_iter().enumerate() {
+            let mut current = item;
+            let mut emit = true;
+
+            for stage in &mut resolved {
+                match stage {
+                    FusedStage::Map(cb) => {
+                        current = self.invoke_closure_sync(
+                            cb,
+                            vec![current, PhpValue::Int(global_idx as i64)],
+                            span,
+                        )?;
+                    }
+                    FusedStage::Filter(cb) => {
+                        let keep = self.invoke_closure_sync(
+                            cb,
+                            vec![current.clone(), PhpValue::Int(global_idx as i64)],
+                            span,
+                        )?;
+                        if !keep.is_truthy() {
+                            emit = false;
+                            break;
+                        }
+                    }
+                    FusedStage::Reject(cb) => {
+                        let drop = self.invoke_closure_sync(
+                            cb,
+                            vec![current.clone(), PhpValue::Int(global_idx as i64)],
+                            span,
+                        )?;
+                        if drop.is_truthy() {
+                            emit = false;
+                            break;
+                        }
+                    }
+                    FusedStage::Skip { count, skipped } => {
+                        if *skipped < *count {
+                            *skipped += 1;
+                            emit = false;
+                            break;
+                        }
+                    }
+                    FusedStage::Take { limit, taken } => {
+                        if *taken >= *limit {
+                            break 'item;
+                        }
+                        *taken += 1;
+                    }
+                }
+            }
+
+            if emit {
+                out.push(current);
+            }
+        }
+
+        // ── Phase 4: Advance IP and return result ─────────────────────────────
+        self.frames[frame_idx].ip += extra_ops_consumed;
+        Ok(Some((PhpValue::list(out), final_dst)))
+    }
 }
+
 
 impl From<BytecodeChunk> for IrModule {
     fn from(chunk: BytecodeChunk) -> Self {

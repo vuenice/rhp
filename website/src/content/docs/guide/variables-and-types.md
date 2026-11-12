@@ -138,43 +138,44 @@ $flag  = bool(1);          // true (bool)
 
 ---
 
-## Default Storage: `int` and `float` are both `i32`
+## Native 64-Bit Storage: `int` (i64) and `float` (f64)
 
 > [!IMPORTANT]
-> **Both `int` and `float` default to `i32` (32-bit) storage.**
-> The `float` primitive does **not** map to Rust's `f64` by default. It stores a 32-bit integer under the hood just like `int`. Use `Float::f64(...)` or `Float::f32(...)` via the `Float` facade when you explicitly need IEEE-754 precision.
+> **Native 64-Bit Arithmetic Lowered Directly to Rust:**
+> In RHP, `int` is a signed 64-bit integer (`i64`) and `float` is an IEEE-754 64-bit double precision float (`f64`). Both are directly lowered down to bare-metal primitives and stored inline (unboxed) in bytecode registers (`PhpValue::Int(i64)` and `PhpValue::Float(f64)`). They incur **zero heap allocations** and run at hardware CPU speed.
 
 ```php
-int   $count = 42;       // i32 internally
-float $score = 9;        // also i32 internally — NOT f64
-
-// Explicit 64-bit or IEEE float via the Float facade:
-$precise = Float::f64(3.141592653589793);  // f64 precision
-$big     = Int::i64(9223372036854775807);  // i64 max value
+int   $count = 42;       // i64 internally
+float $score = 9.99;     // f64 internally
+int   $bigId = 9223372036854775807; // Full 64-bit signed integer
+float $pi    = 3.141592653589793;   // Full 64-bit IEEE-754 precision
 ```
 
 ---
 
-## `Int` and `Float` — Supporting Facade Classes (NOT Base Types)
+## `Int` and `Float` — Supporting Utility Facades (NOT Base Types)
 
-`Int` and `Float` are **static facade classes** — they are *not* instances of `int` or `float` and can never be instantiated with `new`. They provide factory methods and fluent utilities for working with extended Rust numeric types.
+`Int` and `Float` are **static utility facade classes** — they are *not* types or wrappers, and can never be instantiated with `new`. They provide utility methods for random generation, variadic comparisons, and string formatting.
 
 | Item | Kind | Example |
 | :--- | :--- | :--- |
 | `int` | Primitive keyword (base datatype) | `int $x = 5;` |
-| `float` | Primitive keyword (base datatype) | `float $y = 3;` |
-| `Int` | Static facade class (identifier) | `Int::i64(...)` |
-| `Float` | Static facade class (identifier) | `Float::f64(...)` |
+| `float` | Primitive keyword (base datatype) | `float $y = 3.14;` |
+| `Int` | Static utility facade (identifier) | `Int::random(1, 100)` |
+| `Float` | Static utility facade (identifier) | `Float::compare($a, $b, 0.001)` |
 
 ```php
-// ✅ Correct — use as type keywords (primitive base types)
+// ✅ Correct — use lowercase primitive keywords for types
 int   $age    = 30;
-float $amount = 100;
+float $amount = 99.95;
 
-// ✅ Correct — use as static facade (extended numeric utilities)
-$bigId   = Int::i64(9223372036854775807);
-$precise = Float::f64(3.141592653589793)->toDecimal(6);
-$random  = Int::i64()->random()->add()->subtract();
+// ✅ Correct — use fluent instance methods on variables for formatting/conversions
+string $formatted = $amount->toDecimal(2); // "99.95"
+int    $absolute  = $age->abs();           // 30
+
+// ✅ Correct — use static facades for non-instance utilities
+int   $dice  = Int::random(1, 6);
+float $ratio = Float::random(0.0, 1.0);
 
 // ❌ Fatal Error — Int and Float cannot be instantiated
 // $obj = new Int();
@@ -186,45 +187,48 @@ $random  = Int::i64()->random()->add()->subtract();
 
 ---
 
-## Extended Rust Numeric Types via Facade Methods
+## Fluent Instance Methods on Numeric Variables
 
-For low-level operations (cryptography, network protocols, large data), use the `Int` and `Float` facades to access native Rust numeric variants with full fluent chaining:
+Numeric variables support clean, immutable fluent methods for conversions, rounding, and formatting:
 
 ```php
-// --- Int facade ---
-$small  = Int::i8(127);               // i8  (-128 to 127)
-$medium = Int::i32(2_147_483_647);    // i32 (same as plain `int` default)
-$large  = Int::i64(9_223_372_036_854_775_807);  // i64
-$huge   = Int::i128(170141183460469231731687303715884105727); // i128
-$ptr    = Int::usize(1024);           // usize (pointer-width)
-$chain  = Int::i64()->random()->add(10)->subtract(3); // fluent
+// --- Integer methods ---
+int $num = -15;
+int    $absVal = $num->abs();       // 15
+string $asStr  = $num->toString();  // "-15"
+float  $asDec  = $num->toFloat();   // -15.0
 
-// --- Float facade ---
-$single = Float::f32(3.14);           // f32  (same as plain `float` default storage)
-$double = Float::f64(3.141592653589793); // f64 full IEEE-754 64-bit
-$fmt    = Float::f64(1234567.89)->toDecimal(2); // "1234567.89"
-$pct    = Float::f64(0.75)->toPercent();        // "75.00%"
+// --- Float methods ---
+float $price = 1234.5678;
+string $fixed   = $price->toDecimal(2); // "1234.57"
+float  $rounded = $price->round(2);     // 1234.57
+float  $floored = $price->floor();      // 1234.0
+float  $ceiled  = $price->ceil();       // 1235.0
+int    $intVal  = $price->toInt();      // 1234
 ```
+
+> [!NOTE]
+> Member function chaining is restricted on direct numeric literals (`0->abs()`, `42->toString()`). Always invoke methods on variables or parenthesized expressions.
 
 ---
 
-## Explicit Subtyped Collections (`Arr`)
+## Explicit Subtyped Collections (`list`, `dict`, `set`)
 
-Instead of standard, ambiguous hash tables for every list or map, RHP provides four specialized collection subtypes backed directly by Rust heap structures:
+Instead of standard, ambiguous hash tables for every list or map, RHP provides specialized collection subtypes backed directly by Rust heap structures:
 
-### 1. `Arr::list` (Sequential Lists)
+### 1. `list` (Sequential Lists)
 Optimized for strictly sequential numerical indices and maximum CPU cache locality. Backed by contiguous Rust `Rc<RefCell<Vec<PhpValue>>>` with Copy-On-Write (COW) semantics.
 
 * **CPU Cache Locality & Zero-Allocation Iteration:** During `foreach ($list as $key => $val)` iteration, the runtime uses a dedicated `ActiveIterator::List` stream that points directly to the underlying `Vec<PhpValue>` contiguous memory buffer with an internal cursor index. It streams elements without allocating intermediate key-value pair vectors or cloning keys.
 * **Strict Sequential Indexing:** Supports numeric index reading (`$list[0]`), updating (`$list[1] = 999`), and sequential appending (`$list[] = $val`).
 * **String Key Rejection:** Attempting to assign non-numeric string keys (such as `$list['name'] = 'val'`) is rejected with an `UndefinedIndex` error, preventing sequential lists from degrading into hash tables.
-* **Inline Type Annotations & Implicit Factory Lowering:** Local variable declarations using `list $arr = [];` are compiled directly into optimized Rust-backed `Arr::list([])` allocations under the hood.
+* **Inline Type Annotations:** Local variable declarations using `list $arr = [1, 2, 3];` are compiled directly into optimized Rust `Vec<PhpValue>` allocations under the hood.
 
 ```php
-// Inline variable type annotation and implicit factory initialization
-list $numbers = [10, 20, 30, 40]; // Lowers directly to Arr::list([10, 20, 30, 40])
+// Inline variable type annotation and sequential list initialization
+list $numbers = [10, 20, 30, 40];
 
-// Fluent higher-order transformations
+// Fluent higher-order transformations (pure & immutable)
 list $doubled = $numbers
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 30);
@@ -232,7 +236,7 @@ list $doubled = $numbers
 print($doubled[0]); // 40
 
 // Sequential operations
-$doubled[] = 100;    // Appends 100
+$doubled[] = 100;    // Standard in-place append
 $doubled[1] = 999;   // Updates index 1
 print($doubled->count()); // 4
 
@@ -252,32 +256,32 @@ This design provides two major advantages:
    dict $my_new_scoped_dict = [];
    ```
 
-#### Compiler & Parser Lowering Strategy
+#### Compiler & Type Lowering Strategy
 When RHP processes collection types, the lexer, parser, and IR lowerer collaborate through a three-stage lowering pipeline:
 * **Token Recognition:** The lexer recognizes `list`, `dict`, `set`, and `hashmap` as dedicated built-in type keywords (`Token::TypeList`, `Token::TypeDict`, etc.), clearly separating them from user-defined class identifiers.
-* **Implicit Lowering to Factory Calls:** When the parser encounters local variable declarations or assignments like `list $my_arr = [];`, it compiles them directly into the optimized Rust-backed factory initialization:
-  $$\text{list } \$my\_arr = []; \quad \longrightarrow \quad \$my\_arr = \text{Arr::list}([]); \quad \text{(backed by contiguous Vec<PhpValue>)}$$
-  $$\text{dict } \$my\_dict = []; \quad \longrightarrow \quad \$my\_dict = \text{Arr::dict}([]); \quad \text{(backed by IndexMap)}$$
-  $$\text{set } \$my\_set = []; \quad \longrightarrow \quad \$my\_set = \text{Arr::set}([]); \quad \text{(backed by HashSet)}$$
-  $$\text{hashmap } \$my\_map = []; \quad \longrightarrow \quad \$my\_map = \text{Arr::hashMap}([]); \quad \text{(backed by HashMap)}$$
+* **Native Rust Heap Allocations:** Local variable declarations or assignments like `list $my_arr = [];` allocate directly into high-performance native structures:
+  $$\text{list } \$my\_arr = []; \quad \longrightarrow \quad \text{backed by contiguous } Vec<PhpValue>$$
+  $$\text{dict } \$my\_dict = []; \quad \longrightarrow \quad \text{backed by } IndexMap$$
+  $$\text{set } \$my\_set = []; \quad \longrightarrow \quad \text{backed by } HashSet$$
+  $$\text{hashmap } \$my\_map = []; \quad \longrightarrow \quad \text{backed by } HashMap$$
 * **Parameter Type Safety:** At function boundaries, type contracts enforce compile-time verification and runtime guards (`OpCode::AssertType`), ensuring only the correct high-performance Rust variant enters the function.
 
 
-### 2. `Arr::dict` (Insertion-Ordered Maps)
+### 2. `dict` (Insertion-Ordered Maps)
 String-keyed map retaining strict deterministic insertion order and amortized $O(1)$ lookups, updates, and removals. Backed directly by Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`.
 
-* **Strict Insertion Ordering:** Unlike standard unordered hash tables, `Arr::dict` preserves exact key insertion order across all iterations, serializations, and mutations. Updating the value of an existing key preserves its original index slot.
+* **Strict Insertion Ordering:** Unlike standard unordered hash tables, `dict` preserves exact key insertion order across all iterations, serializations, and mutations. Updating the value of an existing key preserves its original index slot.
 * **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` drives an `ActiveIterator::Dict` that indexes directly into the underlying `IndexMap` via an internal cursor, eliminating intermediate vector allocations.
-* **Laravel Collection Methods:** `Arr::dict` exposes the full suite of Laravel-style collection instance methods for fluent, functional data pipelines.
+* **Laravel Collection Methods:** `dict` exposes the full suite of Laravel-style collection instance methods for fluent, functional data pipelines.
 
 ```php
-dict $product = Arr::dict([
+dict $product = [
     'sku'      => 'PROD-100',
     'name'     => 'Ergonomic Desk',
     'price'    => 250,
     'discount' => 25,
     'tax'      => 15,
-]);
+];
 
 // 1. Fluent Inspection & Access
 $name = $product->get('name');                   // 'Ergonomic Desk'
@@ -293,23 +297,25 @@ $discount = $product->pull('discount', 0);        // 25 (removes 'discount' from
 $product->forget('tax');                          // Removes 'tax'
 
 // 3. Higher-Order Transforms (Immutable Pipelines)
-dict $prices = Arr::dict(['item1' => 10, 'item2' => 20])
-    ->map(fn($price, $key) => $price * 2);        // ['item1' => 20, 'item2' => 40]
+dict $prices = ['item1' => 10, 'item2' => 20];
+dict $doubledPrices = $prices->map(fn($price, $key) => $price * 2); // ['item1' => 20, 'item2' => 40]
 
-dict $filtered = Arr::dict(['a' => 10, 'b' => 5, 'c' => 25])
-    ->filter(fn($val, $k) => $val >= 10);         // ['a' => 10, 'c' => 25]
+dict $inventory = ['a' => 10, 'b' => 5, 'c' => 25];
+dict $filtered = $inventory->filter(fn($val, $k) => $val >= 10);    // ['a' => 10, 'c' => 25]
+dict $rejected = $inventory->reject(fn($val, $k) => $val >= 10);    // ['b' => 5]
 
-dict $rejected = Arr::dict(['a' => 10, 'b' => 5, 'c' => 25])
-    ->reject(fn($val, $k) => $val >= 10);         // ['b' => 5]
-
-int $sum = Arr::dict(['x' => 10, 'y' => 20, 'z' => 30])->sum(); // 60
-float $avg = Arr::dict(['x' => 10, 'y' => 20, 'z' => 30])->avg(); // 20.0
+dict $coords = ['x' => 10, 'y' => 20, 'z' => 30];
+int $sum = $coords->sum(); // 60
+float $avg = $coords->avg(); // 20.0
 
 // 4. Filtering, Flipping, Merging & JSON Serialization
 dict $subset = $product->only(['sku', 'name']);
 dict $without = $product->except(['sku']);
-dict $flipped = Arr::dict(['role' => 'admin'])->flip(); // ['admin' => 'role']
-dict $merged = Arr::dict(['a' => 1])->merge(Arr::dict(['b' => 2, 'a' => 99])); // ['a' => 99, 'b' => 2]
+dict $roles = ['role' => 'admin'];
+dict $flipped = $roles->flip(); // ['admin' => 'role']
+dict $base = ['a' => 1];
+dict $overlay = ['b' => 2, 'a' => 99];
+dict $merged = $base->merge($overlay); // ['a' => 99, 'b' => 2]
 string $json = $product->toJson(); // '{"sku":"PROD-100","name":"Ergonomic Desk",...}'
 
 // 5. Zero-Allocation Streaming Iteration
@@ -318,11 +324,11 @@ foreach ($product as $prop => $val) {
 }
 ```
 
-### 3. `Arr::set` (Unique Sets - Step 10)
+### 3. `set` (Unique Sets)
 Unique collection mapped directly to native Rust `HashSet<PhpValue>`. Automatically deduplicates values, provides guaranteed $O(1)$ set membership, and implements mathematical set algebra:
 
 ```php
-set $tags = Arr::set(['fast', 'rust', 'php', 'rust', 'backend', 'php']);
+set $tags = ['fast', 'rust', 'php', 'rust', 'backend', 'php'];
 
 // 1. Automatic Deduplication
 print($tags->count()); // 4 (unique: 'fast', 'rust', 'php', 'backend')
@@ -345,8 +351,8 @@ bool $removed = $tags->remove('php'); // true (was present)
 $tags->delete('nonexistent');         // false (alias for remove())
 
 // 5. Mathematical Set Algebra
-$setA = Arr::set([1, 2, 3, 4]);
-$setB = Arr::set([3, 4, 5, 6]);
+set $setA = [1, 2, 3, 4];
+set $setB = [3, 4, 5, 6];
 
 set $diff = $setA->diff($setB);            // Relative complement: {1, 2}
 set $intersect = $setA->intersect($setB);  // Intersection: {3, 4}
@@ -354,8 +360,8 @@ set $union = $setA->union($setB);          // Set union: {1, 2, 3, 4, 5, 6}
 set $diffArr = $setA->diff([2, 4]);        // Cross-collection algebra with plain array
 
 // 6. Higher-Order Transforms & Reductions
-set $evens = Arr::set([1, 2, 3, 4, 5, 6])
-    ->filter(fn($n) => $n % 2 === 0);      // {2, 4, 6}
+set $nums = [1, 2, 3, 4, 5, 6];
+set $evens = $nums->filter(fn($n) => $n % 2 === 0);      // {2, 4, 6}
 
 set $doubled = $evens->map(fn($n) => $n * 10); // {20, 40, 60}
 int $sum = $doubled->reduce(fn($acc, $n) => $acc + $n, 0); // 120
@@ -427,8 +433,8 @@ $arr = ['name' => 'yogesh']; // Seamlessly reassigns to dictionary
 // Permissive parent type hint for backward compatibility:
 array $data = [1, 2, 3];
 $data = ['name' => 'yogesh'];           // Allowed
-$data = Arr::list([10, 20]);            // Allowed
-$data = Arr::dict(['env' => 'prod']);   // Allowed
+$data = [10, 20];                       // Allowed
+$data = ['env' => 'prod'];              // Allowed
 ```
 
 ### 3. Strict Type Bounds vs. Dynamic Variables
@@ -455,8 +461,16 @@ int $x = 0;
 
 ## Immutable Helper Methods by Default
 
-* **Immutability by Default:** Calling array and collection helper methods (such as `$my_array->sort()` or `Arr::list($my_array)->sort()`) **never mutates the original array in place**.
+* **Immutability by Default:** Calling array and collection helper methods (such as `$my_array->sort()`, `$my_array->map()`, `$my_array->filter()`) **never mutates the original collection in place**.
 * **Zero Hidden Side Effects:** Every transformation returns a brand-new collection instance, keeping data flows clean, predictable, and thread-safe.
+* **Compile Error on Unused Results:** Discarding the return value of an immutable collection method (`$my_array->sort();` without capturing or assigning) is rejected by the compiler.
+* **Linter Auto-Assignment:** The mandatory linter (`rhp run lint`) automatically detects unassigned collection transformations and rewrites them into self-assignments:
+  ```php
+  // BEFORE LINT:
+  $my_array->sort();
+  // AFTER LINT:
+  $my_array = $my_array->sort();
+  ```
 
 ```php
 $original = [3, 1, 2];
@@ -468,17 +482,17 @@ print($original[0]); // 3 (untouched!)
 print($sorted[0]);   // 1
 ```
 
-### Explicit Variable Reassignment
+### In-Place Mutations vs Reassignment
 
-If a developer wants to update a variable with the transformed or sorted array, they use **explicit reassignment**:
-
-```php
-$my_array = $my_array->sort();
-// or
-$my_array = Arr::list($my_array)->sort();
-```
-
-Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointer mechanics, making variable replacement lightning-fast without unnecessary memory duplication or garbage collection overhead.
+1. **Standard In-Place Append:** For sequential appending, standard PHP bracket syntax is used:
+   ```php
+   $nums[] = 42; // In-place append (O(1) with COW via ensure_list_mut)
+   ```
+2. **Collection Transformations via Reassignment:** If a developer wants to update a variable with the sorted or filtered collection:
+   ```php
+   $my_array = $my_array->sort();
+   ```
+   Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointer mechanics, making variable replacement lightning-fast without unnecessary memory duplication or garbage collection overhead.
 
 ---
 
@@ -487,7 +501,7 @@ Under the hood, this leverages RHP's internal **Copy-On-Write (COW)** and pointe
 To prevent unexpected side effects and eliminate unnecessary heap clones, collections and strings in RHP use Copy-On-Write (COW) semantics:
 
 ```php
-list $original = Arr::list([1, 2, 3]);
+list $original = [1, 2, 3];
 
 // Shares the underlying buffer with zero memory copy (O(1) pointer reference)
 list $copy = $original;
@@ -526,7 +540,7 @@ RHP uses **`null`** as a first-class scalar value and type keyword (unlike Rust,
   ```
 
 * **Missing Struct Property $\to$ Structs Not Present in RHP:**
-  The `struct` keyword is **not present in RHP**. Structured domain models are built using typed `class` declarations or native collection subtypes like `dict` (`Arr::dict`). On class instances, accessing undeclared properties triggers a compile-time or runtime `UndefinedProperty` error.
+  The `struct` keyword is **not present in RHP**. Structured domain models are built using typed `class` declarations or native collection subtypes like `dict`. On class instances, accessing undeclared properties triggers a compile-time or runtime `UndefinedProperty` error.
 
 * **Uninitialized Fields $\to$ Compile Error (Must Initialize at Creation):**
   Typed class properties cannot be left in an uninitialized state. All properties without default values must be initialized upon object creation (e.g., in `__construct`):
@@ -551,7 +565,7 @@ array_key_exists('a', $arr); // true  (key exists, value is null)
 array_key_exists('b', $arr); // false (key undefined)
 
 // With native RHP dict collections:
-dict $d = Arr::dict(['a' => null]);
+dict $d = ['a' => null];
 $d->has('a');                // true  (key exists)
 $d->has('b');                // false (key undefined)
 $d->get('a');                // null

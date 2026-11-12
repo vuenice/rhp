@@ -71,7 +71,7 @@ RHP supports both the permissive `array` parent type and strict collection subty
 ```php
 // 1. Permissive parent return type: accepts any collection variant
 function myfuncWhichreturnsArray(): array {
-    return [1, 2, 3]; // or return ['name' => 'yogesh']; or return Arr::list(...);
+    return [1, 2, 3]; // or return ['name' => 'yogesh'];
 }
 
 // 2. Permissive array parameter: accepts List, Dict, Set, HashMap, or standard Array
@@ -81,8 +81,10 @@ function countElements(array $items): int {
 
 $c1 = countElements([1, 2, 3]);                  // Standard array
 $c2 = countElements(['a' => 1, 'b' => 2]);       // Dictionary
-$c3 = countElements(Arr::list([10, 20, 30]));    // Subtyped List
-$c4 = countElements(Arr::set(['a', 'b']));       // Subtyped Set
+list $typedList = [10, 20, 30];
+$c3 = countElements($typedList);                 // Subtyped List
+set $typedSet = ['a', 'b'];
+$c4 = countElements($typedSet);                  // Subtyped Set
 
 // 3. Strict collection subtypes: enforce precise memory boundaries
 function process_items(list $my_arr, dict $my_dict) {
@@ -99,7 +101,7 @@ function processUsers(list $userIds, dict $options): list {
 }
 
 // Incompatible arguments throw compile-time & runtime type errors:
-// process_items('not a list', Arr::dict([])); 
+// process_items('not a list', []); 
 // Error: Argument #1 ('$my_arr') has incompatible type: expected 'list', found 'string'
 ```
 
@@ -116,7 +118,7 @@ Arrow functions provide concise syntax for higher-order collection transformatio
 ```php
 float $taxRate = 0.08;
 
-list $prices = Arr::list([10.0, 20.0, 30.0]);
+list $prices = [10.0, 20.0, 30.0];
 list $taxed = $prices->map(fn(float $price) => $price * (1 + $taxRate));
 ```
 

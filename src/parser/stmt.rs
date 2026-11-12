@@ -1,12 +1,12 @@
 use crate::ast::{
-    expr::{Argument, Expr, ExprKind},
+    expr::{Expr, ExprKind},
     stmt::{
         Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind,
         ElseIfBranch, EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, PropertyDecl,
         Stmt, StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf,
         TraitUseDecl, UseImport,
     },
-    types::{ClassModifiers, Ident, Visibility},
+    types::{ClassModifiers, Visibility},
 };
 use crate::lexer::{
     facade::{is_static_facade, is_static_only, register_tier3_facade},
@@ -569,30 +569,16 @@ impl<'s> CombinatorStream<'s> {
             let mut vars = Vec::new();
             while !self.check(&Token::CloseParen) && !self.is_eof() {
                 let expr = self.parse_expr_lowest()?;
-                match expr.kind {
-                    ExprKind::ArrayIndex { array, index } => {
-                        if let Some(idx) = index {
-                            let call_span = expr.span;
-                            let remove_call = Expr::new(
-                                ExprKind::MethodCall {
-                                    object: array,
-                                    method: Ident::new("remove", call_span),
-                                    args: vec![Argument::new(*idx, call_span)],
-                                    is_nullsafe: false,
-                                },
-                                call_span,
-                            );
-                            stmts.push(Stmt::new(StmtKind::Expr(remove_call), call_span));
-                        } else {
-                            return Err(ParseError::new(
-                                ParseErrorKind::InvalidUnsetTarget {
-                                    reason: "Cannot unset empty array subscript `[]`".to_string(),
-                                },
-                                expr.span,
-                            ));
-                        }
+                match &expr.kind {
+                    ExprKind::ArrayIndex { index: None, .. } => {
+                        return Err(ParseError::new(
+                            ParseErrorKind::InvalidUnsetTarget {
+                                reason: "Cannot unset empty array subscript `[]`".to_string(),
+                            },
+                            expr.span,
+                        ));
                     }
-                    ExprKind::Variable(_) => {
+                    ExprKind::ArrayIndex { .. } | ExprKind::Variable(_) => {
                         vars.push(expr);
                     }
                     _ => {

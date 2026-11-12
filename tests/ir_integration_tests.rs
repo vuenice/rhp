@@ -156,8 +156,12 @@ fn test_subtyped_collections_and_fluent_arrow_closures() {
         collection_kinds,
         vec![
             IrCollectionKind::List,
+            IrCollectionKind::List,
             IrCollectionKind::Dict,
+            IrCollectionKind::Dict,
+            IrCollectionKind::List,
             IrCollectionKind::Set,
+            IrCollectionKind::Dict,
             IrCollectionKind::HashMap,
         ]
     );

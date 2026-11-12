@@ -77,21 +77,21 @@ The `foreach` construct iterates smoothly over all RHP collection subtypes (`lis
 
 ### 1. Subtyped Collections (`list`, `dict`, `set`, `hashMap`)
 
-For dictionaries (`Arr::dict`), `foreach` drives a zero-allocation streaming iterator (`ActiveIterator::Dict`) that accesses entries directly via internal index offsets without allocating temporary key/value arrays, strictly maintaining insertion order:
+For dictionaries (`dict`), `foreach` drives a zero-allocation streaming iterator (`ActiveIterator::Dict`) that accesses entries directly via internal index offsets without allocating temporary key/value arrays, strictly maintaining insertion order:
 
 ```php
 // Iterating over a list (sequential 0-based index)
-list $users = Arr::list(['Alice', 'Bob', 'Charlie']);
+list $users = ['Alice', 'Bob', 'Charlie'];
 foreach ($users as $index => $name) {
     Sys::print("[{}]: {}", $index, $name);
 }
 
 // Iterating over an ordered dictionary (strict insertion order preserved)
-dict $meta = Arr::dict([
+dict $meta = [
     'region'  => 'us-east-1',
     'active'  => true,
     'cluster' => 'k8s-prod',
-]);
+];
 foreach ($meta as $key => $value) {
     Sys::print("{} => {}", $key, (string)$value);
 }

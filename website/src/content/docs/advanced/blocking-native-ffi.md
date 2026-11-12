@@ -111,10 +111,10 @@ $checksum = Crypto::fast_crc32("quick_header");
 $hash = Crypto::argon2id_hash($userPassword, $userSalt);
 
 // 3. Execution continues linearly
-return Arr::dict([
+return [
     "checksum" => $checksum,
     "hash"     => $hash,
-]);
+];
 ```
 
 ### 2. Module-Level `#![blocking]` Attribute

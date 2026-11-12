@@ -42,13 +42,13 @@ $response = Trace::span('checkout.process', function() {
         'amount' => 99.99,
     ]);
 
-    Trace::addEvent('payment_received', Arr::dict([
+    Trace::addEvent('payment_received', [
         'gateway' => 'stripe',
         'status' => 'success',
-    ]));
+    ]);
 
     return $payment->status();
-}, Arr::dict(['category' => 'ecommerce']));
+}, ['category' => 'ecommerce']);
 ```
 
 ### 2. Manual Span Lifecycle (`Trace::startSpan` & `Trace::endSpan`)
@@ -57,23 +57,23 @@ For multi-step or asynchronous workflows spanning across functions:
 
 ```php
 // Start a manual server span
-Trace::startSpan('manual_user_sync', Arr::dict([
+Trace::startSpan('manual_user_sync', [
     'kind' => 'SERVER',
-    'attributes' => Arr::dict([
+    'attributes' => [
         'sync.entity' => 'users',
         'sync.batch_size' => 100,
-    ]),
-]));
+    ],
+]);
 
 // Retrieve active distributed IDs for logging or RPC
 $traceId = Trace::traceId();
 $spanId  = Trace::spanId();
 $parent  = Trace::parentSpanId();
 
-Trace::addEvent('sync_step_completed', Arr::dict(['step' => 1]));
+Trace::addEvent('sync_step_completed', ['step' => 1]);
 
 // Complete the span with status OK or ERROR
-Trace::endSpan(Arr::dict(['status' => 'OK']));
+Trace::endSpan(['status' => 'OK']);
 ```
 
 ### Supported Span Kinds

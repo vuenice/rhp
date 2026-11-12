@@ -147,7 +147,7 @@ pub fn parse_expr(&mut self, min_bp: u8) -> Result<Expr<'s>, ParseError> {
   * Exponentiation: `2 ** 3 ** 4` parses as `2 ** (3 ** 4)`.
   * Chained assignment: `$a = $b = 10` parses as `$a = ($b = 10)`.
   * Null-coalesce: `$a ?? $b ?? $c` parses as `$a ?? ($b ?? $c)`.
-* **Fluent Chaining & Scope Resolution:** High binding power (`100`) binds `Arr::list(...)` and chains subsequent `->map(...)` and `->filter(...)` calls cleanly without parentheses.
+* **Fluent Chaining & Scope Resolution:** High binding power (`100`) binds collection expressions and variables, chaining subsequent `->map(...)` and `->filter(...)` calls cleanly without parentheses.
 * **Array Destructuring:** Prefix `[` detects lvalue target lists (`[$user, $posts] = Future::wait([...])`).
 * **Double-Quoted String Interpolation:** `"user={$id}"` is tokenized and decomposed into `Literal::InterpolatedString` with discrete `StringPart::Literal` and `StringPart::Expr` chunks.
 * **Static Facade Protection:** Instantiating static facades (`new Int()`, `new Arr()`, `new Str()`) triggers an immediate compile-time `ParseErrorKind::StaticFacadeInstantiationForbidden` error:
@@ -197,7 +197,7 @@ Before execution in Production Mode, the typed AST is translated into a flat, co
 - **Virtual Register Allocation (`Reg(u16)`):** Local variables, function parameters, and expression temporaries are allocated contiguous 16-bit virtual registers (`r0`..`r65535`).
 - **Constant Pool Deduplication (`Constant` / `ConstantId`):** Primitives, interned UTF-8 string literals, 64-bit numbers, and semantic `RhpType` contracts are deduplicated in per-chunk constant pools.
 - **Boundary Contract Guards:** Emits explicit `OpCode::AssertType` instructions at function/method parameter entry, return sites, and locked local declarations (`$x: int = ...`).
-- **Facade & Collection Specialization:** Lowers `Arr::list`, `Arr::dict`, `Arr::set`, and `Arr::hashMap` directly into `NewCollection` opcodes, native Rust integer/float constructors into `WrapRustInt` / `WrapRustFloat`, and legacy PHP calls into canonical facade dispatches.
+- **Facade & Collection Specialization:** Lowers `list`, `dict`, `set`, and `hashMap` literals directly into `NewCollection` opcodes, native Rust integer/float constructors into `WrapRustInt` / `WrapRustFloat`, and legacy PHP calls into canonical facade dispatches.
 
 ---
 
@@ -406,5 +406,16 @@ Closures (`function() use (...) { ... }`) and arrow functions (`fn(...) => ...`)
 
 For complete architectural details, empirical codebase audits, and benchmarks, see the dedicated [Pure Closure Optimization Guide](/docs/advanced/pure-closure-optimization).
 
+---
 
+## 9. Collection Compiler Optimizations: FBIP & Stream Fusion
 
+The bytecode compiler and register VM implement two under-the-hood collection optimizations:
+
+1. **FBIP (Functional But In-Place) Sort (`refcount == 1`):**
+   When the compiler detects reassignment to the same buffer (`$nums = $nums->sort()`) where no other alias exists (`refcount == 1`), it sorts the underlying buffer in-place (`zero allocation`), bypassing temporary vector clones. If aliases exist, it automatically falls back to safe Copy-On-Write (COW) detachment.
+
+2. **Stream Fusion (Loop Deforestation):**
+   Fluent higher-order collection pipelines (`$nums->map(...)->filter(...)->take(10)`) with pure closures are fused via bytecode lookahead into a single-pass loop. Intermediate vectors are eliminated, elements remain hot in CPU registers, and pipelines with `take(K)` short-circuit in $O(K)$ time instead of $O(N)$.
+
+For detailed architecture diagrams, memory benchmarks, and telemetry APIs, see the dedicated [Collection Compiler Optimizations Guide](/docs/advanced/collection-compiler-optimizations).

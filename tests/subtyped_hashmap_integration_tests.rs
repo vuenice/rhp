@@ -78,27 +78,19 @@ fn test_hashmap_complex_keys_support() {
         // Initialize empty HashMap
         $map = Arr::hashMap();
 
-        // 1. Array / List as complex key
-        $keyArr1 = [10, 20];
-        $keyArr2 = [30, 40];
-        $map[$keyArr1] = 'point A';
-        $map[$keyArr2] = 'point B';
-
-        // 2. Object / Class instance as complex key
+        // 1. Object / Class instance as complex key
         $e1 = new Entity(101);
         $e2 = new Entity(102);
         $map[$e1] = 'entity 101';
         $map[$e2] = 'entity 102';
 
-        // 3. Various scalar keys (Int, Float, String, Bool)
+        // 2. Various scalar keys (Int, Float, String, Bool)
         $map[100] = 'int key';
         $map[3.14] = 'float key';
         $map['normal_string'] = 'string key';
         $map[true] = 'bool key';
 
-        // Lookups using identical structural keys
-        $getPointA = $map[[10, 20]];
-        $getPointB = $map[[30, 40]];
+        // Lookups using keys
         $getEntity1 = $map[$e1];
         $getEntity2 = $map[$e2];
         $getInt = $map[100];
@@ -108,8 +100,6 @@ fn test_hashmap_complex_keys_support() {
         $count = $map->count();
 
         return [
-            $getPointA,
-            $getPointB,
             $getEntity1,
             $getEntity2,
             $getInt,
@@ -124,17 +114,23 @@ fn test_hashmap_complex_keys_support() {
     assert_eq!(
         res,
         PhpValue::list(vec![
-            PhpValue::string("point A"),
-            PhpValue::string("point B"),
             PhpValue::string("entity 101"),
             PhpValue::string("entity 102"),
             PhpValue::string("int key"),
             PhpValue::string("float key"),
             PhpValue::string("string key"),
             PhpValue::string("bool key"),
-            PhpValue::Int(8),
+            PhpValue::Int(6),
         ])
     );
+
+    // List cannot be used as hashmap key
+    let err_source = r#"
+        $map = Arr::hashMap();
+        $map[[10, 20]] = 'fail';
+    "#;
+    let err = run_source(err_source).expect_err("List as hashmap key must fail");
+    assert!(err.to_string().contains("cannot be used as a set element or hashmap key"));
 }
 
 #[test]
@@ -321,10 +317,15 @@ fn test_hashmap_foreach_iteration_with_complex_keys() {
     clear_runtime_closure_macros();
 
     let source = r#"
+        class KeyItem {
+            public int $val;
+            public function __construct(int $v) { $this->val = $v; }
+        }
+
         $map = Arr::hashMap();
-        $map[[1, 2]] = 10;
-        $map[[3, 4]] = 20;
-        $map[[5, 6]] = 30;
+        $map[new KeyItem(3)] = 10;
+        $map[new KeyItem(7)] = 20;
+        $map[new KeyItem(11)] = 30;
 
         $totalVal = 0;
         $keyCount = 0;
@@ -333,7 +334,7 @@ fn test_hashmap_foreach_iteration_with_complex_keys() {
         foreach ($map as $k => $v) {
             $totalVal += $v;
             $keyCount++;
-            $keysSum += $k[0] + $k[1];
+            $keysSum += $k->val;
         }
 
         $valOnlyTotal = 0;
@@ -350,7 +351,7 @@ fn test_hashmap_foreach_iteration_with_complex_keys() {
         PhpValue::list(vec![
             PhpValue::Int(60),
             PhpValue::Int(3),
-            PhpValue::Int(21), // (1+2) + (3+4) + (5+6) = 21
+            PhpValue::Int(21), // 3 + 7 + 11 = 21
             PhpValue::Int(60),
         ])
     );

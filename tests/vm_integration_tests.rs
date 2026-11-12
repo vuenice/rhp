@@ -550,36 +550,27 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
     assert!(!arr_mut.is_shared());
     assert!(!arr.is_shared());
 
-    // 3. VM runtime: Array Copy-on-Write on assignment and mutation
+    // 3. VM runtime: Lists are shared mutable objects across variable assignment
     let source_arr_cow = r#"
         $orig = [10, 20, 30];
         $copied = $orig;
         $copied[0] = 99;
         $copied[] = 100;
     "#;
-    let (vm, _) = run_source_with_vm(source_arr_cow).expect("Array COW execution should pass");
+    let (vm, _) = run_source_with_vm(source_arr_cow).expect("Array execution should pass");
     let orig = vm.get_main_variable("$orig").unwrap();
     let copied = vm.get_main_variable("$copied").unwrap();
 
-    assert_eq!(
-        orig,
-        &PhpValue::array(vec![
-            PhpValue::Int(10),
-            PhpValue::Int(20),
-            PhpValue::Int(30),
-        ])
-    );
-    assert_eq!(
-        copied,
-        &PhpValue::array(vec![
-            PhpValue::Int(99),
-            PhpValue::Int(20),
-            PhpValue::Int(30),
-            PhpValue::Int(100),
-        ])
-    );
+    let expected_shared = PhpValue::list(vec![
+        PhpValue::Int(99),
+        PhpValue::Int(20),
+        PhpValue::Int(30),
+        PhpValue::Int(100),
+    ]);
+    assert_eq!(orig, &expected_shared);
+    assert_eq!(copied, &expected_shared);
 
-    // 4. VM runtime: Array Copy-on-Write across function calls
+    // 4. VM runtime: Lists are shared mutable objects across function calls
     let source_func_cow = r#"
         function mutateList(array $items): array {
             $items[0] = 777;
@@ -590,27 +581,18 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
         $myList = [1, 2, 3];
         $returnedList = mutateList($myList);
     "#;
-    let (vm, _) = run_source_with_vm(source_func_cow).expect("Function COW execution should pass");
+    let (vm, _) = run_source_with_vm(source_func_cow).expect("Function execution should pass");
     let my_list = vm.get_main_variable("$myList").unwrap();
     let ret_list = vm.get_main_variable("$returnedList").unwrap();
 
-    assert_eq!(
-        my_list,
-        &PhpValue::array(vec![
-            PhpValue::Int(1),
-            PhpValue::Int(2),
-            PhpValue::Int(3),
-        ])
-    );
-    assert_eq!(
-        ret_list,
-        &PhpValue::array(vec![
-            PhpValue::Int(777),
-            PhpValue::Int(2),
-            PhpValue::Int(3),
-            PhpValue::Int(888),
-        ])
-    );
+    let expected_func = PhpValue::list(vec![
+        PhpValue::Int(777),
+        PhpValue::Int(2),
+        PhpValue::Int(3),
+        PhpValue::Int(888),
+    ]);
+    assert_eq!(my_list, &expected_func);
+    assert_eq!(ret_list, &expected_func);
 
     // 5. VM runtime: Object Reference Semantics (objects share reference handle)
     let source_obj_ref = r#"

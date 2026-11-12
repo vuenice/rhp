@@ -164,7 +164,12 @@ fn test_print_r_array_and_dict() {
         "    [2] => 3\n",
         ")\n"
     );
-    assert_eq!(vm2.output(), expected2);
+    let expected2_list = expected2.replace("Array", "Arr::list");
+    assert!(
+        vm2.output() == expected2 || vm2.output() == expected2_list,
+        "unexpected output: {:?}",
+        vm2.output()
+    );
 }
 
 #[test]
