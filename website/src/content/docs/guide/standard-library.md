@@ -19,7 +19,7 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Session` | Session state management across requests | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_SESSION` is not supported** &mdash; use `Session::get()` |
 | `Cookie` | HTTP cookie reading and setting | `get()`, `set()`, `put()`, `has()`, `all()`, `forget()`, `clear()` | **`$_COOKIE` is not supported** &mdash; use `Cookie::get()` |
 | `Arr` | Subtyped collection creation & fluent operations | `list()`, `dict()`, `set()`, `hashMap()`, `macro()` | &mdash; |
-| `Str` | Binary-safe raw byte & UTF-8 string manipulation | `slug()`, `contains()`, `digit()`, `alpha()`, `alnum()`, `upper()`, `fromEncoding()` | &mdash; |
+| `Str` | Binary-safe raw byte & UTF-8 string factories & utilities | `random()`, `join()`, `fromBytes()`, `fromEncoding()`, `toEncoding()`, `utf8()`, `macro()` | &mdash; |
 | `Crypt` | Cryptographic hashing, HMAC, OpenSSL AES encryption & random bytes | `hash()`, `hashHmac()`, `opensslEncrypt()`, `opensslDecrypt()`, `randomBytes()`, `md5()` | &mdash; |
 | `Html` | HTML entity escaping, tag stripping, sanitization & tag generation | `specialChars()`, `stripTags()`, `entities()`, `specialCharsDecode()`, `clean()`, `tag()` | &mdash; |
 | `Url` | URL component parsing, query string building & Base64 encoding | `parseUrl()`, `httpBuildQuery()`, `base64Encode()`, `base64Decode()`, `to()`, `encode()` | &mdash; |
@@ -845,31 +845,69 @@ $csv = $nums->toCsv(); // "1,2,3"
 
 ## Str Facade & Binary-Safe String Architecture
 
-In RHP, strings are fundamentally **binary-safe raw byte buffers** (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization (SSO) and larger buffers via `Rc<Vec<u8>>`). This design matches the Zend Engine's binary safety while maintaining Rust's strict memory safety:
+In RHP, strings are fundamentally **binary-safe byte buffers** (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization (SSO) and larger buffers via `Arc<str>` / `Arc<[u8]>`). This matches the Zend Engine's binary safety while maintaining Rust's memory safety guarantees.
 
-### 1. Underlying Representation: `PhpValue::String(Vec<u8>)`
-* **Binary Safety:** Safely store and process arbitrary binary payloads, network buffers, images (e.g. PNG/JPEG byte headers), and strings containing null bytes (`\0`) without triggering Rust UTF-8 panics or validation errors.
-* **Legacy Japanese Multi-Byte Support:** Safely accommodates legacy multi-byte Japanese encodings like **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** natively as raw bytes without crashing.
+### 1. String Manipulation via Fluent Arrow Syntax (`$str->...`)
 
-### 2. Static Facade Constructors (No `new Str()`)
-Following RHP's design philosophy—where developers do not instantiate helper classes with `new Str()`—developers use **static factory methods and explicit encoding facades** to handle text safely:
+Just like collections (`$list->map()->filter()`), all string transformations, searches, and inspections are performed directly via **immutable arrow methods** on string variables:
 
 ```php
-// 1. Creating a standard string (treated as raw bytes / UTF-8 safe)
-$greeting = "こんにちは世界"; // Stored natively as raw UTF-8 bytes in Vec<u8>
+$title = "  Hello World RHP!  ";
 
-// 2. Explicitly declaring or converting from a specific encoding (e.g., Shift-JIS)
-$jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
+// 1. Fluent transformations (returns new string; original untouched)
+$slug = $title->trim()->lower()->slug(); // "hello-world-rhp"
 
-// 3. Ensuring UTF-8 compliance via explicit facade constructors
-$safeText = Str::utf8($userInput);
+// 2. Inspection and searching
+bool $hasWorld = $title->contains("World"); // true
+bool $isStart  = $title->startsWith("  Hello"); // true
+int  $length   = $title->length(); // character length
+int  $bytes    = $title->byteLength(); // raw byte length
 
-// 4. Converting back to raw encoding bytes (e.g. Shift-JIS)
-$rawJis = Str::toEncoding($greeting, 'Shift-JIS');
+// 3. Slicing, splitting, and replacement
+list   $words   = $title->trim()->split(" "); // ["Hello", "World", "RHP!"]
+string $cleaned = $title->replace("RHP", "PHP"); // "  Hello World PHP!  "
+string $sub     = $title->trim()->substr(0, 5); // "Hello"
+```
+
+> [!NOTE]
+> **No Method Calls on Direct String Literals:**
+> The compiler restricts invoking member functions directly on bare string literals (e.g. `""->trim()` or `"test"->upper()`). Always invoke methods on string variables or parenthesized expressions:
+> ```php
+> // ❌ Restricted:
+> // "hello"->upper();
+> 
+> // ✅ Idiomatic:
+> $greeting = "hello";
+> $loud = $greeting->upper();
+> ```
+
+### 2. Static Factory & Encoding Methods (`Str::`)
+
+The `Str` facade class is reserved for **factory methods, non-instance utilities, and character encoding operations** that generate new strings from scratch:
+
+```php
+// 1. CSPRNG Cryptographically Secure Random String
+string $token = Str::random(32);
+
+// 2. Joining List Elements into a String
+string $csv = Str::join(", ", ["alpha", "beta", "gamma"]);
+
+// 3. Constructing from Raw Byte Arrays
+string $raw = Str::fromBytes([72, 101, 108, 108, 111]); // "Hello"
+
+// 4. Character Encoding & Legacy Multi-Byte Conversion (Shift-JIS, EUC-JP)
+string $jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
+string $safeUtf8 = Str::utf8($userInput);
+string $rawJis = Str::toEncoding($greeting, 'Shift-JIS');
+
+// 5. Explicit Loose String Coercion Comparison
+bool $match = Str::compare("42", 42); // true
+bool $same  = Str::compare("hello", "HELLO", true); // true (case-insensitive)
 ```
 
 ### 3. Immutable Helpers & Explicit Variable Reassignment
-Consistent with array and collection design rules, string helper methods are **immutable by default** (returning a new instance rather than mutating buffers in place), ensuring clean data flows. Developers update variables via **explicit reassignment** leveraging RHP’s Copy-On-Write (COW) and pointer semantics:
+
+Consistent with collections, string helper methods are **immutable by default** (returning a new instance rather than mutating buffers in place). Developers update variables via **explicit reassignment** leveraging RHP’s Copy-On-Write (COW) and pointer semantics:
 
 ```php
 $text = "  hello world  ";
@@ -885,8 +923,9 @@ $text = $text->trim()->upper();
 
 | Feature | Implementation Strategy | Benefit |
 | :--- | :--- | :--- |
-| **Internal Storage** | `Vec<u8>` with 23-byte SSO inside `PhpValue::String` | Binary safe; handles arbitrary bytes, images, network streams, and legacy Japanese encodings natively without panics. |
-| **Instantiation** | Static facades (`Str::utf8()`, `Str::fromEncoding()`) | Avoids `new Str()` object header overhead; keeps syntax clean and performant. |
+| **Internal Storage** | Stack SSO ($\le 23$ bytes) or `Arc<str>` / `Arc<[u8]>` | Binary safe; handles arbitrary bytes, images, and legacy encodings natively without panics. |
+| **Transformations** | Fluent arrow syntax (`$str->trim()->upper()`) | Clean left-to-right pipelines matching modern language ergonomics; zero nested wrapper calls. |
+| **Instantiation** | Static facades (`Str::random()`, `Str::join()`, `Str::fromBytes()`) | Dedicated factory API; avoids `new Str()` object instantiation overhead. |
 | **Mutations** | Immutable helpers + explicit reassignment (`$str = $str->method()`) | Predictable side-effect-free data manipulation combined with zero-garbage memory replacement. |
 
 ---

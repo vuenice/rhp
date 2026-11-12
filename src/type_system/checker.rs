@@ -38,6 +38,15 @@ pub struct TypeCheckResult {
     pub top_level_inferences: HashMap<String, RhpType>,
     /// Inferred semantic type for every expression node indexed by its source `Span`.
     pub expr_types: HashMap<Span, RhpType>,
+    /// Compile-time warnings that do not fail the check.
+    pub warnings: Vec<TypeWarning>,
+}
+
+/// A compile-time warning that leaves the program runnable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeWarning {
+    pub message: String,
+    pub span: Span,
 }
 
 impl TypeCheckResult {
@@ -2355,8 +2364,18 @@ impl TypeChecker {
                             }
                             env.unset(var.name);
                         }
-                        ExprKind::ArrayIndex { .. } => {
-                            let _ = self.infer_expr(expr, env, ctx, None)?;
+                        ExprKind::ArrayIndex { array, index } => {
+                            let _ = self.infer_expr(array, env, ctx, None)?;
+                            if let Some(idx) = index {
+                                let _ = self.infer_expr(idx, env, ctx, None)?;
+                            }
+                            return Err(TypeError::new(
+                                TypeErrorKind::Custom {
+                                    message: "unset() cannot remove an element. Use ->remove()."
+                                        .to_string(),
+                                },
+                                expr.span,
+                            ));
                         }
                         _ => {
                             let ty = self.infer_expr(expr, env, ctx, None)?;
@@ -2764,18 +2783,15 @@ impl TypeChecker {
                 if elements.is_empty() {
                     RhpType::Array(Box::new(RhpType::Mixed))
                 } else if !is_keyed {
-                    // If all elements have the same concrete type (and not callables/futures), infer homogeneous Array<T> or Tuple
                     let first = &elem_types[0];
                     let all_same = elem_types.iter().all(|t| t == first);
                     if all_same && !matches!(first, RhpType::Callable { .. } | RhpType::Future(_))
                     {
-                        RhpType::Array(Box::new(first.clone()))
+                        RhpType::Collection(CollectionSubtype::List(Box::new(first.clone())))
                     } else {
                         RhpType::Tuple(elem_types)
                     }
                 } else {
-                    // A bare array literal is an array. list, dict, set, and hashMap
-                    // come from the type the linter wrote, not from the key shape.
                     let mut unified_val: Option<RhpType> = None;
                     for t in &elem_types {
                         unified_val = Some(match unified_val {
@@ -2783,7 +2799,19 @@ impl TypeChecker {
                             Some(prev) => RhpType::unify(&prev, t),
                         });
                     }
-                    RhpType::Array(Box::new(unified_val.unwrap_or(RhpType::Mixed)))
+                    let value_ty = unified_val.unwrap_or(RhpType::Mixed);
+                    match keyed_literal_kind(elements) {
+                        KeyedLiteral::Dict => {
+                            RhpType::Collection(CollectionSubtype::Dict(Box::new(value_ty)))
+                        }
+                        KeyedLiteral::List => {
+                            RhpType::Collection(CollectionSubtype::List(Box::new(value_ty)))
+                        }
+                        KeyedLiteral::HashMap => RhpType::Collection(CollectionSubtype::HashMap(
+                            Box::new(RhpType::Mixed),
+                            Box::new(value_ty),
+                        )),
+                    }
                 }
             }
 
@@ -3304,6 +3332,22 @@ impl TypeChecker {
             } => {
                 let obj_ty = self.infer_expr(object, env, ctx, None)?;
                 let base_obj_ty = obj_ty.non_null_type();
+                if matches!(method.name, "remove" | "forget" | "delete") {
+                    if matches!(base_obj_ty, RhpType::Tuple(_)) {
+                        return Err(TypeError::new(
+                            TypeErrorKind::Custom {
+                                message: "A tuple has a fixed length, so it has no remove(). Use a list and call list->remove(int).".to_string(),
+                            },
+                            expr.span,
+                        ));
+                    }
+                    if slow_element_removal(&base_obj_ty) {
+                        self.result.warnings.push(TypeWarning {
+                            message: SLOW_REMOVE_WARNING.to_string(),
+                            span: expr.span,
+                        });
+                    }
+                }
 
                 // Provide contextual element type hints for collection functional methods (`map`, `filter`, `reject`, `find`, `reduce`)
                 let collection_cb_hints: Option<Vec<RhpType>> =
@@ -3366,6 +3410,9 @@ impl TypeChecker {
 
                 // 3. Built-in fluent methods without collection callback hints
                 let arg_types = self.infer_arguments(args, env, ctx, None)?;
+                if matches!(method.name, "remove" | "forget" | "delete") {
+                    check_remove_argument(&base_obj_ty, &arg_types, expr.span)?;
+                }
                 if let Some(fluent_ret) =
                     resolve_builtin_fluent_method(&base_obj_ty, method.name, &arg_types)
                 {
@@ -3764,12 +3811,20 @@ impl TypeChecker {
         match &target.kind {
             // 1. Variable assignment `$x = ...`
             ExprKind::Variable(var) => {
+                let assigned = if matches!(rhs_expr.map(|e| &e.kind), Some(ExprKind::Array(_))) {
+                    match env.get_binding(var.name).and_then(|b| b.locked_type.clone()) {
+                        Some(locked @ RhpType::Collection(_)) => locked,
+                        _ => effective_rhs_ty,
+                    }
+                } else {
+                    effective_rhs_ty
+                };
                 env.assign_inferred(
-                var.name,
-                effective_rhs_ty,
-                span,
-                Some(&self.result.hierarchy),
-            )
+                    var.name,
+                    assigned,
+                    span,
+                    Some(&self.result.hierarchy),
+                )
             },
 
             // 2. Array / Tuple destructuring `[$user, $posts] = Future::wait([...])`
@@ -4274,6 +4329,102 @@ impl Default for TypeChecker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+enum KeyedLiteral {
+    List,
+    Dict,
+    HashMap,
+}
+
+fn keyed_literal_kind(elements: &[crate::ast::expr::ArrayElement<'_>]) -> KeyedLiteral {
+    let mut all_string_keys = true;
+    let mut is_sequential_int = true;
+    let mut expected = 0i64;
+    for el in elements {
+        let Some(key) = &el.key else {
+            all_string_keys = false;
+            expected += 1;
+            continue;
+        };
+        match &key.kind {
+            ExprKind::Literal(Literal::String { .. })
+            | ExprKind::Literal(Literal::InterpolatedString { .. }) => {
+                is_sequential_int = false;
+            }
+            ExprKind::Literal(Literal::Int { value, .. }) => {
+                all_string_keys = false;
+                if *value != expected {
+                    is_sequential_int = false;
+                }
+            }
+            _ => {
+                all_string_keys = false;
+                is_sequential_int = false;
+            }
+        }
+        expected += 1;
+    }
+    if is_sequential_int {
+        KeyedLiteral::List
+    } else if all_string_keys {
+        KeyedLiteral::Dict
+    } else {
+        KeyedLiteral::HashMap
+    }
+}
+
+const SLOW_REMOVE_WARNING: &str =
+    "Removing an element from list and dict is generally slower than set and hashMap";
+
+fn slow_element_removal(ty: &RhpType) -> bool {
+    matches!(
+        ty,
+        RhpType::Collection(CollectionSubtype::List(_))
+            | RhpType::Collection(CollectionSubtype::Dict(_))
+    )
+}
+
+fn check_remove_argument(receiver: &RhpType, args: &[RhpType], span: Span) -> Result<(), TypeError> {
+    let (callable, param, expected) = match receiver {
+        RhpType::Collection(CollectionSubtype::List(_)) => {
+            ("list->remove", "index", RhpType::Int)
+        }
+        RhpType::Collection(CollectionSubtype::Dict(_)) => {
+            ("dict->remove", "key", RhpType::String)
+        }
+        RhpType::Collection(CollectionSubtype::Set(elem)) => {
+            ("set->remove", "value", (**elem).clone())
+        }
+        RhpType::Collection(CollectionSubtype::HashMap(key, _)) => {
+            ("hashMap->remove", "key", (**key).clone())
+        }
+        _ => return Ok(()),
+    };
+    let Some(actual) = args.first() else {
+        return Err(TypeError::new(
+            TypeErrorKind::ArityMismatch {
+                callable_name: callable.to_string(),
+                min_args: 1,
+                max_args: 1,
+                found_args: 0,
+            },
+            span,
+        ));
+    };
+    if !actual.is_assignable_to(&expected, None) {
+        return Err(TypeError::new(
+            TypeErrorKind::ArgumentTypeMismatch {
+                callable_name: callable.to_string(),
+                param_name: param.to_string(),
+                arg_index: 1,
+                expected: expected.to_string(),
+                found: actual.to_string(),
+            },
+            span,
+        ));
+    }
+    Ok(())
 }
 
 struct ThisFinder {

@@ -161,7 +161,7 @@ fn test_ini_get_and_set_loop_limits_and_budget() {
     "#;
 
     let (_vm, val) = run_source_with_vm(code).unwrap();
-    if let PhpValue::Array(items) = val {
+    if let PhpValue::Array(items) | PhpValue::List(items) = val {
         let b = items.borrow();
         assert_eq!(b[0], PhpValue::string("10000"));
         assert_eq!(b[1], PhpValue::string("5000"));

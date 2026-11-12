@@ -49,7 +49,20 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
 
     // 4. Medium/Gradual Type Checker pass
     match check_program(&program) {
-        Ok(_) => {}
+        Ok(result) => {
+            for warning in result.warnings {
+                issues.push(Issue::new(
+                    IssueLevel::Warning,
+                    "slow-collection-remove",
+                    warning.message,
+                    file_name,
+                    warning.span.line,
+                    warning.span.col,
+                    warning.span.start,
+                    warning.span.end,
+                ));
+            }
+        }
         Err(type_err) => {
             let code = type_error_to_code(&type_err.kind);
             let err_msg = type_err.kind.to_string();

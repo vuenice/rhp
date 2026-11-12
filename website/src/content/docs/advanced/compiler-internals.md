@@ -406,5 +406,16 @@ Closures (`function() use (...) { ... }`) and arrow functions (`fn(...) => ...`)
 
 For complete architectural details, empirical codebase audits, and benchmarks, see the dedicated [Pure Closure Optimization Guide](/docs/advanced/pure-closure-optimization).
 
+---
 
+## 9. Collection Compiler Optimizations: FBIP & Stream Fusion
 
+The bytecode compiler and register VM implement two under-the-hood collection optimizations:
+
+1. **FBIP (Functional But In-Place) Sort (`refcount == 1`):**
+   When the compiler detects reassignment to the same buffer (`$nums = $nums->sort()`) where no other alias exists (`refcount == 1`), it sorts the underlying buffer in-place (`zero allocation`), bypassing temporary vector clones. If aliases exist, it automatically falls back to safe Copy-On-Write (COW) detachment.
+
+2. **Stream Fusion (Loop Deforestation):**
+   Fluent higher-order collection pipelines (`$nums->map(...)->filter(...)->take(10)`) with pure closures are fused via bytecode lookahead into a single-pass loop. Intermediate vectors are eliminated, elements remain hot in CPU registers, and pipelines with `take(K)` short-circuit in $O(K)$ time instead of $O(N)$.
+
+For detailed architecture diagrams, memory benchmarks, and telemetry APIs, see the dedicated [Collection Compiler Optimizations Guide](/docs/advanced/collection-compiler-optimizations).

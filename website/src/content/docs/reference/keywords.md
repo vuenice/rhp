@@ -89,31 +89,31 @@ $emptyVal = null;
 ### Default Numeric Storage
 
 > [!IMPORTANT]
-> **Both `int` and `float` default to `i32` (32-bit) storage.** Neither maps to `f64` by default.
-> Use `Int::i64(...)` or `Float::f64(...)` for wider precision.
+> **Native 64-Bit Storage:**
+> In RHP, `int` is a signed 64-bit integer (`i64`) and `float` is an IEEE-754 64-bit double precision float (`f64`). Both are directly lowered down to bare-metal primitives and stored inline without boxing.
 
-| Primitive | Default Rust Storage | Extended Variants (via facade) |
+| Primitive | Native Rust Storage | Notes |
 | :--- | :--- | :--- |
-| `int` | `i32` | `Int::i8`, `Int::i16`, `Int::i32`, `Int::i64`, `Int::i128`, `Int::u8` … `Int::u128`, `Int::usize` |
-| `float` | `i32` | `Float::f32`, `Float::f64` |
+| `int` | `i64` | Signed 64-bit integer (−9.22e18 to 9.22e18) |
+| `float` | `f64` | 64-bit IEEE-754 double precision float |
 
-### `Int` and `Float` — Facade Identifiers (Not Type Keywords)
+### `Int` and `Float` — Utility Facade Identifiers (Not Type Keywords)
 
-`Int` and `Float` (capitalized) are **static facade class identifiers**, not type keywords. They cannot be used as type annotations and cannot be instantiated with `new`:
+`Int` and `Float` (capitalized) are **static utility facade class identifiers**, not type keywords. They cannot be used as type annotations and cannot be instantiated with `new`:
 
 ```php
 // ✅ Valid — lowercase type keyword annotations
 function calc(int $a, float $b): float { ... }
 
-// ✅ Valid — capitalized facade static method calls
-$id = Int::i64(9223372036854775807);
-$formatted = Float::f64(3.14)->toDecimal(2);
+// ✅ Valid — capitalized facade static utility calls
+int $dice = Int::random(1, 6);
+bool $match = Float::compare(1.0001, 1.0002, 0.001);
 
 // ❌ ParseError — Int/Float cannot be used as type annotations
-function broken(Int $a): Float { ... }
+// function broken(Int $a): Float { ... }
 
 // ❌ Fatal Error — Int/Float cannot be instantiated
-$x = new Int();
+// $x = new Int();
 ```
 
 ---

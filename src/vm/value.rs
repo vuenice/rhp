@@ -1370,17 +1370,39 @@ impl PhpValue {
             (Self::String(x), Self::String(y)) => x == y,
             (Self::EmptyArray, Self::EmptyArray) => true,
             (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
-                let a = x.borrow();
-                let b = y.borrow();
+                if Rc::ptr_eq(x, y) {
+                    return true;
+                }
+                let a = x.borrow().clone();
+                let b = y.borrow().clone();
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.strict_eq(v2))
             }
             (Self::Dict(x), Self::Dict(y)) => {
-                let a = x.borrow();
-                let b = y.borrow();
-                a.len() == b.len() && a.iter().all(|(k, v1)| b.get(k).map_or(false, |v2| v1.strict_eq(v2)))
+                if Rc::ptr_eq(x, y) {
+                    return true;
+                }
+                let a = x.borrow().clone();
+                let b = y.borrow().clone();
+                a.len() == b.len()
+                    && a.iter()
+                        .all(|(k, v1)| b.get(k).map_or(false, |v2| v1.strict_eq(v2)))
             }
-            (Self::Set(x), Self::Set(y)) => *x.borrow() == *y.borrow(),
-            (Self::HashMap(x), Self::HashMap(y)) => *x.borrow() == *y.borrow(),
+            (Self::Set(x), Self::Set(y)) => {
+                if Rc::ptr_eq(x, y) {
+                    return true;
+                }
+                let a = x.borrow().clone();
+                let b = y.borrow().clone();
+                a == b
+            }
+            (Self::HashMap(x), Self::HashMap(y)) => {
+                if Rc::ptr_eq(x, y) {
+                    return true;
+                }
+                let a = x.borrow().clone();
+                let b = y.borrow().clone();
+                a == b
+            }
             (Self::Object(x), Self::Object(y)) => Rc::ptr_eq(x, y),
             (Self::Closure(x), Self::Closure(y)) => Rc::ptr_eq(x, y),
             (Self::Future(x), Self::Future(y)) => Rc::ptr_eq(x, y),
@@ -1595,31 +1617,15 @@ impl PhpValue {
                 }
                 true
             }
-            Self::List(rc) => {
-                if Rc::strong_count(rc) > 1 {
-                    let cloned = rc.borrow().clone();
-                    *rc = Rc::new(RefCell::new(cloned));
-                    crate::vm::memory::record_cow_detachment();
-                }
-                true
-            }
+            Self::List(_) => true,
             _ => false,
         }
     }
 
-    /// Detaches the sequential list buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Lists are shared mutable objects. A write through any alias changes the same buffer.
     /// Returns `true` if this value is a List, `false` otherwise.
     pub fn ensure_list_mut(&mut self) -> bool {
-        if let Self::List(rc) = self {
-            if Rc::strong_count(rc) > 1 {
-                let cloned = rc.borrow().clone();
-                *rc = Rc::new(RefCell::new(cloned));
-                crate::vm::memory::record_cow_detachment();
-            }
-            true
-        } else {
-            false
-        }
+        matches!(self, Self::List(_))
     }
 
     /// Returns `true` if this value is an array or collection variant (`Array`, `List`, `Dict`, `Set`, or `HashMap`).
@@ -1673,19 +1679,18 @@ impl PhpValue {
         }
     }
 
-    /// Detaches the dictionary buffer if shared (`strong_count > 1`) (Copy-On-Write).
+    /// Dicts are shared mutable objects. A write through any alias changes the same buffer.
     /// Returns `true` if this value is a Dict, `false` otherwise.
     pub fn ensure_dict_mut(&mut self) -> bool {
-        if let Self::Dict(rc) = self {
-            if Rc::strong_count(rc) > 1 {
-                let cloned = rc.borrow().clone();
-                *rc = Rc::new(RefCell::new(cloned));
-                crate::vm::memory::record_cow_detachment();
-            }
-            true
-        } else {
-            false
-        }
+        matches!(self, Self::Dict(_))
+    }
+
+    /// Lists, dicts, and untyped arrays cannot be set elements or hashmap keys.
+    pub fn is_unhashable_collection(&self) -> bool {
+        matches!(
+            self,
+            Self::EmptyArray | Self::Array(_) | Self::List(_) | Self::Dict(_)
+        )
     }
 
     /// Returns `true` if this value is an explicit subtyped dictionary (`Arr::dict`).
