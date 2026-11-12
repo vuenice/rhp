@@ -139,7 +139,7 @@ Because `??` binds tighter than `?:`, which binds tighter than `??=`:
 ```php
 // Maximal munch: ... is parsed as a single variadic/spread token
 function collectValues(int ...$numbers): list {
-    return Arr::list([...$numbers]);
+    return [...$numbers];
 }
 
 // Pratt parser precedence hierarchy:

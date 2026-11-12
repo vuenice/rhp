@@ -147,7 +147,7 @@ pub fn parse_expr(&mut self, min_bp: u8) -> Result<Expr<'s>, ParseError> {
   * Exponentiation: `2 ** 3 ** 4` parses as `2 ** (3 ** 4)`.
   * Chained assignment: `$a = $b = 10` parses as `$a = ($b = 10)`.
   * Null-coalesce: `$a ?? $b ?? $c` parses as `$a ?? ($b ?? $c)`.
-* **Fluent Chaining & Scope Resolution:** High binding power (`100`) binds `Arr::list(...)` and chains subsequent `->map(...)` and `->filter(...)` calls cleanly without parentheses.
+* **Fluent Chaining & Scope Resolution:** High binding power (`100`) binds collection expressions and variables, chaining subsequent `->map(...)` and `->filter(...)` calls cleanly without parentheses.
 * **Array Destructuring:** Prefix `[` detects lvalue target lists (`[$user, $posts] = Future::wait([...])`).
 * **Double-Quoted String Interpolation:** `"user={$id}"` is tokenized and decomposed into `Literal::InterpolatedString` with discrete `StringPart::Literal` and `StringPart::Expr` chunks.
 * **Static Facade Protection:** Instantiating static facades (`new Int()`, `new Arr()`, `new Str()`) triggers an immediate compile-time `ParseErrorKind::StaticFacadeInstantiationForbidden` error:
@@ -197,7 +197,7 @@ Before execution in Production Mode, the typed AST is translated into a flat, co
 - **Virtual Register Allocation (`Reg(u16)`):** Local variables, function parameters, and expression temporaries are allocated contiguous 16-bit virtual registers (`r0`..`r65535`).
 - **Constant Pool Deduplication (`Constant` / `ConstantId`):** Primitives, interned UTF-8 string literals, 64-bit numbers, and semantic `RhpType` contracts are deduplicated in per-chunk constant pools.
 - **Boundary Contract Guards:** Emits explicit `OpCode::AssertType` instructions at function/method parameter entry, return sites, and locked local declarations (`$x: int = ...`).
-- **Facade & Collection Specialization:** Lowers `Arr::list`, `Arr::dict`, `Arr::set`, and `Arr::hashMap` directly into `NewCollection` opcodes, native Rust integer/float constructors into `WrapRustInt` / `WrapRustFloat`, and legacy PHP calls into canonical facade dispatches.
+- **Facade & Collection Specialization:** Lowers `list`, `dict`, `set`, and `hashMap` literals directly into `NewCollection` opcodes, native Rust integer/float constructors into `WrapRustInt` / `WrapRustFloat`, and legacy PHP calls into canonical facade dispatches.
 
 ---
 

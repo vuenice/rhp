@@ -40,9 +40,9 @@ Rather than relying on Zend Engine's monolithic `zend_array` hash bucket archite
 
 | Surface Type | Underlying Rust Representation | Semantic Invariant |
 |---|---|---|
-| `list` / `Arr::list()` | `Rc<RefCell<Vec<PhpValue>>>` | Sequential indexed elements, contiguous memory, maximum CPU cache line locality. |
-| `dict` / `Arr::dict()` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | Dense linear key-value storage retaining strict insertion order with sparse hashing. |
-| `set` / `Arr::set()` | `Rc<RefCell<HashSet<PhpValue>>>` | Dense unique collection with $O(1)$ membership checking and mathematical set algebra. |
+| `list` | `Rc<RefCell<Vec<PhpValue>>>` | Sequential indexed elements, contiguous memory, maximum CPU cache line locality. |
+| `dict` | `Rc<RefCell<IndexMap<String, PhpValue>>>` | Dense linear key-value storage retaining strict insertion order with sparse hashing. |
+| `set` | `Rc<RefCell<HashSet<PhpValue>>>` | Dense unique collection with $O(1)$ membership checking and mathematical set algebra. |
 | `PhpValue::Frozen` | `FrozenValue` (`Send + Sync`) | Immutable value snapshots safe for cross-worker sharing with zero locks. |
 
 ### Copy-On-Write (CoW) Detachment

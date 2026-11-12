@@ -256,7 +256,8 @@ for ($i = 0; $i < 5; $i++) {
 // In RHP: Explicit, non-blocking asynchronous response stream
 return Response::stream(function(StreamWriter $stream): void {
     for (int $i = 0; $i < 5; $i++) {
-        $payload = Arr::dict(['tick' => $i])->toJson();
+        dict $tickData = ['tick' => $i];
+        $payload = $tickData->toJson();
         $stream->write("data: {$payload}\n\n");
         Future::delayed(200); // Non-blocking Tokio fiber delay
     }
@@ -768,7 +769,7 @@ Telemetry::trace('heavy_processing', function(): void {
 
 ### What Was Bad About It in PHP
 
-- **Lexical keyword collision with RHP typed collections:** In RHP, `list` is a dedicated language keyword for sequential contiguous-memory collection subtypes (`list $items`, `list<string>`, `Arr::list()`). Allowing `list(...)` as a destructuring construct introduces parsing ambiguity between variable type declarations, constructor-like expressions, and destructuring statements.
+- **Lexical keyword collision with RHP typed collections:** In RHP, `list` is a dedicated language keyword for sequential contiguous-memory collection subtypes (`list $items`, `list<string>`). Allowing `list(...)` as a destructuring construct introduces parsing ambiguity between variable type declarations, constructor-like expressions, and destructuring statements.
 - **Pseudo-function syntactical illusion:** While `list()` resembled a built-in function or constructor, it was actually a special parser construct that could only appear on the left-hand side of an assignment operator (`=`). It could not be evaluated as an expression, passed to callables, or assigned directly, creating confusing language asymmetries.
 - **Inconsistent error semantics:** Legacy PHP emitted undefined key warnings (`E_WARNING: Undefined array key`) or fatal type errors depending on PHP version when unpacking non-arrays or incomplete arrays, lacking type-safe guarantees.
 - **Outdated and redundant:** Modern PHP (since 7.1) and all modern programming languages (Rust, JavaScript/TypeScript, Python) standardize on square-bracket or pattern destructuring (`[$a, $b] = $array;`), rendering the `list()` construct an obsolete syntax artifact.
@@ -783,7 +784,7 @@ Telemetry::trace('heavy_processing', function(): void {
    - Skipping items: `[$first, , $third] = $items;`
    - Keyed dictionary unpacking: `['status' => $status, 'data' => $payload] = $response;`
 2. **Dedicated `list` Collection Subtype:**
-   The `list` keyword is cleanly repurposed as a first-class, cache-efficient sequential collection type: `list $nums = [1, 2, 3];` or `Arr::list([1, 2, 3])`.
+   The `list` keyword is cleanly repurposed as a first-class, cache-efficient sequential collection type: `list $nums = [1, 2, 3];`.
 3. **Foreach Tuple Unpacking:**
    Foreach loops natively support clean tuple and list unpacking: `foreach ($entries as [$key, $value]) { ... }`.
 4. **Type-Safe `match` Pattern Destructuring:**
@@ -815,7 +816,7 @@ $coords = [100, 250];
 [$r, , $b] = getRgbColors();
 
 // list is reserved for typed collection declarations:
-list $numbers = Arr::list([100, 250]);
+list $numbers = [100, 250];
 ```
 
 #### Example B: Keyed Associative Destructuring
@@ -1169,7 +1170,7 @@ file_put_contents('/tmp/log.txt', $logText);
 **After (Modern RHP):**
 ```php
 // In RHP: Explicit Debug::format() produces clean inspection string
-dict $data = Arr::dict(['status' => 'pending', 'retry' => 3]);
+dict $data = ['status' => 'pending', 'retry' => 3];
 string $logText = Debug::format($data);
 File::write('/tmp/log.txt', $logText);
 ```
@@ -1190,7 +1191,7 @@ $loaded = require 'bootstrap/cache/config.php';
 **After (Modern RHP):**
 ```php
 // In RHP: Blazing-fast binary or readable JSON cache
-dict $config = Arr::dict(['app' => Arr::dict(['name' => 'Rocket', 'env' => 'production'])]);
+dict $config = ['app' => ['name' => 'Rocket', 'env' => 'production']];
 
 // Fast binary cache for production boot:
 bytes $cache = Bin::encode($config);

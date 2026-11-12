@@ -16,7 +16,7 @@ function findUser(int $id): dict {
     if ($id <= 0) {
         throw new RecordNotFoundException("Invalid user ID {$id}");
     }
-    return Arr::dict(['id' => $id, 'name' => 'Valid User']);
+    return ['id' => $id, 'name' => 'Valid User'];
 }
 
 try {

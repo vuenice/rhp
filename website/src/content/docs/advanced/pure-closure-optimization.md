@@ -195,7 +195,7 @@ Instead of mutating outer scope variables through reference captures, developers
 
 ```php
 // RHP Idiomatic Functional Pipeline: 100% Pure & Zero Allocations
-$numbers = Arr::list([10, 20, 30, 40]);
+list $numbers = [10, 20, 30, 40];
 $total = $numbers->reduce(fn(int $acc, int $n): int => $acc + $n, 0);
 ```
 
