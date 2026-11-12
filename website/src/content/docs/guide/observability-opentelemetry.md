@@ -133,11 +133,11 @@ Trace::histogram('db.query_duration_ms', 3.8);
 // 4. Retrieve exact percentile distribution summary
 $summary = Trace::metricSummary('http.request_duration_ms');
 
-Sys::print("Total Count: " . $summary['count']);
-Sys::print("Average: " . $summary['avg'] . " ms");
-Sys::print("p50: " . $summary['p50'] . " ms");
-Sys::print("p95: " . $summary['p95'] . " ms");
-Sys::print("p99: " . $summary['p99'] . " ms");
+Sys::print("Total Count: " + string($summary['count']));
+Sys::print("Average: " + string($summary['avg']) + " ms");
+Sys::print("p50: " + string($summary['p50']) + " ms");
+Sys::print("p95: " + string($summary['p95']) + " ms");
+Sys::print("p99: " + string($summary['p99']) + " ms");
 ```
 
 ---

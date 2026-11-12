@@ -15,7 +15,7 @@ function calculateDiscount(float $subtotal, float $discountRate = 0.10): float {
 }
 
 float $finalPrice = calculateDiscount(100.0, 0.15);
-print("Final price: " . (string)$finalPrice);
+print("Final price: " + string($finalPrice));
 ```
 
 ### Parameter Ordering: Required Parameters Must Precede Optional Parameters
@@ -196,12 +196,12 @@ function dispatch(callable $action, mixed $payload): mixed {
 }
 
 // 1. Arrow closure
-dispatch(fn($d) => print("Handled: " . $d), "event-1");
+dispatch(fn($d) => print("Handled: " + $d), "event-1");
 
 // 2. Invokable Object ($action($params))
 class CreateSiteAction {
     public function __invoke(array $data): string {
-        return "Created site: " . $data['domain'];
+        return "Created site: " + $data['domain'];
     }
 }
 

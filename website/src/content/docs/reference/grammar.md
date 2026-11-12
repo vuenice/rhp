@@ -89,7 +89,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Exponentiation** | `(91, 90)` | `**` | **Right-to-left** | Power operator (`2 ** 3 ** 4` $\rightarrow$ `2 ** (3 ** 4)`) |
 | **Type Instance Check** | `(85, 86)` | `instanceof` | Left-to-right | Class and interface verification (`$obj instanceof User`) |
 | **Multiplicative** | `(80, 81)` | `*`, `/`, `%` | Left-to-right | Multiplication, division, modulo |
-| **Additive & String** | `(75, 76)` | `+`, `-`, `.` | Left-to-right | Addition, subtraction, string concatenation (`.`) |
+| **Additive & String** | `(75, 76)` | `+`, `-` | Left-to-right | Addition, subtraction, string concatenation (`+`) |
 | **Bitwise Shift** | `(70, 71)` | `<<`, `>>` | Left-to-right | Bitwise left and right shift |
 | **Relational Comparison** | `(65, 66)` | `<`, `<=`, `>`, `>=`, `<=>` | Left-to-right | Less, greater, spaceship comparison |
 | **Equality Check** | `(60, 61)` | `==`, `!=`, `===`, `!==`, `<>` | Left-to-right | Strict equivalence and identity |
@@ -100,7 +100,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Logical OR** | `(35, 36)` | `\|\|` | Left-to-right | Short-circuit boolean OR |
 | **Null Coalescing** | `(30, 29)` | `??` | **Right-to-left** | Fallback chaining (`$a ?? $b ?? $default`) |
 | **Ternary & Elvis** | `(25, 24)` | `? :`, `?:` | **Right-to-left** | Conditional expression and Elvis fallback |
-| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `.=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10` $\rightarrow$ `$a = ($b = 10)`) |
+| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10` $\rightarrow$ `$a = ($b = 10)`) |
 | **Logical Word AND** | `(9, 10)` | `and` | Left-to-right | Low-precedence logical AND |
 | **Logical Word XOR** | `(7, 8)` | `xor` | Left-to-right | Low-precedence logical XOR |
 | **Logical Word OR** | `(5, 6)` | `or` | Left-to-right | Low-precedence logical OR |

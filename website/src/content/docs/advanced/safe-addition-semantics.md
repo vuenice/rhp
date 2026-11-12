@@ -7,7 +7,7 @@ order: 4
 
 # Safe Addition Semantics & Arithmetic Operators
 
-RHP is a statically compiled programming language with PHP-familiar syntax (`$var`, `.` string concatenation), but its execution model is built upon Rust and LLVM/Cranelift. To prevent silent security vulnerabilities, runtime crashes, and catastrophic data corruption, RHP's arithmetic semantics reject legacy PHP implicit coercions and silent overflows.
+RHP is a statically compiled programming language with PHP-familiar syntax (`$var`, object arrows `->`), but its execution model is built upon Rust and LLVM/Cranelift. To prevent silent security vulnerabilities, runtime crashes, and catastrophic data corruption, RHP's arithmetic semantics reject legacy PHP implicit coercions and silent overflows.
 
 ---
 
@@ -220,9 +220,9 @@ All diagnostic messages emitted by the type checker provide exact code spans and
 error: cannot add `string` and `int`
   --> src/checkout.rhp:14:21
    |
-14 |     $total = $items . " items: " + $count;
+14 |     $total = $items + " items: " + $count;
    |                                  ^
-   = help: use `.` to concatenate, or convert with `int($s)` if the string is numeric
+   = help: '+' concatenates strings or adds numbers; convert with `string($count)` or use string interpolation
 
 error: cannot add `i32` and `f64`: mismatched types
   --> src/calc.rhp:8:12

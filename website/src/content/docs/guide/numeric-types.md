@@ -110,7 +110,7 @@ float $h = float("abc");   // 0 (non-numeric string → 0)
 
 ## Numeric Literal Edge Cases & Strict Validation
 
-RHP's lexer enforces rigorous syntax verification on numeric literals to prevent ambiguities with string concatenation (`.`) and member access (`.`):
+RHP's lexer enforces rigorous syntax verification on numeric literals to prevent ambiguities with member access or range operators:
 
 ### 1. No Trailing Separators or Decimal Points
 Numeric literals cannot end with an underscore (`_`) or a bare decimal point (`.`):
@@ -138,7 +138,7 @@ Omitting the leading zero in fractional numbers is strictly prohibited. You must
 // ✅ Valid:
 float $half = 0.5;
 ```
-This eliminates parsing collisions where a leading dot could be conflated with the string concatenation operator (`$str . 5`).
+This eliminates parsing collisions and enforces unambiguous, readable syntax.
 
 ### 3. Incomplete Base Prefixes & Exponents
 Base prefixes (`0x`, `0b`, `0o`) and scientific exponent markers (`1e`, `2E`) must be followed by valid digits:

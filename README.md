@@ -425,8 +425,8 @@ namespace App\Services;
 
 class OrderProcessor {
     public function execute(int $orderId): void {
-        echo "Executing " . __METHOD__ . " on line " . __LINE__ . "\n";
-        echo "Source file: " . __FILE__ . " in " . __DIR__ . "\n";
+        echo "Executing " + __METHOD__ + " on line " + string(__LINE__) + "\n";
+        echo "Source file: " + __FILE__ + " in " + __DIR__ + "\n";
     }
 }
 ```

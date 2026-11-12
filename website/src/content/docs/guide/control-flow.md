@@ -66,7 +66,7 @@ string $roleTitle = match ($roleId) {
     default => 'Guest',
 };
 
-print("User Role: " . $roleTitle);
+print("User Role: " + $roleTitle);
 ```
 
 ---
@@ -198,8 +198,8 @@ $paginator = DB::table('orders')->paginate(15);
 foreach ($paginator as $order) {
     print("Order #{$order->id}");
 }
-print("Total orders: " . (string)$paginator->total());
-print("Current page: " . (string)$paginator->currentPage());
+print("Total orders: " + string($paginator->total()));
+print("Current page: " + string($paginator->currentPage()));
 
 // 3. Laravel Collections via collect()
 $collection = collect(['apple', 'banana', 'cherry']);
@@ -252,7 +252,7 @@ foreach ($team as $member) {
 // Standard for loop
 for (int $i = 0; $i < 5; $i++) {
     if ($i === 2) continue;
-    print("Step: " . (string)$i);
+    print("Step: " + string($i));
 }
 
 // While loop

@@ -19,7 +19,7 @@ fn print_help() {
             "    dev [OPTIONS]                    Execute in Development Mode (e.g. 'rhp dev --file=\"server.rhp\"')\n",
             "    build [OPTIONS]                  Execute in Production Mode (e.g. 'rhp build --file=\"server.rhp\"')\n",
             "    serve [OPTIONS]                  Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
-            "    upgrade-php [PATH] [OPTIONS]     Upgrade PHP superglobals and globals to RHP Request/Cookie facades\n",
+            "    migrate [PATH] [OPTIONS]         Migrate PHP superglobals and globals to RHP Request/Cookie facades\n",
             "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
             "    check [PATH] [OPTIONS]           Check syntax and type boundary contracts (supports --format=json)\n",
             "    explain <CODE> [OPTIONS]         Explain a compiler diagnostic code (e.g. 'rhp explain RHP0102')\n\n",
@@ -130,8 +130,8 @@ fn main() {
         "explain" => {
             handle_run_explain(&args[2..]);
         }
-        "upgrade-php" | "upgrade_php" => {
-            handle_run_upgrade_php(&args[2..]);
+        "migrate" | "migrate-php" | "migrate_php" | "upgrade-php" | "upgrade_php" => {
+            handle_run_migrate(&args[2..]);
         }
         "lint" => {
             handle_run_lint(&args[2..]);
@@ -205,8 +205,8 @@ fn main() {
                 "playground" | "play" | "ui" | "gui" => {
                     print_playground_hint();
                 }
-                "upgrade-php" | "upgrade_php" => {
-                    handle_run_upgrade_php(&args[3..]);
+                "migrate" | "migrate-php" | "migrate_php" | "upgrade-php" | "upgrade_php" => {
+                    handle_run_migrate(&args[3..]);
                 }
                 "lint" => {
                     handle_run_lint(&args[3..]);
@@ -470,8 +470,8 @@ fn handle_run_lint(sub_args: &[String]) {
     }
 }
 
-/// Handle `rhp upgrade-php [PATH] [--check] [--dry-run] [--format=human|json]`
-fn handle_run_upgrade_php(sub_args: &[String]) {
+/// Handle `rhp migrate [PATH] [--check] [--dry-run] [--format=human|json]`
+fn handle_run_migrate(sub_args: &[String]) {
     let mut check_only = false;
     let mut target_path = ".".to_string();
     let mut json_format = false;
@@ -481,8 +481,8 @@ fn handle_run_upgrade_php(sub_args: &[String]) {
         if arg == "--help" || arg == "-h" {
             println!(
                 concat!(
-                    "rhp upgrade-php [PATH] [OPTIONS]\n\n",
-                    "Upgrades legacy PHP scripts to modern RHP conventions:\n",
+                    "rhp migrate [PATH] [OPTIONS]\n\n",
+                    "Migrates legacy PHP scripts to modern RHP conventions:\n",
                     "  - Adds extra initialization lines when superglobals are used:\n",
                     "      $_GET = Request::query();\n",
                     "      $_POST = Request::body();\n",
@@ -522,11 +522,11 @@ fn handle_run_upgrade_php(sub_args: &[String]) {
         process::exit(1);
     }
 
-    let options = rhp::upgrade_php::UpgradeOptions {
+    let options = rhp::migrate::MigrateOptions {
         fix: !check_only,
     };
 
-    match rhp::upgrade_php::upgrade_php_path(path, options) {
+    match rhp::migrate::migrate_path(path, options) {
         Ok(report) => {
             if json_format {
                 println!("{}", report.to_json());
@@ -536,7 +536,7 @@ fn handle_run_upgrade_php(sub_args: &[String]) {
             process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error during upgrade-php execution: {}", e);
+            eprintln!("Error during migrate execution: {}", e);
             process::exit(1);
         }
     }

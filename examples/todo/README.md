@@ -14,7 +14,7 @@ This example demonstrates the core strengths and runtime features of the RHP lan
 
 2. **Register-Based Bytecode Virtual Machine:**
    - Fast VM execution with copy-on-write array operations.
-   - Built-in string interpolation and concatenation (`$a . $b`).
+   - Built-in string interpolation and concatenation (`$a + $b`).
 
 3. **Standard Library Facades & I/O:**
    - `File::read(string $path): string` & `File::write(string $path, string $contents): bool` for persistent storage to `todos.json`.

@@ -344,18 +344,21 @@ $x--; // 6
 
 ---
 
-## String Concatenation Operator (`.`)
+## String Concatenation Operator (`+`)
 
-Consistent with PHP syntax, strings are concatenated using the dot (`.`) operator:
+In RHP, strings are concatenated using the `+` operator with strict type checking (both operands must be strings):
 
 ```php
 string $first = "Fast";
 string $second = "Backend";
-string $full = $first . " " . $second; // "Fast Backend"
+string $full = $first + " " + $second; // "Fast Backend"
 
 string $buffer = "Log: ";
-$buffer .= "Operation complete.";
+$buffer += "Operation complete.";
 ```
+
+> [!NOTE]
+> The legacy PHP dot operator (`.`) and dot-assign (`.=`) have been removed from RHP. Using `.` or `.=` results in a compile-time parse error directing developers to `+` and `+=`.
 
 ---
 
@@ -396,7 +399,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Exponentiation** | `(91, 90)` | `**` | **Right-to-left** | Power operator (`2 ** 3 ** 4` $\rightarrow$ `2 ** (3 ** 4)`) |
 | **Type Check** | `(85, 86)` | `instanceof` | Left-to-right | Class and interface verification |
 | **Multiplicative** | `(80, 81)` | `*`, `/`, `%` | Left-to-right | Multiplication, division, modulo |
-| **Additive & String** | `(75, 76)` | `+`, `-`, `.` | Left-to-right | Addition, subtraction, string concatenation |
+| **Additive & String** | `(75, 76)` | `+`, `-` | Left-to-right | Addition, subtraction, string concatenation (`+`) |
 | **Bitwise Shift** | `(70, 71)` | `<<`, `>>` | Left-to-right | Bitwise left and right shift |
 | **Relational Comparison** | `(65, 66)` | `<`, `<=`, `>`, `>=`, `<=>` | Left-to-right | Less, greater, bound, spaceship comparison |
 | **Equality Check** | `(60, 61)` | `==`, `!=`, `===`, `!==`, `<>` | Left-to-right | Loose equivalence and strict identity |
@@ -407,7 +410,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Logical OR** | `(35, 36)` | `\|\|` | Left-to-right | Short-circuit boolean OR |
 | **Null Coalescing** | `(30, 29)` | `??` | **Right-to-left** | Fallback chaining (`$a ?? $b ?? $default`) |
 | **Ternary & Elvis** | `(25, 24)` | `? :`, `?:` | **Right-to-left** | Conditional expression and Elvis fallback |
-| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `.=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10`) |
+| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10`) |
 | **Logical Word AND** | `(9, 10)` | `and` | Left-to-right | Low-precedence logical AND |
 | **Logical Word XOR** | `(7, 8)` | `xor` | Left-to-right | Low-precedence logical XOR |
 | **Logical Word OR** | `(5, 6)` | `or` | Left-to-right | Low-precedence logical OR |
@@ -469,7 +472,7 @@ $label = "Item" + $idStr;
 // $a...$b is lexed as: [$a, ..., $b] (Ellipsis), NOT [$a, .., ., $b]
 ```
 
-To avoid ambiguity, format multi-character expressions with clean whitespace (e.g., `$first . $second`).
+To avoid ambiguity, format multi-character expressions with clean whitespace (e.g., `$first + $second`).
 
 ---
 
@@ -479,6 +482,7 @@ RHP intentionally removes or replaces specific legacy PHP operator behaviors:
 
 | PHP Operator Feature | Status in RHP | Reason | Modern RHP Alternative |
 | :--- | :--- | :--- | :--- |
+| **String Concatenation `.` and `.=`** | ❌ **Rejected** (`ParseError`) | Replaced by `+` and `+=` with strict type checking (disallowing implicit string/numeric coercion) | Use `+` for string concatenation, `+=` for append, or backticks/double-quotes interpolation |
 | **Type Casts `(int)`, `(string)`, `(float)`, `(bool)`** | ❌ **Rejected** (`ParseError`) | Ambiguous syntax with parentheses; lack of strict type inference | Use functional conversion: `int($x)`, `string($x)`, `float($x)`, `bool($x)` |
 | **Array Union Operator `+` (`$a + $b`)** | ❌ **Rejected** (`TypeError`) | High risk of unintended key overwrites and non-intuitive coercion | Use `Arr::merge($a, $b)` or `dict` methods |
 | **Execution Operator (Backticks `` `ls` ``)** | ❌ **String literal only** | Security hazard and hidden subprocess spawning | Use `Process::run(['ls'])` or `System::exec(...)` |

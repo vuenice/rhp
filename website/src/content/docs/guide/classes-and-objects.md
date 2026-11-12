@@ -27,7 +27,7 @@ class UserProfile {
 }
 
 $user = new UserProfile(1, "Alice", "alice@example.com");
-print("User: " . $user->name);
+print("User: " + $user->name);
 ```
 
 ### Structs Are Not Present in RHP
@@ -84,7 +84,7 @@ class AuditLog implements Loggable {
     use Timestampable;
 
     public function logMessage(string $message): void {
-        Log::info("[Audit] " . $message);
+        Log::info("[Audit] " + $message);
     }
 }
 ```
@@ -123,7 +123,7 @@ PHP classes are **open and extensible by default** without requiring non-standar
 ```php
 class UserService {
     public function findUser(int $id): string {
-        return "user_" . string($id);
+        return "user_" + string($id);
     }
 }
 ```
@@ -208,7 +208,7 @@ An anonymous class is defined and instantiated in a single expression:
 ```php
 $greeter = new class {
     public function greet(string $name): string {
-        return "Hello, " . $name . "!";
+        return "Hello, " + $name + "!";
     }
 };
 
@@ -230,7 +230,7 @@ $user = new class("Alice", 30) {
     }
 
     public function describe(): string {
-        return $this->name . " is " . string($this->age);
+        return $this->name + " is " + string($this->age);
     }
 };
 
@@ -254,7 +254,7 @@ class BaseService {
 
 $mockService = new class extends BaseService implements LoggerInterface {
     public function log(string $msg): void {
-        Log::info("[Mock] " . $msg);
+        Log::info("[Mock] " + $msg);
     }
 };
 
@@ -346,7 +346,7 @@ class CreateSite {
     public function __construct(private string $environment) {}
 
     public function __invoke(array $data): string {
-        return "Created site [" . $data['domain'] . "] in " . $this->environment;
+        return "Created site [" + $data['domain'] + "] in " + $this->environment;
     }
 }
 
@@ -396,7 +396,7 @@ class OrderRepository implements IteratorAggregate {
 
 $repo = new OrderRepository(['ORD-101', 'ORD-102', 'ORD-103']);
 foreach ($repo as $order) {
-    print("Processing order: " . $order);
+    print("Processing order: " + $order);
 }
 ```
 
@@ -422,7 +422,7 @@ class PagedCursor implements Iterator {
     }
 
     public function current(): mixed {
-        return "Record #" . (string)$this->position;
+        return "Record #" + string($this->position);
     }
 
     public function key(): mixed {
@@ -460,7 +460,7 @@ enum PlanType {
 }
 
 $plan = PlanType::Pro;
-print("Selected plan: " . $plan->name); // "Pro"
+print("Selected plan: " + $plan->name); // "Pro"
 ```
 
 #### 2. Backed Enums (`string` or `int`)
@@ -500,7 +500,7 @@ $allPlans = PlanType::cases();
 // [$allPlans[0] === PlanType::Free, $allPlans[1] === PlanType::Pro, ...]
 
 foreach (SiteStatus::cases() as $case) {
-    print($case->name . " => " . $case->value . "\n");
+    print($case->name + " => " + $case->value + "\n");
 }
 
 $count = count(PlanType::cases()); // 3
@@ -522,7 +522,7 @@ $isMedium = ($priority === Priority::Medium); // true
   try {
       SiteStatus::from('invalid_status');
   } catch (ValueError $e) {
-      print("Caught error: " . $e->message);
+      print("Caught error: " + $e->message);
       // 'Caught error: "invalid_status" is not a valid backing value for enum SiteStatus'
   }
   ```
@@ -825,12 +825,12 @@ For expressive patterns like Eloquent dynamic scopes or query builder forwarding
 class EloquentModel {
     public function __call(string $name, array $args): mixed {
         // Automatically invoked when calling undefined instance methods
-        return "dynamic_call:" . $name . ":" . implode(",", $args);
+        return "dynamic_call:" + $name + ":" + implode(",", $args);
     }
 
     public static function __callStatic(string $name, array $args): mixed {
         // Automatically invoked when calling undefined static methods
-        return "static_call:" . $name;
+        return "static_call:" + $name;
     }
 }
 

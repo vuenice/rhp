@@ -4,22 +4,22 @@ use std::path::Path;
 use regex::Regex;
 use serde::Serialize;
 
-/// Options for the upgrade-php command.
+/// Options for the migrate command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UpgradeOptions {
+pub struct MigrateOptions {
     /// Whether to write modifications to disk (true) or check only / dry run (false).
     pub fix: bool,
 }
 
-impl Default for UpgradeOptions {
+impl Default for MigrateOptions {
     fn default() -> Self {
         Self { fix: true }
     }
 }
 
-/// Result of upgrading a single file.
+/// Result of migrating a single file.
 #[derive(Debug, Clone, Serialize)]
-pub struct UpgradeFileResult {
+pub struct MigrateFileResult {
     pub file_path: String,
     pub modified: bool,
     pub added_lines: Vec<String>,
@@ -28,18 +28,25 @@ pub struct UpgradeFileResult {
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
-    pub upgraded_content: String,
+    pub migrated_content: String,
 }
 
-/// Aggregated report of upgrading multiple files.
+impl MigrateFileResult {
+    #[inline]
+    pub fn upgraded_content(&self) -> &str {
+        &self.migrated_content
+    }
+}
+
+/// Aggregated report of migrating multiple files.
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct UpgradeReport {
+pub struct MigrateReport {
     pub files_scanned: usize,
     pub files_modified: usize,
-    pub results: Vec<UpgradeFileResult>,
+    pub results: Vec<MigrateFileResult>,
 }
 
-impl UpgradeReport {
+impl MigrateReport {
     pub fn new() -> Self {
         Self::default()
     }
@@ -52,16 +59,16 @@ impl UpgradeReport {
         let mut out = String::new();
         out.push_str("=======================================================================\n");
         if dry_run {
-            out.push_str("🔍 RHP PHP Upgrade Check (Dry Run - No files modified)\n");
+            out.push_str("🔍 RHP PHP Migration Check (Dry Run - No files modified)\n");
         } else {
-            out.push_str("🚀 RHP PHP Upgrade Tool\n");
+            out.push_str("🚀 RHP PHP Migration Tool\n");
         }
         out.push_str("=======================================================================\n");
         out.push_str(&format!("  Files Scanned:  {}\n", self.files_scanned));
         out.push_str(&format!("  Files Modified: {}\n", self.files_modified));
 
         if self.files_modified > 0 {
-            out.push_str("\nUpgraded Files:\n");
+            out.push_str("\nMigrated Files:\n");
             for res in &self.results {
                 if res.modified {
                     out.push_str(&format!("  • {}\n", res.file_path));
@@ -77,14 +84,22 @@ impl UpgradeReport {
                 }
             }
         } else {
-            out.push_str("\nNo PHP legacy superglobals or globals required upgrading.\n");
+            out.push_str("\nNo PHP legacy superglobals or globals required migrating.\n");
         }
         out
     }
 }
 
-/// Upgrade a source string in memory.
-pub fn upgrade_php_source(source: &str, file_name: &str) -> UpgradeFileResult {
+// Backwards-compatible aliases
+pub type UpgradeOptions = MigrateOptions;
+pub type UpgradeFileResult = MigrateFileResult;
+pub type UpgradeReport = MigrateReport;
+pub use migrate_source as upgrade_php_source;
+pub use migrate_file as upgrade_php_file;
+pub use migrate_path as upgrade_php_path;
+
+/// Migrate a source string in memory.
+pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut current = source.to_string();
     let mut cookie_set_count = 0;
     let mut global_replace_count = 0;
@@ -105,36 +120,36 @@ pub fn upgrade_php_source(source: &str, file_name: &str) -> UpgradeFileResult {
 
     let modified = current != source;
 
-    UpgradeFileResult {
+    MigrateFileResult {
         file_path: file_name.to_string(),
         modified,
         added_lines,
         cookie_set_count,
         global_replace_count,
         original_content: source.to_string(),
-        upgraded_content: current,
+        migrated_content: current,
     }
 }
 
-/// Upgrade a single file on disk.
-pub fn upgrade_php_file(path: &Path, options: UpgradeOptions) -> io::Result<UpgradeFileResult> {
+/// Migrate a single file on disk.
+pub fn migrate_file(path: &Path, options: MigrateOptions) -> io::Result<MigrateFileResult> {
     let source = fs::read_to_string(path)?;
     let file_path = path.display().to_string();
-    let result = upgrade_php_source(&source, &file_path);
+    let result = migrate_source(&source, &file_path);
 
     if result.modified && options.fix {
-        fs::write(path, &result.upgraded_content)?;
+        fs::write(path, &result.migrated_content)?;
     }
 
     Ok(result)
 }
 
-/// Upgrade a path (either a single file or a directory recursively).
-pub fn upgrade_php_path(target: &Path, options: UpgradeOptions) -> io::Result<UpgradeReport> {
-    let mut report = UpgradeReport::new();
+/// Migrate a path (either a single file or a directory recursively).
+pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<MigrateReport> {
+    let mut report = MigrateReport::new();
 
     if target.is_file() {
-        let res = upgrade_php_file(target, options)?;
+        let res = migrate_file(target, options)?;
         report.files_scanned += 1;
         if res.modified {
             report.files_modified += 1;
@@ -144,13 +159,13 @@ pub fn upgrade_php_path(target: &Path, options: UpgradeOptions) -> io::Result<Up
     }
 
     if target.is_dir() {
-        upgrade_directory_recursive(target, options, &mut report)?;
+        migrate_directory_recursive(target, options, &mut report)?;
     }
 
     Ok(report)
 }
 
-fn upgrade_directory_recursive(dir: &Path, options: UpgradeOptions, report: &mut UpgradeReport) -> io::Result<()> {
+fn migrate_directory_recursive(dir: &Path, options: MigrateOptions, report: &mut MigrateReport) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -164,9 +179,9 @@ fn upgrade_directory_recursive(dir: &Path, options: UpgradeOptions, report: &mut
             if name == "target" || name == ".git" || name == "vendor" || name == "node_modules" {
                 continue;
             }
-            upgrade_directory_recursive(&path, options, report)?;
+            migrate_directory_recursive(&path, options, report)?;
         } else if is_php_or_rhp_file(&path) {
-            let res = upgrade_php_file(&path, options)?;
+            let res = migrate_file(&path, options)?;
             report.files_scanned += 1;
             if res.modified {
                 report.files_modified += 1;
