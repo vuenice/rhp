@@ -10570,7 +10570,7 @@ impl VM {
                 if lhs.is_bytes() && rhs.is_bytes() {
                     return Err(self.make_error(
                         RuntimeErrorKind::TypeError {
-                            message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
                         },
                         span,
                     ));
@@ -10587,7 +10587,41 @@ impl VM {
                 s.push_str(&rhs.to_php_string());
                 Ok(PhpValue::string(s))
             }
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+            BinaryOp::Add => {
+                if lhs.is_bytes() && rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if lhs.is_bytes() || rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if lhs.is_string() && rhs.is_string() {
+                    let mut s = lhs.to_php_string();
+                    s.push_str(&rhs.to_php_string());
+                    return Ok(PhpValue::string(s));
+                }
+                if lhs.is_string() || rhs.is_string() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::InvalidBinaryOperands {
+                            op: "+".to_string(),
+                            lhs_type: lhs.type_name().to_string(),
+                            rhs_type: rhs.type_name().to_string(),
+                        },
+                        span,
+                    ));
+                }
+                self.exec_numeric_binary(op, lhs, rhs, span)
+            }
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
                 self.exec_numeric_binary(op, lhs, rhs, span)
             }
 

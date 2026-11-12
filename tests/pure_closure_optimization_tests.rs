@@ -97,7 +97,7 @@ fn test_this_elision_optimization() {
     class DataFilter {
         public function makeGreeter(): callable {
             return function(string $name): string {
-                return "Hello " . $name;
+                return "Hello " + $name;
             };
         }
     }

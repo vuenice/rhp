@@ -148,7 +148,7 @@ fn test_unstatic_subsets_map_filter_haskey_hasvalue_keys_values() {
 
         // 4. HashMap
         $map = Arr::hashMap(['name' => 'RHP', 'version' => '2']);
-        $m_mapped = $map->map(fn($v) => $v . '_ok');
+        $m_mapped = $map->map(fn($v) => $v + '_ok');
         $m_filtered = $map->filter(fn($v) => $v == '2');
         $m_hasKeyName = $map->hasKey('name');
         $m_hasKeyMissing = $map->hasKey('missing');

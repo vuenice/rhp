@@ -62,7 +62,7 @@ fn test_instance_methods_of_shared_class_allowed_everywhere() {
     let src = r#"
         shared class Router {
             public function dispatch(string $path): string {
-                return "route:" . $path;
+                return "route:" + $path;
             }
         }
 

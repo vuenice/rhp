@@ -165,7 +165,7 @@ fn test_instanceof_in_if_condition() {
 
         function checkUser(mixed $obj): string {
             if ($obj instanceof User) {
-                return "is_user:" . $obj->name;
+                return "is_user:" + $obj->name;
             } else {
                 return "not_user";
             }

@@ -290,10 +290,10 @@ fn test_time_constants_and_echo_and_macros() {
 
         // String coercion
         $d = Time::parse("2024-03-15 09:30:00");
-        $str = "Event on: " . $d;
+        $str = "Event on: {$d}";
 
         // Macro test
-        Time::macro('toCustomTag', fn($obj) => "TAG:" . $obj->toDateString());
+        Time::macro('toCustomTag', fn($obj) => "TAG:" + $obj->toDateString());
         $macro_res = Time::toCustomTag($d);
 
         return [

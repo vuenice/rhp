@@ -23,7 +23,7 @@ fn test_exit_executes_shutdown_functions_and_destructors() {
             }
 
             public function __destruct() {
-                echo "destruct:" . $this->name . ";";
+                echo "destruct:" + $this->name + ";";
             }
         }
 
@@ -186,12 +186,12 @@ fn test_normal_completion_also_runs_shutdown_and_destructors() {
                 $this->id = $id;
             }
             public function __destruct() {
-                echo "clean:" . $this->id . ";";
+                echo "clean:" + $this->id + ";";
             }
         }
 
         register_shutdown_function(function($msg) {
-            echo "shutdown:" . $msg . ";";
+            echo "shutdown:" + $msg + ";";
         }, "custom_arg");
 
         $a = new AutoClean("A");

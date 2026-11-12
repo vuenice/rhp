@@ -25,7 +25,7 @@ fn test_metadata_table_emitted_at_compile_time() {
 
             #[Get('/{id}')]
             public function show(int $id): string {
-                return "order_" . $id;
+                return "order_{$id}";
             }
         }
 
@@ -186,7 +186,7 @@ fn test_method_injection_and_handler_shim_resolution() {
 
         class UserController {
             public function show(Request $req, User $user, int $postId, Mailer $mailer): string {
-                return "User " . $user->name . " post " . $postId . " with " . $mailer->driver;
+                return "User {$user->name} post {$postId} with {$mailer->driver}";
             }
         }
     "#;

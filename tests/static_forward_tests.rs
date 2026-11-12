@@ -61,7 +61,7 @@ fn test_evaluation_order_factory_runs_before_arguments() {
 
         class Model {
             public static function __forward(): object {
-                Tracker::$order = Tracker::$order . 'forward;';
+                Tracker::$order = Tracker::$order + 'forward;';
                 return new Builder();
             }
         }
@@ -69,7 +69,7 @@ fn test_evaluation_order_factory_runs_before_arguments() {
         class User extends Model {}
 
         function get_arg(): int {
-            Tracker::$order = Tracker::$order . 'arg;';
+            Tracker::$order = Tracker::$order + 'arg;';
             return 100;
         }
 
@@ -87,7 +87,7 @@ fn test_real_static_method_precedence_over_forwarding() {
     let source = r#"
         class Builder {
             public function find(int $id): string {
-                return 'builder find: ' . $id;
+                return "builder find: {$id}";
             }
         }
 
@@ -97,7 +97,7 @@ fn test_real_static_method_precedence_over_forwarding() {
             }
 
             public static function find(int $id): string {
-                return 'model static find: ' . $id;
+                return "model static find: {$id}";
             }
         }
 
@@ -189,7 +189,7 @@ fn test_dynamic_class_static_forwarding() {
                 $this->m = $m;
             }
             public function query(): string {
-                return 'queried ' . $this->m;
+                return 'queried ' + $this->m;
             }
         }
 
@@ -215,7 +215,7 @@ fn test_facade_pattern_with_forward() {
     let source = r#"
         class CacheStore {
             public function get(string $key): string {
-                return 'stored_' . $key;
+                return 'stored_' + $key;
             }
         }
 
@@ -238,7 +238,8 @@ fn test_call_static_fallback_when_no_forward_hook() {
     let source = r#"
         class LegacyProxy {
             public static function __callStatic(string $method, array $args): string {
-                return 'intercepted ' . $method . ' with ' . count($args) . ' args';
+                $argCount = count($args);
+                return "intercepted {$method} with {$argCount} args";
             }
         }
 

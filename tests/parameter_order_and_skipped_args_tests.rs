@@ -64,7 +64,7 @@ $arrow = fn(int $step = 1, int $x) => $x + $step;
 fn test_linter_pipeline_end_to_end_fixes_parameter_order() {
     let code = r#"
 function greet(string $greeting = 'Hello', string $name): string {
-    return $greeting . ' ' . $name;
+    return $greeting + ' ' + $name;
 }
 "#;
 
@@ -150,7 +150,8 @@ function configureApp(
     bool $debug = false,
     string $logLevel = 'info'
 ): string {
-    return $name . ':' . $env . ':' . $port . ':' . ($debug ? '1' : '0') . ':' . $logLevel;
+    $d = $debug ? '1' : '0';
+    return "{$name}:{$env}:{$port}:{$d}:{$logLevel}";
 }
 
 // 1. Skip $env and $port with extra commas, specify $debug = true, skip $logLevel
@@ -190,7 +191,8 @@ class Service {
     ) {}
 
     public function query(string $sql, int $timeout = 30, bool $fetchAssoc = true): string {
-        return $this->host . ':' . $this->port . ':' . $this->user . ':' . $this->database . '|' . $sql . '|' . $timeout . '|' . ($fetchAssoc ? 'assoc' : 'list');
+        $mode = $fetchAssoc ? 'assoc' : 'list';
+        return "{$this->host}:{$this->port}:{$this->user}:{$this->database}|{$sql}|{$timeout}|{$mode}";
     }
 }
 
@@ -227,7 +229,7 @@ $val = $calc(10, , 100);
 fn test_call_all_optional_parameters_with_leading_skipped_comma() {
     let code = r#"
 function coords(int $x = 0, int $y = 0, int $z = 0): string {
-    return $x . ',' . $y . ',' . $z;
+    return "{$x},{$y},{$z}";
 }
 
 // Skip $x, provide $y = 50, skip $z

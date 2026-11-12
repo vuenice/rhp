@@ -126,7 +126,7 @@ fn test_copy_on_write_state_isolation_static_properties() {
         r#"
         $c = ServerConfig::get();
         $z = ServerConfig::getZone();
-        return $z . ":" . $c;
+        return "{$z}:{$c}";
         "#,
     )
     .with_id("req_inspect");
@@ -161,7 +161,7 @@ fn test_request_facade_injection_and_isolation() {
                 $user = Request::get("user");
                 $action = Request::get("action");
                 $method = Request::server("REQUEST_METHOD");
-                return $method . " -> " . $user . " performs " . $action;
+                return $method + " -> " + $user + " performs " + $action;
             }
         }
     "#;
@@ -244,7 +244,7 @@ fn test_fault_isolation_and_panic_boundary() {
 fn test_direct_precompiled_function_call_concurrency() {
     let parent_code = r#"
         function calculateHash(int $id, string $salt): string {
-            return "hash:" . $id . "-" . $salt;
+            return "hash:{$id}-{$salt}";
         }
     "#;
 
@@ -281,7 +281,7 @@ fn test_process_cow_worker_model() {
             public static function executeJob(int $id): string {
                 self::$stateVersion = self::$stateVersion + $id;
                 echo "job_executed;";
-                return "res_" . self::$stateVersion;
+                return "res_" + string(self::$stateVersion);
             }
         }
     "#;

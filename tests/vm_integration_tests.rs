@@ -715,28 +715,28 @@ fn test_vm_runtime_type_casting_and_collection_boundary_contracts() {
     );
 }
 #[test]
-fn test_php_fidelity_dot_concat_and_plus_arithmetic() {
+fn test_plus_concatenation_and_arithmetic() {
     let source = r#"
-        // 1. Dot concatenation (always string)
-        $concat1 = "10" . "20";
-        $concat2 = 5 . 5;
-        $concat3 = "User: " . 42;
+        // 1. Plus string concatenation (both operands must be strings)
+        $concat1 = "10" + "20";
+        $concat2 = "hello " + "world";
+        $concat3 = "User: " + "42";
 
-        // 2. Plus arithmetic (+ is strictly arithmetic addition, never string concatenation)
+        // 2. Plus arithmetic (+ is arithmetic addition on numbers)
         $add1 = 10 + 20;
         $add2 = 15 + 25;
 
-        // 3. Concat assignment (.=) and Add assignment (+=)
+        // 3. Add assignment (+=) works for both strings (appending) and numbers
         $msg = "hello";
-        $msg .= " world";
+        $msg += " world";
 
         $counter = 10;
         $counter += 5;
     "#;
 
-    let (vm, _) = run_source_with_vm(source).expect("PHP fidelity operators must execute cleanly");
+    let (vm, _) = run_source_with_vm(source).expect("Plus concatenation and arithmetic must execute cleanly");
     assert_eq!(vm.get_main_variable("$concat1"), Some(&PhpValue::string("1020")));
-    assert_eq!(vm.get_main_variable("$concat2"), Some(&PhpValue::string("55")));
+    assert_eq!(vm.get_main_variable("$concat2"), Some(&PhpValue::string("hello world")));
     assert_eq!(vm.get_main_variable("$concat3"), Some(&PhpValue::string("User: 42")));
 
     assert_eq!(vm.get_main_variable("$add1"), Some(&PhpValue::Int(30)));
@@ -744,6 +744,14 @@ fn test_php_fidelity_dot_concat_and_plus_arithmetic() {
 
     assert_eq!(vm.get_main_variable("$msg"), Some(&PhpValue::string("hello world")));
     assert_eq!(vm.get_main_variable("$counter"), Some(&PhpValue::Int(15)));
+
+    // 4. Dot operator is rejected
+    assert!(run_source_with_vm(r#"$x = "a" . "b";"#).is_err());
+    assert!(run_source_with_vm(r#"$x = "a"; $x .= "b";"#).is_err());
+
+    // 5. Mismatched string + number is rejected
+    assert!(run_source_with_vm(r#"$x = "hello " + 42;"#).is_err());
+    assert!(run_source_with_vm(r#"$x = 42 + "hello";"#).is_err());
 }
 
 #[test]

@@ -187,7 +187,7 @@ fn test_socket_facade_and_port_discovery() {
 #[test]
 fn test_file_rmdir_and_path_glob_workflow() {
     let code = r#"
-        $dir = Path::tempDir() . '/rhp-test-glob-' . bin2hex(random_bytes(6));
+        $dir = Path::tempDir() + '/rhp-test-glob-' + bin2hex(random_bytes(6));
         mkdir($dir);
         file_put_contents("{$dir}/a.txt", "file A");
         file_put_contents("{$dir}/b.txt", "file B");

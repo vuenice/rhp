@@ -62,37 +62,37 @@ fn test_bytes_non_interpolation() {
 
 #[test]
 fn test_string_concatenation_strictness() {
-    // 1. Utf8 . Utf8 works
+    // 1. Utf8 + Utf8 works
     let code = r#"
         $a = "hello ";
         $b = "world";
-        return $a . $b;
+        return $a + $b;
     "#;
     let res = run_source(code).expect("concatenation should succeed");
     assert_eq!(res.to_php_string(), "hello world");
     assert!(res.is_utf8());
 
-    // 2. Bytes . Bytes throws TypeError
+    // 2. Bytes + Bytes throws TypeError
     let code_bb = r#"
         $a = b"foo";
         $b = b"bar";
-        return $a . $b;
+        return $a + $b;
     "#;
-    let err_bb = run_source(code_bb).expect_err("Bytes . Bytes should fail");
+    let err_bb = run_source(code_bb).expect_err("Bytes + Bytes should fail");
     let msg = format!("{:?}", err_bb);
     assert!(
-        msg.contains("Cannot concatenate bytes using the '.' operator"),
+        msg.contains("Cannot concatenate bytes using the '+' operator"),
         "got: {}",
         msg
     );
 
-    // 3. Utf8 . Bytes throws TypeError
+    // 3. Utf8 + Bytes throws TypeError
     let code_sb = r#"
         $a = "foo";
         $b = b"bar";
-        return $a . $b;
+        return $a + $b;
     "#;
-    let err_sb = run_source(code_sb).expect_err("Utf8 . Bytes should fail");
+    let err_sb = run_source(code_sb).expect_err("Utf8 + Bytes should fail");
     let msg_sb = format!("{:?}", err_sb);
     assert!(
         msg_sb.contains("Cannot concatenate string and bytes"),
@@ -100,18 +100,32 @@ fn test_string_concatenation_strictness() {
         msg_sb
     );
 
-    // 4. Bytes . Utf8 throws TypeError
+    // 4. Bytes + Utf8 throws TypeError
     let code_bs = r#"
         $a = b"foo";
         $b = "bar";
-        return $a . $b;
+        return $a + $b;
     "#;
-    let err_bs = run_source(code_bs).expect_err("Bytes . Utf8 should fail");
+    let err_bs = run_source(code_bs).expect_err("Bytes + Utf8 should fail");
     let msg_bs = format!("{:?}", err_bs);
     assert!(
         msg_bs.contains("Cannot concatenate string and bytes"),
         "got: {}",
         msg_bs
+    );
+
+    // 5. Dot concatenation operator is removed and produces compile error
+    let code_dot = r#"
+        $a = "hello ";
+        $b = "world";
+        return $a . $b;
+    "#;
+    let err_dot = run_source(code_dot).expect_err("Dot concat should fail");
+    let msg_dot = format!("{:?}", err_dot);
+    assert!(
+        msg_dot.contains("The '.' concatenation operator has been removed. Use '+' for string concatenation."),
+        "got: {}",
+        msg_dot
     );
 }
 

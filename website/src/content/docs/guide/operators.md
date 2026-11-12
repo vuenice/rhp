@@ -230,10 +230,13 @@ u8 $clamped = 250u8 +| 20u8; // 255u8 (saturating)
 
 > [!IMPORTANT]
 > **No Implicit Coercion & No Silent Overflow:**
-> - `+` is **strictly mathematical**. Both operands must have identical numeric types (e.g. `int + int` or `float + float`).
-> - Mixed-type addition (`int + float`, `string + int`, `null + int`, `bool + int`) is rejected with actionable compile-time errors.
-> - String concatenation **must** use `.` (`$first . $second`).
+> - `+` supports **strictly typed addition and concatenation**:
+>   - Numeric addition: operands must be numeric (`int + int`, `float + float`).
+>   - String concatenation: both operands must be strings (`string + string`).
+> - Mixed-type addition/concatenation (`string + int`, `int + string`, `null + int`, `bool + int`) is rejected with actionable compile-time errors.
+> - String concatenation assignment uses `+=` (`$msg += " world"`).
 > - Array merging **must** use `array_merge()` or spread `[...$a, ...$b]`.
+> - The legacy `.` operator for string concatenation has been **removed** from RHP.
 > - Constant expressions that overflow are flagged as **compile-time errors**, never deferred to runtime.
 > - For full specifications, LLVM codegen details, and custom `Add` traits, see [Safe Addition & Arithmetic Semantics](/docs/advanced/safe-addition-semantics).
 
@@ -246,13 +249,12 @@ RHP supports simple assignment and compound assignment shortcuts:
 | Operator | Syntax | Equivalent | Description |
 | :--- | :--- | :--- | :--- |
 | `=` | `$x = $y` | `$x = $y` | Assigns value of right operand to left target |
-| `+=` | `$x += $y` | `$x = $x + $y` | Addition assignment |
+| `+=` | `$x += $y` | `$x = $x + $y` | Addition / string append assignment |
 | `-=` | `$x -= $y` | `$x = $x - $y` | Subtraction assignment |
 | `*=` | `$x *= $y` | `$x = $x * $y` | Multiplication assignment |
 | `/=` | `$x /= $y` | `$x = $x / $y` | Division assignment |
 | `%=` | `$x %= $y` | `$x = $x % $y` | Modulo assignment |
 | `**=` | `$x **= $y` | `$x = $x ** $y` | Exponentiation assignment |
-| `.=` | `$x .= $y` | `$x = $x . $y` | String concatenation assignment |
 | `??=` | `$x ??= $y` | `$x = $x ?? $y` | Null-coalescing assignment |
 | `&=` | `$x &= $y` | `$x = $x & $y` | Bitwise AND assignment |
 | `\|=` | `$x \|= $y` | `$x = $x \| $y` | Bitwise OR assignment |
@@ -449,7 +451,7 @@ When consecutive operator characters appear, RHP's lexer applies the **Maximal M
 | :--- | :--- | :--- | :--- |
 | `Ellipsis` | `...` | 3 characters | Variadic parameters and array/collection unpacking |
 | `Range` | `..` | 2 characters | Sequential range iteration (`1..10`) |
-| `Dot` | `.` | 1 character | String concatenation |
+| `Dot` | `.` | 1 character | Removed operator (fails compilation; use `+` for strings) |
 
 ### Disambiguation Behavior
 
@@ -460,8 +462,8 @@ function sum(int ...$values): int {}
 // Lexed as Range:
 foreach (1..5 as $i) {}
 
-// Lexed as Dot concatenation:
-$label = "Item" . $id;
+// String concatenation uses '+' (dot operator is rejected):
+$label = "Item" + $idStr;
 
 // Whitespace-free maximal munch:
 // $a...$b is lexed as: [$a, ..., $b] (Ellipsis), NOT [$a, .., ., $b]

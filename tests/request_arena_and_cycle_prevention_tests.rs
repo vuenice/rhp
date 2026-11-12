@@ -363,7 +363,7 @@ fn test_worker_request_executes_with_instant_arena_drop() {
     let parent = ParentProcess::boot(
         r#"
         function handleRequest(string $payload): string {
-            $temp = Str::upper($payload) . " PROCESSED";
+            $temp = Str::upper($payload) + " PROCESSED";
             return $temp;
         }
         "#,

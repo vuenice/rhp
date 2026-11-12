@@ -247,9 +247,42 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
             let lhs = eval_expr(left, env)?;
             let rhs = eval_expr(right, env)?;
             match op {
-                BinaryOp::Add => Ok(PhpValue::Int(
-                    (lhs.to_i32().unwrap_or(0).wrapping_add(rhs.to_i32().unwrap_or(0))) as i64,
-                )),
+                BinaryOp::Add => {
+                    if lhs.is_bytes() && rhs.is_bytes() {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::Custom {
+                                message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
+                            },
+                            node.span,
+                        ));
+                    }
+                    if lhs.is_bytes() || rhs.is_bytes() {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::Custom {
+                                message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                            },
+                            node.span,
+                        ));
+                    }
+                    if lhs.is_string() && rhs.is_string() {
+                        let mut s = lhs.to_php_string();
+                        s.push_str(&rhs.to_php_string());
+                        return Ok(PhpValue::string(s));
+                    }
+                    if lhs.is_string() || rhs.is_string() {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidBinaryOperands {
+                                op: "+".to_string(),
+                                lhs_type: lhs.type_name().to_string(),
+                                rhs_type: rhs.type_name().to_string(),
+                            },
+                            node.span,
+                        ));
+                    }
+                    Ok(PhpValue::Int(
+                        (lhs.to_i32().unwrap_or(0).wrapping_add(rhs.to_i32().unwrap_or(0))) as i64,
+                    ))
+                }
                 BinaryOp::Sub => Ok(PhpValue::Int(
                     (lhs.to_i32().unwrap_or(0).wrapping_sub(rhs.to_i32().unwrap_or(0))) as i64,
                 )),
@@ -271,7 +304,7 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     if lhs.is_bytes() && rhs.is_bytes() {
                         return Err(RuntimeError::new(
                             RuntimeErrorKind::Custom {
-                                message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                                message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
                             },
                             node.span,
                         ));

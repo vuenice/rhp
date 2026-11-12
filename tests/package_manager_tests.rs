@@ -266,7 +266,7 @@ namespace Local\Formatter;
 
 class Format {
     public static function wrap(string $s): string {
-        return "[" . $s . "]";
+        return "[" + $s + "]";
     }
 }
 "#).unwrap();

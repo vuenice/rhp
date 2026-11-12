@@ -228,7 +228,7 @@ fn test_dynamic_type_inference_within_function_bodies() {
         function calculateTotal(int $quantity, float $unitPrice, string $currency): float {
             $subtotal = $quantity * $unitPrice;
             $tax = $subtotal * 0.18;
-            $label = "Currency: " . $currency;
+            $label = "Currency: " + $currency;
             $isTaxable = $tax > 0.0;
             return $subtotal + $tax;
         }
@@ -277,7 +277,7 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
     let ergonomic_dynamic_body = r#"
         function formatPayload(int $id): string {
             $data = $id * 10;
-            $data = "ID-" . $data;
+            $data = "ID-" + string($data);
             return $data;
         }
     "#;
@@ -527,7 +527,7 @@ fn test_boundary_call_argument_and_return_type_verification() {
     // 3. ReturnTypeMismatch inside function body
     let bad_return = r#"
         function computeScore(int $base): int {
-            $msg = "score is " . $base;
+            $msg = "score is " + string($base);
             return $msg;
         }
     "#;
@@ -740,4 +740,98 @@ fn test_collection_and_scalar_type_hint_boundary_contracts() {
         other => panic!("Expected TypeError, got {:?}", other),
     }
 }
+
+#[test]
+fn test_plus_concatenation_strict_typing_and_dot_removal() {
+    // 1. Valid string concatenation using +
+    let valid_concat = r#"
+        function greet(string $first, string $last): string {
+            return $first + " " + $last;
+        }
+    "#;
+    let typed = parse_and_check(valid_concat).expect("string + string should typecheck");
+    assert_eq!(
+        typed.type_info.inferred_var_type("greet", "$first"),
+        Some(&RhpType::String)
+    );
+
+    // 2. Valid string concatenation assignment using +=
+    let valid_assign = r#"
+        function appendMsg(string $msg): string {
+            $msg += " world";
+            return $msg;
+        }
+    "#;
+    parse_and_check(valid_assign).expect("string += string should typecheck");
+
+    // 3. Mismatched string + int must produce InvalidBinaryOperation
+    let bad_concat_str_int = r#"
+        function bad(string $s, int $n): string {
+            return $s + $n;
+        }
+    "#;
+    let err = parse_and_check(bad_concat_str_int).expect_err("string + int should be rejected");
+    match err {
+        FrontendError::Type(te) => assert!(matches!(
+            te.kind,
+            TypeErrorKind::InvalidBinaryOperation { .. }
+        )),
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+
+    // 4. Mismatched int + string must produce InvalidBinaryOperation
+    let bad_concat_int_str = r#"
+        function bad(int $n, string $s): string {
+            return $n + $s;
+        }
+    "#;
+    let err = parse_and_check(bad_concat_int_str).expect_err("int + string should be rejected");
+    match err {
+        FrontendError::Type(te) => assert!(matches!(
+            te.kind,
+            TypeErrorKind::InvalidBinaryOperation { .. }
+        )),
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+
+    // 5. Legacy '.' operator must be rejected by parser with educational message
+    let dot_code = r#"
+        function oldDot(string $a, string $b): string {
+            return $a . $b;
+        }
+    "#;
+    let err = parse_and_check(dot_code).expect_err("dot operator should be rejected at parse time");
+    match err {
+        FrontendError::Parse(pe) => {
+            let msg = pe.to_string();
+            assert!(
+                msg.contains("The '.' concatenation operator has been removed. Use '+' for string concatenation."),
+                "Unexpected parser message: {}",
+                msg
+            );
+        }
+        other => panic!("Expected ParseError, got {:?}", other),
+    }
+
+    // 6. Legacy '.=' operator must be rejected by parser with educational message
+    let dot_assign_code = r#"
+        function oldDotAssign(string $a): string {
+            $a .= " test";
+            return $a;
+        }
+    "#;
+    let err = parse_and_check(dot_assign_code).expect_err("dot-assign operator should be rejected at parse time");
+    match err {
+        FrontendError::Parse(pe) => {
+            let msg = pe.to_string();
+            assert!(
+                msg.contains("The '.=' operator has been removed. Use '+=' for string concatenation assignment."),
+                "Unexpected parser message: {}",
+                msg
+            );
+        }
+        other => panic!("Expected ParseError, got {:?}", other),
+    }
+}
+
 
