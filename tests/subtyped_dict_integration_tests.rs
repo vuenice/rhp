@@ -49,22 +49,19 @@ fn test_dict_indexmap_memory_layout_and_cow_detachment() {
     assert!(dict.is_shared());
     assert!(dict_alias.is_shared());
 
-    // Copy-On-Write (COW): ensure_dict_mut detaches the underlying IndexMap
+    // Dicts are shared objects. A write through an alias changes the original.
     assert!(dict_alias.ensure_dict_mut());
-    assert_eq!(dict.ref_count(), 1);
-    assert_eq!(dict_alias.ref_count(), 1);
-    assert!(!dict.is_shared());
-    assert!(!dict_alias.is_shared());
+    assert_eq!(dict.ref_count(), 2);
+    assert!(dict.is_shared());
 
-    // Mutate detached dict
     if let PhpValue::Dict(ref rc) = dict_alias {
         rc.borrow_mut()
             .insert("retries".to_string(), PhpValue::Int(3));
     }
-    assert_eq!(dict.dict_len(), Some(3));
+    assert_eq!(dict.dict_len(), Some(4));
     assert_eq!(dict_alias.dict_len(), Some(4));
+    assert_eq!(dict.dict_get("retries"), Some(PhpValue::Int(3)));
     assert_eq!(dict_alias.dict_get("retries"), Some(PhpValue::Int(3)));
-    assert_eq!(dict.dict_get("retries"), None);
 }
 
 #[test]

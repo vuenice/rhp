@@ -1,58 +1,39 @@
 ---
-description: List and set identity, self-insert, and hash bugs. List and set hold only int, float, and string. HashMap is out of scope.
+description: Lists and dicts are shared objects. Element unset is only for dict and hashmap.
 globs: src/vm/**/*.rs,src/type_system/**/*.rs,src/ir/**/*.rs
 alwaysApply: false
 ---
 
-# List and set identity
+# Shared lists and dicts
 
-## Current Problem
+Lists and dicts are `Rc<RefCell<_>>`. Assignment and `$a[] = $b` store that same buffer. `$b = $a; $b[] = 1` changes `$a`. `$a[] = $a` is a cycle. `strict_eq` returns true when both sides are the same buffer before it walks children. Two different cyclic values may overflow comparison.
 
-`List`, `Dict`, and `Set` are `Rc<RefCell<_>>` in `src/vm/value.rs`. `PhpValue::clone` copies the `Rc`, so `$a[] = $b` stores the same box. `$a[] = $a` makes a cycle. `PartialEq` calls `borrow()` and panics if that box is already open, or recurses until the stack overflows. `Hash` uses `try_borrow` and, on failure, hashes only the type tag, so one list has two hashes. A set element that is later mutated changes bucket and `contains` misses it. `Arr::hashMap` has the same key bug. Do not design for it now.
+A list may hold scalars, lists, and dicts together. A list or dict used as a set element or hashmap key is a type error. `clone $a` is the deep copy.
 
-## Possible solutions
+List indexes are dense `0..=len`. `$a[] =` appends. An index past `len` is a type error. Dict keys are strings. Any other key on an empty array becomes a hashmap. Untyped `[]` stays `EmptyArray` until the first write.
 
-**A. Reject only `$a[] = $a`.**
-- Pros: stops the direct cycle.
-- Cons: `$a[] = $b; $b[] = $a` remains. Shared `Rc` still panics on `==`. Mutating a set element still changes its hash.
-
-**B. `cow_clone` on every push, and a deep snapshot when adding to a set.**
-- Pros: `$a[] = $b` then `$b[] = 2` leaves `$a[0]` unchanged. The set keeps its own buffers, so a later write cannot move the hash.
-- Cons: nested lists stay shared unless every level is copied. Objects copied by pointer can still change if their hash ever depends on fields. `chunk()` and `flatten()` still need lists of lists.
-
-**C. List and set elements are only `int`, `float`, and `string`. Anything else is a `dict`.**
-- Pros: a list cannot contain itself, so the cycle and the re-entrant hash disappear. Set keys are copied scalars, so later writes do not move the bucket. Matches the decision already made.
-- Cons: `chunk()`, grouped rows, and lists of lists are dicts (or rejected), not lists. Dict values can still be shared boxes, so dict equality can still panic. `Arr::hashMap` stays unsupported.
-
-## Suggested solution
-
-**C**, plus copy the scalar on push and on `Arr::set` add (do not share the caller's `Rc`). Compare two values that are the same box as equal without borrowing twice. Dict may hold lists, sets, and other dicts. A list or set that receives one of those is a type error: use `dict`.
+`unset($x[$k])` is not supported. Delete with `$x->remove(...)`. `unset($var)` still clears the variable. `list->remove` takes an int index. `dict->remove` takes a string key. `set->remove` takes a value. `hashMap->remove` takes a key. A tuple has a fixed length and no `remove`. List and dict `remove` warn because they shift. Set and hashmap do not.
 
 ## RHP code
 
-Problem — push shares the box, then compare panics:
-
 ```php
-list $a = [];
+list $a = [1];
+list $b = $a;
+$b[] = 2;
+print($a[1]); // 2
+
 $a[] = $a;
-print($a === $a); // panic: list is already borrowed
-```
+print($a == $a); // true
 
-Solution — that push is illegal; scalars copy in:
+dict $node = ['name' => 'Ada'];
+$node['parent'] = $node;
+$node->remove('name'); // warning: dict removal shifts
 
-```php
-list $a = [];
-$a[] = $a; // error: list accepts int, float, string only
+list $items = [1, 2];
+$items->remove(0); // warning: list removal shifts
 
-list $b = [1];
-list $row = [];
-$row[] = $b; // error: use dict
+$set = Arr::set([1]);
+$set->remove(1); // no warning
 
-dict $row = ["nums" => $b];
-
-list $ids = [1];
-$set = Arr::set([]);
-$set->add(1);
-$ids[] = 2;
-print($set->contains(1)); // true
+unset($items[0]); // error: use ->remove()
 ```

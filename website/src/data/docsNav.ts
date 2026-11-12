@@ -74,6 +74,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Blocking Native FFI Escape Hatch", "advanced/blocking-native-ffi"),
       item("Compiler & VM Internals", "advanced/compiler-internals"),
       item("Pure Closure Optimization", "advanced/pure-closure-optimization"),
+      item("Collection Compiler Optimizations", "advanced/collection-compiler-optimizations"),
       item("Safe Addition & Arithmetic Semantics", "advanced/safe-addition-semantics"),
       item("CPU Preemption & Instruction Budget", "advanced/cpu-preemption"),
     ]

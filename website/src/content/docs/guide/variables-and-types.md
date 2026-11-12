@@ -138,43 +138,44 @@ $flag  = bool(1);          // true (bool)
 
 ---
 
-## Default Storage: `int` and `float` are both `i32`
+## Native 64-Bit Storage: `int` (i64) and `float` (f64)
 
 > [!IMPORTANT]
-> **Both `int` and `float` default to `i32` (32-bit) storage.**
-> The `float` primitive does **not** map to Rust's `f64` by default. It stores a 32-bit integer under the hood just like `int`. Use `Float::f64(...)` or `Float::f32(...)` via the `Float` facade when you explicitly need IEEE-754 precision.
+> **Native 64-Bit Arithmetic Lowered Directly to Rust:**
+> In RHP, `int` is a signed 64-bit integer (`i64`) and `float` is an IEEE-754 64-bit double precision float (`f64`). Both are directly lowered down to bare-metal primitives and stored inline (unboxed) in bytecode registers (`PhpValue::Int(i64)` and `PhpValue::Float(f64)`). They incur **zero heap allocations** and run at hardware CPU speed.
 
 ```php
-int   $count = 42;       // i32 internally
-float $score = 9;        // also i32 internally — NOT f64
-
-// Explicit 64-bit or IEEE float via the Float facade:
-$precise = Float::f64(3.141592653589793);  // f64 precision
-$big     = Int::i64(9223372036854775807);  // i64 max value
+int   $count = 42;       // i64 internally
+float $score = 9.99;     // f64 internally
+int   $bigId = 9223372036854775807; // Full 64-bit signed integer
+float $pi    = 3.141592653589793;   // Full 64-bit IEEE-754 precision
 ```
 
 ---
 
-## `Int` and `Float` — Supporting Facade Classes (NOT Base Types)
+## `Int` and `Float` — Supporting Utility Facades (NOT Base Types)
 
-`Int` and `Float` are **static facade classes** — they are *not* instances of `int` or `float` and can never be instantiated with `new`. They provide factory methods and fluent utilities for working with extended Rust numeric types.
+`Int` and `Float` are **static utility facade classes** — they are *not* types or wrappers, and can never be instantiated with `new`. They provide utility methods for random generation, variadic comparisons, and string formatting.
 
 | Item | Kind | Example |
 | :--- | :--- | :--- |
 | `int` | Primitive keyword (base datatype) | `int $x = 5;` |
-| `float` | Primitive keyword (base datatype) | `float $y = 3;` |
-| `Int` | Static facade class (identifier) | `Int::i64(...)` |
-| `Float` | Static facade class (identifier) | `Float::f64(...)` |
+| `float` | Primitive keyword (base datatype) | `float $y = 3.14;` |
+| `Int` | Static utility facade (identifier) | `Int::random(1, 100)` |
+| `Float` | Static utility facade (identifier) | `Float::compare($a, $b, 0.001)` |
 
 ```php
-// ✅ Correct — use as type keywords (primitive base types)
+// ✅ Correct — use lowercase primitive keywords for types
 int   $age    = 30;
-float $amount = 100;
+float $amount = 99.95;
 
-// ✅ Correct — use as static facade (extended numeric utilities)
-$bigId   = Int::i64(9223372036854775807);
-$precise = Float::f64(3.141592653589793)->toDecimal(6);
-$random  = Int::i64()->random()->add()->subtract();
+// ✅ Correct — use fluent instance methods on variables for formatting/conversions
+string $formatted = $amount->toDecimal(2); // "99.95"
+int    $absolute  = $age->abs();           // 30
+
+// ✅ Correct — use static facades for non-instance utilities
+int   $dice  = Int::random(1, 6);
+float $ratio = Float::random(0.0, 1.0);
 
 // ❌ Fatal Error — Int and Float cannot be instantiated
 // $obj = new Int();
@@ -186,25 +187,28 @@ $random  = Int::i64()->random()->add()->subtract();
 
 ---
 
-## Extended Rust Numeric Types via Facade Methods
+## Fluent Instance Methods on Numeric Variables
 
-For low-level operations (cryptography, network protocols, large data), use the `Int` and `Float` facades to access native Rust numeric variants with full fluent chaining:
+Numeric variables support clean, immutable fluent methods for conversions, rounding, and formatting:
 
 ```php
-// --- Int facade ---
-$small  = Int::i8(127);               // i8  (-128 to 127)
-$medium = Int::i32(2_147_483_647);    // i32 (same as plain `int` default)
-$large  = Int::i64(9_223_372_036_854_775_807);  // i64
-$huge   = Int::i128(170141183460469231731687303715884105727); // i128
-$ptr    = Int::usize(1024);           // usize (pointer-width)
-$chain  = Int::i64()->random()->add(10)->subtract(3); // fluent
+// --- Integer methods ---
+int $num = -15;
+int    $absVal = $num->abs();       // 15
+string $asStr  = $num->toString();  // "-15"
+float  $asDec  = $num->toFloat();   // -15.0
 
-// --- Float facade ---
-$single = Float::f32(3.14);           // f32  (same as plain `float` default storage)
-$double = Float::f64(3.141592653589793); // f64 full IEEE-754 64-bit
-$fmt    = Float::f64(1234567.89)->toDecimal(2); // "1234567.89"
-$pct    = Float::f64(0.75)->toPercent();        // "75.00%"
+// --- Float methods ---
+float $price = 1234.5678;
+string $fixed   = $price->toDecimal(2); // "1234.57"
+float  $rounded = $price->round(2);     // 1234.57
+float  $floored = $price->floor();      // 1234.0
+float  $ceiled  = $price->ceil();       // 1235.0
+int    $intVal  = $price->toInt();      // 1234
 ```
+
+> [!NOTE]
+> Member function chaining is restricted on direct numeric literals (`0->abs()`, `42->toString()`). Always invoke methods on variables or parenthesized expressions.
 
 ---
 

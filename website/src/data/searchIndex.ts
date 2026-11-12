@@ -243,6 +243,13 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["closure", "pure closure", "arrow function", "anonymous function", "cranelift", "jit", "fn_ptr", "zero allocation", "this elision", "closurecategory", "upvalues", "reference capture", "capturing", "closure purity", "cycle elimination"]
   },
   {
+    title: "Collection Compiler Optimizations",
+    section: "Advanced",
+    description: "Under-the-hood FBIP in-place buffer reuse (refcount == 1 zero-allocation sort) and pure stream fusion (single-pass loop deforestation with O(K) early-exit).",
+    url: "/docs/advanced/collection-compiler-optimizations",
+    keywords: ["collection", "compiler optimization", "fbip", "in-place sort", "refcount", "stream fusion", "loop deforestation", "pipeline", "map", "filter", "take", "skip", "reject", "zero allocation", "short-circuit", "memory efficiency"]
+  },
+  {
     title: "Safe Addition & Arithmetic Semantics",
     section: "Advanced",
     description: "Checked addition (+), wrapping (+%), saturating (+|), constant folding, LLVM overflow intrinsics, and eliminating PHP coercion pitfalls.",

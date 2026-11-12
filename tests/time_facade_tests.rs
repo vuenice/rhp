@@ -37,7 +37,7 @@ fn test_time_create_parse_and_formatting() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-05-20 14:30:45");
         assert_eq!(items[1].to_php_string(), "2024-05-20");
@@ -102,7 +102,7 @@ fn test_time_fluent_add_and_sub() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-01-16");
         assert_eq!(items[1].to_php_string(), "2024-01-21");
@@ -159,7 +159,7 @@ fn test_time_last_of_month_and_boundaries() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-02-29 23:59:59");
         assert_eq!(items[1].to_php_string(), "2023-02-28 23:59:59");
@@ -200,7 +200,7 @@ fn test_time_static_direct_calls() {
     let res = run_source(code).expect("Script execution failed");
     TimeDate::clear_test_now();
 
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-08-15 11:22:33");
         assert_eq!(items[1].to_php_string(), "2024-08-15");
@@ -258,7 +258,7 @@ fn test_time_comparisons_and_differences() {
     let res = run_source(code).expect("Script execution failed");
     TimeDate::clear_test_now();
 
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_bool(), Some(true));
         assert_eq!(items[1].to_bool(), Some(true));
@@ -307,7 +307,7 @@ fn test_time_constants_and_echo_and_macros() {
     "#;
 
     let res = run_source(code).expect("Script execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_i64(), Some(0));
         assert_eq!(items[1].to_i64(), Some(1));
@@ -348,7 +348,7 @@ fn test_carbon_alias_backward_compatibility() {
     "#;
 
     let res = run_source(code).expect("Carbon alias execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-06-01 12:00:00");
         assert_eq!(items[1].to_i64(), Some(0));
@@ -371,7 +371,7 @@ fn test_now_helper_lowering() {
     "#;
 
     let res = run_source(code).expect("Execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_bool(), Some(true));
         assert_eq!(items[1].to_php_string(), "2025-01-15 10:30:00");
@@ -395,7 +395,7 @@ fn test_date_helper_lowering() {
     "#;
 
     let res = run_source(code).expect("Execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-05-20");
         assert_eq!(items[1].to_php_string(), "2024-05-20 14:30:45");
@@ -421,7 +421,7 @@ fn test_date_with_timestamp() {
     "#;
 
     let res = run_source(code).expect("Execution failed");
-    if let PhpValue::Array(items_rc) = res {
+    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
         let items = items_rc.borrow();
         assert_eq!(items[0].to_php_string(), "2024-05-20 12:00:00");
         assert_eq!(items[1].to_php_string(), "2024-05-20 12:00:00");

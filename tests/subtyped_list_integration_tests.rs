@@ -31,20 +31,17 @@ fn test_list_direct_vec_memory_layout_and_cow_detachment() {
     assert!(list.is_shared());
     assert!(list_alias.is_shared());
 
-    // Copy-On-Write (COW): ensure_list_mut detaches the underlying Vec<PhpValue>
+    // Lists are shared objects. A write through an alias changes the original.
     assert!(list_alias.ensure_list_mut());
-    assert_eq!(list.ref_count(), 1);
-    assert_eq!(list_alias.ref_count(), 1);
-    assert!(!list.is_shared());
-    assert!(!list_alias.is_shared());
+    assert_eq!(list.ref_count(), 2);
+    assert!(list.is_shared());
 
-    // Mutate detached list
     if let PhpValue::List(ref rc) = list_alias {
         rc.borrow_mut().push(PhpValue::Int(999));
     }
-    assert_eq!(list.list_len(), Some(3));
+    assert_eq!(list.list_len(), Some(4));
     assert_eq!(list_alias.list_len(), Some(4));
-    assert_eq!(list_alias.list_get(3), Some(PhpValue::Int(999)));
+    assert_eq!(list.list_get(3), Some(PhpValue::Int(999)));
 }
 
 #[test]
@@ -650,88 +647,64 @@ fn test_list_strict_non_negative_integer_keys() {
 }
 
 #[test]
-fn test_list_strict_homogeneity() {
+fn test_list_allows_mixed_elements() {
     clear_runtime_closure_macros();
 
-    // 1. Initial list with mixed int and string via type hint
     let source_init_mixed = r#"
         list $x = [1, 2, "three"];
+        return $x;
     "#;
-    let err = run_source(source_init_mixed).expect_err("Mixed int and string list literal must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found int and string"),
-        "Unexpected error: {:?}",
-        err
+    let res = run_source(source_init_mixed).expect("mixed list literal");
+    assert_eq!(
+        res,
+        PhpValue::list(vec![
+            PhpValue::Int(1),
+            PhpValue::Int(2),
+            PhpValue::string("three"),
+        ])
     );
 
-    // 2. Initial Arr::list with mixed int and float
     let source_facade_mixed = r#"
         return Arr::list([1, 2, 3.14]);
     "#;
-    let err = run_source(source_facade_mixed).expect_err("Mixed int and float list must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found int and float"),
-        "Unexpected error: {:?}",
-        err
-    );
+    let res = run_source(source_facade_mixed).expect("mixed Arr::list");
+    assert!(res.is_list());
+    assert_eq!(res.list_len(), Some(3));
 
-    // 3. Bracket push with mismatching type
     let source_push_mismatch = r#"
         $list = Arr::list([10, 20, 30]);
         $list[] = "forty";
+        return $list[3];
     "#;
-    let err = run_source(source_push_mismatch).expect_err("Push mismatch must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found int and string"),
-        "Unexpected error: {:?}",
-        err
-    );
+    let res = run_source(source_push_mismatch).expect("push string onto int list");
+    assert_eq!(res, PhpValue::string("forty"));
 
-    // 4. Fluent push with mismatching type
     let source_fluent_push = r#"
         $list = Arr::list(["a", "b"]);
         $list->push(123);
+        return $list[2];
     "#;
-    let err = run_source(source_fluent_push).expect_err("Fluent push mismatch must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found string and int"),
-        "Unexpected error: {:?}",
-        err
-    );
+    let res = run_source(source_fluent_push).expect("fluent push");
+    assert_eq!(res, PhpValue::Int(123));
 
-    // 5. Index replacement with mismatching type
     let source_index_replace = r#"
         $list = Arr::list([10, 20, 30]);
         $list[1] = "mismatch";
+        return $list[1];
     "#;
-    let err = run_source(source_index_replace).expect_err("Index replace mismatch must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found int and string"),
-        "Unexpected error: {:?}",
-        err
-    );
+    let res = run_source(source_index_replace).expect("index replace");
+    assert_eq!(res, PhpValue::string("mismatch"));
 
-    // 6. Dynamic push into empty list establishes element type
     let source_empty_dynamic = r#"
         $list = Arr::list();
         $list[] = 42;
-        $list[] = 84;
+        $list[] = "mismatch";
         return $list;
     "#;
-    let res = run_source(source_empty_dynamic).expect("Empty list dynamic push must succeed");
-    assert_eq!(res, PhpValue::list(vec![PhpValue::Int(42), PhpValue::Int(84)]));
-
-    // 7. Dynamic push second element mismatching empty-started list
-    let source_empty_dynamic_mismatch = r#"
-        $list = Arr::list();
-        $list[] = 42;
-        $list[] = "mismatch";
-    "#;
-    let err = run_source(source_empty_dynamic_mismatch).expect_err("Empty list dynamic mismatch must fail");
-    assert!(
-        err.to_string().contains("All elements in a list must have the same type, found int and string"),
-        "Unexpected error: {:?}",
-        err
+    let res = run_source(source_empty_dynamic).expect("empty list accepts mixed pushes");
+    assert_eq!(
+        res,
+        PhpValue::list(vec![PhpValue::Int(42), PhpValue::string("mismatch")])
     );
 }
 

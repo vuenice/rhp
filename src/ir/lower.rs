@@ -9,7 +9,7 @@ use crate::ast::{
     types::{CastType, Ident, TypeHint, Visibility},
     Program,
 };
-use crate::ast::visitor::{walk_expr, AstVisitor};
+use crate::ast::visitor::{walk_expr, walk_stmt, AstVisitor};
 use crate::ir::{
     error::{IrError, IrErrorKind},
     opcode::{
@@ -245,6 +245,8 @@ pub struct IrLowerer<'a> {
     use_aliases: HashMap<String, String>,
     synthetic_counter: u32,
     escaped_classes: HashSet<String>,
+    /// Empty array literals whose later local writes resolve to a list or dict.
+    empty_promotions: HashMap<(usize, usize, usize), IrCollectionKind>,
 }
 
 impl<'a> IrLowerer<'a> {
@@ -256,6 +258,7 @@ impl<'a> IrLowerer<'a> {
             use_aliases: HashMap::new(),
             synthetic_counter: 0,
             escaped_classes: HashSet::new(),
+            empty_promotions: HashMap::new(),
         }
     }
 
@@ -268,7 +271,12 @@ impl<'a> IrLowerer<'a> {
             use_aliases: HashMap::new(),
             synthetic_counter: 0,
             escaped_classes: HashSet::new(),
+            empty_promotions: HashMap::new(),
         }
+    }
+
+    fn record_empty_promotions(&mut self, stmts: &[Stmt<'_>]) {
+        self.empty_promotions.extend(collect_empty_promotions(stmts));
     }
 
     /// Lower a complete AST [`Program`] into a compiled [`IrModule`].
@@ -288,6 +296,7 @@ impl<'a> IrLowerer<'a> {
         // Reset namespace and use aliases for top-level statement pass
         self.current_namespace = None;
         self.use_aliases.clear();
+        self.record_empty_promotions(&program.statements);
 
         for stmt in &program.statements {
             self.lower_stmt(&mut main_builder, stmt)?;
@@ -1209,17 +1218,15 @@ impl<'a> IrLowerer<'a> {
                             }
                         }
                         ExprKind::ArrayIndex { array, index: Some(idx) } => {
-                            let call_span = expr.span;
-                            let remove_expr = Expr::new(
-                                ExprKind::MethodCall {
-                                    object: array.clone(),
-                                    method: Ident::new("remove", call_span),
-                                    args: vec![Argument::new((**idx).clone(), call_span)],
-                                    is_nullsafe: false,
+                            let arr_reg = self.lower_expr(b, array, None)?;
+                            let key_reg = self.lower_expr(b, idx, None)?;
+                            b.emit(
+                                OpCode::UnsetIndex {
+                                    array: arr_reg,
+                                    key: key_reg,
                                 },
-                                call_span,
+                                expr.span,
                             );
-                            self.lower_expr(b, &remove_expr, None)?;
                         }
                         _ => {
                             self.lower_expr(b, expr, None)?;
@@ -2188,13 +2195,33 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
-                b.emit(
-                    OpCode::NewArray {
-                        dst,
-                        capacity: elements.len() as u16,
-                    },
-                    expr.span,
-                );
+                let kind = if elements.is_empty() {
+                    self.empty_promotions.get(&(
+                        expr.span.file_id,
+                        expr.span.start,
+                        expr.span.end,
+                    )).copied()
+                } else {
+                    array_literal_kind(elements)
+                };
+                if let Some(kind) = kind {
+                    b.emit(
+                        OpCode::NewCollection {
+                            dst,
+                            kind,
+                            source: None,
+                        },
+                        expr.span,
+                    );
+                } else {
+                    b.emit(
+                        OpCode::NewArray {
+                            dst,
+                            capacity: elements.len() as u16,
+                        },
+                        expr.span,
+                    );
+                }
                 for elem in elements {
                     if elem.is_unpack || (elem.key.is_none() && matches!(elem.value.kind, ExprKind::Binary { op: BinaryOp::Range, .. })) {
                         let src_arr = self.lower_expr(b, &elem.value, None)?;
@@ -3486,6 +3513,7 @@ impl<'a> IrLowerer<'a> {
             }
 
             // 4. Lower function body statements
+            self.record_empty_promotions(body_stmts);
             for s in body_stmts {
                 self.lower_stmt(&mut fb, s)?;
             }
@@ -3790,6 +3818,7 @@ impl<'a> IrLowerer<'a> {
             fb.get_or_alloc_local(upval, None, false, false, span)?;
         }
 
+        self.record_empty_promotions(body);
         for s in body {
             self.lower_stmt(&mut fb, s)?;
         }
@@ -4574,6 +4603,223 @@ impl<'a> IrLowerer<'a> {
 }
 
 #[inline]
+fn array_literal_kind(elements: &[ArrayElement<'_>]) -> Option<IrCollectionKind> {
+    if elements.is_empty() {
+        return None;
+    }
+    let mut has_keys = false;
+    let mut all_string_keys = true;
+    let mut is_sequential_int = true;
+    let mut expected_idx = 0i64;
+    for el in elements {
+        if let Some(ref key) = el.key {
+            has_keys = true;
+            match &key.kind {
+                ExprKind::Literal(Literal::String { .. })
+                | ExprKind::Literal(Literal::InterpolatedString { .. }) => {
+                    is_sequential_int = false;
+                }
+                ExprKind::Literal(Literal::Int { value, .. }) => {
+                    all_string_keys = false;
+                    if *value != expected_idx {
+                        is_sequential_int = false;
+                    }
+                }
+                _ => {
+                    all_string_keys = false;
+                    is_sequential_int = false;
+                }
+            }
+        } else {
+            all_string_keys = false;
+        }
+        expected_idx += 1;
+    }
+    if !has_keys || is_sequential_int {
+        Some(IrCollectionKind::List)
+    } else if all_string_keys {
+        Some(IrCollectionKind::Dict)
+    } else {
+        Some(IrCollectionKind::HashMap)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmptyShape {
+    Unknown,
+    List { next: i64 },
+    Dict,
+    Conflict,
+}
+
+enum IndexWrite {
+    Append,
+    Index(i64),
+    StringKey,
+    Dynamic,
+}
+
+struct OpenEmpty {
+    key: (usize, usize, usize),
+    shape: EmptyShape,
+}
+
+struct EmptyPromo<'s> {
+    open: HashMap<String, OpenEmpty>,
+    out: HashMap<(usize, usize, usize), IrCollectionKind>,
+    _life: std::marker::PhantomData<&'s ()>,
+}
+
+impl<'s> EmptyPromo<'s> {
+    fn finish(&mut self) {
+        let names: Vec<String> = self.open.keys().cloned().collect();
+        for name in names {
+            self.close(&name);
+        }
+    }
+
+    fn close(&mut self, name: &str) {
+        let Some(open) = self.open.remove(name) else {
+            return;
+        };
+        let kind = match open.shape {
+            EmptyShape::List { .. } => Some(IrCollectionKind::List),
+            EmptyShape::Dict => Some(IrCollectionKind::Dict),
+            EmptyShape::Unknown | EmptyShape::Conflict => None,
+        };
+        if let Some(kind) = kind {
+            self.out.insert(open.key, kind);
+        }
+    }
+
+    fn assign_var(&mut self, name: &str, rhs: &Expr<'s>) {
+        let name = normalize_var_name(name);
+        self.close(&name);
+        if matches!(&rhs.kind, ExprKind::Array(elements) if elements.is_empty()) {
+            self.open.insert(
+                name,
+                OpenEmpty {
+                    key: (rhs.span.file_id, rhs.span.start, rhs.span.end),
+                    shape: EmptyShape::Unknown,
+                },
+            );
+        }
+    }
+
+    fn note(&mut self, name: &str, index: Option<&Expr<'s>>) {
+        let name = normalize_var_name(name);
+        let Some(open) = self.open.get_mut(&name) else {
+            return;
+        };
+        open.shape = merge_empty_shape(open.shape, classify_index_write(index));
+    }
+}
+
+fn classify_index_write(index: Option<&Expr<'_>>) -> IndexWrite {
+    let Some(index) = index else {
+        return IndexWrite::Append;
+    };
+    match &index.kind {
+        ExprKind::Literal(Literal::Int { value, .. }) => IndexWrite::Index(*value),
+        ExprKind::Literal(Literal::String { .. })
+        | ExprKind::Literal(Literal::InterpolatedString { .. }) => IndexWrite::StringKey,
+        _ => IndexWrite::Dynamic,
+    }
+}
+
+fn merge_empty_shape(shape: EmptyShape, write: IndexWrite) -> EmptyShape {
+    match (shape, write) {
+        (EmptyShape::Conflict, _) | (_, IndexWrite::Dynamic) => EmptyShape::Conflict,
+        (EmptyShape::Unknown, IndexWrite::Append) => EmptyShape::List { next: 1 },
+        (EmptyShape::Unknown, IndexWrite::Index(0)) => EmptyShape::List { next: 1 },
+        (EmptyShape::Unknown, IndexWrite::Index(_)) => EmptyShape::Conflict,
+        (EmptyShape::Unknown, IndexWrite::StringKey) => EmptyShape::Dict,
+        (EmptyShape::List { next }, IndexWrite::Append) => EmptyShape::List { next: next + 1 },
+        (EmptyShape::List { next }, IndexWrite::Index(i)) if i < next => EmptyShape::List { next },
+        (EmptyShape::List { next }, IndexWrite::Index(i)) if i == next => {
+            EmptyShape::List { next: next + 1 }
+        }
+        (EmptyShape::List { .. }, _) => EmptyShape::Conflict,
+        (EmptyShape::Dict, IndexWrite::StringKey) => EmptyShape::Dict,
+        (EmptyShape::Dict, _) => EmptyShape::Conflict,
+    }
+}
+
+impl<'s> AstVisitor<'s> for EmptyPromo<'s> {
+    fn visit_stmt(&mut self, stmt: &Stmt<'s>) {
+        match &stmt.kind {
+            StmtKind::FunctionDecl(_)
+            | StmtKind::ClassDecl(_)
+            | StmtKind::InterfaceDecl(_)
+            | StmtKind::TraitDecl(_)
+            | StmtKind::EnumDecl(_) => {}
+            StmtKind::VarDecl { var, init, .. } => {
+                if let Some(expr) = init {
+                    self.visit_expr(expr);
+                    self.assign_var(var.name, expr);
+                }
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        match &expr.kind {
+            ExprKind::Closure { .. } | ExprKind::ArrowFunction { .. } => {}
+            ExprKind::Assign { target, value, .. } => {
+                self.visit_expr(value);
+                match &target.kind {
+                    ExprKind::Variable(var) => self.assign_var(var.name, value),
+                    ExprKind::ArrayIndex { array, index } => {
+                        if let Some(idx) = index {
+                            self.visit_expr(idx);
+                        }
+                        if let ExprKind::Variable(var) = &array.kind {
+                            self.note(var.name, index.as_deref());
+                        } else {
+                            self.visit_expr(array);
+                        }
+                    }
+                    _ => self.visit_expr(target),
+                }
+            }
+            ExprKind::Unary { op, expr: inner, .. }
+                if matches!(
+                    op,
+                    UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec
+                ) =>
+            {
+                if let ExprKind::ArrayIndex { array, index } = &inner.kind {
+                    if let ExprKind::Variable(var) = &array.kind {
+                        self.note(var.name, index.as_deref());
+                    } else {
+                        self.visit_expr(array);
+                    }
+                    if let Some(idx) = index {
+                        self.visit_expr(idx);
+                    }
+                } else {
+                    self.visit_expr(inner);
+                }
+            }
+            _ => walk_expr(self, expr),
+        }
+    }
+}
+
+fn collect_empty_promotions(stmts: &[Stmt<'_>]) -> HashMap<(usize, usize, usize), IrCollectionKind> {
+    let mut promo = EmptyPromo {
+        open: HashMap::new(),
+        out: HashMap::new(),
+        _life: std::marker::PhantomData,
+    };
+    for stmt in stmts {
+        promo.visit_stmt(stmt);
+    }
+    promo.finish();
+    promo.out
+}
+
 fn normalize_var_name(name: &str) -> String {
     if name.starts_with('$') {
         name.to_string()

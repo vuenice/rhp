@@ -40,6 +40,8 @@ static COW_DETACHMENTS: AtomicUsize = AtomicUsize::new(0);
 static LIVE_OBJECTS: AtomicUsize = AtomicUsize::new(0);
 static GC_RUNS: AtomicUsize = AtomicUsize::new(0);
 static GC_PAUSE_NS: AtomicU64 = AtomicU64::new(0);
+static FBIP_INPLACE_SORTS: AtomicUsize = AtomicUsize::new(0);
+static STREAM_FUSIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// Detailed telemetry snapshot of RHP memory management and ownership enforcement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +102,14 @@ impl MemoryStats {
         map.insert("gc_pause_ms".to_string(), PhpValue::Float(0.0));
         map.insert("tracing_gc_enabled".to_string(), PhpValue::Bool(false));
         map.insert("thread_safe".to_string(), PhpValue::Bool(true));
+        map.insert(
+            "fbip_inplace_sorts".to_string(),
+            PhpValue::Int(fbip_inplace_sorts() as i64),
+        );
+        map.insert(
+            "stream_fusions".to_string(),
+            PhpValue::Int(stream_fusions() as i64),
+        );
         let arena_stats = crate::vm::arena::get_global_arena_stats();
         map.insert(
             "arena_allocated_bytes".to_string(),
@@ -254,6 +264,26 @@ pub fn get_memory_stats() -> MemoryStats {
     }
 }
 
+/// Returns the total number of Functional But In-Place (FBIP) zero-allocation sorts executed.
+pub fn fbip_inplace_sorts() -> usize {
+    FBIP_INPLACE_SORTS.load(Ordering::Relaxed)
+}
+
+/// Record an FBIP in-place buffer sort event.
+pub fn record_fbip_inplace_sort() {
+    FBIP_INPLACE_SORTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Returns the total number of stream pipeline fusions executed.
+pub fn stream_fusions() -> usize {
+    STREAM_FUSIONS.load(Ordering::Relaxed)
+}
+
+/// Record a stream fusion pipeline execution event.
+pub fn record_stream_fusion() {
+    STREAM_FUSIONS.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Resets all global memory tracking counters to zero (used for test isolation).
 pub fn reset_memory_tracker() {
     CURRENT_ALLOCATED_BYTES.store(0, Ordering::Relaxed);
@@ -264,6 +294,8 @@ pub fn reset_memory_tracker() {
     LIVE_OBJECTS.store(0, Ordering::Relaxed);
     GC_RUNS.store(0, Ordering::Relaxed);
     GC_PAUSE_NS.store(0, Ordering::Relaxed);
+    FBIP_INPLACE_SORTS.store(0, Ordering::Relaxed);
+    STREAM_FUSIONS.store(0, Ordering::Relaxed);
 }
 
 // =========================================================================

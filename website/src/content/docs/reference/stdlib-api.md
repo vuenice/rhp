@@ -410,56 +410,29 @@ foreach ($map as $val) {                                  // Iterates values onl
 ## `Str` Facade & String Instance API
 
 ```php
-// Static Facade Methods & Constructors
-Str::slug(string $text, string $separator = '-'): string;
-Str::contains(string $haystack, string $needle): bool;
-Str::startsWith(string $haystack, string $prefix): bool;
-Str::endsWith(string $haystack, string $suffix): bool;
-Str::upper(string $text): string;
-Str::lower(string $text): string;
-Str::trim(string $text, string $chars = " \t\n\r\0\x0B"): string;
-Str::ltrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
-Str::rtrim(string $text, string $chars = " \t\n\r\0\x0B"): string;
-Str::substr(string $text, int $start, ?int $length = null): string;
-Str::pad(string $s, int $length, string $pad = " ", string|int $side = "right"): string; // mb-safe padding (left, right, both)
-Str::repeat(string $text, int $times): string;
-Str::countOccurrences(string $haystack, string $needle): int; // Count substring frequency
-Str::replaceAt(string $s, string $replacement, int $start, ?int $length = null): string; // Replace by position
-Str::reverse(string $text): string;
+// Static Utility, Factory & Encoding Methods (Str::)
 Str::random(int $length = 16): string;
-Str::join(string $glue, array $pieces): string;
-Str::split(string $delimiter, string $string): list;
-Str::replace(string $search, string $replace, string $subject): string;
-Str::find(string $haystack, string $needle, int $offset = 0): ?int;
-Str::compare(mixed $a, mixed $b, bool $caseInsensitive = false): bool; // String coercion comparison (optional case-insensitive)
-Str::natCompare(string $string1, string $string2): int;                    // Natural order string comparison (strnatcmp, < 0, 0, > 0)
-Str::natCaseCompare(string $string1, string $string2): int;                // Case-insensitive natural order string comparison (strnatcasecmp)
-Str::strcmp(string $string1, string $string2): int;                        // Binary-safe string comparison (< 0, 0, > 0)
-Str::strcasecmp(string $string1, string $string2): int;                    // Binary-safe case-insensitive string comparison
-Str::strncmp(string $string1, string $string2, int $length): int;          // Binary-safe string comparison of first n characters
-Str::strncasecmp(string $string1, string $string2, int $length): int;      // Binary-safe case-insensitive comparison of first n characters
-Str::digit(mixed $value): bool;                                        // Checks if string contains only digits [0-9]
-Str::alpha(mixed $value): bool;                                        // Checks if string contains only alphabetic characters [a-zA-Z]
-Str::alnum(mixed $value): bool;                                        // Checks if string contains only alphanumeric characters [a-zA-Z0-9]
-
-// Multi-Byte Encodings & Binary Constructors
+Str::join(string $glue, array|list $pieces): string;
+Str::fromBytes(array|list $bytes): string;
 Str::fromEncoding(string|array $bytes, string $encoding): string; // Decodes Shift-JIS, EUC-JP, ISO-2022-JP, UTF-8
 Str::toEncoding(string $text, string $encoding): string;           // Encodes to target encoding raw bytes
 Str::utf8(string|array $input): string;                            // Ensures UTF-8 compliance from raw bytes
 Str::isUtf8(string $text): bool;                                   // Checks if bytes are valid UTF-8
-Str::fromBytes(array|list $bytes): string;                         // Constructs binary string from byte values [0..255]
 Str::bytes(string $text): list;                                    // Returns list of byte integers [0..255]
 Str::byteLength(string $text): int;                                // Returns byte length (binary length)
 Str::encoding(string $text): string;                               // Detects probable encoding
+Str::compare(mixed $a, mixed $b, bool $caseInsensitive = false): bool; // String coercion comparison (optional case-insensitive)
+Str::natCompare(string $string1, string $string2): int;                    // Natural order string comparison (strnatcmp, < 0, 0, > 0)
+Str::natCaseCompare(string $string1, string $string2): int;                // Case-insensitive natural order string comparison (strnatcasecmp)
 Str::macro(string $name, callable $closure): void;                 // Registers dynamic macro bound to string instances
 
-// Fluent Immutable Instance Methods ($text->trim()->upper())
+// Fluent Immutable Instance Methods ($str->trim()->upper())
 $str->trim(?string $chars = null): string;
 $str->ltrim(?string $chars = null): string;
 $str->rtrim(?string $chars = null): string;
 $str->upper(): string;
 $str->lower(): string;
-$str->slug(): string;
+$str->slug(string $separator = '-'): string;
 $str->contains(string $needle): bool;
 $str->startsWith(string $prefix): bool;
 $str->endsWith(string $suffix): bool;
@@ -468,6 +441,9 @@ $str->length(): int;
 $str->byteLength(): int;
 $str->split(string $delimiter): list;
 $str->replace(string $search, string $replace): string;
+$str->replaceAt(string $replacement, int $start, ?int $length = null): string;
+$str->pad(int $length, string $pad = " ", string|int $side = "right"): string;
+$str->countOccurrences(string $needle): int;
 $str->substr(int $start, ?int $length = null): string;
 $str->reverse(): string;
 $str->repeat(int $times): string;
@@ -476,6 +452,9 @@ $str->utf8(): string;
 $str->bytes(): list;
 $str->isUtf8(): bool;
 $str->isEmpty(): bool;
+$str->digit(): bool;
+$str->alpha(): bool;
+$str->alnum(): bool;
 $str->compare(mixed $other, bool $caseInsensitive = false): bool;
 $str->strcmp(string $other): int;
 $str->strcasecmp(string $other): int;
@@ -512,13 +491,12 @@ Int::min(int ...$n): int;                                      // Variadic or ar
 Int::max(int ...$n): int;                                      // Variadic or array max: Int::max(1, 2) or Int::max([1, 2])
 Int::random(int $min = 0, int $max = 100): int;                // CSPRNG random integer (uses /dev/urandom internally)
 
-// Integer Non-Static / Fluent Operations
-int $n = 10;
-$n->add(5);      // 15
-$n->sub(3);      // 7
-$n->mul(4);      // 40
-$n->div(2);      // 5
-$n->div(0);      // Throws \DivisionByZeroError (catchable in try-catch)
+// Integer Fluent Instance Methods ($n->abs(), $n->toString(), etc.)
+// Note: Basic arithmetic should use native operators ($a + $b, $a * $b) for peak CPU performance.
+int $n = -10;
+$n->abs();       // 10
+$n->toString();  // "-10"
+$n->toFloat();   // -10.0
 
 // Float numeric utility & precision comparison
 Float::compare(mixed $a, mixed $b, ?float $epsilon = null): bool;
@@ -529,25 +507,25 @@ Float::compare(10, 10.0);                 // true
 Float::compare(0.1 + 0.2, 0.3);           // true (handles IEEE 754 precision)
 Float::compare(1.0001, 1.0002, 0.001);    // true (within epsilon tolerance)
 Float::format(float $num, int $decimals = 0, string $decPoint = '.', string $thousandsSep = ','): string; // Formats number
-Float::abs(float $n): float;                                   // Absolute value
 Float::min(float ...$n): float;                                // Variadic or array min
 Float::max(float ...$n): float;                                // Variadic or array max
 Float::random(float $min = 0.0, float $max = 1.0): float;      // CSPRNG random float in [min, max]
 
-// Float Binary Format Operations (IEEE-754 64-bit Floating-Point)
-float $x = 0.1;
-$x->bAdd(0.2);   // float(0.30000000000000004)
-$x->bSub(0.05);  // float(0.05)
-$x->bMul(2.0);   // float(0.2)
-$x->bDiv(2.0);   // float(0.05)
-$x->bDiv(0.0);   // Throws \DivisionByZeroError
+// Float Fluent Instance Methods ($x->toDecimal(), $x->round(), etc.)
+float $x = 1234.5678;
+$x->toDecimal(2); // "1234.57"
+$x->round(2);     // 1234.57
+$x->floor();      // 1234.0
+$x->ceil();       // 1235.0
+$x->toInt();      // 1234
+$x->toString();   // "1234.5678"
 
 // Float Arbitrary-Precision Decimal Math (Exact Base-10 Arithmetic, BCMath-style)
-$x->add(0.2);    // float(0.3) - exact decimal representation without binary precision drift
-$x->sub(0.05);   // float(0.05)
-$x->mul(0.2);    // float(0.02)
-0.3->div(0.1);   // float(3)
-$x->div(0.0);    // Throws \DivisionByZeroError
+float $val = 0.3;
+$val->add(0.2);   // float(0.5)
+$val->sub(0.05);  // float(0.25)
+$val->mul(0.2);   // float(0.06)
+$val->div(0.1);   // float(3.0)
 
 // Arbitrary-Precision Static & Procedural Math (bcmath bridge)
 Float::add('0.1', '0.2');      // '0.3' (or bcadd('0.1', '0.2'))

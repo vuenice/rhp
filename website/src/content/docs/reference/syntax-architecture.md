@@ -188,7 +188,7 @@ $emptyVal = null;
 ```
 
 > [!NOTE]
-> Capitalized names like `Int` and `Float` exist only as **Tier 1 static facade classes** (`Int::i64()`, `Float::f64()`), never as primitive type hints.
+> Capitalized names like `Int` and `Float` exist only as **Tier 1 static utility classes** (`Int::random()`, `Float::compare()`), never as primitive type hints.
 
 ---
 

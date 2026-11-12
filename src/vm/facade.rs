@@ -1503,19 +1503,6 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             } else {
                 Vec::new()
             };
-            if let Some(first) = items.first() {
-                for item in &items[1..] {
-                    if !first.same_type_as(item) {
-                        return Err(RuntimeErrorKind::TypeError {
-                            message: format!(
-                                "All elements in a list must have the same type, found {} and {}",
-                                first.type_name(),
-                                item.type_name()
-                            ),
-                        });
-                    }
-                }
-            }
             Ok(PhpValue::list(items))
         }
         "range" => {
@@ -2414,6 +2401,16 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                 } else {
                     Vec::new()
                 };
+                for item in &items {
+                    if item.is_unhashable_collection() {
+                        return Err(RuntimeErrorKind::TypeError {
+                            message: format!(
+                                "{} cannot be used as a set element or hashmap key",
+                                item.type_name()
+                            ),
+                        });
+                    }
+                }
                 if let Some(first) = items.first() {
                     for item in &items[1..] {
                         if !first.same_type_as(item) {
@@ -2436,6 +2433,16 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             } else {
                 Vec::new()
             };
+            for (key, _) in &entries {
+                if key.is_unhashable_collection() {
+                    return Err(RuntimeErrorKind::TypeError {
+                        message: format!(
+                            "{} cannot be used as a set element or hashmap key",
+                            key.type_name()
+                        ),
+                    });
+                }
+            }
             Ok(PhpValue::hash_map(entries))
         }
         "check" => {
@@ -2461,7 +2468,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
                         "dict" | "dictionary" => matches!(target, PhpValue::EmptyArray | PhpValue::Dict(_)),
                         "set" => matches!(target, PhpValue::Set(_)),
                         "hashmap" | "map" => matches!(target, PhpValue::HashMap(_)),
-                        "array" => matches!(target, PhpValue::EmptyArray | PhpValue::Array(_)),
+                        "array" => matches!(target, PhpValue::EmptyArray | PhpValue::Array(_) | PhpValue::List(_)),
                         _ => false,
                     }
                 }
