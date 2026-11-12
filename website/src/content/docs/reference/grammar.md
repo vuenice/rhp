@@ -130,7 +130,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 Static facade calls followed by chained instance methods parse seamlessly with high operator precedence:
 
 ```php
-$numbers = Arr::list([1, 2, 3, 4, 5])
+$numbers = [1, 2, 3, 4, 5]
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 4);
 

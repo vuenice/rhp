@@ -151,7 +151,8 @@ Arr::macro('toCsv', function ($delimiter = ',') {
 });
 
 // Usage anywhere in your application
-$csv = Arr::list([1, 2, 3])->toCsv();
+list $nums = [1, 2, 3];
+$csv = $nums->toCsv();
 ```
 
 **Why Macros Work Perfectly for RHP:**

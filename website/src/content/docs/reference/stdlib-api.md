@@ -15,7 +15,7 @@ RHP provides four specialized collection subtypes backed by dedicated Rust heap 
 - `hashmap` / `map`: Universal key-value dictionary supporting arbitrary complex keys (`HashMap<PhpValue, PhpValue>`)
 
 > **Immutability by Default & Reassignment Contract:**
-> Calling collection helper methods (such as `$arr->sort()`, `$arr->filter()`, or `Arr::list($arr)->sort()`) **never mutates the original collection in place**. Every transformation returns a brand-new instance. To update a variable, use explicit reassignment:
+> Calling collection helper methods (such as `$arr->sort()`, `$arr->filter()`, `$arr->map()`) **never mutates the original collection in place**. Every transformation returns a brand-new instance. An unused collection method call is a compile error, and the linter automatically adds self-assignment:
 > ```php
 > $my_array = $my_array->sort(); // Leverages Copy-On-Write (COW) with zero unnecessary clones
 > ```
@@ -23,12 +23,6 @@ RHP provides four specialized collection subtypes backed by dedicated Rust heap 
 ### Static `Arr` Facade Methods
 
 ```php
-// Subtype Constructors
-Arr::list(array $items = []): list;
-Arr::dict(array $pairs = []): dict;
-Arr::set(array $values = []): set;
-Arr::hashMap(array $entries = []): hashmap;
-Arr::map(array $entries = []): hashmap; // Alias for Arr::hashMap()
 
 // Dot-Notation Deep Inspection & Mutation
 Arr::get(mixed $target, string $key, mixed $default = null): mixed;
@@ -393,7 +387,8 @@ $map[$user] = 'User Session Data';
 $data = $map[$user];
 
 // 3. Set as key:
-$map[Arr::set([1, 2])] = 'Coordinate Pair';
+set $coordPair = [1, 2];
+$map[$coordPair] = 'Coordinate Pair';
 
 // 4. Scalar keys:
 $map[42] = 'int';

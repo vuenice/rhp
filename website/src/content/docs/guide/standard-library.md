@@ -47,11 +47,11 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 
 RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor of **three streamlined, high-performance collection primitives** mapped directly to native Rust heap structures with `Rc` Copy-On-Write (COW) semantics:
 
-| Subtype | Constructor | Underlying Rust Structure | Primary Use Case & Characteristics |
+| Subtype | Native Declaration | Underlying Rust Structure | Primary Use Case & Characteristics |
 | :--- | :--- | :--- | :--- |
-| `list` | `Arr::list([...])` | `Rc<Vec<Value>>` | Contiguous numerical index sequence (`0..n`), maximum CPU cache locality, $O(1)$ append |
-| `dict` | `Arr::dict([...])` | `Rc<IndexMap<Key, Value, ahash::RandomState>>` | String/atom-keyed dictionary retaining strict insertion order, hardware AES-accelerated `ahash` |
-| `set` | `Arr::set([...])` | `Rc<IndexSet<Key, ahash::RandomState>>` | Unique value collection, auto-deduplication, $O(1)$ membership checks, insertion-ordered set algebra |
+| `list` | `list $x = [...]` | `Rc<Vec<Value>>` | Contiguous numerical index sequence (`0..n`), maximum CPU cache locality, $O(1)$ append |
+| `dict` | `dict $x = [...]` | `Rc<IndexMap<Key, Value, ahash::RandomState>>` | String/atom-keyed dictionary retaining strict insertion order, hardware AES-accelerated `ahash` |
+| `set` | `set $x = [...]` | `Rc<IndexSet<Key, ahash::RandomState>>` | Unique value collection, auto-deduplication, $O(1)$ membership checks, insertion-ordered set algebra |
 
 > [!NOTE]
 > **Streamlined Architecture (`tuple` & `hashMap` on hold):**
@@ -59,24 +59,24 @@ RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor
 
 ---
 
-### 1. `Arr::list` (Sequential Lists - Step 8)
+### 1. `list` (Sequential Lists)
 
-`Arr::list` maps directly to a contiguous Rust `Vec<PhpValue>` wrapped in `Rc<RefCell<...>>` with Copy-On-Write (COW) semantics. It guarantees maximum CPU cache locality, sequential zero-based integer indexing, and rapid append operations:
+`list` maps directly to a contiguous Rust `Vec<PhpValue>` wrapped in `Rc<RefCell<...>>` with Copy-On-Write (COW) semantics. It guarantees maximum CPU cache locality, sequential zero-based integer indexing, and rapid append operations:
 
 * **CPU Cache Locality During Iteration:** The runtime iteration engine uses a dedicated `ActiveIterator::List` stream that retains a direct reference handle to the contiguous vector with a cursor index. It streams elements sequentially without allocating intermediate `(PhpValue, PhpValue)` pairs or cloning keys.
 * **Strict Sequential Index Integrity:** Lists support numeric indexing (`$list[0]`), numeric in-place updates (`$list[1] = 999`), and append operations (`$list[] = $val`). Non-numeric string keys (e.g. `$list['key'] = 42`) are strictly rejected with an `UndefinedIndex` runtime error.
-* **Inline Declaration & Implicit Factory Lowering:** Declaring `list $arr = [];` is automatically lowered by the compiler into an optimized `Arr::list([])` allocation.
+* **Inline Declaration:** Declaring `list $arr = [];` is compiled directly into an optimized contiguous `Vec<PhpValue>` buffer.
 
 ```php
-// 1. Instantiation (Explicit Facade or Inline Declaration)
-list $numbers = Arr::list([10, 20, 30, 40]);
-list $items = []; // Lowers directly to Arr::list([])
+// 1. Instantiation
+list $numbers = [10, 20, 30, 40];
+list $items = [];
 
 // 2. Static Factory Helpers
 list $seq = Arr::range(1, 10, 2);       // [1, 3, 5, 7, 9]
 list $repeated = Arr::repeat('rhp', 3); // ['rhp', 'rhp', 'rhp']
 list $wrapped = Arr::wrap(42);          // [42]
-list $fromDict = Arr::from(Arr::dict(['a' => 1, 'b' => 2])); // [1, 2]
+list $fromDict = Arr::from(['a' => 1, 'b' => 2]); // [1, 2]
 
 // 3. Higher-Order Transforms & Pipelines
 list $doubled = $numbers
@@ -95,7 +95,7 @@ int $count = $doubled->count();  // 3
 
 // 5. Slicing, Chunks, and Flattening
 list $chunks = $numbers->chunk(2);               // [[10, 20], [30, 40]]
-list $flat = Arr::flatten(Arr::list([[1, 2], [3, 4]])); // [1, 2, 3, 4]
+list $flat = Arr::flatten([[1, 2], [3, 4]]);     // [1, 2, 3, 4]
 list $taken = $numbers->take(2);                // [10, 20]
 list $skipped = $numbers->skip(2);              // [30, 40]
 list $sliced = $numbers->slice(1, 2);           // [20, 30]
@@ -106,26 +106,27 @@ int $last = $doubled->last();                   // 80
 int $found = $doubled->find(fn($n) => $n > 50); // 60
 bool $hasForty = $doubled->contains(40);        // true
 bool $isEmpty = $doubled->isEmpty();            // false
-list $unique = Arr::list([1, 2, 2, 3])->unique(); // [1, 2, 3]
+list $unique = [1, 2, 2, 3]->unique();          // [1, 2, 3]
 
 // 7. Partitioning & Zipping
 list $parts = $numbers->partition(fn($n) => $n <= 20); // [[10, 20], [30, 40]]
-list $zipped = Arr::list(['a', 'b'])->zip(Arr::list([1, 2])); // [['a', 1], ['b', 2]]
+list $letters = ['a', 'b'];
+list $zipped = $letters->zip([1, 2]); // [['a', 1], ['b', 2]]
 
 // 8. Dynamic Macro Registration (Arr::macro)
 Arr::macro('toCsv', function ($delimiter = ',') {
     return implode($delimiter, $this->all());
 });
 
-string $csv = Arr::list([1, 2, 3])->toCsv();      // "1,2,3"
-string $pipe = Arr::list(['a', 'b'])->toCsv('|'); // "a|b"
+string $csv = $numbers->toCsv();                 // "10,20,30,40"
+string $pipe = $letters->toCsv('|');             // "a|b"
 ```
 
 ---
 
-### 2. `Arr::dict` (Insertion-Ordered Dictionaries & Laravel Collection Methods - Step 9)
+### 2. `dict` (Insertion-Ordered Dictionaries & Laravel Collection Methods)
 
-`Arr::dict` maps key-value dictionaries directly to Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`. It combines $O(1)$ amortized lookups, updates, and removals with **strict deterministic insertion ordering** and a full suite of Laravel-inspired fluent collection methods:
+`dict` maps key-value dictionaries directly to Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`. It combines $O(1)$ amortized lookups, updates, and removals with **strict deterministic insertion ordering** and a full suite of Laravel-inspired fluent collection methods:
 
 * **Strict Insertion Ordering:** Unlike unordered hash tables, `IndexMap` retains the exact chronological insertion order of keys across all loops, serializations, and transforms. Mutating the value of an existing key preserves its original index slot.
 * **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` operates via `ActiveIterator::Dict` indexing directly into the `IndexMap` without creating temporary key or value vectors.
@@ -133,13 +134,13 @@ string $pipe = Arr::list(['a', 'b'])->toCsv('|'); // "a|b"
 
 ```php
 // 1. Instantiation
-dict $product = Arr::dict([
+dict $product = [
     'sku'      => 'DESK-2026',
     'name'     => 'Standing Desk',
     'price'    => 350,
     'discount' => 30,
     'tax'      => 20,
-]);
+];
 
 // 2. Inspection & Access
 string $name = $product->get('name');                   // 'Standing Desk'
@@ -157,48 +158,54 @@ $discount = $product->pull('discount');                 // 30 (retrieves and rem
 $product->forget('tax');                                // Removes 'tax' key
 
 // 4. Higher-Order Transforms (Immutable Pipelines)
-dict $prices = Arr::dict(['item1' => 20, 'item2' => 40])
-    ->map(fn($price, $key) => $price * 1.1);
+dict $rawPrices = ['item1' => 20, 'item2' => 40];
+dict $prices = $rawPrices->map(fn($price, $key) => $price * 1.1);
 
-dict $keyed = Arr::dict(['first' => 10, 'second' => 20])
-    ->mapWithKeys(fn($val, $key) => ["key_" . $key => $val * 2]);
+dict $rawKeyed = ['first' => 10, 'second' => 20];
+dict $keyed = $rawKeyed->mapWithKeys(fn($val, $key) => ["key_" . $key => $val * 2]);
 
-dict $filtered = Arr::dict(['a' => 10, 'b' => 5, 'c' => 20])
-    ->filter(fn($val, $key) => $val >= 10);             // ['a' => 10, 'c' => 20]
+dict $rawABC = ['a' => 10, 'b' => 5, 'c' => 20];
+dict $filtered = $rawABC->filter(fn($val, $key) => $val >= 10);             // ['a' => 10, 'c' => 20]
+dict $rejected = $rawABC->reject(fn($val, $key) => $val >= 10);             // ['b' => 5]
 
-dict $rejected = Arr::dict(['a' => 10, 'b' => 5, 'c' => 20])
-    ->reject(fn($val, $key) => $val >= 10);             // ['b' => 5]
-
-int $reduced = Arr::dict(['x' => 1, 'y' => 2, 'z' => 3])
-    ->reduce(fn($carry, $val) => $carry + $val, 0);     // 6
+dict $xyz = ['x' => 1, 'y' => 2, 'z' => 3];
+int $reduced = $xyz->reduce(fn($carry, $val) => $carry + $val, 0);          // 6
 
 // 5. Sorting, Reversing & Slicing
-dict $byKeyAsc = Arr::dict(['c' => 30, 'a' => 10, 'b' => 20])->sortKeys();
-dict $byKeyDesc = Arr::dict(['c' => 30, 'a' => 10, 'b' => 20])->sortKeysDesc();
-dict $byValAsc = Arr::dict(['c' => 30, 'a' => 10, 'b' => 20])->sort();
-dict $reversed = Arr::dict(['a' => 1, 'b' => 2])->reverse(); // ['b' => 2, 'a' => 1]
-list $chunks = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4])->chunk(2);
-dict $taken = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3])->take(2);
-dict $skipped = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3])->skip(1);
-dict $sliced = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3])->slice(1, 1);
+dict $itemsToSort = ['c' => 30, 'a' => 10, 'b' => 20];
+dict $byKeyAsc = $itemsToSort->sortKeys();
+dict $byKeyDesc = $itemsToSort->sortKeysDesc();
+dict $byValAsc = $itemsToSort->sort();
+dict $pair = ['a' => 1, 'b' => 2];
+dict $reversed = $pair->reverse(); // ['b' => 2, 'a' => 1]
+dict $quad = ['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4];
+list $chunks = $quad->chunk(2);
+dict $trio = ['a' => 1, 'b' => 2, 'c' => 3];
+dict $taken = $trio->take(2);
+dict $skipped = $trio->skip(1);
+dict $sliced = $trio->slice(1, 1);
 
 // 6. Navigation & Aggregates
 string $firstVal = $product->first();
 string $lastVal = $product->last();
 string $firstKey = $product->firstKey();                // 'sku'
 string $lastKey = $product->lastKey();                  // 'in_stock'
-int $sum = Arr::dict(['a' => 10, 'b' => 20])->sum();    // 30
-float $avg = Arr::dict(['a' => 10, 'b' => 20])->avg();  // 15.0
-int $min = Arr::dict(['a' => 10, 'b' => 20])->min();    // 10
-int $max = Arr::dict(['a' => 10, 'b' => 20])->max();    // 20
+dict $numDict = ['a' => 10, 'b' => 20];
+int $sum = $numDict->sum();    // 30
+float $avg = $numDict->avg();  // 15.0
+int $min = $numDict->min();    // 10
+int $max = $numDict->max();    // 20
 
 // 7. Partitioning, Flipping, Merging & Set Operations
 dict $onlySku = $product->only(['sku', 'name']);
 dict $without = $product->except(['sku']);
-dict $flipped = Arr::dict(['role' => 'admin'])->flip(); // ['admin' => 'role']
-dict $merged = Arr::dict(['a' => 1])->merge(Arr::dict(['b' => 2, 'a' => 99])); // ['a' => 99, 'b' => 2]
-dict $diff = Arr::dict(['a' => 1, 'b' => 2])->diff(Arr::dict(['b' => 2])); // ['a' => 1]
-dict $intersect = Arr::dict(['a' => 1, 'b' => 2])->intersect(Arr::dict(['b' => 2])); // ['b' => 2]
+dict $adminRole = ['role' => 'admin'];
+dict $flipped = $adminRole->flip(); // ['admin' => 'role']
+dict $baseDict = ['a' => 1];
+dict $overlayDict = ['b' => 2, 'a' => 99];
+dict $merged = $baseDict->merge($overlayDict); // ['a' => 99, 'b' => 2]
+dict $diff = $pair->diff(['b' => 2]); // ['a' => 1]
+dict $intersect = $pair->intersect(['b' => 2]); // ['b' => 2]
 
 // 8. JSON Serialization
 string $json = $product->toJson(); // '{"sku":"DESK-2026","name":"Standing Desk",...}'
@@ -211,13 +218,13 @@ foreach ($product as $key => $value) {
 
 ---
 
-### 3. `Arr::set` (Unique Collections & Set Algebra - Step 10)
+### 3. `set` (Unique Collections & Set Algebra)
 
-`Arr::set` maps directly to Rust's native `HashSet<PhpValue>`. It eliminates duplicate values automatically on construction and mutations, providing $O(1)$ set membership lookups and mathematical set algebra:
+`set` maps directly to Rust's native `HashSet<PhpValue>`. It eliminates duplicate values automatically on construction and mutations, providing $O(1)$ set membership lookups and mathematical set algebra:
 
 ```php
 // 1. Automatic Deduplication on Construction
-$tags = Arr::set(['fast', 'rust', 'php', 'rust', 'backend', 'php']);
+set $tags = ['fast', 'rust', 'php', 'rust', 'backend', 'php'];
 print($tags->count()); // 4 (unique: 'fast', 'rust', 'php', 'backend')
 
 // 2. Adding Elements (Deduplicated automatically)
@@ -238,8 +245,8 @@ bool $removed = $tags->remove('php'); // true (was present)
 $tags->delete('nonexistent');         // false (alias for remove())
 
 // 5. Mathematical Set Algebra
-$setA = Arr::set([1, 2, 3, 4]);
-$setB = Arr::set([3, 4, 5, 6]);
+set $setA = [1, 2, 3, 4];
+set $setB = [3, 4, 5, 6];
 
 // Relative Complement (diff: elements in A not in B -> {1, 2})
 $diff = $setA->diff($setB);
@@ -254,8 +261,8 @@ $union = $setA->union($setB);
 $diffArr = $setA->diff([2, 4]); // {1, 3}
 
 // 6. Higher-Order Transforms & Reductions
-$evens = Arr::set([1, 2, 3, 4, 5, 6])
-    ->filter(fn($n) => $n % 2 === 0); // {2, 4, 6}
+set $nums = [1, 2, 3, 4, 5, 6];
+set $evens = $nums->filter(fn($n) => $n % 2 === 0); // {2, 4, 6}
 
 $doubled = $evens->map(fn($n) => $n * 10); // {20, 40, 60}
 
@@ -272,9 +279,9 @@ foreach ($tags as $index => $tag) {
 
 ---
 
-### 4. `Arr::hashMap` / `Arr::map` (Universal Complex Key Dictionaries - Step 11)
+### 4. `hashmap` (Universal Complex Key Dictionaries)
 
-In standard PHP, array keys are strictly coerced to integers or strings. `Arr::hashMap` breaks this limitation by mapping directly to Rust's `HashMap<PhpValue, PhpValue>`, enabling **any data structure** to serve as a key:
+In standard PHP, array keys are strictly coerced to integers or strings. `hashmap` breaks this limitation by mapping directly to Rust's `HashMap<PhpValue, PhpValue>`, enabling **any data structure** to serve as a key:
 
 ```php
 class Point {
@@ -287,7 +294,7 @@ class Point {
 }
 
 // Instantiate universal map
-$map = Arr::hashMap();
+hashmap $map = [];
 
 // 1. Arrays / Lists as Complex Keys
 $map[[10, 20]] = 'Alpha Base';
@@ -305,7 +312,8 @@ $map[$p2] = 'Second Waypoint';
 $waypoint = $map[$p1]; // 'First Waypoint'
 
 // 3. Sets as Keys
-$map[Arr::set(['read', 'write'])] = 'ReadWriteRole';
+set $roles = ['read', 'write'];
+$map[$roles] = 'ReadWriteRole';
 
 // 4. Scalar Keys (Int, Float, String, Bool)
 $map[42] = 'integer key';
@@ -336,7 +344,7 @@ $doubled = $map
 $reindexed = $map->mapWithKeys(fn($v, $k) => ["transformed_" . (string)$k => $v]);
 
 // Diff, Intersect, and Merge
-$other = Arr::hashMap(['a' => 1, 'b' => 2]);
+hashmap $other = ['a' => 1, 'b' => 2];
 $diffMap = $map->diff($other);           // Keys in $map not in $other
 $merged  = $map->merge($other);          // Combines maps into new instance
 
@@ -356,15 +364,15 @@ The static `Arr` facade exposes Laravel-inspired utilities for navigating deeply
 Access and mutate arbitrarily nested dictionaries or object trees using intuitive dot-delimited key paths:
 
 ```php
-$data = Arr::dict([
-    'user' => Arr::dict([
-        'profile' => Arr::dict([
+dict $data = [
+    'user' => [
+        'profile' => [
             'name'  => 'Alice',
             'email' => 'alice@example.com',
-        ]),
+        ],
         'role' => 'admin',
-    ]),
-]);
+    ],
+];
 
 // 1. Safe Deep Read with Arr::get
 $name = Arr::get($data, 'user.profile.name');               // 'Alice'
@@ -387,12 +395,12 @@ $pulledName = Arr::pull($withoutRole, 'user.profile.name'); // 'Alice' (retrieve
 
 // 5. Flattening & Unflattening (Arr::dot / Arr::undot)
 // Arr::dot collapses multidimensional dicts into single-level dot keys:
-dict $flat = Arr::dot(Arr::dict([
-    'db' => Arr::dict([
+dict $flat = Arr::dot([
+    'db' => [
         'host' => '127.0.0.1',
         'port' => 3306,
-    ]),
-])); // ['db.host' => '127.0.0.1', 'db.port' => 3306]
+    ],
+]); // ['db.host' => '127.0.0.1', 'db.port' => 3306]
 
 // Arr::undot reconstructs full nested dictionaries from dot keys:
 dict $nested = Arr::undot($flat);
@@ -403,14 +411,14 @@ dict $nested = Arr::undot($flat);
 
 ```php
 // 1. Arr::divide: Splits a dictionary into a pair of [keys, values]
-list $divided = Arr::divide(Arr::dict(['x' => 10, 'y' => 20]));
+list $divided = Arr::divide(['x' => 10, 'y' => 20]);
 // Result: [['x', 'y'], [10, 20]]
 
 // 2. Arr::keyBy: Indexes a list of dictionaries by a key field
-list $users = Arr::list([
-    Arr::dict(['id' => 'u1', 'name' => 'John']),
-    Arr::dict(['id' => 'u2', 'name' => 'Jane']),
-]);
+list $users = [
+    ['id' => 'u1', 'name' => 'John'],
+    ['id' => 'u2', 'name' => 'Jane'],
+];
 dict $keyed = Arr::keyBy($users, 'id');
 // ['u1' => ['id' => 'u1', 'name' => 'John'], 'u2' => ['id' => 'u2', 'name' => 'Jane']]
 
@@ -422,8 +430,8 @@ dict $keyedNames = Arr::pluck($users, 'name', 'id'); // ['u1' => 'John', 'u2' =>
 list $collapsed = Arr::collapse([[1, 2], [3, 4], [5]]); // [1, 2, 3, 4, 5]
 
 // 5. Shape Inspection: Arr::isAssoc and Arr::isList
-bool $isAssoc = Arr::isAssoc(Arr::dict(['k' => 'v']));  // true
-bool $isList  = Arr::isList(Arr::list([1, 2, 3]));       // true
+bool $isAssoc = Arr::isAssoc(['k' => 'v']);  // true
+bool $isList  = Arr::isList([1, 2, 3]);       // true
 ```
 
 #### Natural Order Sorting & Standard Array Operations
@@ -438,18 +446,18 @@ RHP provides complete natural order sorting and PHP array compatibility function
 // 1. Natural Order Sorting (natsort & natcasesort)
 // Standard lexicographical sorting orders "img10.png" before "img2.png".
 // Natural order comparison handles numeric chunks intelligently:
-list $files = Arr::list(['img10.png', 'img1.png', 'img2.png', 'img20.png']);
+list $files = ['img10.png', 'img1.png', 'img2.png', 'img20.png'];
 
 list $sorted = $files->natsort();
 // Result: ['img1.png', 'img2.png', 'img10.png', 'img20.png']
 
 // Case-insensitive natural order sorting:
-list $mixed = Arr::list(['IMG10.png', 'img1.png', 'img2.png']);
+list $mixed = ['IMG10.png', 'img1.png', 'img2.png'];
 list $caseSorted = $mixed->natcasesort(); // Also: $mixed->sortNaturalCase()
 // Result: ['img1.png', 'img2.png', 'IMG10.png']
 
 // Natural sorting on dict preserves key-value associations:
-dict $items = Arr::dict(['a' => 'item10', 'b' => 'item1', 'c' => 'item2']);
+dict $items = ['a' => 'item10', 'b' => 'item1', 'c' => 'item2'];
 dict $sortedDict = $items->natsort();
 // Result: ['b' => 'item1', 'c' => 'item2', 'a' => 'item10']
 
@@ -463,41 +471,42 @@ int $cmp2 = strnatcasecmp('IMG10.png', 'img2.png'); //  1 (IMG10 > img2)
 int $cmp3 = Str::natCompare('a1', 'a1');            //  0 (equal)
 
 // 3. Collection Differences & Intersections (array_diff, array_intersect)
-list $l1 = Arr::list([1, 2, 3, 4, 5]);
-list $l2 = Arr::list([2, 4]);
+list $l1 = [1, 2, 3, 4, 5];
+list $l2 = [2, 4];
 list $diff = $l1->diff($l2);                        // [1, 3, 5] (array_diff)
 list $inter = $l1->intersect($l2);                  // [2, 4]    (array_intersect)
 
-dict $d1 = Arr::dict(['a' => 1, 'b' => 2, 'c' => 3]);
-dict $d2 = Arr::dict(['b' => 20, 'c' => 3]);
+dict $d1 = ['a' => 1, 'b' => 2, 'c' => 3];
+dict $d2 = ['b' => 20, 'c' => 3];
 dict $diffVal = $d1->diff($d2);                     // ['a' => 1, 'b' => 2] (compares values)
 dict $diffKey = $d1->diffKey($d2);                  // ['a' => 1] (array_diff_key: compares keys)
 dict $interKey = $d1->intersectKey($d2);            // ['b' => 2, 'c' => 3] (array_intersect_key)
 
 // 4. Data Restructuring: Column, Flip, and Combine
-list $records = Arr::list([
-    Arr::dict(['id' => 101, 'name' => 'Alice', 'role' => 'dev']),
-    Arr::dict(['id' => 102, 'name' => 'Bob',   'role' => 'ops']),
-]);
+list $records = [
+    ['id' => 101, 'name' => 'Alice', 'role' => 'dev'],
+    ['id' => 102, 'name' => 'Bob',   'role' => 'ops'],
+];
 
 // array_column(): pluck column or re-index by key column
 list $names = $records->column('name');             // ['Alice', 'Bob']
 dict $keyedById = $records->column('name', 'id');   // ['101' => 'Alice', '102' => 'Bob']
 
 // array_flip(): swaps keys and values
-dict $flipped = Arr::dict(['admin' => 1, 'guest' => 2])->flip(); // ['1' => 'admin', '2' => 'guest']
+dict $roles = ['admin' => 1, 'guest' => 2];
+dict $flipped = $roles->flip(); // ['1' => 'admin', '2' => 'guest']
 
 // array_combine(): constructs dictionary from keys and values
-list $keys = Arr::list(['red', 'green', 'blue']);
-list $vals = Arr::list(['#f00', '#0f0', '#00f']);
+list $keys = ['red', 'green', 'blue'];
+list $vals = ['#f00', '#0f0', '#00f'];
 dict $colors = Arr::combine($keys, $vals);          // ['red' => '#f00', 'green' => '#0f0', 'blue' => '#00f']
 
 // 5. Value Frequency Counting (array_count_values)
-list $votes = Arr::list(['yes', 'no', 'yes', 'yes', 'abstain', 'no']);
+list $votes = ['yes', 'no', 'yes', 'yes', 'abstain', 'no'];
 dict $counts = $votes->countValues();               // ['yes' => 3, 'no' => 2, 'abstain' => 1]
 
 // 6. Shuffling & Random Sampling (shuffle & array_rand)
-list $deck = Arr::list([1, 2, 3, 4, 5]);
+list $deck = [1, 2, 3, 4, 5];
 list $shuffled = $deck->shuffle();                  // Returns randomly permuted list
 
 // array_rand(): returns random key or array of keys
@@ -530,10 +539,12 @@ function countAnyCollection(array $items): int {
     return $items->count();
 }
 
-countAnyCollection(Arr::list([1, 2, 3]));       // OK
-countAnyCollection(Arr::dict(['a' => 1]));      // OK
-countAnyCollection(Arr::set(['x', 'y']));       // OK
-countAnyCollection(Arr::hashMap([[1, 2] => 3]));// OK
+countAnyCollection([1, 2, 3]);       // OK (list)
+countAnyCollection(['a' => 1]);      // OK (dict)
+set $demoSet = ['x', 'y'];
+countAnyCollection($demoSet);        // OK (set)
+hashMap $demoMap = [[1, 2] => 3];
+countAnyCollection($demoMap);        // OK (hashMap)
 ```
 
 ---
@@ -547,7 +558,7 @@ Arr::macro('joinCommas', function(): string {
     return $this->values()->join(', ');
 });
 
-$tags = Arr::set(['php', 'rust', 'rhp']);
+set $tags = ['php', 'rust', 'rhp'];
 print($tags->joinCommas()); // "php, rust, rhp"
 ```
 
@@ -745,41 +756,53 @@ function incrementConfig(): void {
 
 ---
 
-## Arr Facade & Subtyped Collection Architecture
+## Collection Architecture & Fluent Arrow Methods
 
-RHP provides the static `Arr` facade to replace PHP's procedural array functions with high-performance, object-oriented collection builders:
+RHP provides high-performance, object-oriented collection subtypes backed directly by Rust heap memory:
 
 ### 1. Four High-Performance Collection Subtypes
-* **`Arr::list(array $items = []): list`** - Sequential integer-indexed lists backed by contiguous `Box<Vec<PhpValue>>` for maximum CPU cache locality.
-* **`Arr::dict(array $pairs = []): dict`** - Insertion-ordered string-keyed dictionaries backed by `Box<IndexMap<String, PhpValue>>`.
-* **`Arr::set(array $values = []): set`** - Unique value collections backed by `Box<HashSet<PhpValue>>` with $O(1)$ membership checks and set algebra.
-* **`Arr::hashMap(): hashmap`** - Universal key-value maps backed by `Box<HashMap<PhpValue, PhpValue>>`, supporting arbitrary complex keys (arrays, objects).
+* **`list`** - Sequential integer-indexed lists backed by contiguous `Vec<PhpValue>` for maximum CPU cache locality.
+* **`dict`** - Insertion-ordered string-keyed dictionaries backed by `IndexMap<String, PhpValue>`.
+* **`set`** - Unique value collections backed by `HashSet<PhpValue>` with $O(1)$ membership checks and set algebra.
+* **`hashmap`** - Universal key-value maps backed by `HashMap<PhpValue, PhpValue>`, supporting arbitrary complex keys (arrays, objects).
 
 ### 2. Permissive Parent `array` Type
 The `array` keyword acts as the **permissive parent type** for all four collection subtypes. Functions can accept `array $items` or return `array` to work seamlessly across lists, dicts, sets, and hashmaps without strict boundary errors:
 
 ```php
 function transform(array $input): array {
-    // Works with [1, 2, 3], ['k' => 'v'], Arr::list(), or Arr::dict()
+    // Works with [1, 2, 3], ['k' => 'v'], list, or dict
     return $input->sort();
 }
 ```
 
-### 3. Immutable Helper Methods by Default
-Calling collection helper methods (such as `$arr->sort()`, `$arr->filter()`, or `Arr::list($arr)->sort()`) **never mutates the original collection in place**. Every transformation returns a brand-new instance, guaranteeing clean, side-effect-free data flows.
+### 3. Immutable Arrow Methods by Default
+Calling collection helper methods (such as `$arr->sort()`, `$arr->filter()`, or `$arr->map()`) **never mutates the original collection in place**. Every transformation returns a brand-new instance, guaranteeing clean, side-effect-free data flows.
 
-### 4. Explicit Variable Reassignment
-To update a variable with a transformed or sorted collection, use explicit reassignment:
+* **Compiler Error on Unused Results:** Discarding the return value of an immutable collection method (`$arr->sort();` without capturing or assigning) is rejected by the compiler (`#[must_use]`).
+* **Linter Auto-Assignment:** The mandatory linter (`rhp run lint`) automatically detects unassigned collection transformations and converts them into self-assignments:
+  ```php
+  // BEFORE LINT:
+  $arr->sort();
+  // AFTER LINT:
+  $arr = $arr->sort();
+  ```
 
-```php
-$numbers = [3, 1, 2];
+### 4. In-Place Appending & Explicit Variable Reassignment
+1. **Standard In-Place Append:** To append in place, standard PHP bracket syntax is used:
+   ```php
+   $nums[] = 42; // In-place append (O(1) with COW via ensure_list_mut)
+   ```
+2. **Explicit Variable Reassignment:** To update a variable with a transformed or sorted collection:
+   ```php
+   $numbers = [3, 1, 2];
 
-// $numbers is unchanged; $sorted holds a new sorted array
-$sorted = $numbers->sort();
+   // $numbers is unchanged; $sorted holds a new sorted array
+   $sorted = $numbers->sort();
 
-// Explicit reassignment leverages Copy-On-Write (COW) with zero unnecessary clones:
-$numbers = $numbers->sort();
-```
+   // Explicit reassignment leverages Copy-On-Write (COW) with zero unnecessary clones:
+   $numbers = $numbers->sort();
+   ```
 
 ### 5. Runtime Macro Registration (`Arr::macro`) vs. Class Extension
 
@@ -808,7 +831,8 @@ Arr::macro('toCsv', function ($delimiter = ',') {
 });
 
 // Usage anywhere in your application
-$csv = Arr::list([1, 2, 3])->toCsv(); // "1,2,3"
+list $nums = [1, 2, 3];
+$csv = $nums->toCsv(); // "1,2,3"
 ```
 
 #### Why Macros Work Perfectly for RHP
@@ -947,7 +971,7 @@ $result = Trace::span('order.process', function() {
     // Outbound HTTP call automatically injects W3C traceparent header
     $res = HTTP::post('https://api.payment.internal/charge', ['amount' => 149.99]);
 
-    Trace::addEvent('payment_settled', Arr::dict(['provider' => 'stripe']));
+    Trace::addEvent('payment_settled', ['provider' => 'stripe']);
     return $res->status();
 });
 
@@ -1369,7 +1393,7 @@ dict $manifest = Bin::decode(File::read('bootstrap/cache/routes.bin'));
 string $rawContent = File::read('metrics.json');
 dict $data = json_decode($rawContent, true);
 
-list $activeUsers = Arr::list($data->get('users'))
+list $activeUsers = $data->get('users')
     ->filter(fn($u) => $u['is_active'] === true)
     ->map(fn($u) => Str::slug($u['username']));
 

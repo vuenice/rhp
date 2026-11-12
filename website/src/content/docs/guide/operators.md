@@ -114,8 +114,8 @@ Array::compareJoined([1, 2, 3], ['1', '2', '3'], '-');    // true (custom separa
 
 // 4. Unordered Value Comparison (Strictly supports list and set only)
 // Compares elements irrespective of order; rejects dict/hashmap with runtime error
-$setA = Arr::set([1, 2, 3]);
-$setB = Arr::set([3, 1, 2]);
+set $setA = [1, 2, 3];
+set $setB = [3, 1, 2];
 Array::compareUnordered($listA, $listC); // true (list vs list, order ignored)
 Array::compareUnordered($listA, $setB);  // true (list vs set, order ignored)
 Array::compareUnordered($setA, $setB);   // true (set vs set, order ignored)

@@ -16,7 +16,7 @@ rhp run lint [PATH] [OPTIONS]
 By default, running `rhp run lint` executes in fix-and-report mode:
 1. **PER-CS Code Formatting & Semicolon Splitting:** Enforces standard 4-space indentation, normalized brace positioning, parameter comma spacing, and separates statements ending with semicolons onto distinct lines while preserving comments, docblocks, and string literals verbatim.
 2. **Automated Copy-by-Reference for Mutated Arrays:** Automatically updates function and method array parameters (`array`, `list`, `dict`, `hashMap`, `set`) to copy-by-reference (`&$param`) whenever the array is mutated inside the function, updating callers in the same file.
-3. **Auto-Assignment of Collection Calls:** Automatically assigns pure, unassigned collection transformations (such as `$x->map();` and `Arr::list($z)->map();`) back to the target variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
+3. **Auto-Assignment of Collection Calls:** Automatically assigns pure, unassigned collection transformations (such as `$x->map();` and `$z->map();`) back to the target variable (`$x = $x->map();`, `$z = $z->map();`). The compiler emits an error if an immutable collection transformation's return value is left unused, and the linter automatically adds the self-assignment.
 4. **Parameter Order Normalization (Required Before Optional):** Automatically reorganizes parameter signatures across functions, methods, closures, and arrow functions so required parameters precede optional ones.
 5. **Automated Type Inference:** Writes `array`, `list`, `dict`, `set`, and `hashMap` on variables, class properties, parameters that have defaults, and function return types. The linter is mandatory, so the compiler uses the written type and does not choose a collection kind from the shape of an array literal.
 6. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
@@ -94,7 +94,7 @@ When an array literal is initialized at declaration time, the linter inspects th
 - **`list`:** Sequential integer-indexed elements or unkeyed arrays (`[1, 2, 3]`, `['apple', 'banana']`).
 - **`dict`:** Non-empty arrays where all keys are string literals (`['name' => 'Alice', 'role' => 'admin']`).
 - **`hashMap`:** Non-empty arrays where keys are integers, non-string scalars, or complex expressions (`[1 => 'first', 2 => 'second']`).
-- **`set`:** A call to `Arr::set(...)`. A unique unkeyed literal stays a `list`. Append (`$items[] =`) always means a list.
+- **`set`:** Unique collections declared with `set` or unique elements. Append (`$items[] =`) always means a list.
 - **`array`:** An empty `[]` whose later writes do not agree on one kind.
 
 An empty `[]` is refined from the first write in the same scope:
@@ -109,7 +109,7 @@ An empty `[]` is refined from the first write in the same scope:
 $tags = ['php', 'rust', 'rhp'];
 $user = ['id' => 'u1', 'active' => true];
 $lookup = [100 => 'Pending', 200 => 'Success'];
-$unique = Arr::set([1, 2, 2]);
+set $unique = [1, 2, 2];
 $buffer = [];
 $buffer[] = 'first';
 
@@ -117,7 +117,7 @@ $buffer[] = 'first';
 list $tags = ['php', 'rust', 'rhp'];
 dict $user = ['id' => 'u1', 'active' => true];
 hashMap $lookup = [100 => 'Pending', 200 => 'Success'];
-set $unique = Arr::set([1, 2, 2]);
+set $unique = [1, 2];
 list $buffer = [];
 $buffer[] = 'first';
 ```
@@ -240,13 +240,13 @@ $filter = fn(array $items, int $step = 1) => $items;
 
 In standard PHP and RHP, arrays, lists, and dictionaries are value types with copy-on-write semantics. If a function mutates an array parameter without an explicit reference symbol (`&`), only the local function frame's copy is modified, while the caller's array remains untouched.
 
-To eliminate bugs caused by omitted references, `rhp run lint` automatically detects when an array parameter is mutated inside a function or method body and updates the parameter to **copy-by-reference** (`&$param`):
+To eliminate bugs caused by omitted references, the compiler gives an error if `&` is not present in a function parameter for mutated collection types. The linter (`rhp run lint`) automatically detects when an array parameter is mutated inside a function or method body and updates the parameter to **copy-by-reference** (`&$param`):
 
 ```php
 // BEFORE LINTING:
-function myFunction(array $x,list $y,dict $z) {
+function myFunction(array $x, list $y, dict $z) {
     $x->map();
-    Arr::list($z)->map();
+    $z->map();
     $y[0] = 10;
 }
 
@@ -254,7 +254,7 @@ function myFunction(array $x,list $y,dict $z) {
 function myFunction(array &$x, list &$y, dict &$z)
 {
     $x = $x->map();
-    $z = Arr::list($z)->map();
+    $z = $z->map();
     $y[0] = 10;
 }
 ```
@@ -267,7 +267,7 @@ The linter inspects the function AST for:
 - **Unset Statements:** `unset($x[0]);`, `unset($z['temp']);`
 - **Mutating PHP Array Functions:** Passing the array to `array_push($x, ...)`, `array_pop($x)`, `sort($x)`, `asort($x)`, `shuffle($x)`, etc.
 - **Pass-by-Reference Call Arguments:** Passing the array or an element as a reference to another function (`otherFunc(&$x)`).
-- **In-Place Reassignments & Updates:** Assigning the result of collection transformations back to the variable (`$x = $x->map();`, `$z = Arr::list($z)->map();`).
+- **In-Place Reassignments & Updates:** Assigning the result of collection transformations back to the variable (`$x = $x->map();`, `$z = $z->map();`).
 
 ### Call-Site Synchronization
 
@@ -289,25 +289,24 @@ Non-mutated arrays (read-only arrays) and scalar parameters (e.g. `int $count`) 
 
 ## Auto-Assignment of Collection Calls
 
-In RHP, collection helper methods (`Arr::list()->map()`, `$list->filter()`, `$dict->sort()`, etc.) are pure and immutable by design: they return a brand-new transformed collection without mutating the original receiver in place.
+In RHP, collection helper methods (`$list->map()`, `$list->filter()`, `$dict->sort()`, etc.) are pure and immutable by design: they return a brand-new transformed collection without mutating the original receiver in place.
 
-Developers frequently invoke methods like `$x->map()` or `Arr::list($z)->map()` without assigning the output value, intending to update the variable. `rhp run lint` automatically detects these unassigned statements and assigns the result back to the target variable:
+Calling an immutable collection method without capturing or assigning the return value is a compile error (`#[must_use]`). The linter automatically detects these unassigned statements and rewrites them into self-assignments (`$x = $x->map();`):
 
 ```php
 // BEFORE LINTING (single line, unassigned):
-$x->map();Arr::list($z)->map();
+$x->map();$z->map();
 
 // AFTER 'rhp run lint':
 $x = $x->map();
-$z = Arr::list($z)->map();
+$z = $z->map();
 ```
 
 ### Supported Method Targets
 
-1. **Variables (`$var->method()`):** Chained transformation methods on variables (`map`, `filter`, `reduce`, `sort`, `reverse`, `unique`, `chunk`, `flatten`, `concat`, `slice`, `take`, `skip`, etc.) are converted to `$var = $var->method();`.
-2. **Facade Wrappers (`Arr::*($var)->method()`):** Chained calls on `Arr::list($var)`, `Arr::dict($var)`, `Arr::set($var)`, or `Arr::hashMap($var)` are converted to `$var = Arr::list($var)->method();`.
-3. **Chained Pipelines:** Method chains like `Arr::list($z)->map()->filter()` are assigned to `$z = Arr::list($z)->map()->filter();`.
-4. **Preserves Existing Assignments:** If the statement is already assigned (`$out = $x->map();`), returned (`return $x->map();`), or used inside an expression/condition (`if ($x->map())`), it is left untouched.
+1. **Direct Collection Variables (`$var->method()`):** Chained transformation methods on collection variables (`map`, `filter`, `reduce`, `sort`, `reverse`, `unique`, `chunk`, `flatten`, `concat`, `slice`, `take`, `skip`, etc.) are converted to `$var = $var->method();`.
+2. **Chained Pipelines:** Method chains like `$z->map()->filter()` are assigned to `$z = $z->map()->filter();`.
+3. **Preserves Existing Assignments:** If the statement is already assigned (`$out = $x->map();`), returned (`return $x->map();`), or used inside an expression/condition (`if ($x->map())`), it is left untouched.
 
 ### Formatting Side-Effects
 
