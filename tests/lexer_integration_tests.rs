@@ -491,6 +491,22 @@ fn test_string_quoting_and_backticks() {
         backtick[0].token.unescape_string(),
         Some(r#"raw "double" and 'single' quotes"#.to_string())
     );
+
+    let markdown_html = Lexer::tokenize("```html\n<div>hello</div>\n```").expect("Triple backtick HTML");
+    assert_eq!(
+        markdown_html[0].token,
+        Token::BacktickString("```html\n<div>hello</div>\n```")
+    );
+    assert_eq!(
+        markdown_html[0].token.raw_string_content(),
+        Some("<div>hello</div>")
+    );
+
+    let markdown_sql = Lexer::tokenize("```sql\nSELECT * FROM users\n```").expect("Triple backtick SQL");
+    assert_eq!(
+        markdown_sql[0].token.raw_string_content(),
+        Some("SELECT * FROM users")
+    );
 }
 
 #[test]

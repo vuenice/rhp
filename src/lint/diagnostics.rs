@@ -513,7 +513,18 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
             | BinaryOp::WordAnd
             | BinaryOp::WordOr
             | BinaryOp::WordXor => RhpType::Bool,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+            BinaryOp::Add => {
+                let left_ty = infer_expr_rhp_type(left);
+                let right_ty = infer_expr_rhp_type(right);
+                if matches!(left_ty, RhpType::String) || matches!(right_ty, RhpType::String) {
+                    RhpType::String
+                } else if matches!(left_ty, RhpType::Float) || matches!(right_ty, RhpType::Float) {
+                    RhpType::Float
+                } else {
+                    RhpType::Int
+                }
+            }
+            BinaryOp::Sub | BinaryOp::Mul => {
                 let left_ty = infer_expr_rhp_type(left);
                 let right_ty = infer_expr_rhp_type(right);
                 if matches!(left_ty, RhpType::Float) || matches!(right_ty, RhpType::Float) {

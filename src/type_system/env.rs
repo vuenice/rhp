@@ -510,7 +510,7 @@ pub fn resolve_facade_static_call(
         },
 
         "Future" => match method {
-            "run" => {
+            "run" | "async" => {
                 let inner_ret = arg_types
                     .first()
                     .and_then(|t| match t {
@@ -595,9 +595,14 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
         },
 
-        "HTTP" => Ok(RhpType::Class("HTTPResponse".to_string())),
-        "AHTTP" => match method {
-            "withHeaders" => Ok(RhpType::Class("AHTTPClient".to_string())),
+        "HTTP" | "Http" => match method {
+            "withHeaders" | "withToken" | "withBasicAuth" | "timeout" | "connectTimeout"
+            | "asJson" | "asForm" | "withoutVerifying" => Ok(RhpType::Class("HTTPClient".to_string())),
+            _ => Ok(RhpType::Class("HTTPResponse".to_string())),
+        },
+        "AHTTP" | "AHttp" => match method {
+            "withHeaders" | "withToken" | "withBasicAuth" | "timeout" | "connectTimeout"
+            | "asJson" | "asForm" | "withoutVerifying" => Ok(RhpType::Class("AHTTPClient".to_string())),
             _ => Ok(RhpType::Future(Box::new(RhpType::Class("HTTPResponse".to_string())))),
         },
         "Image" => Ok(RhpType::Class("ImageInstance".to_string())),
@@ -1112,11 +1117,27 @@ pub fn resolve_builtin_fluent_method(
                 "body" => Some(RhpType::String),
                 "bytes" => Some(RhpType::Bytes),
                 "status" => Some(RhpType::Int),
-                "ok" => Some(RhpType::Bool),
+                "ok" | "successful" | "failed" => Some(RhpType::Bool),
+                "header" => Some(RhpType::String),
+                "headers" => Some(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+                _ => Some(RhpType::Dynamic),
+            },
+            "HTTPClient" => match method {
+                "withHeaders" | "withToken" | "withBasicAuth" | "timeout" | "connectTimeout"
+                | "asJson" | "asForm" | "withoutVerifying" => {
+                    Some(RhpType::Class("HTTPClient".to_string()))
+                }
+                "post" | "get" | "put" | "delete" | "patch" | "request" | "head" => {
+                    Some(RhpType::Class("HTTPResponse".to_string()))
+                }
                 _ => Some(RhpType::Dynamic),
             },
             "AHTTPClient" => match method {
-                "post" | "get" | "put" | "delete" | "patch" | "request" => {
+                "withHeaders" | "withToken" | "withBasicAuth" | "timeout" | "connectTimeout"
+                | "asJson" | "asForm" | "withoutVerifying" => {
+                    Some(RhpType::Class("AHTTPClient".to_string()))
+                }
+                "post" | "get" | "put" | "delete" | "patch" | "request" | "head" => {
                     Some(RhpType::Future(Box::new(RhpType::Class("HTTPResponse".to_string()))))
                 }
                 _ => Some(RhpType::Dynamic),

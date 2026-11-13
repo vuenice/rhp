@@ -566,8 +566,8 @@ pub fn dispatch_facade_call(
         "Sys" => dispatch_sys(method, args),
         "File" => dispatch_file(method, args),
         "AFile" => dispatch_afile(method, args),
-        "HTTP" => dispatch_http(method, args),
-        "AHTTP" => dispatch_ahttp(method, args),
+        "HTTP" | "Http" => dispatch_http(method, args),
+        "AHTTP" | "AHttp" => dispatch_ahttp(method, args),
         "Log" => dispatch_log(method, args),
         "DB" => dispatch_db(method, args),
         "ADB" => dispatch_adb(method, args),
@@ -2823,7 +2823,7 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
                 other => Ok(other),
             }
         }
-        "run" => {
+        "run" | "async" => {
             let task = args.first().cloned().unwrap_or(PhpValue::Null);
             Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
                 VmFuture::resolved(task),
@@ -4600,12 +4600,11 @@ fn dispatch_afile(method: &str, args: &[PhpValue]) -> FacadeResult {
 
 fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
-        "get" | "post" => {
+        "get" | "post" | "put" | "patch" | "delete" | "head" => {
             let url = get_arg_str(args, 0, "HTTP::request")?;
-            let kind = if method == "post" {
-                IoKind::HttpPost { url: url.clone() }
-            } else {
-                IoKind::HttpGet { url: url.clone() }
+            let kind = match method {
+                "post" => IoKind::HttpPost { url: url.clone() },
+                _ => IoKind::HttpGet { url: url.clone() },
             };
             record_fiber_io_start(kind);
 
@@ -4634,8 +4633,12 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
             let mut obj = VmObject::new("HTTPResponse");
             obj.set_property("url", PhpValue::string(url));
             obj.set_property("status", PhpValue::Int(200));
-            obj.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
-            obj.set_property("raw_bytes", PhpValue::bytes(b"{\"status\":\"ok\"}".to_vec()));
+            let body_val = args
+                .get(1)
+                .map(|v| v.to_php_string())
+                .unwrap_or_else(|| "{\"status\":\"ok\"}".to_string());
+            obj.set_property("body", PhpValue::string(&body_val));
+            obj.set_property("raw_bytes", PhpValue::bytes(body_val.into_bytes()));
 
             let mut headers_dict = IndexMap::new();
             for (hk, hv) in outbound_headers {
@@ -4654,6 +4657,44 @@ fn dispatch_http(method: &str, args: &[PhpValue]) -> FacadeResult {
         "withHeaders" => {
             let mut obj = VmObject::new("HTTPClient");
             obj.set_property("headers", args.first().cloned().unwrap_or(PhpValue::Null));
+            Ok(PhpValue::object(obj))
+        }
+        "withToken" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("token", args.first().cloned().unwrap_or(PhpValue::Null));
+            Ok(PhpValue::object(obj))
+        }
+        "withBasicAuth" => {
+            let mut obj = VmObject::new("HTTPClient");
+            let user = args.first().cloned().unwrap_or(PhpValue::Null);
+            let pass = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            obj.set_property("basic_auth_user", user);
+            obj.set_property("basic_auth_pass", pass);
+            Ok(PhpValue::object(obj))
+        }
+        "timeout" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("timeout", args.first().cloned().unwrap_or(PhpValue::Int(30)));
+            Ok(PhpValue::object(obj))
+        }
+        "connectTimeout" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("connect_timeout", args.first().cloned().unwrap_or(PhpValue::Int(10)));
+            Ok(PhpValue::object(obj))
+        }
+        "asJson" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("as_json", PhpValue::Bool(true));
+            Ok(PhpValue::object(obj))
+        }
+        "asForm" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("as_form", PhpValue::Bool(true));
+            Ok(PhpValue::object(obj))
+        }
+        "withoutVerifying" => {
+            let mut obj = VmObject::new("HTTPClient");
+            obj.set_property("without_verifying", PhpValue::Bool(true));
             Ok(PhpValue::object(obj))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {

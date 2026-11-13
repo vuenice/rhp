@@ -22,9 +22,9 @@ function findUser(int $id): dict {
 try {
     $user = findUser(-1);
 } catch (RecordNotFoundException $e) {
-    Log::warning("User not found: " . $e->getMessage());
+    Log::warning("User not found: " + $e->getMessage());
 } catch (Exception $e) {
-    Log::error("Unexpected fault: " . $e->getMessage());
+    Log::error("Unexpected fault: " + $e->getMessage());
 } finally {
     // Executes regardless of exception state
     Log::info("Execution check complete");

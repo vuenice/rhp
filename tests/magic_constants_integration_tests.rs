@@ -204,7 +204,7 @@ $ns_ci = __namespace__;
 
 class Worker {
     public function work(): string {
-        return __CLASS__ . " -> " . __METHOD__;
+        return __CLASS__ + " -> " + __METHOD__;
     }
 }
 
@@ -258,7 +258,7 @@ return [$global_trait, __trait__];
 fn test_magic_constants_in_defaults_and_expressions() {
     let code = r#"
 function logEvent(string $msg, int $line = __LINE__): string {
-    return $msg . " at line " . $line;
+    return $msg + " at line " + string($line);
 }
 
 class Record {

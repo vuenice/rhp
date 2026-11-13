@@ -162,7 +162,8 @@ dict $rawPrices = ['item1' => 20, 'item2' => 40];
 dict $prices = $rawPrices->map(fn($price, $key) => $price * 1.1);
 
 dict $rawKeyed = ['first' => 10, 'second' => 20];
-dict $keyed = $rawKeyed->mapWithKeys(fn($val, $key) => ["key_" . $key => $val * 2]);
+dict $keyed = $rawKeyed->mapWithKeys(fn($val, $key) => ["key_" + $key => $val * 2]);
+
 
 dict $rawABC = ['a' => 10, 'b' => 5, 'c' => 20];
 dict $filtered = $rawABC->filter(fn($val, $key) => $val >= 10);             // ['a' => 10, 'c' => 20]
@@ -341,7 +342,7 @@ $doubled = $map
     ->map(fn($v, $k) => $v * 2);
 
 // mapWithKeys transforms both key and value
-$reindexed = $map->mapWithKeys(fn($v, $k) => ["transformed_" . (string)$k => $v]);
+$reindexed = $map->mapWithKeys(fn($v, $k) => ["transformed_" + string($k) => $v]);
 
 // Diff, Intersect, and Merge
 hashmap $other = ['a' => 1, 'b' => 2];
@@ -1209,7 +1210,7 @@ string $currentDate = Time::toDateString();
 string $currentDateTime = Time::toDateTimeString();
 
 // String casting & echo automatically format as toDateTimeString()
-echo "Event at: " . $dt; // "Event at: 2024-05-20 14:30:45"
+echo "Event at: " + $dt; // "Event at: 2024-05-20 14:30:45"
 ```
 
 ### Fluent Date Arithmetic & Boundaries
@@ -1436,6 +1437,6 @@ list $activeUsers = $data->get('users')
     ->filter(fn($u) => $u['is_active'] === true)
     ->map(fn($u) => Str::slug($u['username']));
 
-Log::info("Found " . (string)$activeUsers->count() . " active users");
+Log::info("Found " + string($activeUsers->count()) + " active users");
 Sys::print("Active users: {}, Peak Memory: {} bytes", $activeUsers->count(), Memory::peak());
 ```

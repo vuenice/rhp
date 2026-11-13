@@ -18,7 +18,7 @@ fn test_foreach_custom_iterator_aggregate() {
         $team = new TeamList(["Alice", "Bob", "Charlie"]);
         $collected = [];
         foreach ($team as $key => $member) {
-            $collected[] = $key . ":" . $member;
+            $collected[] = "{$key}:{$member}";
         }
         return $collected;
     "#;
@@ -117,7 +117,7 @@ fn test_foreach_plain_object_visible_properties() {
         $dto = new UserDTO();
         $props = [];
         foreach ($dto as $key => $val) {
-            $props[] = $key . "=" . $val;
+            $props[] = "{$key}={$val}";
         }
         return $props;
     "#;
@@ -220,7 +220,7 @@ fn test_foreach_laravel_collection_and_collect() {
         $c1 = collect(["alpha", "beta", "gamma"]);
         $res1 = [];
         foreach ($c1 as $k => $v) {
-            $res1[] = $k . ":" . $v;
+            $res1[] = "{$k}:{$v}";
         }
 
         $c2 = new Collection(["x" => 10, "y" => 20]);

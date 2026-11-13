@@ -7,7 +7,7 @@ fn test_instance_magic_call_forwarding() {
             public string $table = 'users';
 
             public function __call(string $name, array $args): string {
-                return "dynamic_call:" . $name . ":" . implode(",", $args);
+                return "dynamic_call:" + $name + ":" + implode(",", $args);
             }
         }
 
@@ -177,7 +177,7 @@ fn test_dynamic_method_and_property_with_curly_braces() {
             }
 
             public function __call(string $name, array $args): string {
-                return "fallback:" . $name . ":" . implode("-", $args);
+                return "fallback:" + $name + ":" + implode("-", $args);
             }
         }
 
@@ -187,8 +187,8 @@ fn test_dynamic_method_and_property_with_curly_braces() {
         $method1 = 'calculate';
         $res1 = $svc->{$method1}(6, 7);
 
-        // 2. Dynamic method call with expression inside braces: $obj->{'get' . 'Secret'}()
-        $res2 = $svc->{'get' . 'Secret'}();
+        // 2. Dynamic method call with expression inside braces: $obj->{'get' + 'Secret'}()
+        $res2 = $svc->{'get' + 'Secret'}();
 
         // 3. Dynamic method call forwarding to __call
         $unknown = 'whereUser';
@@ -253,7 +253,7 @@ fn test_final_method_non_overriding_and_devirtualization() {
             }
 
             final public function update(string $status): string {
-                return "updated_to_" . $status;
+                return "updated_to_" + $status;
             }
         }
 

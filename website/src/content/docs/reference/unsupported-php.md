@@ -202,7 +202,7 @@ try {
 ```php
 // In RHP: Exception-safe closure capture with automatic RAII release
 string $html = Output::capture(function() use ($username): void {
-    echo "<h1>Welcome, " . Html::specialChars($username) . "</h1>";
+    echo "<h1>Welcome, " + Html::specialChars($username) + "</h1>";
 });
 ```
 
@@ -223,8 +223,8 @@ function renderView(string $viewPath, array $data): string {
 ```php
 // In RHP: Native template compilation or direct Writer streaming
 function renderProfile(Writer $out, dict $data): void {
-    $out->write("<h1>Profile: " . Html::specialChars($data['name']) . "</h1>");
-    $out->write("<p>Email: " . Html::specialChars($data['email']) . "</p>");
+    $out->write("<h1>Profile: " + Html::specialChars($data['name']) + "</h1>");
+    $out->write("<p>Email: " + Html::specialChars($data['email']) + "</p>");
 }
 
 // Or returning structured View response:
@@ -349,7 +349,7 @@ $response = Http::withToken("sec_tok_9918")
     ->get("https://api.example.com/v1/users/42");
 
 if ($response->failed()) {
-    throw new RuntimeException("API error: " . $response->status());
+    throw new RuntimeException("API error: " + string($response->status()));
 }
 
 dict $data = $response->json();
@@ -1027,7 +1027,7 @@ set_error_handler(function(int $severity, string $message, string $file, int $li
 // In RHP: All runtime failures are native typed exceptions by default.
 // Centralized error handling is registered cleanly via application middleware:
 App::onError(function(Throwable $e, Request $req): Response {
-    Log::error("Unhandled exception: " . $e->getMessage(), [
+    Log::error("Unhandled exception: " + $e->getMessage(), [
         'exception' => $e::class,
         'path' => $req->path(),
     ]);
@@ -1230,7 +1230,7 @@ dict $loadedJson = Json::decode(File::read('bootstrap/cache/config.json'));
    import "./Config.rhp";
    import "./Cache.rs" as NativeCache;
    ```
-   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view . '.rhp';`) trigger fatal compile-time syntax errors (`RHP0120`).
+   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view + '.rhp';`) trigger fatal compile-time syntax errors (`RHP0120`).
 2. **Build-Time Class Map & Implicit Prelude:**
    Package and dependency autoloading is moved entirely to build/install time. `vendor/autoload.rhp` is generated ahead of time by `rhp add` / `rhp install` / `rhpm` as a static class map and package manifest, not executed dynamically at startup. The compiler reads the PSR-4 namespace-to-directory mapping declared in `rhp.toml` / `composer.json`, resolves all imports, and builds the complete module dependency graph. The autoloader functions as an implicit prelude prepended to the compilation root. There is **no `spl_autoload_register()`**, zero runtime filesystem probing, and zero lazy class loading in production.
 3. **Deterministic Go/Rust-Style Module Initialization Semantics:**
@@ -1336,11 +1336,23 @@ $client = new Client();
 When porting an existing PHP codebase to RHP, run the automated migration command:
 
 ```bash
-rhp migrate ./app --write
+# Migrate directory or file in-place:
+rhp migrate ./app
+
+# Dry-run check: preview changes without writing to disk:
+rhp migrate ./app --check
+
+# Structured JSON report:
+rhp migrate ./app --format=json
 ```
 
 ### What `rhp migrate` Automatically Rewrites
 
+- **Opening and Closing PHP Tags:** Strips legacy `<?php` from the start and `?>` from the end of files so code adopts RHP's native script syntax.
+- **String Concatenation Operators:** Automatically converts PHP dot concatenation (`.` and `.=`) to modern RHP addition operators (`+` and `+=`).
+- **Superglobals to Request Facades:** Injects `$_GET = Request::query();`, `$_POST = Request::body();`, `$_SERVER['REQUEST_METHOD'] = Request::method();`, `$_SERVER['REMOTE_ADDR'] = Request::ip();`, `$_SERVER['HTTP_HOST'] = Request::host();`, `$_FILES = Request::files();`, and `$_COOKIE = Cookie::get();` when legacy superglobals are detected.
+- **Cookie Mutations:** Upgrades `setcookie(...)`, `setrawcookie(...)`, and `$_COOKIE['key'] = $val;` into `Cookie::set(...)`.
+- **Global Variables:** Replaces `$_GLOBAL['var']` and `$GLOBALS['var']` with original global variables (`$var`), and dynamic `$GLOBALS[$k]` with `$$k`.
 - **Strict Comparison Operators:** Automatically converts `===` to `==` and `!==` to `!=`.
 - **Output Buffering:** Simple `ob_start(); ... $html = ob_get_clean();` blocks are automatically transformed into `Output::capture(function() { ... })`.
 - **cURL Calls:** Standard `curl_init()` and `curl_setopt()` chains configured with common options (`CURLOPT_RETURNTRANSFER`, `CURLOPT_HTTPHEADER`, `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT`, `CURLOPT_USERPWD`) are rewritten into expressive `Http::` facade chains.

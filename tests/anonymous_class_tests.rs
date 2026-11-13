@@ -28,7 +28,7 @@ fn test_anonymous_class_with_constructor_and_properties() {
             }
 
             public function describe(): string {
-                return $this->name . " is " . string($this->age);
+                return $this->name + " is " + string($this->age);
             }
         };
         return $user->describe();
@@ -49,7 +49,7 @@ fn test_anonymous_class_inheritance_and_instanceof() {
 
         $service = new class extends BaseService {
             public function customName(): string {
-                return $this->baseName() . "_extended";
+                return $this->baseName() + "_extended";
             }
         };
 
@@ -81,7 +81,7 @@ fn test_anonymous_class_implements_interface() {
 
         $greeter = new class implements GreeterInterface {
             public function greet(string $name): string {
-                return "Welcome, " . $name . "!";
+                return "Welcome, " + $name + "!";
             }
         };
 
@@ -116,7 +116,7 @@ fn test_anonymous_class_parent_constructor_forwarding() {
 
         $car = new class("Sedan") extends Vehicle {
             public function getType(): string {
-                return "Vehicle type: " . $this->type;
+                return "Vehicle type: " + $this->type;
             }
         };
 
@@ -195,7 +195,7 @@ fn test_anonymous_class_with_trait() {
     let source = r#"
         trait LogHelper {
             public function formatLog(string $msg): string {
-                return "[LOG]: " . $msg;
+                return "[LOG]: " + $msg;
             }
         }
 

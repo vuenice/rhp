@@ -235,7 +235,7 @@ fn test_str_macro_registration_and_fluent_execution() {
     clear_runtime_closure_macros();
 
     let code = r#"
-        Str::macro('shout', fn() => $this->trim()->upper() . '!!!');
+        Str::macro('shout', fn() => $this->trim()->upper() + '!!!');
         $greeting = "  welcome to rhp  ";
         $shouted = $greeting->shout();
         return $shouted;

@@ -144,7 +144,7 @@ class Logger {
     public int $created_line = __LINE__;
 
     public function log(string $msg, int $line = __LINE__, string $file = __FILE__): void {
-        print("[{$file}:{$line}] " . __METHOD__ . "() -> " . $msg);
+        print("[{$file}:{$line}] " + __METHOD__ + "() -> " + $msg);
     }
 }
 

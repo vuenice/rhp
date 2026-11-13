@@ -22,7 +22,7 @@ fn test_set_error_handler_basic_capture() {
         }
 
         set_error_handler(function($errno, $errstr, $errfile, $errline) {
-            ErrorRecorder::$captured = ErrorRecorder::$captured . "[{$errno}:{$errstr}]";
+            ErrorRecorder::$captured = ErrorRecorder::$captured + "[{$errno}:{$errstr}]";
             return true;
         });
 
@@ -49,7 +49,7 @@ fn test_set_error_handler_level_bitmask_filtering() {
 
         // Only listen for E_USER_WARNING (512)
         set_error_handler(function($errno, $errstr) {
-            FilterRecorder::$captured = FilterRecorder::$captured . "[{$errstr}]";
+            FilterRecorder::$captured = FilterRecorder::$captured + "[{$errstr}]";
             return true;
         }, E_USER_WARNING);
 
@@ -105,12 +105,12 @@ fn test_restore_error_handler_stack() {
         }
 
         $h1 = function($errno, $errstr) {
-            StackRecorder::$log = StackRecorder::$log . "[h1:{$errstr}]";
+            StackRecorder::$log = StackRecorder::$log + "[h1:{$errstr}]";
             return true;
         };
 
         $h2 = function($errno, $errstr) {
-            StackRecorder::$log = StackRecorder::$log . "[h2:{$errstr}]";
+            StackRecorder::$log = StackRecorder::$log + "[h2:{$errstr}]";
             return true;
         };
 
@@ -149,7 +149,7 @@ fn test_restore_error_handler_stack() {
 fn test_set_exception_handler_uncaught_capture() {
     let code = r#"
         set_exception_handler(function($e) {
-            echo "TopLevelCaught: " . $e->getMessage();
+            echo "TopLevelCaught: " + $e->getMessage();
         });
 
         throw new RuntimeException("Crash payload");
@@ -169,11 +169,11 @@ fn test_set_exception_handler_uncaught_capture() {
 fn test_restore_exception_handler() {
     let code = r#"
         $handler1 = function($e) {
-            echo "Handler1: " . $e->getMessage();
+            echo "Handler1: " + $e->getMessage();
         };
 
         $handler2 = function($e) {
-            echo "Handler2: " . $e->getMessage();
+            echo "Handler2: " + $e->getMessage();
         };
 
         $p0 = set_exception_handler($handler1);

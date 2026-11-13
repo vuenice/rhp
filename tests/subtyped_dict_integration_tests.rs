@@ -168,7 +168,7 @@ fn test_dict_fluent_laravel_collection_methods() {
 
         // 5. mapWithKeys()
         $keyed = Arr::dict(['first' => 1, 'second' => 2])
-            ->mapWithKeys(fn($v, $k) => ['key_' . $k => $v * 10]);
+            ->mapWithKeys(fn($v, $k) => ['key_' + $k => $v * 10]);
 
         // 6. filter() and reject()
         $filtered = Arr::dict(['a' => 10, 'b' => 5, 'c' => 20])
@@ -619,7 +619,7 @@ fn test_arr_macro_registration_and_dict_execution() {
         Arr::macro('toHeaderLine', function ($sep = ': ') {
             $lines = [];
             foreach ($this->all() as $k => $v) {
-                $lines[] = $k . $sep . $v;
+                $lines[] = $k + $sep + $v;
             }
             return implode("\n", $lines);
         });

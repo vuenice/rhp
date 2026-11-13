@@ -947,7 +947,18 @@ pub fn infer_expression_type_name(
             | BinaryOp::WordAnd
             | BinaryOp::WordOr
             | BinaryOp::WordXor => Some("bool".to_string()),
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+            BinaryOp::Add => {
+                let left_ty = infer_expression_type_name(left, type_info, known_vars);
+                let right_ty = infer_expression_type_name(right, type_info, known_vars);
+                if left_ty.as_deref() == Some("string") || right_ty.as_deref() == Some("string") {
+                    Some("string".to_string())
+                } else if left_ty.as_deref() == Some("float") || right_ty.as_deref() == Some("float") {
+                    Some("float".to_string())
+                } else {
+                    Some("int".to_string())
+                }
+            }
+            BinaryOp::Sub | BinaryOp::Mul => {
                 let left_ty = infer_expression_type_name(left, type_info, known_vars);
                 let right_ty = infer_expression_type_name(right, type_info, known_vars);
                 if left_ty.as_deref() == Some("float") || right_ty.as_deref() == Some("float") {

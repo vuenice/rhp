@@ -217,7 +217,7 @@ fn test_tier3_script_land_static_facades() {
         #[Facade]
         class TextHelper {
             public static function shout(string $s): string {
-                return Str::upper($s) . "!!!";
+                return Str::upper($s) + "!!!";
             }
         }
 
@@ -380,11 +380,11 @@ fn test_facade_macro_registration_and_execution_across_tiers() {
         }
 
         // Tier 1 dynamic macro
-        Str::macro("shout", fn(string $s) => Str::upper($s) . "!!!");
+        Str::macro("shout", fn(string $s) => Str::upper($s) + "!!!");
         $tier1_res = Str::shout("hello world");
 
         // Tier 2 dynamic macro
-        CustomCrypto::macro("salt", fn(string $s) => $s . "_salt_123");
+        CustomCrypto::macro("salt", fn(string $s) => $s + "_salt_123");
         $tier2_res = CustomCrypto::salt("pass");
 
         // Tier 3 dynamic macro

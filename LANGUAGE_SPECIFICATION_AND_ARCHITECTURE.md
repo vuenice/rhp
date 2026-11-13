@@ -215,7 +215,7 @@ Dynamic include and require constructs (`include`, `require`, `include_once`, `r
    import "./Config.rhp";
    import "./Cache.rs" as NativeCache;
    ```
-   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view . '.rhp';`) are fatal compile-time errors (`RHP0120`).
+   Computed expressions (e.g., `require $path;`, `import $mod;`, `include $view + '.rhp';`) are fatal compile-time errors (`RHP0120`).
 2. **Build-Time Class Map & Implicit Prelude:**
    Package and dependency autoloading is moved entirely to build/install time. `vendor/autoload.rhp` is generated ahead of time by `rhp add` / `rhp install` / `rhpm` as a static class map and package manifest, not executed dynamically at startup. The compiler reads the PSR-4 namespace-to-directory mapping declared in `rhp.toml` / `composer.json`, resolves all imports, and builds the complete module dependency graph. The autoloader functions as an implicit prelude prepended to the compilation root. There is **no `spl_autoload_register()`**, zero runtime filesystem probing, and zero lazy class loading in production.
 3. **Deterministic Go/Rust-Style Module Initialization Semantics:**

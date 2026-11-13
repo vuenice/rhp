@@ -5,7 +5,7 @@ fn test_basic_invokable_object() {
     let source = r#"
         class CreateSite {
             public function __invoke(string $domain): string {
-                return "site created: " . $domain;
+                return "site created: " + $domain;
             }
         }
 
@@ -29,7 +29,7 @@ fn test_laravel_single_action_controller_pattern() {
             }
 
             public function __invoke(array $data): string {
-                return "Created site [" . $data["name"] . "] on " . $this->environment;
+                return "Created site [" + $data["name"] + "] on " + $this->environment;
             }
         }
 
@@ -99,7 +99,7 @@ fn test_invokable_object_trait_and_inheritance() {
     let source = r#"
         trait InvokableLogger {
             public function __invoke(string $msg): string {
-                return "[LOG] " . $msg;
+                return "[LOG] " + $msg;
             }
         }
 
@@ -122,7 +122,7 @@ fn test_invokable_object_as_callable_boundary_parameter() {
     let source = r#"
         class ActionHandler {
             public function __invoke(string $input): string {
-                return "processed: " . $input;
+                return "processed: " + $input;
             }
         }
 
@@ -143,7 +143,7 @@ fn test_immediate_instantiation_invokable_call() {
     let source = r#"
         class Formatter {
             public function __invoke(string $s): string {
-                return ">>> " . $s . " <<<";
+                return ">>> " + $s + " <<<";
             }
         }
 
@@ -160,7 +160,7 @@ fn test_invokable_stored_in_array() {
     let source = r#"
         class GreetingAction {
             public function __invoke(string $target): string {
-                return "Hello, " . $target . "!";
+                return "Hello, " + $target + "!";
             }
         }
 

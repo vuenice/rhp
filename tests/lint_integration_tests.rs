@@ -195,7 +195,7 @@ fn test_autotype_does_not_break_dynamic_reassignments() {
     // When a variable is reassigned to a different type in the same scope, do not add a locked type
     let conflicting = r#"
 $data = 100;
-$data = "ID-" . $data;
+$data = "ID-" + string($data);
 "#;
 
     let typed = add_variable_types(conflicting);

@@ -230,10 +230,13 @@ u8 $clamped = 250u8 +| 20u8; // 255u8 (saturating)
 
 > [!IMPORTANT]
 > **No Implicit Coercion & No Silent Overflow:**
-> - `+` is **strictly mathematical**. Both operands must have identical numeric types (e.g. `int + int` or `float + float`).
-> - Mixed-type addition (`int + float`, `string + int`, `null + int`, `bool + int`) is rejected with actionable compile-time errors.
-> - String concatenation **must** use `.` (`$first . $second`).
+> - `+` supports **strictly typed addition and concatenation**:
+>   - Numeric addition: operands must be numeric (`int + int`, `float + float`).
+>   - String concatenation: both operands must be strings (`string + string`).
+> - Mixed-type addition/concatenation (`string + int`, `int + string`, `null + int`, `bool + int`) is rejected with actionable compile-time errors.
+> - String concatenation assignment uses `+=` (`$msg += " world"`).
 > - Array merging **must** use `array_merge()` or spread `[...$a, ...$b]`.
+> - The legacy `.` operator for string concatenation has been **removed** from RHP.
 > - Constant expressions that overflow are flagged as **compile-time errors**, never deferred to runtime.
 > - For full specifications, LLVM codegen details, and custom `Add` traits, see [Safe Addition & Arithmetic Semantics](/docs/advanced/safe-addition-semantics).
 
@@ -246,13 +249,12 @@ RHP supports simple assignment and compound assignment shortcuts:
 | Operator | Syntax | Equivalent | Description |
 | :--- | :--- | :--- | :--- |
 | `=` | `$x = $y` | `$x = $y` | Assigns value of right operand to left target |
-| `+=` | `$x += $y` | `$x = $x + $y` | Addition assignment |
+| `+=` | `$x += $y` | `$x = $x + $y` | Addition / string append assignment |
 | `-=` | `$x -= $y` | `$x = $x - $y` | Subtraction assignment |
 | `*=` | `$x *= $y` | `$x = $x * $y` | Multiplication assignment |
 | `/=` | `$x /= $y` | `$x = $x / $y` | Division assignment |
 | `%=` | `$x %= $y` | `$x = $x % $y` | Modulo assignment |
 | `**=` | `$x **= $y` | `$x = $x ** $y` | Exponentiation assignment |
-| `.=` | `$x .= $y` | `$x = $x . $y` | String concatenation assignment |
 | `??=` | `$x ??= $y` | `$x = $x ?? $y` | Null-coalescing assignment |
 | `&=` | `$x &= $y` | `$x = $x & $y` | Bitwise AND assignment |
 | `\|=` | `$x \|= $y` | `$x = $x \| $y` | Bitwise OR assignment |
@@ -342,18 +344,21 @@ $x--; // 6
 
 ---
 
-## String Concatenation Operator (`.`)
+## String Concatenation Operator (`+`)
 
-Consistent with PHP syntax, strings are concatenated using the dot (`.`) operator:
+In RHP, strings are concatenated using the `+` operator with strict type checking (both operands must be strings):
 
 ```php
 string $first = "Fast";
 string $second = "Backend";
-string $full = $first . " " . $second; // "Fast Backend"
+string $full = $first + " " + $second; // "Fast Backend"
 
 string $buffer = "Log: ";
-$buffer .= "Operation complete.";
+$buffer += "Operation complete.";
 ```
+
+> [!NOTE]
+> The legacy PHP dot operator (`.`) and dot-assign (`.=`) have been removed from RHP. Using `.` or `.=` results in a compile-time parse error directing developers to `+` and `+=`.
 
 ---
 
@@ -394,7 +399,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Exponentiation** | `(91, 90)` | `**` | **Right-to-left** | Power operator (`2 ** 3 ** 4` $\rightarrow$ `2 ** (3 ** 4)`) |
 | **Type Check** | `(85, 86)` | `instanceof` | Left-to-right | Class and interface verification |
 | **Multiplicative** | `(80, 81)` | `*`, `/`, `%` | Left-to-right | Multiplication, division, modulo |
-| **Additive & String** | `(75, 76)` | `+`, `-`, `.` | Left-to-right | Addition, subtraction, string concatenation |
+| **Additive & String** | `(75, 76)` | `+`, `-` | Left-to-right | Addition, subtraction, string concatenation (`+`) |
 | **Bitwise Shift** | `(70, 71)` | `<<`, `>>` | Left-to-right | Bitwise left and right shift |
 | **Relational Comparison** | `(65, 66)` | `<`, `<=`, `>`, `>=`, `<=>` | Left-to-right | Less, greater, bound, spaceship comparison |
 | **Equality Check** | `(60, 61)` | `==`, `!=`, `===`, `!==`, `<>` | Left-to-right | Loose equivalence and strict identity |
@@ -405,7 +410,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Logical OR** | `(35, 36)` | `\|\|` | Left-to-right | Short-circuit boolean OR |
 | **Null Coalescing** | `(30, 29)` | `??` | **Right-to-left** | Fallback chaining (`$a ?? $b ?? $default`) |
 | **Ternary & Elvis** | `(25, 24)` | `? :`, `?:` | **Right-to-left** | Conditional expression and Elvis fallback |
-| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `.=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10`) |
+| **Assignment** | `(20, 19)` | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `??=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | **Right-to-left** | Variable assignment (`$a = $b = 10`) |
 | **Logical Word AND** | `(9, 10)` | `and` | Left-to-right | Low-precedence logical AND |
 | **Logical Word XOR** | `(7, 8)` | `xor` | Left-to-right | Low-precedence logical XOR |
 | **Logical Word OR** | `(5, 6)` | `or` | Left-to-right | Low-precedence logical OR |
@@ -449,7 +454,7 @@ When consecutive operator characters appear, RHP's lexer applies the **Maximal M
 | :--- | :--- | :--- | :--- |
 | `Ellipsis` | `...` | 3 characters | Variadic parameters and array/collection unpacking |
 | `Range` | `..` | 2 characters | Sequential range iteration (`1..10`) |
-| `Dot` | `.` | 1 character | String concatenation |
+| `Dot` | `.` | 1 character | Removed operator (fails compilation; use `+` for strings) |
 
 ### Disambiguation Behavior
 
@@ -460,14 +465,14 @@ function sum(int ...$values): int {}
 // Lexed as Range:
 foreach (1..5 as $i) {}
 
-// Lexed as Dot concatenation:
-$label = "Item" . $id;
+// String concatenation uses '+' (dot operator is rejected):
+$label = "Item" + $idStr;
 
 // Whitespace-free maximal munch:
 // $a...$b is lexed as: [$a, ..., $b] (Ellipsis), NOT [$a, .., ., $b]
 ```
 
-To avoid ambiguity, format multi-character expressions with clean whitespace (e.g., `$first . $second`).
+To avoid ambiguity, format multi-character expressions with clean whitespace (e.g., `$first + $second`).
 
 ---
 
@@ -477,6 +482,7 @@ RHP intentionally removes or replaces specific legacy PHP operator behaviors:
 
 | PHP Operator Feature | Status in RHP | Reason | Modern RHP Alternative |
 | :--- | :--- | :--- | :--- |
+| **String Concatenation `.` and `.=`** | ❌ **Rejected** (`ParseError`) | Replaced by `+` and `+=` with strict type checking (disallowing implicit string/numeric coercion) | Use `+` for string concatenation, `+=` for append, or backticks/double-quotes interpolation |
 | **Type Casts `(int)`, `(string)`, `(float)`, `(bool)`** | ❌ **Rejected** (`ParseError`) | Ambiguous syntax with parentheses; lack of strict type inference | Use functional conversion: `int($x)`, `string($x)`, `float($x)`, `bool($x)` |
 | **Array Union Operator `+` (`$a + $b`)** | ❌ **Rejected** (`TypeError`) | High risk of unintended key overwrites and non-intuitive coercion | Use `Arr::merge($a, $b)` or `dict` methods |
 | **Execution Operator (Backticks `` `ls` ``)** | ❌ **String literal only** | Security hazard and hidden subprocess spawning | Use `Process::run(['ls'])` or `System::exec(...)` |

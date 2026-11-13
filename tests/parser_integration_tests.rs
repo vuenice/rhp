@@ -1066,7 +1066,7 @@ fn test_spec_global_helpers_reserved_intrinsics_and_custom_helper_lowering() {
     register_custom_helper(
         "my_custom_function",
         vec![("$env".to_string(), None), ("$tax".to_string(), None)],
-        "return $env . ':' . $tax;",
+        "return $env + ':' + $tax;",
     )
     .expect("Failed to register custom helper on Glob facade");
     assert!(has_custom_helper("my_custom_function"));
@@ -1279,7 +1279,7 @@ fn test_dynamic_include_and_require_forbidden() {
     let test_cases = [
         ("require $path;", "require"),
         ("require 'config.rhp';", "require"),
-        ("require_once __DIR__ . '/vendor/autoload.php';", "require_once"),
+        ("require_once __DIR__ + '/vendor/autoload.php';", "require_once"),
         ("include $template;", "include"),
         ("include_once 'header.php';", "include_once"),
         ("$x = require($file);", "require"),

@@ -4552,7 +4552,7 @@ impl VM {
         // Intercept higher-order `Future::*` and `Arr::*` facade calls that invoke closures
         if facade == "Future" {
             match method {
-                "run" => {
+                "run" | "async" => {
                     match args.first() {
                         Some(PhpValue::Closure(c)) => {
                             let rx = self.spawn_closure_future(c);
@@ -9035,8 +9035,14 @@ impl VM {
                     Ok(PhpValue::bytes(Vec::new()))
                 }
             }
-            ("HTTPResponse", "status") => Ok(PhpValue::Int(200)),
-            ("HTTPResponse", "ok") => {
+            ("HTTPResponse", "status") => {
+                if let PhpValue::Object(o) = receiver {
+                    Ok(o.borrow().get_property("status").cloned().unwrap_or(PhpValue::Int(200)))
+                } else {
+                    Ok(PhpValue::Int(200))
+                }
+            }
+            ("HTTPResponse", "ok" | "successful") => {
                 let status = if let PhpValue::Object(o) = receiver {
                     o.borrow()
                         .get_property("status")
@@ -9046,6 +9052,30 @@ impl VM {
                     200
                 };
                 Ok(PhpValue::Bool(status >= 200 && status < 300))
+            }
+            ("HTTPResponse", "failed") => {
+                let status = if let PhpValue::Object(o) = receiver {
+                    o.borrow()
+                        .get_property("status")
+                        .and_then(|v| v.to_i64())
+                        .unwrap_or(200)
+                } else {
+                    200
+                };
+                Ok(PhpValue::Bool(status >= 400 || status < 200))
+            }
+            ("HTTPResponse", "header") => {
+                let name = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                if let PhpValue::Object(o) = receiver {
+                    if let Some(PhpValue::Dict(d)) = o.borrow().get_property("headers") {
+                        for (k, v) in d.borrow().iter() {
+                            if k.eq_ignore_ascii_case(&name) {
+                                return Ok(v.clone());
+                            }
+                        }
+                    }
+                }
+                Ok(PhpValue::Null)
             }
             ("HTTPResponse", "headers") => {
                 if let PhpValue::Object(o) = receiver {
@@ -9057,15 +9087,37 @@ impl VM {
                     Ok(PhpValue::dict(Vec::new()))
                 }
             }
-            ("HTTPClient", "get" | "post") => {
+            ("HTTPClient", "withHeaders" | "withToken" | "withBasicAuth" | "timeout" | "connectTimeout" | "asJson" | "asForm" | "withoutVerifying") => {
+                if let PhpValue::Object(o) = receiver {
+                    match method {
+                        "withHeaders" => o.borrow_mut().set_property("headers", args.first().cloned().unwrap_or(PhpValue::Null)),
+                        "withToken" => o.borrow_mut().set_property("token", args.first().cloned().unwrap_or(PhpValue::Null)),
+                        "withBasicAuth" => {
+                            o.borrow_mut().set_property("basic_auth_user", args.first().cloned().unwrap_or(PhpValue::Null));
+                            o.borrow_mut().set_property("basic_auth_pass", args.get(1).cloned().unwrap_or(PhpValue::Null));
+                        }
+                        "timeout" => o.borrow_mut().set_property("timeout", args.first().cloned().unwrap_or(PhpValue::Int(30))),
+                        "connectTimeout" => o.borrow_mut().set_property("connect_timeout", args.first().cloned().unwrap_or(PhpValue::Int(10))),
+                        "asJson" => o.borrow_mut().set_property("as_json", PhpValue::Bool(true)),
+                        "asForm" => o.borrow_mut().set_property("as_form", PhpValue::Bool(true)),
+                        "withoutVerifying" => o.borrow_mut().set_property("without_verifying", PhpValue::Bool(true)),
+                        _ => {}
+                    }
+                }
+                Ok(receiver.clone())
+            }
+            ("HTTPClient", "get" | "post" | "put" | "patch" | "delete" | "head") => {
                 let url = args
                     .first()
                     .map(|v| v.to_php_string())
                     .unwrap_or_default();
+                let body_payload = args.get(1).map(|v| v.to_php_string());
                 let mut resp = VmObject::new("HTTPResponse");
                 resp.set_property("url", PhpValue::string(url));
                 resp.set_property("status", PhpValue::Int(200));
-                resp.set_property("body", PhpValue::string("{\"status\":\"ok\"}"));
+                let body_str = body_payload.unwrap_or_else(|| "{\"status\":\"ok\"}".to_string());
+                resp.set_property("body", PhpValue::string(&body_str));
+                resp.set_property("raw_bytes", PhpValue::bytes(body_str.as_bytes().to_vec()));
                 Ok(PhpValue::object(resp))
             }
             ("AHTTPClient", "get" | "post" | "put" | "delete" | "patch" | "request") => {
@@ -10651,7 +10703,7 @@ impl VM {
                 if lhs.is_bytes() && rhs.is_bytes() {
                     return Err(self.make_error(
                         RuntimeErrorKind::TypeError {
-                            message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
                         },
                         span,
                     ));
@@ -10668,7 +10720,41 @@ impl VM {
                 s.push_str(&rhs.to_php_string());
                 Ok(PhpValue::string(s))
             }
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
+            BinaryOp::Add => {
+                if lhs.is_bytes() && rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if lhs.is_bytes() || rhs.is_bytes() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::TypeError {
+                            message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if lhs.is_string() && rhs.is_string() {
+                    let mut s = lhs.to_php_string();
+                    s.push_str(&rhs.to_php_string());
+                    return Ok(PhpValue::string(s));
+                }
+                if lhs.is_string() || rhs.is_string() {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::InvalidBinaryOperands {
+                            op: "+".to_string(),
+                            lhs_type: lhs.type_name().to_string(),
+                            rhs_type: rhs.type_name().to_string(),
+                        },
+                        span,
+                    ));
+                }
+                self.exec_numeric_binary(op, lhs, rhs, span)
+            }
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
                 self.exec_numeric_binary(op, lhs, rhs, span)
             }
 

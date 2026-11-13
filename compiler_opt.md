@@ -103,8 +103,8 @@ Rather than hiding deep array copies behind implicit runtime COW or guessing dev
 #### Case 1: Read-Only Parameter (Valid)
 ```php
 function printSummary(list $items) {
-    echo "Count: " . count($items);
-    echo "First: " . $items[0];
+    echo "Count: " + string(count($items));
+    echo "First: " + string($items[0]);
     // No modifications made to $items
 }
 

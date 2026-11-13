@@ -3,10 +3,11 @@ pub mod autotype;
 pub mod casing;
 pub mod diagnostics;
 pub mod formatter;
+pub mod migrate;
+pub use migrate as upgrade_php;
 pub mod param_order;
 pub mod ref_params;
 pub mod reporter;
-pub mod upgrade_php;
 
 use std::fs;
 use std::io;
@@ -20,13 +21,14 @@ pub use casing::{
 };
 pub use diagnostics::{run_typecheck, type_error_to_code};
 pub use formatter::{format_source, split_statements_on_semicolons};
+pub use migrate::{
+    migrate_file, migrate_path, migrate_source, remove_php_tags, upgrade_php_file, upgrade_php_path,
+    upgrade_php_source, MigrateFileResult, MigrateOptions, MigrateReport, UpgradeFileResult,
+    UpgradeOptions, UpgradeReport,
+};
 pub use param_order::{check_parameter_order, fix_parameter_order, has_required_after_optional};
 pub use ref_params::convert_mutated_array_params_to_ref;
 pub use reporter::{Issue, IssueLevel, IssueSpan, LintReport};
-pub use upgrade_php::{
-    upgrade_php_file, upgrade_php_path, upgrade_php_source, UpgradeFileResult, UpgradeOptions,
-    UpgradeReport,
-};
 
 /// Lint configuration options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

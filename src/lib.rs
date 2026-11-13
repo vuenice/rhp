@@ -19,7 +19,8 @@ pub mod telemetry;
 pub mod type_system;
 pub mod vm;
 pub mod runtime;
-pub use lint::upgrade_php;
+pub use lint::migrate;
+pub use lint::migrate as upgrade_php;
 
 pub use expand::{
     compile_template, discover_expanders, expand_program, expand_template, parse_and_expand,

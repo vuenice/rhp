@@ -16,11 +16,11 @@ Create a new file named `hello.rhp`:
 string $target = "World";
 
 // Utilize native Rust-backed string facades
-string $message = Str::slug("Hello " . $target . " from RHP Engine");
+string $message = Str::slug("Hello " + $target + " from RHP Engine");
 
 // Standard library output intrinsic
-print("Output: " . $message); //automatically compiled to Sys::print()
-print("RHP Version: " . Sys::version()); //automatically compiled to Sys::print()
+print("Output: " + $message); //automatically compiled to Sys::print()
+print("RHP Version: " + Sys::version()); //automatically compiled to Sys::print()
 ```
 
 > **Automatic Global Function Compilation:**

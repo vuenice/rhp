@@ -3651,9 +3651,87 @@ impl TypeChecker {
         span: Span,
     ) -> Result<RhpType, TypeError> {
         match op {
-            // Arithmetic: +, -, *, /, %, **
-            BinaryOp::Add
-            | BinaryOp::Sub
+            // Addition (+) supports numeric addition AND string concatenation
+            BinaryOp::Add => {
+                if left_ty == &RhpType::Bytes && right_ty == &RhpType::Bytes {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if left_ty == &RhpType::Bytes || right_ty == &RhpType::Bytes {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+
+                let left_is_string = left_ty == &RhpType::String
+                    || matches!(left_ty, RhpType::Union(u) if u.iter().all(|m| m == &RhpType::String));
+                let right_is_string = right_ty == &RhpType::String
+                    || matches!(right_ty, RhpType::Union(u) if u.iter().all(|m| m == &RhpType::String));
+
+                if left_is_string && right_is_string {
+                    return Ok(RhpType::String);
+                }
+
+                // If one side is string, the other MUST be string (or Dynamic/Mixed)
+                if left_is_string {
+                    if matches!(right_ty, RhpType::Dynamic | RhpType::Mixed) {
+                        return Ok(RhpType::String);
+                    }
+                    return Err(TypeError::new(
+                        TypeErrorKind::InvalidBinaryOperation {
+                            op: "+".to_string(),
+                            left_type: left_ty.to_string(),
+                            right_type: right_ty.to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if right_is_string {
+                    if matches!(left_ty, RhpType::Dynamic | RhpType::Mixed) {
+                        return Ok(RhpType::String);
+                    }
+                    return Err(TypeError::new(
+                        TypeErrorKind::InvalidBinaryOperation {
+                            op: "+".to_string(),
+                            left_type: left_ty.to_string(),
+                            right_type: right_ty.to_string(),
+                        },
+                        span,
+                    ));
+                }
+
+                let is_valid_operand = |t: &RhpType| -> bool {
+                    t.is_numeric()
+                        || matches!(t, RhpType::Dynamic | RhpType::Mixed)
+                        || matches!(t, RhpType::Union(u) if u.iter().any(|m| m.is_numeric()))
+                };
+
+                if !is_valid_operand(left_ty) || !is_valid_operand(right_ty) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::InvalidBinaryOperation {
+                            op: "+".to_string(),
+                            left_type: left_ty.to_string(),
+                            right_type: right_ty.to_string(),
+                        },
+                        span,
+                    ));
+                }
+
+                if left_ty.is_float() || right_ty.is_float() {
+                    return Ok(RhpType::Float);
+                }
+                Ok(RhpType::Int)
+            }
+
+            // Arithmetic: -, *, /, %, **
+            BinaryOp::Sub
             | BinaryOp::Mul
             | BinaryOp::Div
             | BinaryOp::Mod
@@ -3682,12 +3760,12 @@ impl TypeChecker {
                 Ok(RhpType::Int)
             }
 
-            // String concatenation `.`
+            // Legacy String concatenation `.` fallback
             BinaryOp::Concat => {
                 if left_ty == &RhpType::Bytes && right_ty == &RhpType::Bytes {
                     return Err(TypeError::new(
                         TypeErrorKind::Custom {
-                            message: "Cannot concatenate bytes using the '.' operator. Use BytesBuffer or decode to string first.".to_string(),
+                            message: "Cannot concatenate bytes using the '+' operator. Use BytesBuffer or decode to string first.".to_string(),
                         },
                         span,
                     ));
@@ -3788,14 +3866,29 @@ impl TypeChecker {
         let effective_rhs_ty = match op {
             AssignOp::Assign => rhs_ty,
             AssignOp::ConcatAssign => RhpType::String,
-            AssignOp::AddAssign
-            | AssignOp::SubAssign
-            | AssignOp::MulAssign
-            | AssignOp::DivAssign
-            | AssignOp::ModAssign
-            | AssignOp::PowAssign => {
+            AssignOp::AddAssign => {
                 let lhs_ty = self.infer_expr(target, env, ctx, None)?;
                 self.infer_binary_op(BinaryOp::Add, &lhs_ty, &rhs_ty, span)?
+            }
+            AssignOp::SubAssign => {
+                let lhs_ty = self.infer_expr(target, env, ctx, None)?;
+                self.infer_binary_op(BinaryOp::Sub, &lhs_ty, &rhs_ty, span)?
+            }
+            AssignOp::MulAssign => {
+                let lhs_ty = self.infer_expr(target, env, ctx, None)?;
+                self.infer_binary_op(BinaryOp::Mul, &lhs_ty, &rhs_ty, span)?
+            }
+            AssignOp::DivAssign => {
+                let lhs_ty = self.infer_expr(target, env, ctx, None)?;
+                self.infer_binary_op(BinaryOp::Div, &lhs_ty, &rhs_ty, span)?
+            }
+            AssignOp::ModAssign => {
+                let lhs_ty = self.infer_expr(target, env, ctx, None)?;
+                self.infer_binary_op(BinaryOp::Mod, &lhs_ty, &rhs_ty, span)?
+            }
+            AssignOp::PowAssign => {
+                let lhs_ty = self.infer_expr(target, env, ctx, None)?;
+                self.infer_binary_op(BinaryOp::Pow, &lhs_ty, &rhs_ty, span)?
             }
             AssignOp::CoalesceAssign => {
                 let lhs_ty = self.infer_expr(target, env, ctx, None)?;

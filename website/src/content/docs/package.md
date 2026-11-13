@@ -161,7 +161,7 @@ use Rhp\MySlugger\MySlugger;
 
 $slug = MySlugger::slugify("Hello World RHP");
 if ($slug !== "hello-world-rhp") {
-    throw new \Exception("Test failed! Got: " . $slug);
+    throw new \Exception("Test failed! Got: " + $slug);
 }
 
 echo "✅ All tests passed!\n";
@@ -264,7 +264,7 @@ use MyMongo;
 $conn = MyMongo::connect("mongodb://127.0.0.1:27017");
 $status = MyMongo::ping();
 
-echo "Connected! Handle ID: " . $conn['handle'] . "\n";
+echo "Connected! Handle ID: " + $conn['handle'] + "\n";
 ```
 
 ---

@@ -38,6 +38,7 @@ RHP combines a dynamic, developer-friendly interface with a robust, multi-thread
   - **Production Mode (`rhp run build` or `rhp build`):** Lowers code into a register-based Bytecode VM with optional Cranelift JIT compilation, running on a multi-worker Tokio execution pool for maximum throughput.
   - **HTTP Web Server (`rhp serve`):** Dedicated HTTP server routing requests into isolated zero-bootstrap worker VMs with standard superglobals (`$_SERVER`, `$_GET`, `$_POST`, `HTTP_HX_REQUEST`).
   - **Lint & Auto-Format Mode (`rhp run lint`):** Auto-applies standard 4-space indentation, formats operators/braces (inspired by Carthage Mago), automatically infers and adds variable type signatures (`$x = '';` -> `string $x = '';`), runs the static type checker, and outputs diagnostic issues in JSON format.
+  - **Automated Migration (`rhp migrate`):** Automatically migrates legacy PHP codebases to RHP: converts string concatenation (`.` and `.=`) to `+` and `+=`, replaces `$GLOBALS` with scoped variables, upgrades cookie mutations to `Cookie::set(...)`, and auto-injects Request/Cookie facade initializers for superglobals.
 - **Asynchronous & Synchronous Flexibility:** RHP is dynamically typed and supports both synchronous and asynchronous execution. Most database queries and file reads execute sequentially in local fibers without extra boilerplate, but you can explicitly offload tasks when needed.
 - **Rust-Powered Reliability:** RHP is built on Rust to guarantee memory safety, eliminate crashes from isolated user requests, and provide top-tier request handling speeds.
 
@@ -425,8 +426,8 @@ namespace App\Services;
 
 class OrderProcessor {
     public function execute(int $orderId): void {
-        echo "Executing " . __METHOD__ . " on line " . __LINE__ . "\n";
-        echo "Source file: " . __FILE__ . " in " . __DIR__ . "\n";
+        echo "Executing " + __METHOD__ + " on line " + string(__LINE__) + "\n";
+        echo "Source file: " + __FILE__ + " in " + __DIR__ + "\n";
     }
 }
 ```

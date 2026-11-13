@@ -10,9 +10,9 @@ order: 1
 Unlike legacy runtimes (PHP Zend Engine, Go, Node.js V8, JVM) that incur stop-the-world pauses and cyclic GC sweeps, RHP is **100% free of a tracing garbage collector**:
 
 ```php
-print("Is GC Free: " . (Memory::isGcFree() ? 'true' : 'false')); // true
-print("GC Total Runs: " . Memory::gcRuns());                    // 0
-print("GC Pause Duration: " . Memory::gcPauseMs() . " ms");      // 0.0 ms
+print("Is GC Free: " + (Memory::isGcFree() ? 'true' : 'false')); // true
+print("GC Total Runs: " + string(Memory::gcRuns()));                    // 0
+print("GC Pause Duration: " + string(Memory::gcPauseMs()) + " ms");      // 0.0 ms
 ```
 
 ---

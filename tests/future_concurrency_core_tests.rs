@@ -257,7 +257,7 @@ fn test_future_upvalue_capture_in_background_tasks() {
     let source = r#"
         $multiplier = 5;
         $prefix = "Result: ";
-        $fut = Future::run(fn() => "{$prefix}" . (10 * $multiplier));
+        $fut = Future::run(fn() => "{$prefix}" + string(10 * $multiplier));
         return $fut->wait();
     "#;
 

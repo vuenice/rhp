@@ -42,7 +42,7 @@ fn test_closure_callbacks_with_list_map() {
             }
 
             private function formatSingle(string $val): string {
-                return $this->prefix . $val;
+                return $this->prefix + $val;
             }
         }
 
@@ -123,7 +123,7 @@ fn test_nested_non_static_closures_capture_this_transitively() {
             public function createPipeline(): callable {
                 return function(string $title): callable {
                     return function(string $name) use ($title): string {
-                        return $this->greeting . ", " . $title . " " . $name . "!";
+                        return $this->greeting + ", " + $title + " " + $name + "!";
                     };
                 };
             }

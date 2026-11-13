@@ -89,6 +89,24 @@ impl<'s> CombinatorStream<'s> {
                 continue;
             }
 
+            // Explicitly reject removed '.' and '.=' concatenation operators
+            if matches!(next_tok.token, Token::Dot) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "The '.' concatenation operator has been removed. Use '+' for string concatenation.".to_string(),
+                    },
+                    next_tok.span,
+                ));
+            }
+            if matches!(next_tok.token, Token::DotAssign) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "The '.=' operator has been removed. Use '+=' for string concatenation assignment.".to_string(),
+                    },
+                    next_tok.span,
+                ));
+            }
+
             // 2. Infix call, member, index, or binary operators
             if let Some((left_bp, right_bp)) = infix_binding_power(&next_tok.token) {
                 if left_bp < min_bp {
@@ -2022,8 +2040,8 @@ fn infix_binding_power(token: &Token<'_>) -> Option<(u8, u8)> {
             Some((binding_power::MULTIPLICATIVE, binding_power::MULTIPLICATIVE + 1))
         }
 
-        // Additive & string concatenation
-        Token::Plus | Token::Minus | Token::Dot => {
+        // Additive
+        Token::Plus | Token::Minus => {
             Some((binding_power::ADDITIVE, binding_power::ADDITIVE + 1))
         }
 
@@ -2071,7 +2089,6 @@ fn infix_binding_power(token: &Token<'_>) -> Option<(u8, u8)> {
         | Token::SlashAssign
         | Token::PercentAssign
         | Token::StarStarAssign
-        | Token::DotAssign
         | Token::NullCoalesceAssign
         | Token::AmpersandAssign
         | Token::PipeAssign
@@ -2097,7 +2114,6 @@ fn to_binary_op(token: &Token<'_>) -> Option<BinaryOp> {
         Token::Slash => Some(BinaryOp::Div),
         Token::Percent => Some(BinaryOp::Mod),
         Token::StarStar => Some(BinaryOp::Pow),
-        Token::Dot => Some(BinaryOp::Concat),
         Token::Ampersand => Some(BinaryOp::BitAnd),
         Token::Pipe => Some(BinaryOp::BitOr),
         Token::Caret => Some(BinaryOp::BitXor),
@@ -2131,7 +2147,6 @@ fn to_assign_op(token: &Token<'_>) -> Option<AssignOp> {
         Token::SlashAssign => Some(AssignOp::DivAssign),
         Token::PercentAssign => Some(AssignOp::ModAssign),
         Token::StarStarAssign => Some(AssignOp::PowAssign),
-        Token::DotAssign => Some(AssignOp::ConcatAssign),
         Token::NullCoalesceAssign => Some(AssignOp::CoalesceAssign),
         Token::AmpersandAssign => Some(AssignOp::BitAndAssign),
         Token::PipeAssign => Some(AssignOp::BitOrAssign),
