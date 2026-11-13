@@ -29,6 +29,7 @@ pub struct MigrateFileResult {
     pub php_tag_removed: bool,
     pub curl_migrated_count: usize,
     pub curl_multi_count: usize,
+    pub heredoc_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -94,6 +95,9 @@ impl MigrateReport {
                     if res.curl_multi_count > 0 {
                         out.push_str(&format!("      ! {} curl_multi_* loop(s) flagged for manual review (see https://rhp.dev/docs/reference/unsupported-php#curl-extension)\n", res.curl_multi_count));
                     }
+                    if res.heredoc_count > 0 {
+                        out.push_str(&format!("      ~ {} Heredoc / Nowdoc block(s) upgraded to ``` markdown syntax\n", res.heredoc_count));
+                    }
                     if res.php_tag_removed {
                         out.push_str("      ~ removed opening '<?php' and/or closing '?>' tag(s)\n");
                     }
@@ -122,10 +126,16 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut dot_concat_count = 0;
     let mut curl_migrated_count = 0;
     let mut curl_multi_count = 0;
+    let mut heredoc_count = 0;
 
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
     current = after_tags;
+
+    // Step 0.1: Upgrade Heredoc / Nowdoc blocks to ``` markdown syntax
+    let (after_heredocs, h_count) = upgrade_heredoc_blocks(&current);
+    heredoc_count += h_count;
+    current = after_heredocs;
 
     // Step 0.5: Upgrade cURL functions to Http facade and flag curl_multi_*
     let (after_curl, c_migrated, c_multi) = upgrade_curl_calls(&current);
@@ -164,6 +174,7 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         php_tag_removed: tags_removed,
         curl_migrated_count,
         curl_multi_count,
+        heredoc_count,
         original_content: source.to_string(),
         migrated_content: current,
     }
@@ -319,6 +330,30 @@ fn build_code_mask(source: &str) -> Vec<bool> {
             continue;
         }
 
+        // Triple-backtick markdown string: ```...```
+        if b == b'`' && i + 2 < n && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+            is_code[i] = false;
+            is_code[i + 1] = false;
+            is_code[i + 2] = false;
+            i += 3;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'\\' && i + 1 < n {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'`' && i + 2 < n && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+                    is_code[i + 1] = false;
+                    is_code[i + 2] = false;
+                    i += 3;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
         // Backtick string: `...`
         if b == b'`' {
             is_code[i] = false;
@@ -459,6 +494,153 @@ pub fn remove_php_tags(source: &str) -> (String, bool) {
     }
 
     (s, modified)
+}
+
+// =========================================================================
+// Step 0.1: Upgrade Heredoc / Nowdoc blocks to ``` markdown syntax
+// =========================================================================
+
+/// Upgrades PHP Heredoc and Nowdoc syntax (`<<<HTML ... HTML;`, `<<<SQL ... SQL;`, `<<<EOF ... EOF;`)
+/// to Markdown triple-backtick strings (```` ```html ... ```; ````, ````` ```sql ... ```; ````, ```` ``` ... ```; ````).
+///
+/// Delimiters like `HTML` and `SQL` are converted to lowercase markdown code block language tags (` ```html `, ` ```sql `).
+/// Generic/sentinel delimiters (`EOF`, `EOD`, `EOT`, `TEXT`, etc.) are converted to untagged markdown blocks (` ``` `).
+/// Any closing delimiter `TAG` on its own line (preserving any leading indentation) is replaced with ```` ``` ````,
+/// while preserving any trailing punctuation (`;`, `,`, `)`, `]`, etc.).
+pub fn upgrade_heredoc_blocks(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut out = String::with_capacity(n);
+    let mut i = 0;
+    let mut count = 0;
+
+    while i < n {
+        // Look for heredoc opening `<<<` in code context
+        if mask[i] && bytes[i..].starts_with(b"<<<") {
+            let mut p = i + 3;
+            // Skip optional horizontal whitespace
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+
+            // Extract tag (unquoted, single-quoted nowdoc, or double-quoted heredoc)
+            let mut tag_str = "";
+
+            if p < n && (bytes[p] == b'\'' || bytes[p] == b'"') {
+                let quote = bytes[p];
+                p += 1;
+                let start = p;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                    p += 1;
+                }
+                let t = &source[start..p];
+                if p < n && bytes[p] == quote && !t.is_empty() {
+                    p += 1; // consume closing quote
+                    tag_str = t;
+                }
+            } else if p < n && (bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                let start = p;
+                p += 1;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                    p += 1;
+                }
+                tag_str = &source[start..p];
+            }
+
+            // Check if followed by spaces and newline
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+
+            let is_valid_opening = !tag_str.is_empty() && (
+                (p < n && (bytes[p] == b'\n' || bytes[p] == b'\r')) || p == n
+            );
+
+            if is_valid_opening {
+                // Determine markdown language tag
+                let tag_lower = tag_str.to_ascii_lowercase();
+                let lang = match tag_lower.as_str() {
+                    "eof" | "eod" | "eot" | "end" | "str" | "text" | "string" | "txt" | "data" | "doc" | "heredoc" | "nowdoc" => "",
+                    _ => &tag_lower,
+                };
+
+                // Advance p to start of body (skipping \r?\n)
+                let mut body_p = p;
+                if body_p < n && bytes[body_p] == b'\r' && body_p + 1 < n && bytes[body_p + 1] == b'\n' {
+                    body_p += 2;
+                } else if body_p < n && bytes[body_p] == b'\n' {
+                    body_p += 1;
+                }
+
+                let mut cur = body_p;
+                let mut found_closing = None;
+
+                while cur <= n {
+                    let line_start = cur;
+                    let mut s = line_start;
+                    while s < n && (bytes[s] == b' ' || bytes[s] == b'\t') {
+                        s += 1;
+                    }
+
+                    if cur < n && source[s..].starts_with(tag_str) {
+                        let after_tag = s + tag_str.len();
+                        let mut rest = after_tag;
+                        while rest < n && (bytes[rest] == b' ' || bytes[rest] == b'\t') {
+                            rest += 1;
+                        }
+
+                        let is_valid_closing = if rest >= n {
+                            true
+                        } else {
+                            let b = bytes[rest];
+                            match b {
+                                b'\r' | b'\n' | b';' | b',' | b')' | b']' | b'}' | b'.' | b'+' | b'-' | b'*' | b'/' | b'?' | b':' => true,
+                                _ => false,
+                            }
+                        };
+
+                        if is_valid_closing {
+                            found_closing = Some((line_start, s, after_tag));
+                            break;
+                        }
+                    }
+
+                    // Advance to next line
+                    while cur < n && bytes[cur] != b'\n' {
+                        cur += 1;
+                    }
+                    if cur < n && bytes[cur] == b'\n' {
+                        cur += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Some((_line_start, s, after_tag)) = found_closing {
+                    // Valid heredoc found!
+                    out.push_str("```");
+                    out.push_str(lang);
+                    // Copy newline after opening delimiter
+                    out.push_str(&source[p..body_p]);
+                    // Copy body content up to indentation before closing tag
+                    out.push_str(&source[body_p..s]);
+                    // Closing tag replaced with ```
+                    out.push_str("```");
+                    // Advance outer loop index to after_tag
+                    i = after_tag;
+                    count += 1;
+                    continue;
+                }
+            }
+        }
+
+        let ch = source[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    (out, count)
 }
 
 // =========================================================================

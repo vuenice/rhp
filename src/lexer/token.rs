@@ -441,6 +441,8 @@ pub enum Token<'s> {
     #[token("\"", err_unterminated_double_quote)]
     UnterminatedDoubleQuote,
 
+    #[regex(r#"(?s:```[a-zA-Z0-9_-]*[ \t]*\r?\n.*?```)"#, |lex| lex.slice())]
+    #[regex(r#"(?s:```.*?```)"#, |lex| lex.slice())]
     #[regex(r#"(?s:`([^`\\]|\\.)*`)"#, |lex| lex.slice())]
     BacktickString(&'s str),
 
@@ -990,8 +992,29 @@ impl<'s> Token<'s> {
     /// Extracts the raw inner slice of a string or bytes literal, removing surrounding quotes.
     pub fn raw_string_content(&self) -> Option<&'s str> {
         match self {
-            Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) | Token::BacktickString(s) => {
+            Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) => {
                 if s.len() >= 2 {
+                    Some(&s[1..s.len() - 1])
+                } else {
+                    Some("")
+                }
+            }
+            Token::BacktickString(s) => {
+                if s.starts_with("```") && s.ends_with("```") && s.len() >= 6 {
+                    let mut inner = &s[3..s.len() - 3];
+                    if let Some(nl_pos) = inner.find('\n') {
+                        let tag = inner[..nl_pos].trim();
+                        if tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                            inner = &inner[nl_pos + 1..];
+                        }
+                    }
+                    if inner.ends_with("\r\n") {
+                        inner = &inner[..inner.len() - 2];
+                    } else if inner.ends_with('\n') {
+                        inner = &inner[..inner.len() - 1];
+                    }
+                    Some(inner)
+                } else if s.len() >= 2 {
                     Some(&s[1..s.len() - 1])
                 } else {
                     Some("")

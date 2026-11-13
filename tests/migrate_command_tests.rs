@@ -712,4 +712,154 @@ fn test_migrate_curl_setopt_array() {
     assert!(res.migrated_content.contains("$res = $response->body();"));
 }
 
+#[test]
+fn test_migrate_heredoc_html() {
+    let input = concat!(
+        "$html = <<<HTML\n",
+        "<div class=\"card\">\n",
+        "    <h1>Title</h1>\n",
+        "</div>\n",
+        "HTML;\n"
+    );
+    let res = migrate_source(input, "page.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    let expected = concat!(
+        "$html = ```html\n",
+        "<div class=\"card\">\n",
+        "    <h1>Title</h1>\n",
+        "</div>\n",
+        "```;\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_heredoc_sql() {
+    let input = concat!(
+        "$sql = <<<SQL\n",
+        "SELECT id, name\n",
+        "FROM users\n",
+        "WHERE active = 1\n",
+        "SQL;\n"
+    );
+    let res = migrate_source(input, "query.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    let expected = concat!(
+        "$sql = ```sql\n",
+        "SELECT id, name\n",
+        "FROM users\n",
+        "WHERE active = 1\n",
+        "```;\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_nowdoc_html_and_sql() {
+    let input = concat!(
+        "$html = <<<'HTML'\n",
+        "<p>$var_not_interpolated</p>\n",
+        "HTML;\n",
+        "$sql = <<<'SQL'\n",
+        "SELECT * FROM logs;\n",
+        "SQL;\n"
+    );
+    let res = migrate_source(input, "views.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 2);
+    assert!(res.migrated_content.contains("$html = ```html\n<p>$var_not_interpolated</p>\n```;"));
+    assert!(res.migrated_content.contains("$sql = ```sql\nSELECT * FROM logs;\n```;"));
+}
+
+#[test]
+fn test_migrate_heredoc_generic_eof() {
+    let input = concat!(
+        "$txt = <<<EOF\n",
+        "Plain text string\n",
+        "EOF;\n"
+    );
+    let res = migrate_source(input, "text.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    let expected = concat!(
+        "$txt = ```\n",
+        "Plain text string\n",
+        "```;\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_heredoc_indented_php73() {
+    let input = concat!(
+        "function getQuery() {\n",
+        "    return <<<SQL\n",
+        "        SELECT id, title\n",
+        "        FROM posts\n",
+        "        SQL;\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "posts.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    let expected = concat!(
+        "function getQuery() {\n",
+        "    return ```sql\n",
+        "        SELECT id, title\n",
+        "        FROM posts\n",
+        "        ```;\n",
+        "}\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_heredoc_in_function_argument() {
+    let input = concat!(
+        "render(<<<HTML\n",
+        "<button class=\"btn\">Click me</button>\n",
+        "HTML, 42);\n"
+    );
+    let res = migrate_source(input, "render.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    let expected = concat!(
+        "render(```html\n",
+        "<button class=\"btn\">Click me</button>\n",
+        "```, 42);\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_heredoc_dot_concatenation_preserved_inside() {
+    let input = concat!(
+        "$query = <<<SQL\n",
+        "SELECT users.id, profiles.name\n",
+        "FROM users\n",
+        "SQL;\n",
+        "$extra = \"hello\" . \"world\";\n"
+    );
+    let res = migrate_source(input, "query_dots.php");
+    assert!(res.modified);
+    assert_eq!(res.heredoc_count, 1);
+    assert_eq!(res.dot_concat_count, 1);
+    assert!(res.migrated_content.contains("SELECT users.id, profiles.name"));
+    assert!(res.migrated_content.contains("\"hello\" + \"world\""));
+}
+
+#[test]
+fn test_migrate_heredoc_ignored_inside_comments_and_strings() {
+    let input = concat!(
+        "// Comment with <<<HTML\n",
+        "$msg = \"Here is <<<SQL in a string\";\n"
+    );
+    let res = migrate_source(input, "comments.php");
+    assert_eq!(res.heredoc_count, 0);
+    assert_eq!(res.migrated_content, input);
+}
+
+
 
