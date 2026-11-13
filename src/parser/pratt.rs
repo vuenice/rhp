@@ -295,7 +295,7 @@ impl<'s> CombinatorStream<'s> {
                     spanned.span,
                 ))
             }
-            Token::SingleQuotedString(_) | Token::BacktickString(_) => {
+            Token::SingleQuotedString(_) => {
                 let value = spanned
                     .token
                     .unescape_utf8_string()
@@ -307,6 +307,27 @@ impl<'s> CombinatorStream<'s> {
                     }),
                     spanned.span,
                 ))
+            }
+            Token::BacktickString(raw) => {
+                if raw.starts_with("```") && raw.ends_with("```") && spanned.token.has_interpolation() {
+                    let parts = parse_heredoc_interpolation(raw, spanned.span, self.file_id)?;
+                    Ok(Expr::new(
+                        ExprKind::Literal(Literal::InterpolatedString { raw, parts }),
+                        spanned.span,
+                    ))
+                } else {
+                    let value = spanned
+                        .token
+                        .unescape_utf8_string()
+                        .map_err(|e| ParseError::new(ParseErrorKind::Custom { message: e }, spanned.span))?;
+                    Ok(Expr::new(
+                        ExprKind::Literal(Literal::String {
+                            raw: spanned.token.as_str(),
+                            value,
+                        }),
+                        spanned.span,
+                    ))
+                }
             }
             Token::DoubleQuotedString(raw) => {
                 if spanned.token.has_interpolation() {
@@ -2161,18 +2182,29 @@ fn parse_string_interpolation<'s>(
     let mut i = 0;
 
     while i < bytes.len() {
-        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+        let mut has_curly = false;
+        let mut start_expr = i + 1;
+        if bytes[i] == b'{' {
+            let mut p = i + 1;
+            while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+            if p < bytes.len() && bytes[p] == b'$' {
+                has_curly = true;
+                start_expr = p;
+            }
+        }
+        if has_curly {
             if !current_lit.is_empty() {
                 parts.push(StringPart::Literal(std::mem::take(&mut current_lit)));
             }
             // Find closing '}'
-            let start_expr = i + 1;
             let mut j = start_expr;
             while j < bytes.len() && bytes[j] != b'}' {
                 j += 1;
             }
             if j < bytes.len() {
-                let expr_str = &inner[start_expr..j];
+                let expr_str = inner[i + 1..j].trim();
                 let tokens = Lexer::tokenize_with_file_id(expr_str, file_id)
                     .map_err(|e| ParseError::new(ParseErrorKind::Lex(e.error), span))?;
                 let mut stream = CombinatorStream::new(tokens, file_id);
@@ -2225,7 +2257,204 @@ fn parse_string_interpolation<'s>(
                 b't' => { current_lit.push('\t'); i += 2; }
                 b'\\' => { current_lit.push('\\'); i += 2; }
                 b'"' => { current_lit.push('"'); i += 2; }
+                b'`' => { current_lit.push('`'); i += 2; }
                 b'$' => { current_lit.push('$'); i += 2; }
+                b'{' => { current_lit.push('{'); i += 2; }
+                b'}' => { current_lit.push('}'); i += 2; }
+                b'0' => { current_lit.push('\0'); i += 2; }
+                b'u' => {
+                    if i + 2 < bytes.len() && bytes[i + 2] == b'{' {
+                        let mut k = i + 3;
+                        let mut hex = String::new();
+                        while k < bytes.len() && bytes[k] != b'}' && (bytes[k] as char).is_ascii_hexdigit() {
+                            hex.push(bytes[k] as char);
+                            k += 1;
+                        }
+                        if k < bytes.len() && bytes[k] == b'}' && !hex.is_empty() {
+                            if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                                if let Some(ch) = char::from_u32(cp) {
+                                    current_lit.push(ch);
+                                    i = k + 1;
+                                    continue;
+                                }
+                            }
+                        }
+                        return Err(ParseError::new(
+                            ParseErrorKind::Custom {
+                                message: "Invalid Unicode escape sequence in string literal".to_string(),
+                            },
+                            span,
+                        ));
+                    } else {
+                        current_lit.push('\\');
+                        current_lit.push('u');
+                        i += 2;
+                    }
+                }
+                b'x' | b'X' => {
+                    let mut hex = String::new();
+                    let mut k = i + 2;
+                    while k < bytes.len() && k < i + 4 && (bytes[k] as char).is_ascii_hexdigit() {
+                        hex.push(bytes[k] as char);
+                        k += 1;
+                    }
+                    if let Ok(b) = u8::from_str_radix(&hex, 16) {
+                        if b > 0x7F {
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: format!(
+                                        "Invalid UTF-8 escape '\\x{}' in string literal. Use a bytes literal b\"...\" instead.",
+                                        hex
+                                    ),
+                                },
+                                span,
+                            ));
+                        }
+                        current_lit.push(b as char);
+                        i = k;
+                        continue;
+                    } else {
+                        current_lit.push('\\');
+                        current_lit.push('x');
+                        i += 2;
+                    }
+                }
+                other => {
+                    current_lit.push('\\');
+                    current_lit.push(other as char);
+                    i += 2;
+                }
+            }
+            continue;
+        } else {
+            current_lit.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    if !current_lit.is_empty() {
+        parts.push(StringPart::Literal(current_lit));
+    }
+
+    Ok(parts)
+}
+
+/// Mini-parser for markdown heredoc string interpolation (e.g. ```` ```html ... {$name} ... ``` ````).
+///
+/// Rules:
+/// - Variables can ONLY be interpolated inside curly braces: `{$var}` or `{ $var }`.
+/// - Bare `$var` without curly braces is preserved as literal text.
+/// - Unmatched or non-variable `{` (e.g. CSS/JSON) is preserved as literal `{`.
+/// - Escapes `\n`, `\r`, `\t`, `\\`, `\"`, `\``, `\$`, `\{`, `\0`, `\u{...}`, `\x..` are unescaped like PHP double quotes.
+fn parse_heredoc_interpolation<'s>(
+    raw: &'s str,
+    span: Span,
+    file_id: usize,
+) -> Result<Vec<StringPart<'s>>, ParseError> {
+    let mut parts = Vec::new();
+    let inner = if raw.starts_with("```") && raw.ends_with("```") && raw.len() >= 6 {
+        let mut s = &raw[3..raw.len() - 3];
+        if let Some(nl_pos) = s.find('\n') {
+            let tag = s[..nl_pos].trim_end_matches('\r');
+            if tag.chars().all(|c| c.is_ascii_alphabetic()) {
+                s = &s[nl_pos + 1..];
+            }
+        }
+        if let Some(last_nl) = s.rfind('\n') {
+            let trailing_after_nl = &s[last_nl + 1..];
+            if trailing_after_nl.chars().all(|c| c == ' ' || c == '\t') {
+                let mut end = last_nl;
+                if end > 0 && s.as_bytes()[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                s = &s[..end];
+            }
+        } else if s.ends_with("\r\n") {
+            s = &s[..s.len() - 2];
+        } else if s.ends_with('\n') {
+            s = &s[..s.len() - 1];
+        }
+        s
+    } else if raw.len() >= 2 {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+
+    let mut current_lit = String::new();
+    let bytes = inner.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let mut p = i + 1;
+            while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+            if p < bytes.len() && bytes[p] == b'$' {
+                // Find matching '}'
+                let mut depth = 1;
+                let mut j = p;
+                let mut in_quote = None;
+                let mut escaped = false;
+                while j < bytes.len() {
+                    let b = bytes[j];
+                    if escaped {
+                        escaped = false;
+                        j += 1;
+                        continue;
+                    }
+                    if b == b'\\' {
+                        escaped = true;
+                        j += 1;
+                        continue;
+                    }
+                    if let Some(q) = in_quote {
+                        if b == q {
+                            in_quote = None;
+                        }
+                    } else if b == b'\'' || b == b'"' {
+                        in_quote = Some(b);
+                    } else if b == b'{' {
+                        depth += 1;
+                    } else if b == b'}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    j += 1;
+                }
+
+                if j < bytes.len() && depth == 0 {
+                    if !current_lit.is_empty() {
+                        parts.push(StringPart::Literal(std::mem::take(&mut current_lit)));
+                    }
+                    let expr_str = inner[i + 1..j].trim();
+                    let tokens = Lexer::tokenize_with_file_id(expr_str, file_id)
+                        .map_err(|e| ParseError::new(ParseErrorKind::Lex(e.error), span))?;
+                    let mut stream = CombinatorStream::new(tokens, file_id);
+                    let expr = stream.parse_expr_lowest()?;
+                    parts.push(StringPart::Expr(expr));
+                    i = j + 1;
+                    continue;
+                }
+            }
+            // Not a curly variable interpolation; treat '{' as literal
+            current_lit.push('{');
+            i += 1;
+            continue;
+        } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'n' => { current_lit.push('\n'); i += 2; }
+                b'r' => { current_lit.push('\r'); i += 2; }
+                b't' => { current_lit.push('\t'); i += 2; }
+                b'\\' => { current_lit.push('\\'); i += 2; }
+                b'"' => { current_lit.push('"'); i += 2; }
+                b'`' => { current_lit.push('`'); i += 2; }
+                b'$' => { current_lit.push('$'); i += 2; }
+                b'{' => { current_lit.push('{'); i += 2; }
+                b'}' => { current_lit.push('}'); i += 2; }
                 b'0' => { current_lit.push('\0'); i += 2; }
                 b'u' => {
                     if i + 2 < bytes.len() && bytes[i + 2] == b'{' {

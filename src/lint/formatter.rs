@@ -9,7 +9,8 @@
 /// - Preserves string literals and comment contents intact
 /// - Trims trailing whitespace and collapses redundant blank lines
 pub fn format_source(source: &str) -> String {
-    let with_split_stmts = split_statements_on_semicolons(source);
+    let with_heredocs = ensure_heredoc_newlines(source);
+    let with_split_stmts = split_statements_on_semicolons(&with_heredocs);
     let with_conditions = wrap_control_conditions(&with_split_stmts);
     let with_ops_moved = move_trailing_operators(&with_conditions);
     let with_semicolons = insert_missing_semicolons(&with_ops_moved);
@@ -20,6 +21,8 @@ pub fn format_source(source: &str) -> String {
     let mut in_multiline_comment = false;
     let mut in_multiline_string = false;
     let mut string_delim: char = '"';
+    let mut in_heredoc = false;
+    let mut heredoc_indent_level = 0;
     let mut previous_was_empty = false;
     let mut is_in_continuation = false;
 
@@ -28,7 +31,7 @@ pub fn format_source(source: &str) -> String {
 
         // Handle empty lines
         if trimmed.is_empty() {
-            if in_multiline_comment || in_multiline_string {
+            if in_multiline_comment || in_multiline_string || in_heredoc {
                 formatted_lines.push(String::new());
                 previous_was_empty = false;
             } else if !previous_was_empty && !formatted_lines.is_empty() {
@@ -36,6 +39,30 @@ pub fn format_source(source: &str) -> String {
                 previous_was_empty = true;
             }
             continue;
+        }
+
+        // Check if inside a heredoc block
+        if in_heredoc {
+            if trimmed.starts_with("```") {
+                in_heredoc = false;
+                let indent = " ".repeat(heredoc_indent_level * 4);
+                formatted_lines.push(format!("{}{}", indent, trimmed));
+                previous_was_empty = false;
+                continue;
+            } else {
+                if trimmed.is_empty() {
+                    formatted_lines.push(String::new());
+                } else {
+                    let line_content = if raw_line.starts_with('\t') {
+                        raw_line.to_string()
+                    } else {
+                        format!("\t{}", raw_line)
+                    };
+                    formatted_lines.push(line_content);
+                }
+                previous_was_empty = false;
+                continue;
+            }
         }
 
         // Check if inside a multi-line comment
@@ -85,8 +112,23 @@ pub fn format_source(source: &str) -> String {
         formatted_lines.push(format!("{}{}", indent, spaced));
         previous_was_empty = false;
 
+        let opens_heredoc = if let Some(idx) = spaced.rfind("```") {
+            let suffix = &spaced[idx + 3..];
+            suffix.chars().all(|c| c.is_ascii_alphabetic())
+        } else {
+            false
+        };
+        if opens_heredoc {
+            in_heredoc = true;
+            heredoc_indent_level = current_line_indent;
+        }
+
         // Calculate net change in indentation level from this line
-        let (opens, closes, enters_comment, enters_string, delim) = scan_line_structural_tokens(&spaced);
+        let (opens, closes, enters_comment, enters_string, delim) = if opens_heredoc {
+            (0, 0, false, false, '"')
+        } else {
+            scan_line_structural_tokens(&spaced)
+        };
         if enters_comment {
             in_multiline_comment = true;
         }
@@ -139,6 +181,114 @@ fn count_leading_closes(line: &str) -> usize {
     count
 }
 
+/// Ensures that heredoc / nowdoc blocks ```` ```<tag> ```` have:
+/// - A newline separation immediately following the opening tag.
+/// - A newline separation immediately preceding the closing delimiter ```` ``` ````.
+pub fn ensure_heredoc_newlines(source: &str) -> String {
+    let mut out = String::with_capacity(source.len() + 16);
+    let chars: Vec<char> = source.chars().collect();
+    let n = chars.len();
+    let mut i = 0;
+
+    let mut in_heredoc = false;
+    let mut in_str = false;
+    let mut str_delim = '"';
+
+    while i < n {
+        if in_heredoc {
+            if chars[i] == '`' && i + 2 < n && chars[i + 1] == '`' && chars[i + 2] == '`' {
+                if !out.ends_with('\n') {
+                    while out.ends_with(' ') || out.ends_with('\t') {
+                        out.pop();
+                    }
+                    out.push('\n');
+                }
+                out.push_str("```");
+                i += 3;
+                in_heredoc = false;
+                continue;
+            }
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        if in_str {
+            out.push(chars[i]);
+            if chars[i] == '\\' && i + 1 < n {
+                i += 1;
+                out.push(chars[i]);
+            } else if chars[i] == str_delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (chars[i] == '/' && i + 1 < n && chars[i + 1] == '/') || chars[i] == '#' {
+            while i < n && chars[i] != '\n' {
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+            out.push_str("/*");
+            i += 2;
+            while i < n {
+                if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    out.push_str("*/");
+                    i += 2;
+                    break;
+                }
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+
+        if chars[i] == '"' || chars[i] == '\'' {
+            in_str = true;
+            str_delim = chars[i];
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '`' && i + 2 < n && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            out.push_str("```");
+            i += 3;
+            // Collect alphabetical tag
+            while i < n && chars[i].is_ascii_alphabetic() {
+                out.push(chars[i]);
+                i += 1;
+            }
+            // If not immediately at newline, skip horizontal spaces and insert newline
+            while i < n && (chars[i] == ' ' || chars[i] == '\t') {
+                i += 1;
+            }
+            if i < n && chars[i] == '\r' && i + 1 < n && chars[i + 1] == '\n' {
+                out.push('\r');
+                out.push('\n');
+                i += 2;
+            } else if i < n && chars[i] == '\n' {
+                out.push('\n');
+                i += 1;
+            } else {
+                out.push('\n');
+            }
+            in_heredoc = true;
+            continue;
+        }
+
+        out.push(chars[i]);
+        i += 1;
+    }
+
+    out
+}
+
 /// Separates statements ending with semicolon `;` onto different lines if they are followed
 /// by another statement on the same line (excluding `for (...)` headers, strings, and comments).
 pub fn split_statements_on_semicolons(source: &str) -> String {
@@ -149,10 +299,24 @@ pub fn split_statements_on_semicolons(source: &str) -> String {
 
     let mut in_str = false;
     let mut str_delim = '"';
+    let mut in_heredoc = false;
     let mut paren_depth: usize = 0;
 
     while i < n {
         let c = chars[i];
+
+        if in_heredoc {
+            output.push(c);
+            if c == '`' && i + 2 < n && chars[i + 1] == '`' && chars[i + 2] == '`' {
+                output.push(chars[i + 1]);
+                output.push(chars[i + 2]);
+                i += 3;
+                in_heredoc = false;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
 
         // Handle string literals
         if in_str {
@@ -164,6 +328,17 @@ pub fn split_statements_on_semicolons(source: &str) -> String {
                 in_str = false;
             }
             i += 1;
+            continue;
+        }
+
+        if c == '`' && i + 2 < n && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            output.push_str("```");
+            i += 3;
+            while i < n && chars[i].is_ascii_alphabetic() {
+                output.push(chars[i]);
+                i += 1;
+            }
+            in_heredoc = true;
             continue;
         }
 
@@ -469,6 +644,11 @@ fn scan_line_structural_tokens(line: &str) -> (usize, usize, bool, bool, char) {
             continue;
         }
 
+        // Heredoc opens or closes
+        if c == '`' && chars.peek() == Some(&'`') {
+            break;
+        }
+
         // String opens
         if c == '"' || c == '\'' || c == '`' {
             in_str = true;
@@ -510,6 +690,11 @@ fn format_line_spacing(line: &str) -> String {
             }
             i += 1;
             continue;
+        }
+
+        if c == '`' && i + 2 < n && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            output.push_str(&line[i..]);
+            break;
         }
 
         if c == '"' || c == '\'' || c == '`' {
@@ -936,9 +1121,31 @@ fn wrap_control_conditions(source: &str) -> String {
     let mut output_lines = Vec::new();
     let lines: Vec<&str> = source.lines().collect();
     let mut in_multiline_comment = false;
+    let mut in_heredoc = false;
 
     for line in lines {
         let trimmed = line.trim();
+
+        if in_heredoc {
+            if trimmed.starts_with("```") {
+                in_heredoc = false;
+            }
+            output_lines.push(line.to_string());
+            continue;
+        }
+
+        let opens_heredoc = if let Some(idx) = trimmed.rfind("```") {
+            let suffix = &trimmed[idx + 3..];
+            suffix.chars().all(|c| c.is_ascii_alphabetic())
+        } else {
+            false
+        };
+        if opens_heredoc {
+            in_heredoc = true;
+            output_lines.push(line.to_string());
+            continue;
+        }
+
         if in_multiline_comment {
             if trimmed.contains("*/") {
                 in_multiline_comment = false;
@@ -1064,11 +1271,32 @@ fn move_trailing_operators(source: &str) -> String {
     let mut lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
     let n = lines.len();
     let mut in_multiline_comment = false;
+    let mut in_heredoc = false;
 
     let mut i = 0;
     while i < n {
         let line = lines[i].clone();
         let trimmed = line.trim();
+
+        if in_heredoc {
+            if trimmed.starts_with("```") {
+                in_heredoc = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        let opens_heredoc = if let Some(idx) = trimmed.rfind("```") {
+            let suffix = &trimmed[idx + 3..];
+            suffix.chars().all(|c| c.is_ascii_alphabetic())
+        } else {
+            false
+        };
+        if opens_heredoc {
+            in_heredoc = true;
+            i += 1;
+            continue;
+        }
 
         if in_multiline_comment {
             if trimmed.contains("*/") {
@@ -1324,6 +1552,7 @@ fn insert_missing_semicolons(source: &str) -> String {
     let mut bracket_depth: isize = 0;
     let mut in_multiline_comment = false;
     let mut in_multiline_string = false;
+    let mut in_heredoc = false;
     let mut str_delim = '"';
 
     for i in 0..n {
@@ -1333,6 +1562,27 @@ fn insert_missing_semicolons(source: &str) -> String {
         if trimmed.is_empty() {
             result_lines.push(raw_line.to_string());
             continue;
+        }
+
+        if in_heredoc {
+            if trimmed.starts_with("```") {
+                in_heredoc = false;
+            } else {
+                result_lines.push(raw_line.to_string());
+                continue;
+            }
+        } else {
+            let opens_heredoc = if let Some(idx) = trimmed.rfind("```") {
+                let suffix = &trimmed[idx + 3..];
+                suffix.chars().all(|c| c.is_ascii_alphabetic())
+            } else {
+                false
+            };
+            if opens_heredoc {
+                in_heredoc = true;
+                result_lines.push(raw_line.to_string());
+                continue;
+            }
         }
 
         if in_multiline_comment {
