@@ -170,8 +170,8 @@ fn test_migrate_declare_strict_types_insertion() {
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
+    assert!(res.php_tag_removed);
     let expected = concat!(
-        "<?php\n",
         "declare(strict_types=1);\n",
         "$_GET = Request::query();\n\n",
         "$page = $_GET['page'];\n"
@@ -188,8 +188,8 @@ fn test_migrate_namespace_insertion() {
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
+    assert!(res.php_tag_removed);
     let expected = concat!(
-        "<?php\n",
         "namespace App\\Http\\Controllers;\n",
         "$_GET = Request::query();\n\n",
         "$val = $_GET['val'];\n"
@@ -202,34 +202,62 @@ fn test_migrate_without_opening_tag() {
     let input = "$id = $_GET['id'];\n";
     let res = migrate_source(input, "script.rhp");
     assert!(res.modified);
+    assert!(!res.php_tag_removed);
     let expected = "$_GET = Request::query();\n\n$id = $_GET['id'];\n";
     assert_eq!(res.migrated_content, expected);
 }
 
 #[test]
 fn test_migrate_does_not_duplicate_existing_lines() {
-    let input = concat!(
+    // When input already has no tags and no migration needed
+    let input_clean = concat!(
+        "$_GET = Request::query();\n",
+        "$id = $_GET['id'];\n"
+    );
+    let res_clean = migrate_source(input_clean, "test.rhp");
+    assert!(!res_clean.modified);
+    assert!(res_clean.added_lines.is_empty());
+
+    // When input has <?php tag, tag is removed without duplicating declarations
+    let input_tagged = concat!(
         "<?php\n",
         "$_GET = Request::query();\n",
         "$id = $_GET['id'];\n"
     );
-    let res = migrate_source(input, "test.php");
-    assert!(!res.modified);
-    assert!(res.added_lines.is_empty());
+    let res_tagged = migrate_source(input_tagged, "test.php");
+    assert!(res_tagged.modified);
+    assert!(res_tagged.php_tag_removed);
+    assert!(res_tagged.added_lines.is_empty());
+    assert_eq!(res_tagged.migrated_content, input_clean);
 }
 
 #[test]
 fn test_migrate_ignores_comments_and_strings() {
-    let input = concat!(
-        "<?php\n",
+    // Without <?php tag: no modifications at all
+    let input_clean = concat!(
         "// Don't add $_GET here\n",
         "/* Nor $_POST here */\n",
         "$msg = \"This $_FILES is a string\";\n",
         "$msg2 = 'Single quoted $_COOKIE string';\n"
     );
-    let res = migrate_source(input, "test.php");
-    assert!(!res.modified);
-    assert!(res.added_lines.is_empty());
+    let res_clean = migrate_source(input_clean, "test.rhp");
+    assert!(!res_clean.modified);
+    assert!(res_clean.added_lines.is_empty());
+
+    // With <?php and ?> tags: tags removed, but no superglobals injected
+    let input_tagged = concat!(
+        "<?php\n",
+        "// Don't add $_GET here\n",
+        "/* Nor $_POST here */\n",
+        "$msg = \"This $_FILES is a string\";\n",
+        "$msg2 = 'Single quoted $_COOKIE string';\n",
+        "?>\n"
+    );
+    let res_tagged = migrate_source(input_tagged, "test.php");
+    assert!(res_tagged.modified);
+    assert!(res_tagged.php_tag_removed);
+    assert!(res_tagged.added_lines.is_empty());
+    assert_eq!(res_tagged.migrated_content, input_clean);
 }
 
 #[test]
@@ -282,6 +310,7 @@ fn test_cli_migrate_execution() {
     assert!(migrated_content.contains("Cookie::set('pref', 'light');"));
     assert!(migrated_content.contains("$db = $database;"));
     assert!(migrated_content.contains("echo $user + ' ' + $db;"));
+    assert!(!migrated_content.contains("<?php"));
 
     // 3. Test backward-compatible alias `rhp upgrade-php`
     let alias_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
@@ -405,13 +434,282 @@ fn test_migrate_multiline_dot_concatenation() {
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
+    assert!(res.php_tag_removed);
     assert_eq!(res.dot_concat_count, 2);
     let expected = concat!(
-        "<?php\n",
         "$query = \"SELECT * FROM users \"\n",
         "    + \"WHERE active = 1 \"\n",
         "    + \"ORDER BY id DESC\";\n"
     );
     assert_eq!(res.migrated_content, expected);
 }
+
+#[test]
+fn test_migrate_removes_opening_and_closing_tags() {
+    let input = concat!(
+        "<?php\n",
+        "echo 'Hello, World!';\n",
+        "?>\n"
+    );
+    let res = migrate_source(input, "hello.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "echo 'Hello, World!';\n");
+}
+
+#[test]
+fn test_migrate_removes_opening_tag_only() {
+    let input = concat!(
+        "<?php\n",
+        "$x = 42;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "$x = 42;\n");
+}
+
+#[test]
+fn test_migrate_removes_closing_tag_only() {
+    let input = concat!(
+        "$x = 42;\n",
+        "?>\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "$x = 42;\n");
+}
+
+#[test]
+fn test_migrate_removes_tags_inline() {
+    let input = "<?php echo 1; ?>\n";
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "echo 1;\n");
+}
+
+#[test]
+fn test_migrate_preserves_php_tags_in_strings_and_comments() {
+    let input = concat!(
+        "<?php\n",
+        "$str = '<?php echo \"inside string\"; ?>';\n",
+        "// <?php in comment ?>\n",
+        "?>\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    let expected = concat!(
+        "$str = '<?php echo \"inside string\"; ?>';\n",
+        "// <?php in comment ?>\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_removes_case_insensitive_tags() {
+    let input = concat!(
+        "<?PHP\n",
+        "$title = 'Title';\n",
+        "?>\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "$title = 'Title';\n");
+}
+
+#[test]
+fn test_migrate_empty_tags_only() {
+    let input = "<?php ?>\n";
+    let res = migrate_source(input, "empty.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "");
+
+    let input_multiline = "<?php\n?>\n";
+    let res_multiline = migrate_source(input_multiline, "empty.php");
+    assert!(res_multiline.modified);
+    assert!(res_multiline.php_tag_removed);
+    assert_eq!(res_multiline.migrated_content, "");
+}
+
+#[test]
+fn test_migrate_tags_with_blank_lines_and_spaces() {
+    let input = concat!(
+        "   <?php   \n",
+        "\n",
+        "$a = 1;\n",
+        "\n",
+        "   ?>   \n"
+    );
+    let res = migrate_source(input, "spaces.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    assert_eq!(res.migrated_content, "$a = 1;\n");
+}
+
+#[test]
+fn test_migrate_preserves_indentation_after_opening_tag() {
+    let input = concat!(
+        "<?php\n",
+        "    class MyClass {\n",
+        "        public int $val = 1;\n",
+        "    }\n",
+        "?>\n"
+    );
+    let res = migrate_source(input, "indent.php");
+    assert!(res.modified);
+    assert!(res.php_tag_removed);
+    let expected = concat!(
+        "    class MyClass {\n",
+        "        public int $val = 1;\n",
+        "    }\n"
+    );
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_migrate_curl_basic_get_option_a() {
+    let input = concat!(
+        "$ch = curl_init();\n",
+        "curl_setopt($ch, CURLOPT_URL, \"https://api.example.com/items\");\n",
+        "curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n",
+        "$res = curl_exec($ch);\n",
+        "curl_close($ch);\n",
+        "echo $res;\n"
+    );
+    let res = migrate_source(input, "curl_test.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    // Original curl code is commented
+    assert!(res.migrated_content.contains("// $ch = curl_init();"));
+    assert!(res.migrated_content.contains("// curl_setopt($ch, CURLOPT_URL, \"https://api.example.com/items\");"));
+    assert!(res.migrated_content.contains("// $res = curl_exec($ch);"));
+    assert!(res.migrated_content.contains("// curl_close($ch);"));
+    // Option A generates $response and $res = $response->body()
+    assert!(res.migrated_content.contains("$response = Http::get(\"https://api.example.com/items\");"));
+    assert!(res.migrated_content.contains("$res = $response->body();"));
+    assert!(res.migrated_content.contains("echo $res;"));
+}
+
+#[test]
+fn test_migrate_curl_option_b_json_decode() {
+    let input = concat!(
+        "$ch = curl_init();\n",
+        "curl_setopt($ch, CURLOPT_URL, \"https://api.example.com/users\");\n",
+        "curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n",
+        "curl_setopt($ch, CURLOPT_TIMEOUT, 10);\n",
+        "$res = curl_exec($ch);\n",
+        "curl_close($ch);\n",
+        "$data = json_decode($res, true);\n"
+    );
+    let res = migrate_source(input, "curl_test.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    // Original curl code and json_decode are commented
+    assert!(res.migrated_content.contains("// $ch = curl_init();"));
+    assert!(res.migrated_content.contains("// $res = curl_exec($ch);"));
+    assert!(res.migrated_content.contains("// $data = json_decode($res, true);"));
+    // Option B rewrites directly to ->json()
+    assert!(res.migrated_content.contains("$data = Http::timeout(10)->get(\"https://api.example.com/users\")->json();"));
+}
+
+#[test]
+fn test_migrate_curl_unassigned_future_async() {
+    let input = concat!(
+        "$ch = curl_init(\"https://api.example.com/webhook\");\n",
+        "curl_setopt($ch, CURLOPT_POST, true);\n",
+        "curl_setopt($ch, CURLOPT_POSTFIELDS, \"event=ping\");\n",
+        "curl_exec($ch);\n",
+        "curl_close($ch);\n"
+    );
+    let res = migrate_source(input, "curl_webhook.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    // Commented old code
+    assert!(res.migrated_content.contains("// $ch = curl_init(\"https://api.example.com/webhook\");"));
+    assert!(res.migrated_content.contains("// curl_exec($ch);"));
+    // Output not saved to variable -> wraps in Future::async(...)
+    assert!(res.migrated_content.contains("Future::async(fn() => Http::post(\"https://api.example.com/webhook\", \"event=ping\"));"));
+}
+
+#[test]
+fn test_migrate_curl_multi_flagged_for_review() {
+    let input = concat!(
+        "$mh = curl_multi_init();\n",
+        "curl_multi_add_handle($mh, $ch1);\n",
+        "curl_multi_exec($mh, $active);\n",
+        "curl_multi_close($mh);\n"
+    );
+    let res = migrate_source(input, "curl_multi.php");
+    assert!(res.modified);
+    assert!(res.curl_multi_count > 0);
+    // Flags with guide link and recommendation
+    assert!(res.migrated_content.contains("// NOTICE: curl_multi_* requires manual review. See https://rhp.dev/docs/reference/unsupported-php#curl-extension"));
+    assert!(res.migrated_content.contains("// You can use Http::pool([...]) / Future::wait([...])"));
+    // Comments old code
+    assert!(res.migrated_content.contains("// $mh = curl_multi_init();"));
+    assert!(res.migrated_content.contains("// curl_multi_exec($mh, $active);"));
+}
+
+#[test]
+fn test_migrate_curl_post_json_with_token() {
+    let input = concat!(
+        "$ch = curl_init(\"https://api.example.com/orders\");\n",
+        "curl_setopt($ch, CURLOPT_POST, 1);\n",
+        "curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['sku' => 'LAPTOP', 'qty' => 1]));\n",
+        "curl_setopt($ch, CURLOPT_HTTPHEADER, [\n",
+        "    \"Authorization: Bearer \" . $token,\n",
+        "    \"X-Tenant: acme\",\n",
+        "]);\n",
+        "$res = curl_exec($ch);\n",
+        "curl_close($ch);\n"
+    );
+    let res = migrate_source(input, "orders.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    assert!(res.migrated_content.contains("Http::withToken($token)"));
+    assert!(res.migrated_content.contains("withHeaders([\"X-Tenant: acme\"])"));
+    assert!(res.migrated_content.contains("post(\"https://api.example.com/orders\", ['sku' => 'LAPTOP', 'qty' => 1])"));
+}
+
+#[test]
+fn test_migrate_curl_with_status_code() {
+    let input = concat!(
+        "$ch = curl_init(\"https://api.example.com/health\");\n",
+        "curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n",
+        "$raw = curl_exec($ch);\n",
+        "$status = curl_getinfo($ch, CURLINFO_HTTP_CODE);\n",
+        "curl_close($ch);\n"
+    );
+    let res = migrate_source(input, "health.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    assert!(res.migrated_content.contains("$response = Http::get(\"https://api.example.com/health\");"));
+    assert!(res.migrated_content.contains("$raw = $response->body();"));
+    assert!(res.migrated_content.contains("$status = $response->status();"));
+}
+
+#[test]
+fn test_migrate_curl_setopt_array() {
+    let input = concat!(
+        "$ch = curl_init();\n",
+        "curl_setopt_array($ch, [\n",
+        "    CURLOPT_URL => \"https://api.example.com/data\",\n",
+        "    CURLOPT_RETURNTRANSFER => true,\n",
+        "    CURLOPT_TIMEOUT => 20,\n",
+        "]);\n",
+        "$res = curl_exec($ch);\n",
+        "curl_close($ch);\n"
+    );
+    let res = migrate_source(input, "data.php");
+    assert!(res.modified);
+    assert_eq!(res.curl_migrated_count, 1);
+    assert!(res.migrated_content.contains("$response = Http::timeout(20)->get(\"https://api.example.com/data\");"));
+    assert!(res.migrated_content.contains("$res = $response->body();"));
+}
+
 

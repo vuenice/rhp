@@ -26,6 +26,9 @@ pub struct MigrateFileResult {
     pub cookie_set_count: usize,
     pub global_replace_count: usize,
     pub dot_concat_count: usize,
+    pub php_tag_removed: bool,
+    pub curl_migrated_count: usize,
+    pub curl_multi_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -85,10 +88,19 @@ impl MigrateReport {
                     if res.global_replace_count > 0 {
                         out.push_str(&format!("      ~ {} $_GLOBAL / $GLOBALS replaced with original global variable(s)\n", res.global_replace_count));
                     }
+                    if res.curl_migrated_count > 0 {
+                        out.push_str(&format!("      ~ {} cURL call(s) upgraded to Http facade\n", res.curl_migrated_count));
+                    }
+                    if res.curl_multi_count > 0 {
+                        out.push_str(&format!("      ! {} curl_multi_* loop(s) flagged for manual review (see https://rhp.dev/docs/reference/unsupported-php#curl-extension)\n", res.curl_multi_count));
+                    }
+                    if res.php_tag_removed {
+                        out.push_str("      ~ removed opening '<?php' and/or closing '?>' tag(s)\n");
+                    }
                 }
             }
         } else {
-            out.push_str("\nNo PHP legacy superglobals or globals required migrating.\n");
+            out.push_str("\nNo PHP legacy superglobals, globals, or tags required migrating.\n");
         }
         out
     }
@@ -108,6 +120,18 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut cookie_set_count = 0;
     let mut global_replace_count = 0;
     let mut dot_concat_count = 0;
+    let mut curl_migrated_count = 0;
+    let mut curl_multi_count = 0;
+
+    // Step 0: Remove <?php from start and ?> from end
+    let (after_tags, tags_removed) = remove_php_tags(&current);
+    current = after_tags;
+
+    // Step 0.5: Upgrade cURL functions to Http facade and flag curl_multi_*
+    let (after_curl, c_migrated, c_multi) = upgrade_curl_calls(&current);
+    curl_migrated_count += c_migrated;
+    curl_multi_count += c_multi;
+    current = after_curl;
 
     // Step 1: Replace $_GLOBAL and $GLOBALS with original global values
     let (after_globals, g_count) = replace_globals(&current);
@@ -137,6 +161,9 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         cookie_set_count,
         global_replace_count,
         dot_concat_count,
+        php_tag_removed: tags_removed,
+        curl_migrated_count,
+        curl_multi_count,
         original_content: source.to_string(),
         migrated_content: current,
     }
@@ -319,6 +346,122 @@ fn build_code_mask(source: &str) -> Vec<bool> {
 }
 
 // =========================================================================
+// Step 0: Remove <?php from start and ?> from end of PHP files
+// =========================================================================
+
+/// Remove `<?php` from the start and `?>` from the end of PHP files.
+/// Returns the updated string and whether any tags were removed.
+pub fn remove_php_tags(source: &str) -> (String, bool) {
+    let mut modified = false;
+    let mut s = source.to_string();
+
+    // 1. Remove <?php from start
+    let bom_offset = if s.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+
+    let without_bom = &s[bom_offset..];
+    let trimmed_start = without_bom.trim_start();
+    let leading_ws_len = without_bom.len() - trimmed_start.len();
+
+    let is_php_open = if trimmed_start.len() >= 5 {
+        trimmed_start[..5].eq_ignore_ascii_case("<?php")
+    } else {
+        false
+    };
+
+    if is_php_open {
+        let after_tag = &trimmed_start[5..];
+        let valid_tag = after_tag.is_empty()
+            || after_tag.starts_with(|c: char| c.is_ascii_whitespace() || c == '?');
+
+        if valid_tag {
+            modified = true;
+            let mut cut_idx = leading_ws_len + 5;
+            let bytes = without_bom.as_bytes();
+            let n = bytes.len();
+
+            // Skip spaces/tabs on <?php line
+            while cut_idx < n && (bytes[cut_idx] == b' ' || bytes[cut_idx] == b'\t') {
+                cut_idx += 1;
+            }
+
+            // Skip newline on <?php line if present
+            if cut_idx < n && bytes[cut_idx] == b'\r' && cut_idx + 1 < n && bytes[cut_idx + 1] == b'\n' {
+                cut_idx += 2;
+            } else if cut_idx < n && bytes[cut_idx] == b'\n' {
+                cut_idx += 1;
+            }
+
+            // Skip any blank lines immediately following <?php line
+            loop {
+                let mut line_end = cut_idx;
+                let mut only_ws = true;
+                while line_end < n && bytes[line_end] != b'\n' {
+                    if bytes[line_end] != b' ' && bytes[line_end] != b'\t' && bytes[line_end] != b'\r' {
+                        only_ws = false;
+                        break;
+                    }
+                    line_end += 1;
+                }
+                if only_ws && line_end < n && bytes[line_end] == b'\n' {
+                    cut_idx = line_end + 1;
+                } else {
+                    break;
+                }
+            }
+
+            s = without_bom[cut_idx..].to_string();
+        }
+    }
+
+    // 2. Remove ?> from end
+    if !s.is_empty() {
+        let trimmed_end = s.trim_end();
+        if trimmed_end.ends_with("?>") {
+            let tag_end = trimmed_end.len();
+            let tag_start = tag_end - 2;
+
+            let mask = build_code_mask(&s);
+            if tag_start < mask.len() && mask[tag_start] {
+                modified = true;
+                let bytes = s.as_bytes();
+                let mut line_start = tag_start;
+                while line_start > 0 && (bytes[line_start - 1] == b' ' || bytes[line_start - 1] == b'\t') {
+                    line_start -= 1;
+                }
+
+                let cut_start = line_start;
+                let remaining = s[..cut_start].to_string();
+
+                if !remaining.is_empty() {
+                    let had_crlf = s.ends_with("\r\n");
+                    let had_trailing_newline = s.ends_with('\n');
+                    let trimmed_rem = remaining.trim_end();
+                    let mut cleaned = trimmed_rem.to_string();
+                    if had_crlf {
+                        cleaned.push_str("\r\n");
+                    } else if had_trailing_newline || (line_start > 0 && bytes[line_start - 1] == b'\n') {
+                        if line_start > 1 && bytes[line_start - 2] == b'\r' {
+                            cleaned.push_str("\r\n");
+                        } else {
+                            cleaned.push('\n');
+                        }
+                    }
+                    s = cleaned;
+                } else {
+                    s = String::new();
+                }
+            }
+        }
+    }
+
+    (s, modified)
+}
+
+// =========================================================================
 // Step 1: Replace $_GLOBAL and $GLOBALS with original global values
 // =========================================================================
 
@@ -327,6 +470,661 @@ struct TextEdit {
     end: usize,
     replacement: String,
 }
+
+// =========================================================================
+// Step 0.5: Replace cURL functions with Http facade and flag curl_multi_*
+// =========================================================================
+
+fn get_line_start(source: &str, pos: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut p = pos.min(bytes.len());
+    while p > 0 && bytes[p - 1] != b'\n' {
+        p -= 1;
+    }
+    p
+}
+
+fn get_line_end(source: &str, pos: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut p = pos.min(bytes.len());
+    while p < bytes.len() && bytes[p] != b'\n' {
+        p += 1;
+    }
+    if p < bytes.len() && bytes[p] == b'\n' {
+        p += 1;
+    }
+    p
+}
+
+fn split_array_items(s: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in s.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            current.push(ch);
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            current.push(ch);
+            continue;
+        }
+        if ch == ',' && !in_single && !in_double {
+            let trimmed = current.trim().to_string();
+            if !trimmed.is_empty() {
+                items.push(trimmed);
+            }
+            current.clear();
+            continue;
+        }
+        current.push(ch);
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        items.push(trimmed);
+    }
+    items
+}
+
+fn extract_bearer_token(item: &str) -> Option<String> {
+    let trimmed = item.trim();
+    // Pattern 1: "Authorization: Bearer " . $token or "Authorization: Bearer " + $token
+    let re_concat = Regex::new(
+        r#"^['"]Authorization:\s*Bearer\s*['"]\s*(?:\.|\+)\s*(.+)$"#,
+    ).ok()?;
+    if let Some(caps) = re_concat.captures(trimmed) {
+        return Some(caps.get(1).unwrap().as_str().trim().to_string());
+    }
+    // Pattern 2: "Authorization: Bearer xyz"
+    let re_literal = Regex::new(
+        r#"^['"]Authorization:\s*Bearer\s+([^'"]+)['"]$"#,
+    ).ok()?;
+    if let Some(caps) = re_literal.captures(trimmed) {
+        return Some(format!("\"{}\"", caps.get(1).unwrap().as_str().trim()));
+    }
+    None
+}
+
+#[derive(Default, Debug)]
+struct ParsedCurlSession {
+    url: Option<String>,
+    method: String,
+    body: Option<String>,
+    headers: Vec<String>,
+    bearer_token: Option<String>,
+    basic_auth: Option<String>,
+    timeout: Option<String>,
+    connect_timeout: Option<String>,
+    without_verifying: bool,
+    res_var: Option<String>,
+    status_var: Option<String>,
+}
+
+fn extract_first_call_arg(s: &str) -> &str {
+    let mut depth_paren = 0;
+    let mut depth_bracket = 0;
+    let mut depth_brace = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for (idx, ch) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+        if in_single || in_double {
+            continue;
+        }
+        match ch {
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            '{' => depth_brace += 1,
+            '}' => depth_brace -= 1,
+            ',' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 => {
+                return s[..idx].trim();
+            }
+            _ => {}
+        }
+    }
+    s.trim()
+}
+
+fn parse_curl_block_options(block_text: &str, init_url: &str) -> ParsedCurlSession {
+    let mut opts = ParsedCurlSession::default();
+    opts.method = "get".to_string();
+
+    if !init_url.trim().is_empty() {
+        opts.url = Some(init_url.trim().to_string());
+    }
+
+    let mut apply_opt = |opt_name: &str, opt_val: &str| {
+        let trimmed_val = opt_val.trim();
+        match opt_name {
+            "CURLOPT_URL" => {
+                opts.url = Some(trimmed_val.to_string());
+            }
+            "CURLOPT_POST" => {
+                if trimmed_val == "1" || trimmed_val.eq_ignore_ascii_case("true") {
+                    opts.method = "post".to_string();
+                }
+            }
+            "CURLOPT_CUSTOMREQUEST" => {
+                let clean_m = trimmed_val.trim_matches('"').trim_matches('\'').to_lowercase();
+                if !clean_m.is_empty() {
+                    opts.method = clean_m;
+                }
+            }
+            "CURLOPT_HTTPGET" => {
+                if trimmed_val == "1" || trimmed_val.eq_ignore_ascii_case("true") {
+                    opts.method = "get".to_string();
+                }
+            }
+            "CURLOPT_POSTFIELDS" => {
+                if trimmed_val.starts_with("json_encode(") && trimmed_val.ends_with(')') {
+                    let inner = trimmed_val["json_encode(".len()..trimmed_val.len() - 1].trim();
+                    let data_arg = extract_first_call_arg(inner);
+                    opts.body = Some(data_arg.to_string());
+                } else {
+                    opts.body = Some(trimmed_val.to_string());
+                }
+            }
+            "CURLOPT_HTTPHEADER" => {
+                if let Some(open_b) = trimmed_val.find('[') {
+                    if let Some(close_b) = trimmed_val.rfind(']') {
+                        let inner = &trimmed_val[open_b + 1..close_b];
+                        for item in split_array_items(inner) {
+                            if let Some(tok) = extract_bearer_token(&item) {
+                                opts.bearer_token = Some(tok);
+                            } else if item.to_lowercase().contains("content-type: application/json") {
+                                // Content-type json handled natively
+                            } else if !item.is_empty() {
+                                opts.headers.push(item);
+                            }
+                        }
+                    }
+                }
+            }
+            "CURLOPT_USERPWD" => {
+                opts.basic_auth = Some(trimmed_val.to_string());
+            }
+            "CURLOPT_TIMEOUT" => {
+                opts.timeout = Some(trimmed_val.to_string());
+            }
+            "CURLOPT_CONNECTTIMEOUT" => {
+                opts.connect_timeout = Some(trimmed_val.to_string());
+            }
+            "CURLOPT_SSL_VERIFYPEER" => {
+                if trimmed_val == "0" || trimmed_val.eq_ignore_ascii_case("false") {
+                    opts.without_verifying = true;
+                }
+            }
+            _ => {}
+        }
+    };
+
+    // 1. Parse individual curl_setopt($ch, CONST, VALUE)
+    let re_setopt = Regex::new(
+        r#"(?:\\)?curl_setopt\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*,\s*([A-Za-z0-9_]+)\s*,\s*([^;]+)\)\s*;"#,
+    ).unwrap();
+    for caps in re_setopt.captures_iter(block_text) {
+        apply_opt(&caps[1], &caps[2]);
+    }
+
+    // 2. Parse batch curl_setopt_array($ch, [...])
+    let re_setopt_array = Regex::new(
+        r#"(?:\\)?curl_setopt_array\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*,\s*\[([^;]*)\]\s*\)\s*;"#,
+    ).unwrap();
+    let re_array_entry = Regex::new(
+        r#"(CURLOPT_[A-Z0-9_]+)\s*=>\s*([^,\r\n]+)"#,
+    ).unwrap();
+
+    for caps in re_setopt_array.captures_iter(block_text) {
+        let inner = &caps[1];
+        for entry in re_array_entry.captures_iter(inner) {
+            apply_opt(&entry[1], &entry[2]);
+        }
+    }
+
+    // 3. Execution variable
+    let re_exec_assign = Regex::new(
+        r#"\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:\\)?curl_exec\s*\("#,
+    ).unwrap();
+    if let Some(caps) = re_exec_assign.captures(block_text) {
+        opts.res_var = Some(caps[1].to_string());
+    } else if block_text.contains("curl_exec(") {
+        opts.res_var = None;
+    }
+
+    // 4. Status code variable
+    let re_getinfo = Regex::new(
+        r#"\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:\\)?curl_getinfo\s*\([^,;)]*,\s*CURLINFO_(?:HTTP|RESPONSE)_CODE\s*\)\s*;"#,
+    ).unwrap();
+    if let Some(caps) = re_getinfo.captures(block_text) {
+        opts.status_var = Some(caps[1].to_string());
+    }
+
+    opts
+}
+
+fn build_http_chain(opts: &ParsedCurlSession) -> String {
+    let mut chain = String::from("Http::");
+
+    if let Some(tok) = &opts.bearer_token {
+        chain.push_str(&format!("withToken({})->", tok));
+    }
+
+    if let Some(auth) = &opts.basic_auth {
+        if auth.starts_with('"') && auth.ends_with('"') && auth.contains(':') {
+            let inner = &auth[1..auth.len() - 1];
+            if let Some((u, p)) = inner.split_once(':') {
+                chain.push_str(&format!("withBasicAuth(\"{}\", \"{}\")->", u, p));
+            } else {
+                chain.push_str(&format!("withBasicAuth({})->", auth));
+            }
+        } else {
+            chain.push_str(&format!("withBasicAuth({})->", auth));
+        }
+    }
+
+    if !opts.headers.is_empty() {
+        chain.push_str(&format!("withHeaders([{}])->", opts.headers.join(", ")));
+    }
+
+    if let Some(to) = &opts.timeout {
+        chain.push_str(&format!("timeout({})->", to));
+    }
+
+    if let Some(cto) = &opts.connect_timeout {
+        chain.push_str(&format!("connectTimeout({})->", cto));
+    }
+
+    if opts.without_verifying {
+        chain.push_str("withoutVerifying()->");
+    }
+
+    let url = opts.url.as_deref().unwrap_or("\"\"");
+    let method = if opts.method.is_empty() { "get" } else { &opts.method };
+
+    match method {
+        "post" => {
+            if let Some(b) = &opts.body {
+                chain.push_str(&format!("post({}, {})", url, b));
+            } else {
+                chain.push_str(&format!("post({})", url));
+            }
+        }
+        "put" => {
+            if let Some(b) = &opts.body {
+                chain.push_str(&format!("put({}, {})", url, b));
+            } else {
+                chain.push_str(&format!("put({})", url));
+            }
+        }
+        "patch" => {
+            if let Some(b) = &opts.body {
+                chain.push_str(&format!("patch({}, {})", url, b));
+            } else {
+                chain.push_str(&format!("patch({})", url));
+            }
+        }
+        "delete" => {
+            if let Some(b) = &opts.body {
+                chain.push_str(&format!("delete({}, {})", url, b));
+            } else {
+                chain.push_str(&format!("delete({})", url));
+            }
+        }
+        _ => {
+            chain.push_str(&format!("get({})", url));
+        }
+    }
+
+    chain
+}
+
+/// Upgrades PHP cURL functions to modern RHP `Http` facade.
+///
+/// Features:
+/// - Comments out original cURL code blocks preserving indentation.
+/// - Option A: `$response = Http::...; $res = $response->body();`
+/// - Option B: If followed by `json_decode`, converts directly to `$data = Http::...->json();`
+/// - Unassigned `curl_exec`: automatically wraps in `Future::async(fn() => Http::...);`
+/// - Flags `curl_multi_*` loops for manual review with guide link:
+///   `https://rhp.dev/docs/reference/unsupported-php#curl-extension`
+///   and comments: "You can use Http::pool([...]) / Future::wait([...])"
+pub fn upgrade_curl_calls(source: &str) -> (String, usize, usize) {
+    let mask = build_code_mask(source);
+    let mut curl_migrated_count = 0;
+    let mut curl_multi_count = 0;
+
+    // Check if any curl_ appears in unmasked code
+    let has_curl = {
+        let bytes = source.as_bytes();
+        let mut found = false;
+        let mut idx = 0;
+        while idx + 5 <= bytes.len() {
+            if mask[idx] && &bytes[idx..idx + 5] == b"curl_" {
+                found = true;
+                break;
+            }
+            idx += 1;
+        }
+        found
+    };
+
+    if !has_curl {
+        return (source.to_string(), 0, 0);
+    }
+
+    let mut current = source.to_string();
+
+    // ---------------------------------------------------------------------
+    // Pass 1: Flag and comment out curl_multi_* loops/calls
+    // ---------------------------------------------------------------------
+    let re_multi_line = Regex::new(r#"(?m)^([ \t]*).*?\bcurl_multi_[a-zA-Z0-9_]+\b.*$"#).unwrap();
+    let re_multi_do_loop = Regex::new(
+        r#"(?s)do\s*\{[^{}]*curl_multi_[^{}]*\}\s*while\s*\([^;]*\);"#,
+    ).unwrap();
+
+    let mut multi_spans: Vec<(usize, usize)> = Vec::new();
+
+    for m in re_multi_do_loop.find_iter(&current) {
+        let mask_cur = build_code_mask(&current);
+        if mask_cur[m.start()] {
+            let s = get_line_start(&current, m.start());
+            let e = get_line_end(&current, m.end());
+            multi_spans.push((s, e));
+        }
+    }
+
+    for m in re_multi_line.find_iter(&current) {
+        let mask_cur = build_code_mask(&current);
+        if mask_cur[m.start()] {
+            let s = get_line_start(&current, m.start());
+            let e = get_line_end(&current, m.end());
+            let already_covered = multi_spans.iter().any(|(ms, me)| s >= *ms && e <= *me);
+            if !already_covered {
+                multi_spans.push((s, e));
+            }
+        }
+    }
+
+    multi_spans.sort_by_key(|s| s.0);
+    let mut merged_multi_spans: Vec<(usize, usize)> = Vec::new();
+    for span in multi_spans {
+        if let Some(last) = merged_multi_spans.last_mut() {
+            if span.0 <= last.1 + 100 && current[last.1..span.0].trim().is_empty() {
+                last.1 = last.1.max(span.1);
+                continue;
+            }
+        }
+        merged_multi_spans.push(span);
+    }
+
+    if !merged_multi_spans.is_empty() {
+        let mut edits: Vec<TextEdit> = Vec::new();
+        for (start, end) in merged_multi_spans {
+            let chunk = &current[start..end];
+            let first_line = chunk.lines().next().unwrap_or("");
+            let indent_len = first_line.len() - first_line.trim_start().len();
+            let indent = &first_line[..indent_len];
+
+            let mut replacement = String::new();
+            replacement.push_str(&format!(
+                "{}// NOTICE: curl_multi_* requires manual review. See https://rhp.dev/docs/reference/unsupported-php#curl-extension\n",
+                indent
+            ));
+            replacement.push_str(&format!(
+                "{}// You can use Http::pool([...]) / Future::wait([...])\n",
+                indent
+            ));
+
+            for line in chunk.lines() {
+                if line.trim().is_empty() {
+                    replacement.push('\n');
+                } else {
+                    let l_ind_len = line.len() - line.trim_start().len();
+                    let l_ind = &line[..l_ind_len];
+                    let l_content = &line[l_ind_len..];
+                    replacement.push_str(l_ind);
+                    replacement.push_str("// ");
+                    replacement.push_str(l_content);
+                    replacement.push('\n');
+                }
+            }
+
+            edits.push(TextEdit {
+                start,
+                end,
+                replacement,
+            });
+            curl_multi_count += 1;
+        }
+
+        edits.sort_by(|a, b| b.start.cmp(&a.start));
+        for edit in edits {
+            current.replace_range(edit.start..edit.end, &edit.replacement);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Pass 2: Upgrade standard curl_* handle blocks to Http facade
+    // ---------------------------------------------------------------------
+    let re_init = Regex::new(
+        r#"(?m)^([ \t]*)(?:\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*)?(?:\\)?curl_init\s*\(([^)]*)\)\s*;"#,
+    ).unwrap();
+
+    let mut session_edits: Vec<TextEdit> = Vec::new();
+    let mask_pass2 = build_code_mask(&current);
+
+    for caps in re_init.captures_iter(&current) {
+        let mat = caps.get(0).unwrap();
+        if !mask_pass2[mat.start()] {
+            continue;
+        }
+
+        let base_indent = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let handle_var = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        let init_url = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+
+        let block_start = get_line_start(&current, mat.start());
+
+        let search_start = mat.end();
+        let rem = &current[search_start..];
+
+        let mut session_end_offset = None;
+
+        if !handle_var.is_empty() {
+            let re_close = Regex::new(&format!(
+                r#"(?:\\)?curl_close\s*\(\s*\${}\s*\)\s*;"#,
+                regex::escape(handle_var)
+            )).unwrap();
+            if let Some(m_close) = re_close.find(rem) {
+                session_end_offset = Some(search_start + m_close.end());
+            }
+        }
+
+        if session_end_offset.is_none() {
+            let pattern_exec = if !handle_var.is_empty() {
+                format!(r#"(?:\\)?curl_exec\s*\(\s*\${}\s*\)\s*;"#, regex::escape(handle_var))
+            } else {
+                r#"(?:\\)?curl_exec\s*\([^)]*\)\s*;"#.to_string()
+            };
+            if let Ok(re_exec) = Regex::new(&pattern_exec) {
+                if let Some(m_exec) = re_exec.find(rem) {
+                    session_end_offset = Some(search_start + m_exec.end());
+                }
+            }
+        }
+
+        let session_end = match session_end_offset {
+            Some(end) => end,
+            None => continue,
+        };
+
+        let intermediate_text = &current[block_start..session_end];
+        let opts = parse_curl_block_options(intermediate_text, init_url);
+
+        let mut json_decode_var: Option<String> = None;
+        let mut final_block_end = session_end;
+
+        if let Some(ref rv) = opts.res_var {
+            let after_session = &current[session_end..];
+            let trimmed_after = after_session.trim_start();
+            let whitespace_len = after_session.len() - trimmed_after.len();
+
+            let re_json_decode = Regex::new(&format!(
+                r#"^\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:\\)?json_decode\s*\(\s*\${}\s*(?:,\s*(?:true|false|1|0))?\s*\)\s*;"#,
+                regex::escape(rv)
+            )).unwrap();
+
+            if let Some(dec_caps) = re_json_decode.captures(trimmed_after) {
+                let dec_match = dec_caps.get(0).unwrap();
+                json_decode_var = Some(dec_caps[1].to_string());
+                final_block_end = session_end + whitespace_len + dec_match.end();
+            }
+        }
+
+        let block_end = get_line_end(&current, final_block_end);
+        let block_text = &current[block_start..block_end];
+
+        let chain = build_http_chain(&opts);
+
+        let mut synthesized = String::new();
+        if opts.res_var.is_none() {
+            synthesized.push_str(&format!("{}Future::async(fn() => {});\n", base_indent, chain));
+        } else if let Some(ref data_var) = json_decode_var {
+            if let Some(ref sv) = opts.status_var {
+                synthesized.push_str(&format!("{}$response = {};\n", base_indent, chain));
+                synthesized.push_str(&format!("{}${} = $response->status();\n", base_indent, sv));
+                synthesized.push_str(&format!("{}${} = $response->json();\n", base_indent, data_var));
+            } else {
+                synthesized.push_str(&format!("{}${} = {}->json();\n", base_indent, data_var, chain));
+            }
+        } else {
+            let rv = opts.res_var.as_ref().unwrap();
+            if let Some(ref sv) = opts.status_var {
+                synthesized.push_str(&format!("{}$response = {};\n", base_indent, chain));
+                synthesized.push_str(&format!("{}${} = $response->body();\n", base_indent, rv));
+                synthesized.push_str(&format!("{}${} = $response->status();\n", base_indent, sv));
+            } else {
+                synthesized.push_str(&format!("{}$response = {};\n", base_indent, chain));
+                synthesized.push_str(&format!("{}${} = $response->body();\n", base_indent, rv));
+            }
+        }
+
+        let mut commented = String::new();
+        for line in block_text.lines() {
+            if line.trim().is_empty() {
+                commented.push('\n');
+            } else {
+                let l_ind_len = line.len() - line.trim_start().len();
+                let l_ind = &line[..l_ind_len];
+                let l_content = &line[l_ind_len..];
+                commented.push_str(l_ind);
+                commented.push_str("// ");
+                commented.push_str(l_content);
+                commented.push('\n');
+            }
+        }
+
+        let replacement = format!("{}{}", commented, synthesized);
+
+        session_edits.push(TextEdit {
+            start: block_start,
+            end: block_end,
+            replacement,
+        });
+        curl_migrated_count += 1;
+    }
+
+    session_edits.sort_by(|a, b| b.start.cmp(&a.start));
+    for edit in session_edits {
+        current.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    // ---------------------------------------------------------------------
+    // Pass 3: Clean up remaining standalone curl_errno / curl_error
+    // ---------------------------------------------------------------------
+    let mask_pass3 = build_code_mask(&current);
+    let mut cleanup_edits: Vec<TextEdit> = Vec::new();
+
+    let re_errno = Regex::new(r#"(?:\\)?curl_errno\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*\)"#).unwrap();
+    for mat in re_errno.find_iter(&current) {
+        if mask_pass3[mat.start()] {
+            cleanup_edits.push(TextEdit {
+                start: mat.start(),
+                end: mat.end(),
+                replacement: "$response->failed()".to_string(),
+            });
+        }
+    }
+
+    let re_error = Regex::new(r#"(?:\\)?curl_error\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*\)"#).unwrap();
+    for mat in re_error.find_iter(&current) {
+        if mask_pass3[mat.start()] {
+            cleanup_edits.push(TextEdit {
+                start: mat.start(),
+                end: mat.end(),
+                replacement: "\"HTTP error: \" + string($response->status())".to_string(),
+            });
+        }
+    }
+
+    let re_standalone_close = Regex::new(r#"(?m)^([ \t]*)(?:\\)?curl_close\s*\(\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*\)\s*;"#).unwrap();
+    for caps in re_standalone_close.captures_iter(&current) {
+        let mat = caps.get(0).unwrap();
+        if mask_pass3[mat.start()] {
+            let ind = &caps[1];
+            cleanup_edits.push(TextEdit {
+                start: mat.start(),
+                end: mat.end(),
+                replacement: format!("{}// curl_close(...);", ind),
+            });
+        }
+    }
+
+    cleanup_edits.sort_by(|a, b| b.start.cmp(&a.start));
+    for edit in cleanup_edits {
+        current.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (current, curl_migrated_count, curl_multi_count)
+}
+
+// =========================================================================
+// Step 1: Replace $_GLOBAL and $GLOBALS with original global values
+// =========================================================================
 
 /// Replace `$_GLOBAL['var']`, `$_GLOBALS['var']`, and `$GLOBALS['var']` with `$var`.
 /// Dynamic variable access `$GLOBALS[$k]` becomes `$$k`.
@@ -770,10 +1568,29 @@ fn find_insertion_point(source: &str) -> usize {
     } else {
         // No <?php tag
         let trimmed = source.trim_start();
-        if trimmed.starts_with("namespace ") {
-            let offset_to_ns = source.len() - trimmed.len();
+        let leading_offset = source.len() - trimmed.len();
+        let mut idx = leading_offset;
+
+        if trimmed.starts_with("declare") {
+            let offset_to_declare = source.len() - trimmed.len();
             if let Some(semi_pos) = trimmed.find(';') {
-                let mut after_ns = offset_to_ns + semi_pos + 1;
+                let mut after_declare = offset_to_declare + semi_pos + 1;
+                while after_declare < source.len() && source.as_bytes()[after_declare] != b'\n' {
+                    after_declare += 1;
+                }
+                if after_declare < source.len() && source.as_bytes()[after_declare] == b'\n' {
+                    after_declare += 1;
+                }
+                idx = after_declare;
+            }
+        }
+
+        let rem = &source[idx..];
+        let trimmed_rem = rem.trim_start();
+        if trimmed_rem.starts_with("namespace ") {
+            let offset_to_ns = rem.len() - trimmed_rem.len();
+            if let Some(semi_pos) = trimmed_rem.find(';') {
+                let mut after_ns = idx + offset_to_ns + semi_pos + 1;
                 while after_ns < source.len() && source.as_bytes()[after_ns] != b'\n' {
                     after_ns += 1;
                 }
@@ -783,6 +1600,7 @@ fn find_insertion_point(source: &str) -> usize {
                 return after_ns;
             }
         }
-        0
+
+        idx
     }
 }

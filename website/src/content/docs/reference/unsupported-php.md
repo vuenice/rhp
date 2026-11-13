@@ -1348,6 +1348,7 @@ rhp migrate ./app --format=json
 
 ### What `rhp migrate` Automatically Rewrites
 
+- **Opening and Closing PHP Tags:** Strips legacy `<?php` from the start and `?>` from the end of files so code adopts RHP's native script syntax.
 - **String Concatenation Operators:** Automatically converts PHP dot concatenation (`.` and `.=`) to modern RHP addition operators (`+` and `+=`).
 - **Superglobals to Request Facades:** Injects `$_GET = Request::query();`, `$_POST = Request::body();`, `$_SERVER['REQUEST_METHOD'] = Request::method();`, `$_SERVER['REMOTE_ADDR'] = Request::ip();`, `$_SERVER['HTTP_HOST'] = Request::host();`, `$_FILES = Request::files();`, and `$_COOKIE = Cookie::get();` when legacy superglobals are detected.
 - **Cookie Mutations:** Upgrades `setcookie(...)`, `setrawcookie(...)`, and `$_COOKIE['key'] = $val;` into `Cookie::set(...)`.

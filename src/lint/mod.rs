@@ -22,7 +22,7 @@ pub use casing::{
 pub use diagnostics::{run_typecheck, type_error_to_code};
 pub use formatter::{format_source, split_statements_on_semicolons};
 pub use migrate::{
-    migrate_file, migrate_path, migrate_source, upgrade_php_file, upgrade_php_path,
+    migrate_file, migrate_path, migrate_source, remove_php_tags, upgrade_php_file, upgrade_php_path,
     upgrade_php_source, MigrateFileResult, MigrateOptions, MigrateReport, UpgradeFileResult,
     UpgradeOptions, UpgradeReport,
 };

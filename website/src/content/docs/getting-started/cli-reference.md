@@ -146,6 +146,7 @@ rhp lint src/ --no-case-change
 ### `rhp migrate [PATH] [OPTIONS]`
 
 Migrates legacy PHP codebases to modern RHP conventions:
+- Strips legacy opening `<?php` and closing `?>` tags from start and end of files (native script syntax).
 - Converts PHP string concatenation operators (`.` and `.=`) to modern RHP addition operators (`+` and `+=`).
 - Injects modern Request/Cookie facade initialization statements when superglobals (`$_GET`, `$_POST`, `$_SERVER`, `$_FILES`, `$_COOKIE`) are detected:
   - `$_GET = Request::query();`
@@ -157,6 +158,8 @@ Migrates legacy PHP codebases to modern RHP conventions:
   - `$_COOKIE = Cookie::get();`
 - Upgrades legacy cookie modifications (`setcookie(...)`, `setrawcookie(...)`, `$_COOKIE['key'] = $val;`) to `Cookie::set(...)`.
 - Replaces legacy `$GLOBALS['var']` and `$_GLOBAL['var']` with `$var`, and dynamic `$GLOBALS[$k]` with `$$k`.
+- Upgrades legacy procedural `curl_*` calls to fluent `Http::` facade chains (preserves original code commented out, supports Option A/B response variables, and auto-wraps unassigned requests in `Future::async(...)`).
+- Flags `curl_multi_*` loops for manual review with a direct guide link and recommendations for `Http::pool([...])` or `Future::wait([...])`.
 
 ```bash
 # Migrate a directory or file in-place
