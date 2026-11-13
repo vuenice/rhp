@@ -1,4 +1,7 @@
-use rhp::migrate::migrate_source;
+use rhp::migrate::{
+    comment_ini_set_calls, migrate_source, replace_get_array_access, replace_post_array_access,
+    strip_error_reporting, upgrade_php_source,
+};
 use std::fs;
 use std::process::Command;
 
@@ -6,17 +9,47 @@ use std::process::Command;
 fn test_migrate_get_used() {
     let input = concat!(
         "<?php\n",
+        "$params = $_GET;\n",
+        "echo $params['id'];\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.added_lines, vec!["$_GET = Request::query();"]);
+    assert!(res.migrated_content.contains("$_GET = Request::query();\n\n$params = $_GET;"));
+}
+
+#[test]
+fn test_migrate_get_array_access_replaced() {
+    let input = concat!(
+        "<?php\n",
         "$id = $_GET['id'];\n",
         "echo $id;\n"
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
-    assert_eq!(res.added_lines, vec!["$_GET = Request::query();"]);
-    assert!(res.migrated_content.contains("$_GET = Request::query();\n\n$id = $_GET['id'];"));
+    assert_eq!(res.get_replace_count, 1);
+    assert_eq!(res.added_lines, Vec::<String>::new());
+    assert_eq!(
+        res.migrated_content,
+        "$id = Request::query('id');\necho $id;\n"
+    );
 }
 
 #[test]
 fn test_migrate_post_used() {
+    let input = concat!(
+        "<?php\n",
+        "$payload = $_POST;\n",
+        "echo $payload;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.added_lines, vec!["$_POST = Request::body();"]);
+    assert!(res.migrated_content.contains("$_POST = Request::body();\n\n$payload = $_POST;"));
+}
+
+#[test]
+fn test_migrate_post_array_access_replaced() {
     let input = concat!(
         "<?php\n",
         "$title = $_POST['title'];\n",
@@ -24,8 +57,12 @@ fn test_migrate_post_used() {
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
-    assert_eq!(res.added_lines, vec!["$_POST = Request::body();"]);
-    assert!(res.migrated_content.contains("$_POST = Request::body();\n\n$title = $_POST['title'];"));
+    assert_eq!(res.post_replace_count, 1);
+    assert_eq!(res.added_lines, Vec::<String>::new());
+    assert_eq!(
+        res.migrated_content,
+        "$title = Request::body('title');\necho $title;\n"
+    );
 }
 
 #[test]
@@ -135,6 +172,8 @@ fn test_migrate_globals_replacement() {
 fn test_migrate_all_variables_combined() {
     let input = concat!(
         "<?php\n",
+        "$raw_get = $_GET;\n",
+        "$raw_post = $_POST;\n",
         "$q = $_GET['search'];\n",
         "$b = $_POST['payload'];\n",
         "$m = $_SERVER['REQUEST_METHOD'];\n",
@@ -146,6 +185,8 @@ fn test_migrate_all_variables_combined() {
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
+    assert_eq!(res.get_replace_count, 1);
+    assert_eq!(res.post_replace_count, 1);
     assert_eq!(
         res.added_lines,
         vec![
@@ -158,6 +199,8 @@ fn test_migrate_all_variables_combined() {
             "$_COOKIE = Cookie::get();"
         ]
     );
+    assert!(res.migrated_content.contains("$q = Request::query('search');"));
+    assert!(res.migrated_content.contains("$b = Request::body('payload');"));
     assert!(res.migrated_content.contains("$db = $conn;"));
 }
 
@@ -166,15 +209,18 @@ fn test_migrate_declare_strict_types_insertion() {
     let input = concat!(
         "<?php\n",
         "declare(strict_types=1);\n",
+        "$raw = $_GET;\n",
         "$page = $_GET['page'];\n"
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
     assert!(res.php_tag_removed);
+    assert_eq!(res.declare_count, 1);
+    assert_eq!(res.get_replace_count, 1);
     let expected = concat!(
-        "declare(strict_types=1);\n",
         "$_GET = Request::query();\n\n",
-        "$page = $_GET['page'];\n"
+        "$raw = $_GET;\n",
+        "$page = Request::query('page');\n"
     );
     assert_eq!(res.migrated_content, expected);
 }
@@ -184,6 +230,7 @@ fn test_migrate_namespace_insertion() {
     let input = concat!(
         "<?php\n",
         "namespace App\\Http\\Controllers;\n",
+        "$raw = $_GET;\n",
         "$val = $_GET['val'];\n"
     );
     let res = migrate_source(input, "test.php");
@@ -192,18 +239,19 @@ fn test_migrate_namespace_insertion() {
     let expected = concat!(
         "namespace App\\Http\\Controllers;\n",
         "$_GET = Request::query();\n\n",
-        "$val = $_GET['val'];\n"
+        "$raw = $_GET;\n",
+        "$val = Request::query('val');\n"
     );
     assert_eq!(res.migrated_content, expected);
 }
 
 #[test]
 fn test_migrate_without_opening_tag() {
-    let input = "$id = $_GET['id'];\n";
+    let input = "$params = $_GET;\n$id = $_GET['id'];\n";
     let res = migrate_source(input, "script.rhp");
     assert!(res.modified);
     assert!(!res.php_tag_removed);
-    let expected = "$_GET = Request::query();\n\n$id = $_GET['id'];\n";
+    let expected = "$_GET = Request::query();\n\n$params = $_GET;\n$id = Request::query('id');\n";
     assert_eq!(res.migrated_content, expected);
 }
 
@@ -212,7 +260,7 @@ fn test_migrate_does_not_duplicate_existing_lines() {
     // When input already has no tags and no migration needed
     let input_clean = concat!(
         "$_GET = Request::query();\n",
-        "$id = $_GET['id'];\n"
+        "$id = Request::query('id');\n"
     );
     let res_clean = migrate_source(input_clean, "test.rhp");
     assert!(!res_clean.modified);
@@ -222,7 +270,7 @@ fn test_migrate_does_not_duplicate_existing_lines() {
     let input_tagged = concat!(
         "<?php\n",
         "$_GET = Request::query();\n",
-        "$id = $_GET['id'];\n"
+        "$id = Request::query('id');\n"
     );
     let res_tagged = migrate_source(input_tagged, "test.php");
     assert!(res_tagged.modified);
@@ -274,6 +322,7 @@ fn test_cli_migrate_execution() {
     let file_path = temp_dir.join("index.php");
     let content = concat!(
         "<?php\n",
+        "$raw_get = $_GET;\n",
         "$user = $_GET['user'];\n",
         "$_COOKIE['pref'] = 'light';\n",
         "$db = $GLOBALS['database'];\n",
@@ -293,6 +342,7 @@ fn test_cli_migrate_execution() {
     let check_stdout = String::from_utf8_lossy(&check_output.stdout);
     assert!(check_stdout.contains("Dry Run"));
     assert!(check_stdout.contains("$_GET = Request::query();"));
+    assert!(check_stdout.contains("1 $_GET[...] access(es) replaced with Request::query(...)"));
 
     // Verify file on disk was not modified yet
     assert_eq!(fs::read_to_string(&file_path).unwrap(), content);
@@ -307,6 +357,7 @@ fn test_cli_migrate_execution() {
     assert!(migrate_output.status.success());
     let migrated_content = fs::read_to_string(&file_path).unwrap();
     assert!(migrated_content.contains("$_GET = Request::query();"));
+    assert!(migrated_content.contains("$user = Request::query('user');"));
     assert!(migrated_content.contains("Cookie::set('pref', 'light');"));
     assert!(migrated_content.contains("$db = $database;"));
     assert!(migrated_content.contains("echo $user + ' ' + $db;"));
@@ -861,5 +912,1264 @@ fn test_migrate_heredoc_ignored_inside_comments_and_strings() {
     assert_eq!(res.migrated_content, input);
 }
 
+#[test]
+fn test_migrate_declare_strict_types_removal() {
+    let input = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "\n",
+        "$x = 42;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "\n",
+        "$x = 42;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
 
+#[test]
+fn test_migrate_declare_ticks_removal() {
+    let input = concat!(
+        "<?php\n",
+        "declare(ticks=1);\n",
+        "\n",
+        "echo \"Processing\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "\n",
+        "echo \"Processing\";\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_declare_encoding_removal() {
+    let input = concat!(
+        "<?php\n",
+        "declare(encoding='ISO-8859-1');\n",
+        "\n",
+        "$text = \"test\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "\n",
+        "$text = \"test\";\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_multiple_declares_removal() {
+    let input = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "declare(ticks=1);\n",
+        "declare(encoding=\"UTF-8\");\n",
+        "\n",
+        "function add(int $a, int $b): int {\n",
+        "    return $a + $b;\n",
+        "}\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 3);
+    let expected = concat!(
+        "\n",
+        "function add(int $a, int $b): int {\n",
+        "    return $a + $b;\n",
+        "}\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_combined_declare_directives() {
+    let input = concat!(
+        "<?php\n",
+        "declare(strict_types=1, ticks=1);\n",
+        "$x = 10;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "$x = 10;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_declare_multiline_and_spaces() {
+    let input = concat!(
+        "<?php\n",
+        "declare (\n",
+        "    strict_types = 1,\n",
+        "    ticks = 1\n",
+        ") ;\n",
+        "$ready = true;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "$ready = true;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_declare_inline_with_php_tag() {
+    let input = "<?php declare(strict_types=1);\n$val = 100;\n";
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    assert_eq!(res.upgraded_content, "$val = 100;\n");
+}
+
+#[test]
+fn test_migrate_declare_block_braces() {
+    let input = concat!(
+        "<?php\n",
+        "declare(ticks=1) {\n",
+        "    $i = 0;\n",
+        "    $i++;\n",
+        "}\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    let expected = concat!(
+        "    $i = 0;\n",
+        "    $i++;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_declare_in_comments_and_strings_preserved() {
+    let input = concat!(
+        "// declare(strict_types=1);\n",
+        "/* declare(ticks=1); */\n",
+        "$str = 'declare(encoding=\"UTF-8\");';\n",
+        "$str2 = \"declare(strict_types=1);\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.declare_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_cli_migrate_write_removes_declares() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("service.php");
+    let content = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "declare(ticks=1);\n",
+        "declare(encoding='UTF-8');\n",
+        "\n",
+        "class Service {\n",
+        "    public function run(): void {}\n",
+        "}\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // 1. Dry run via `rhp migrate --check`
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("Dry Run"));
+    assert!(check_stdout.contains("3 declare() directive(s) removed"));
+    // File on disk unmodified during check
+    assert_eq!(fs::read_to_string(&file_path).unwrap(), content);
+
+    // 2. Actual write via `rhp migrate --write`
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("declare("));
+    assert!(migrated_content.contains("class Service {"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_migrate_type_casts_basic() {
+    let input = concat!(
+        "<?php\n",
+        "$a = (int)$x;\n",
+        "$b = (string)$y;\n",
+        "$c = (float)$z;\n",
+        "$d = (bool)$w;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.cast_count, 4);
+    let expected = concat!(
+        "$a = int($x);\n",
+        "$b = string($y);\n",
+        "$c = float($z);\n",
+        "$d = bool($w);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_type_casts_with_spaces_and_casing() {
+    let input = concat!(
+        "<?php\n",
+        "$a = (INT) $x;\n",
+        "$b = ( string )  $y;\n",
+        "$c = (FLOAT)$z;\n",
+        "$d = (BOOL) $w;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.cast_count, 4);
+    let expected = concat!(
+        "$a = int($x);\n",
+        "$b = string($y);\n",
+        "$c = float($z);\n",
+        "$d = bool($w);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_type_casts_aliases() {
+    let input = concat!(
+        "<?php\n",
+        "$a = (integer)$x;\n",
+        "$b = (boolean)$y;\n",
+        "$c = (double)$z;\n",
+        "$d = (real)$w;\n",
+        "$e = (binary)$v;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.cast_count, 5);
+    let expected = concat!(
+        "$a = int($x);\n",
+        "$b = bool($y);\n",
+        "$c = float($z);\n",
+        "$d = float($w);\n",
+        "$e = string($v);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_type_casts_complex_expressions() {
+    let input = concat!(
+        "<?php\n",
+        "$id = (int)$_GET['id'];\n",
+        "$name = (string)$user->profile->getName();\n",
+        "$total = (float)$item['price'] * $qty;\n",
+        "$sum = (int)($a + $b);\n",
+        "$cnt = (int)count($list);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.cast_count, 5);
+    assert_eq!(res.get_replace_count, 1);
+    assert!(res.upgraded_content.contains("$id = int(Request::query('id'));"));
+    assert!(res.upgraded_content.contains("$name = string($user->profile->getName());"));
+    assert!(res.upgraded_content.contains("$total = float($item['price']) * $qty;"));
+    assert!(res.upgraded_content.contains("$sum = int($a + $b);"));
+    assert!(res.upgraded_content.contains("$cnt = int(count($list));"));
+}
+
+#[test]
+fn test_migrate_type_casts_chained() {
+    let input = concat!(
+        "<?php\n",
+        "$val = (string)(int)$x;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.cast_count, 2);
+    let expected = concat!(
+        "$val = string(int($x));\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_type_casts_in_comments_and_strings_preserved() {
+    let input = concat!(
+        "// (int)$x\n",
+        "/* (string)$y */\n",
+        "$msg = '(float)$z is a string';\n",
+        "$msg2 = \"(bool)$w in double quotes\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.cast_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_cli_migrate_write_type_casts() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_cast_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("calc.php");
+    let content = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "$id = (int)$_GET['id'];\n",
+        "$price = (float)$raw_price;\n",
+        "$title = (string)$name;\n",
+        "$isActive = (bool)$flag;\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // Dry-run
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("4 type cast(s) converted to functional conversion(s)"));
+    assert!(check_stdout.contains("1 declare() directive(s) removed"));
+    assert!(check_stdout.contains("1 $_GET[...] access(es) replaced with Request::query(...)"));
+
+    // Write mode
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("declare("));
+    assert!(migrated_content.contains("int(Request::query('id'))"));
+    assert!(migrated_content.contains("float($raw_price)"));
+    assert!(migrated_content.contains("string($name)"));
+    assert!(migrated_content.contains("bool($flag)"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_migrate_list_destructuring_basic() {
+    let input = concat!(
+        "<?php\n",
+        "list($a, $b) = $coords;\n",
+        "list($x) = $single;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.list_destructure_count, 2);
+    let expected = concat!(
+        "[$a, $b] = $coords;\n",
+        "[$x] = $single;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_destructuring_skipping() {
+    let input = concat!(
+        "<?php\n",
+        "list($r, , $b) = getRgbColors();\n",
+        "list(, , $z) = $dimensions;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.list_destructure_count, 2);
+    let expected = concat!(
+        "[$r, , $b] = getRgbColors();\n",
+        "[, , $z] = $dimensions;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_destructuring_keyed() {
+    let input = concat!(
+        "<?php\n",
+        "list('id' => $id, 'role' => $role) = $user;\n",
+        "list(\"name\" => $name, \"age\" => $age) = $profile;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.list_destructure_count, 2);
+    let expected = concat!(
+        "['id' => $id, 'role' => $role] = $user;\n",
+        "[\"name\" => $name, \"age\" => $age] = $profile;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_destructuring_nested() {
+    let input = concat!(
+        "<?php\n",
+        "list($a, list($b, $c)) = $nested;\n",
+        "list(list($x, $y), list($w, $h)) = $box;\n",
+        "list($a, list($b, list($c, $d))) = $deep;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    // 2 in first line, 3 in second line, 3 in third line = 8 list(...) constructs
+    assert_eq!(res.list_destructure_count, 8);
+    let expected = concat!(
+        "[$a, [$b, $c]] = $nested;\n",
+        "[[$x, $y], [$w, $h]] = $box;\n",
+        "[$a, [$b, [$c, $d]]] = $deep;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_destructuring_foreach() {
+    let input = concat!(
+        "<?php\n",
+        "foreach ($rows as list($id, $name)) {\n",
+        "    echo $id;\n",
+        "}\n",
+        "foreach ($data as $key => list($a, $b)) {\n",
+        "    echo $key;\n",
+        "}\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.list_destructure_count, 2);
+    let expected = concat!(
+        "foreach ($rows as [$id, $name]) {\n",
+        "    echo $id;\n",
+        "}\n",
+        "foreach ($data as $key => [$a, $b]) {\n",
+        "    echo $key;\n",
+        "}\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_destructuring_multiline_and_spacing() {
+    let input = concat!(
+        "<?php\n",
+        "list(\n",
+        "    $first,\n",
+        "    $second,\n",
+        ") = $pair;\n",
+        "list ($m, $n) = $other;\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.list_destructure_count, 2);
+    let expected = concat!(
+        "[\n",
+        "    $first,\n",
+        "    $second,\n",
+        "] = $pair;\n",
+        "[$m, $n] = $other;\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_list_preserves_methods_and_static_calls() {
+    let input = concat!(
+        "$items = Arr::list($a, $b);\n",
+        "$collection->list();\n",
+        "$obj?->list('all');\n",
+        "$list($foo, $bar);\n",
+        "class Handler {\n",
+        "    public function list($filter) {\n",
+        "        return [];\n",
+        "    }\n",
+        "}\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.list_destructure_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_migrate_list_preserves_comments_and_strings() {
+    let input = concat!(
+        "// list($a, $b) = $x;\n",
+        "/* list($c, $d) = $y; */\n",
+        "$msg = 'list($a, $b) in single quotes';\n",
+        "$str = \"list($c, $d) in double quotes\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.list_destructure_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_cli_migrate_write_list_destructuring() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_list_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("destruct.php");
+    let content = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "list($id, $name) = $row;\n",
+        "list($a, list($b, $c)) = $coords;\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // Dry-run
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("3 list(...) destructuring construct(s) converted to [...]"));
+    assert!(check_stdout.contains("1 declare() directive(s) removed"));
+
+    // Write mode
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("declare("));
+    assert!(migrated_content.contains("[$id, $name] = $row;"));
+    assert!(migrated_content.contains("[$a, [$b, $c]] = $coords;"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_migrate_error_suppression_function_calls() {
+    let input = concat!(
+        "<?php\n",
+        "@unlink($file);\n",
+        "$content = @file_get_contents($url);\n",
+        "@mkdir($dir, 0777, true);\n",
+        "@chmod($path, 0755);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.error_suppress_count, 4);
+    let expected = concat!(
+        "unlink($file);\n",
+        "$content = file_get_contents($url);\n",
+        "mkdir($dir, 0777, true);\n",
+        "chmod($path, 0755);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_error_suppression_variables_and_arrays() {
+    let input = concat!(
+        "<?php\n",
+        "$val = @$arr['key'];\n",
+        "$item = @$object->property;\n",
+        "$nested = @$data[0]['nested'];\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.error_suppress_count, 3);
+    let expected = concat!(
+        "$val = $arr['key'];\n",
+        "$item = $object->property;\n",
+        "$nested = $data[0]['nested'];\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_error_suppression_multiple_and_spacing() {
+    let input = concat!(
+        "<?php\n",
+        "@@unlink($file);\n",
+        "$a = @ unlink($x);\n",
+        "$b = @  $arr['k'];\n",
+        "foo(@$p1, @ $p2);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.error_suppress_count, 6);
+    let expected = concat!(
+        "unlink($file);\n",
+        "$a = unlink($x);\n",
+        "$b = $arr['k'];\n",
+        "foo($p1, $p2);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_error_suppression_control_flow_and_keywords() {
+    let input = concat!(
+        "<?php\n",
+        "if (@unlink($file)) {\n",
+        "    echo 1;\n",
+        "}\n",
+        "return @json_decode($json, true);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.error_suppress_count, 2);
+    let expected = concat!(
+        "if (unlink($file)) {\n",
+        "    echo 1;\n",
+        "}\n",
+        "return json_decode($json, true);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_error_suppression_chained_with_casts_and_lists() {
+    let input = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "list($a, $b) = @getCoords();\n",
+        "$id = (int)@$_GET['id'];\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    assert_eq!(res.list_destructure_count, 1);
+    assert_eq!(res.cast_count, 1);
+    assert_eq!(res.get_replace_count, 1);
+    assert_eq!(res.error_suppress_count, 2);
+    let expected = concat!(
+        "[$a, $b] = getCoords();\n",
+        "$id = int(Request::query('id'));\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_error_suppression_preserves_strings_and_comments() {
+    let input = concat!(
+        "// @param int $x\n",
+        "/* @var User $user */\n",
+        "# @todo fix later\n",
+        "$email = 'support@domain.com';\n",
+        "$msg = \"contact@example.org\";\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.error_suppress_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_cli_migrate_write_error_suppression() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_suppress_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("suppress.php");
+    let content = concat!(
+        "<?php\n",
+        "@unlink($file);\n",
+        "$content = @file_get_contents($url);\n",
+        "$id = (int)@$_GET['id'];\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // Dry-run
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("3 error suppression '@' operator(s) removed"));
+    assert!(check_stdout.contains("1 type cast(s) converted to functional conversion(s)"));
+    assert!(check_stdout.contains("1 $_GET[...] access(es) replaced with Request::query(...)"));
+
+    // Write mode
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("@unlink"));
+    assert!(!migrated_content.contains("@file_get_contents"));
+    assert!(!migrated_content.contains("@$_GET"));
+    assert!(migrated_content.contains("unlink($file);"));
+    assert!(migrated_content.contains("file_get_contents($url);"));
+    assert!(migrated_content.contains("int(Request::query('id'))"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_migrate_var_dump_basic() {
+    let input = concat!(
+        "<?php\n",
+        "var_dump($a);\n",
+        "var_dump($x, $y, $z);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.var_dump_count, 2);
+    let expected = concat!(
+        "dd($a);\n",
+        "dd($x, $y, $z);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_var_export_basic() {
+    let input = concat!(
+        "<?php\n",
+        "var_export($user);\n",
+        "var_export($data, true);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.var_dump_count, 2);
+    let expected = concat!(
+        "dd($user);\n",
+        "dd($data, true);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_var_dump_and_export_casing_and_namespaces() {
+    let input = concat!(
+        "<?php\n",
+        "\\var_dump($foo);\n",
+        "\\var_export($bar);\n",
+        "VAR_DUMP($baz);\n",
+        "Var_Export($qux);\n",
+        "var_dump ($spaced);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.var_dump_count, 5);
+    let expected = concat!(
+        "dd($foo);\n",
+        "dd($bar);\n",
+        "dd($baz);\n",
+        "dd($qux);\n",
+        "dd ($spaced);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_var_dump_preserves_methods_and_custom_names() {
+    let input = concat!(
+        "$dumper->var_dump($a);\n",
+        "$exporter?->var_export($b);\n",
+        "Debugger::var_dump($c);\n",
+        "$var_dump($d);\n",
+        "class Debug {\n",
+        "    public function var_dump($e) {}\n",
+        "}\n",
+        "my_var_dump($f);\n",
+        "var_dump_all($g);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.var_dump_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_migrate_var_dump_preserves_strings_and_comments() {
+    let input = concat!(
+        "// var_dump($x);\n",
+        "/* var_export($y); */\n",
+        "$msg = \"calling var_dump($z)\";\n",
+        "$sql = 'SELECT var_export FROM logs';\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(!res.modified);
+    assert_eq!(res.var_dump_count, 0);
+    assert_eq!(res.upgraded_content, input);
+}
+
+#[test]
+fn test_cli_migrate_write_var_dump_and_export() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_dump_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("debug.php");
+    let content = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "var_dump($user);\n",
+        "var_export($config);\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // Dry-run
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("2 var_dump / var_export call(s) replaced with dd()"));
+    assert!(check_stdout.contains("1 declare() directive(s) removed"));
+
+    // Write mode
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("declare("));
+    assert!(!migrated_content.contains("var_dump("));
+    assert!(!migrated_content.contains("var_export("));
+    assert!(migrated_content.contains("dd($user);"));
+    assert!(migrated_content.contains("dd($config);"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_strip_error_reporting_basic() {
+    let input = concat!(
+        "<?php\n",
+        "error_reporting(E_ALL);\n",
+        "$x = 1;\n",
+        "error_reporting(0);\n",
+        "$y = 2;\n",
+        "error_reporting(E_ALL & ~E_NOTICE);\n",
+        "$z = 3;\n",
+        "error_reporting();\n"
+    );
+    let (cleaned, count) = strip_error_reporting(input);
+    assert_eq!(count, 4);
+    let expected = concat!(
+        "<?php\n",
+        "$x = 1;\n",
+        "$y = 2;\n",
+        "$z = 3;\n"
+    );
+    assert_eq!(cleaned, expected);
+}
+
+#[test]
+fn test_strip_error_reporting_with_at_and_slash() {
+    let input = concat!(
+        "<?php\n",
+        "@error_reporting(0);\n",
+        "\\error_reporting(E_ALL);\n",
+        "@\\error_reporting(E_ALL | E_STRICT);\n",
+        "$a = 10;\n"
+    );
+    let (cleaned, count) = strip_error_reporting(input);
+    assert_eq!(count, 3);
+    let expected = concat!(
+        "<?php\n",
+        "$a = 10;\n"
+    );
+    assert_eq!(cleaned, expected);
+}
+
+#[test]
+fn test_strip_error_reporting_trailing_comments_and_spacing() {
+    let input = concat!(
+        "<?php\n",
+        "    error_reporting(E_ALL); // enable all warnings\n",
+        "    $x = 42;\n",
+        "    error_reporting(0); # disable completely\n",
+        "    $y = 84;\n"
+    );
+    let (cleaned, count) = strip_error_reporting(input);
+    assert_eq!(count, 2);
+    let expected = concat!(
+        "<?php\n",
+        "    $x = 42;\n",
+        "    $y = 84;\n"
+    );
+    assert_eq!(cleaned, expected);
+}
+
+#[test]
+fn test_strip_error_reporting_same_line_as_php_tag() {
+    let input = "<?php error_reporting(0);\n$x = 1;\n";
+    let (cleaned, count) = strip_error_reporting(input);
+    assert_eq!(count, 1);
+    assert_eq!(cleaned, "<?php\n$x = 1;\n");
+}
+
+#[test]
+fn test_strip_error_reporting_preserves_methods_and_strings() {
+    let input = concat!(
+        "<?php\n",
+        "// error_reporting(E_ALL);\n",
+        "/* error_reporting(0); */\n",
+        "$str = \"error_reporting(E_ALL)\";\n",
+        "$obj->error_reporting(1);\n",
+        "$obj?->error_reporting(2);\n",
+        "Config::error_reporting(3);\n",
+        "function error_reporting() {\n",
+        "    return 0;\n",
+        "}\n"
+    );
+    let (cleaned, count) = strip_error_reporting(input);
+    assert_eq!(count, 0);
+    assert_eq!(cleaned, input);
+}
+
+#[test]
+fn test_migrate_error_reporting_in_full_pipeline() {
+    let input = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "error_reporting(E_ALL);\n",
+        "list($a, $b) = @getCoords();\n",
+        "$id = (int)$_GET['id'];\n",
+        "var_dump($a, $b);\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.declare_count, 1);
+    assert_eq!(res.error_reporting_count, 1);
+    assert_eq!(res.list_destructure_count, 1);
+    assert_eq!(res.error_suppress_count, 1);
+    assert_eq!(res.cast_count, 1);
+    assert_eq!(res.get_replace_count, 1);
+    assert_eq!(res.var_dump_count, 1);
+
+    let expected = concat!(
+        "[$a, $b] = getCoords();\n",
+        "$id = int(Request::query('id'));\n",
+        "dd($a, $b);\n"
+    );
+    assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_cli_migrate_write_error_reporting() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_err_rep_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_path = temp_dir.join("init.php");
+    let content = concat!(
+        "<?php\n",
+        "declare(strict_types=1);\n",
+        "error_reporting(E_ALL & ~E_DEPRECATED);\n",
+        "@ini_set('display_errors', '0');\n",
+        "$id = (int)$_GET['id'];\n",
+        "var_dump($id);\n"
+    );
+    fs::write(&file_path, content).unwrap();
+
+    // Dry-run
+    let check_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --check");
+
+    assert!(check_output.status.success());
+    let check_stdout = String::from_utf8_lossy(&check_output.stdout);
+    assert!(check_stdout.contains("1 error_reporting(...) call(s) removed"));
+    assert!(check_stdout.contains("1 declare() directive(s) removed"));
+    assert!(check_stdout.contains("1 ini_set(...) call(s) commented out"));
+    assert!(check_stdout.contains("1 $_GET[...] access(es) replaced with Request::query(...)"));
+    assert!(check_stdout.contains("1 type cast(s) converted to functional conversion(s)"));
+    assert!(check_stdout.contains("1 var_dump / var_export call(s) replaced with dd()"));
+
+    // Write mode
+    let migrate_output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+
+    assert!(migrate_output.status.success());
+    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    assert!(!migrated_content.contains("declare("));
+    assert!(!migrated_content.contains("error_reporting("));
+    assert!(migrated_content.contains("// ini_set('display_errors', '0');"));
+    assert!(migrated_content.contains("int(Request::query('id'))"));
+    assert!(migrated_content.contains("dd($id);"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_replace_get_array_access_various_forms() {
+    let input = concat!(
+        "<?php\n",
+        "$id = $_GET['id'];\n",
+        "$name = $_GET[\"name\"];\n",
+        "$key = $_GET[$varKey];\n",
+        "$zero = $_GET[0];\n",
+        "$nested = $_GET['filter']['status'];\n",
+        "$spaces = $_GET[ 'sort' ];\n"
+    );
+    let (res, count) = replace_get_array_access(input);
+    assert_eq!(count, 6);
+    let expected = concat!(
+        "<?php\n",
+        "$id = Request::query('id');\n",
+        "$name = Request::query(\"name\");\n",
+        "$key = Request::query($varKey);\n",
+        "$zero = Request::query(0);\n",
+        "$nested = Request::query('filter')['status'];\n",
+        "$spaces = Request::query('sort');\n"
+    );
+    assert_eq!(res, expected);
+}
+
+#[test]
+fn test_replace_get_array_access_preserves_strings_and_comments() {
+    let input = concat!(
+        "<?php\n",
+        "// $_GET['commented']\n",
+        "/* $_GET['block'] */\n",
+        "$msg = \"Hello $_GET['str']\";\n",
+        "$msg2 = '$_GET[\"test\"]';\n",
+        "$all = $_GET;\n"
+    );
+    let (res, count) = replace_get_array_access(input);
+    assert_eq!(count, 0);
+    assert_eq!(res, input);
+}
+
+#[test]
+fn test_comment_ini_set_basic_and_at_prefix() {
+    let input = concat!(
+        "<?php\n",
+        "ini_set('display_errors', '0');\n",
+        "@ini_set('memory_limit', '512M');\n",
+        "\\ini_set('max_execution_time', 300);\n",
+        "@\\ini_set('log_errors', 1);\n"
+    );
+    let (res, count) = comment_ini_set_calls(input);
+    assert_eq!(count, 4);
+    let expected = concat!(
+        "<?php\n",
+        "// ini_set('display_errors', '0');\n",
+        "// ini_set('memory_limit', '512M');\n",
+        "// ini_set('max_execution_time', 300);\n",
+        "// ini_set('log_errors', 1);\n"
+    );
+    assert_eq!(res, expected);
+}
+
+#[test]
+fn test_comment_ini_set_indentation_and_comments() {
+    let input = concat!(
+        "<?php\n",
+        "    ini_set('display_errors', '1'); // debug mode\n",
+        "    @ini_set('memory_limit', '1G'); # large jobs\n"
+    );
+    let (res, count) = comment_ini_set_calls(input);
+    assert_eq!(count, 2);
+    let expected = concat!(
+        "<?php\n",
+        "    // ini_set('display_errors', '1'); // debug mode\n",
+        "    // ini_set('memory_limit', '1G'); # large jobs\n"
+    );
+    assert_eq!(res, expected);
+}
+
+#[test]
+fn test_comment_ini_set_same_line_as_tag() {
+    let input = "<?php ini_set('display_errors', '0');\n$x = 1;\n";
+    let (res, count) = comment_ini_set_calls(input);
+    assert_eq!(count, 1);
+    assert_eq!(res, "<?php\n// ini_set('display_errors', '0');\n$x = 1;\n");
+}
+
+#[test]
+fn test_comment_ini_set_multiline() {
+    let input = concat!(
+        "<?php\n",
+        "ini_set(\n",
+        "    'error_reporting',\n",
+        "    'E_ALL'\n",
+        ");\n"
+    );
+    let (res, count) = comment_ini_set_calls(input);
+    assert_eq!(count, 1);
+    let expected = concat!(
+        "<?php\n",
+        "// ini_set(\n",
+        "//     'error_reporting',\n",
+        "//     'E_ALL'\n",
+        "// );\n"
+    );
+    assert_eq!(res, expected);
+}
+
+#[test]
+fn test_comment_ini_set_preserves_methods_and_strings() {
+    let input = concat!(
+        "<?php\n",
+        "// ini_set('foo', 'bar');\n",
+        "/* @ini_set('baz', 'qux'); */\n",
+        "$str = \"ini_set('a', 'b')\";\n",
+        "$obj->ini_set('c', 'd');\n",
+        "$obj?->ini_set('e', 'f');\n",
+        "Config::ini_set('g', 'h');\n",
+        "function ini_set($k, $v) {\n",
+        "    return false;\n",
+        "}\n"
+    );
+    let (res, count) = comment_ini_set_calls(input);
+    assert_eq!(count, 0);
+    assert_eq!(res, input);
+}
+
+#[test]
+fn test_replace_post_array_access_various_keys() {
+    let input = concat!(
+        "<?php\n",
+        "$id = $_POST['id'];\n",
+        "$name = $_POST[\"name\"];\n",
+        "$key = $_POST[$varKey];\n",
+        "$zero = $_POST[0];\n",
+        "$nested = $_POST['filter']['status'];\n",
+        "$spaces = $_POST [ 'sort' ] ;\n"
+    );
+    let (res, count) = replace_post_array_access(input);
+    assert_eq!(count, 6);
+    let expected = concat!(
+        "<?php\n",
+        "$id = Request::body('id');\n",
+        "$name = Request::body(\"name\");\n",
+        "$key = Request::body($varKey);\n",
+        "$zero = Request::body(0);\n",
+        "$nested = Request::body('filter')['status'];\n",
+        "$spaces = Request::body('sort') ;\n"
+    );
+    assert_eq!(res, expected);
+}
+
+#[test]
+fn test_replace_post_array_access_preserves_plain_post_and_strings() {
+    let input = concat!(
+        "<?php\n",
+        "$all = $_POST;\n",
+        "foreach ($_POST as $k => $v) {}\n",
+        "$s1 = \"$_POST['id']\";\n",
+        "$s2 = '$_POST[\"name\"]';\n",
+        "// $_POST['commented']\n",
+        "/* $_POST['block'] */\n"
+    );
+    let (res, count) = replace_post_array_access(input);
+    assert_eq!(count, 0);
+    assert_eq!(res, input);
+}
+
+#[test]
+fn test_request_query_and_body_return_string_type() {
+    let script = r#"
+        $q = Request::query('non_existent');
+        $b = Request::body('non_existent');
+        return [
+            'q' => $q,
+            'b' => $b,
+            'q_type' => gettype($q),
+            'b_type' => gettype($b),
+        ];
+    "#;
+    let res = rhp::run_source(script).expect("Execution failed");
+    if let rhp::vm::PhpValue::Dict(dict) = res {
+        let map = dict.borrow();
+        assert_eq!(map.get("q"), Some(&rhp::vm::PhpValue::string("")));
+        assert_eq!(map.get("b"), Some(&rhp::vm::PhpValue::string("")));
+        assert_eq!(map.get("q_type"), Some(&rhp::vm::PhpValue::string("string")));
+        assert_eq!(map.get("b_type"), Some(&rhp::vm::PhpValue::string("string")));
+    } else {
+        panic!("Expected Dict result, got: {:?}", res);
+    }
+}
 

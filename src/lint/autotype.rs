@@ -846,6 +846,12 @@ pub fn infer_expression_type_name(
         ExprKind::StaticCall { target, method, .. } => {
             if let ExprKind::Ident(target_id) = &target.kind {
                 match target_id.name {
+                    "Request" => match method.name {
+                        "query" | "body" => Some("string".to_string()),
+                        "all" | "only" => Some("dict".to_string()),
+                        "has" | "hasFile" | "isJson" | "expectsJson" => Some("bool".to_string()),
+                        _ => Some("string".to_string()),
+                    },
                     "Arr" => match method.name {
                         "list" => Some("list".to_string()),
                         "dict" => Some("dict".to_string()),

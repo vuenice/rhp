@@ -677,6 +677,7 @@ pub fn resolve_facade_static_call(
             "has" => Ok(RhpType::Bool),
             "set" => Ok(RhpType::String),
             "clear" => Ok(RhpType::Void),
+            "query" | "body" => Ok(RhpType::String),
             "get" | "input" => Ok(RhpType::Mixed),
             "all" | "only" | "format" | "merge" => {
                 Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))

@@ -180,6 +180,14 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("require $path;\nrequire_once __DIR__ . '/vendor/autoload.php';"),
         fix: Some("Use static 'import \"./path.rhp\";' or 'use App\\Namespace\\Class;' with literal paths or namespaces. Package autoloading is resolved at build time."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0121",
+        title: "Directive statements forbidden",
+        summary: "The 'declare(...)' directive is not supported in RHP.",
+        explanation: "RHP enforces strict typing universally across all compilation units and relies on Tokio async fibers and OpenTelemetry instead of opcode ticks. Run 'rhp migrate' to automatically remove declare() directives.",
+        example: Some("declare(strict_types=1);\ndeclare(ticks=1);"),
+        fix: Some("Remove declare(...) statements or run 'rhp migrate' to strip them automatically."),
+    },
 
     // --- 0200 - 0299: Type system & boundary errors ---
     DiagnosticCodeInfo {

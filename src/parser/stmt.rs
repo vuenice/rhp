@@ -85,6 +85,38 @@ impl<'s> CombinatorStream<'s> {
             }
         }
 
+        // 3c. Reject legacy declare(...) directive statements
+        if self.check(&Token::Declare) {
+            let declare_tok = self.advance().unwrap();
+            let start_span = declare_tok.span;
+            let mut end_span = start_span;
+            let mut depth = 0;
+            while let Some(tok) = self.peek() {
+                if tok.token == Token::OpenParen {
+                    depth += 1;
+                    self.advance();
+                } else if tok.token == Token::CloseParen {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    self.advance();
+                } else if depth == 0 && tok.token == Token::SemiColon {
+                    let semi = self.advance().unwrap();
+                    end_span = semi.span;
+                    break;
+                } else if depth == 0 && tok.token == Token::OpenBrace {
+                    break;
+                } else {
+                    let t = self.advance().unwrap();
+                    end_span = t.span;
+                }
+            }
+            return Err(ParseError::new(
+                ParseErrorKind::DeclareDirectiveForbidden,
+                start_span.merge(end_span),
+            ));
+        }
+
         // 4. Strongly-typed variable declaration: only prefix type syntax `int $x = 10;` is supported.
         // Colon syntax `$x: int = 10;` is explicitly rejected.
         if let Some(tok) = self.peek() {

@@ -30,17 +30,21 @@ pub struct MigrateFileResult {
     pub curl_migrated_count: usize,
     pub curl_multi_count: usize,
     pub heredoc_count: usize,
+    pub declare_count: usize,
+    pub error_reporting_count: usize,
+    pub ini_set_count: usize,
+    pub cast_count: usize,
+    pub list_destructure_count: usize,
+    pub get_replace_count: usize,
+    pub post_replace_count: usize,
+    pub error_suppress_count: usize,
+    pub var_dump_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
     pub migrated_content: String,
-}
-
-impl MigrateFileResult {
-    #[inline]
-    pub fn upgraded_content(&self) -> &str {
-        &self.migrated_content
-    }
+    #[serde(skip)]
+    pub upgraded_content: String,
 }
 
 /// Aggregated report of migrating multiple files.
@@ -79,6 +83,33 @@ impl MigrateReport {
                     out.push_str(&format!("  • {}\n", res.file_path));
                     for line in &res.added_lines {
                         out.push_str(&format!("      + {}\n", line));
+                    }
+                    if res.declare_count > 0 {
+                        out.push_str(&format!("      ~ {} declare() directive(s) removed\n", res.declare_count));
+                    }
+                    if res.error_reporting_count > 0 {
+                        out.push_str(&format!("      ~ {} error_reporting(...) call(s) removed\n", res.error_reporting_count));
+                    }
+                    if res.ini_set_count > 0 {
+                        out.push_str(&format!("      ~ {} ini_set(...) call(s) commented out\n", res.ini_set_count));
+                    }
+                    if res.cast_count > 0 {
+                        out.push_str(&format!("      ~ {} type cast(s) converted to functional conversion(s)\n", res.cast_count));
+                    }
+                    if res.list_destructure_count > 0 {
+                        out.push_str(&format!("      ~ {} list(...) destructuring construct(s) converted to [...]\n", res.list_destructure_count));
+                    }
+                    if res.get_replace_count > 0 {
+                        out.push_str(&format!("      ~ {} $_GET[...] access(es) replaced with Request::query(...)\n", res.get_replace_count));
+                    }
+                    if res.post_replace_count > 0 {
+                        out.push_str(&format!("      ~ {} $_POST[...] access(es) replaced with Request::body(...)\n", res.post_replace_count));
+                    }
+                    if res.error_suppress_count > 0 {
+                        out.push_str(&format!("      ~ {} error suppression '@' operator(s) removed\n", res.error_suppress_count));
+                    }
+                    if res.var_dump_count > 0 {
+                        out.push_str(&format!("      ~ {} var_dump / var_export call(s) replaced with dd()\n", res.var_dump_count));
                     }
                     if res.dot_concat_count > 0 {
                         out.push_str(&format!("      ~ {} dot concatenation operator(s) replaced with '+'\n", res.dot_concat_count));
@@ -127,10 +158,65 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut curl_migrated_count = 0;
     let mut curl_multi_count = 0;
     let mut heredoc_count = 0;
+    let mut declare_count = 0;
+    let mut error_reporting_count = 0;
+    let mut ini_set_count = 0;
+    let mut cast_count = 0;
+    let mut list_destructure_count = 0;
+    let mut get_replace_count = 0;
+    let mut post_replace_count = 0;
+    let mut error_suppress_count = 0;
+    let mut var_dump_count = 0;
 
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
     current = after_tags;
+
+    // Step 0.01: Strip redundant declare(...) directive statements and blocks
+    let (after_declares, d_count) = strip_declare_statements(&current);
+    declare_count += d_count;
+    current = after_declares;
+
+    // Step 0.02: Strip legacy error_reporting(...) calls
+    let (after_reporting, er_count) = strip_error_reporting(&current);
+    error_reporting_count += er_count;
+    current = after_reporting;
+
+    // Step 0.03: Comment legacy ini_set(...) configuration calls (// ini_set(...);)
+    let (after_ini, ini_c) = comment_ini_set_calls(&current);
+    ini_set_count += ini_c;
+    current = after_ini;
+
+    // Step 0.04: Replace parenthesized type casts ((int)$x, (string)$x, (float)$x, (bool)$x)
+    // with functional conversions (int($x), string($x), float($x), bool($x))
+    let (after_casts, c_cast_count) = replace_type_casts(&current);
+    cast_count += c_cast_count;
+    current = after_casts;
+
+    // Step 0.05: Replace legacy list(...) destructuring with [...] array destructuring
+    let (after_lists, l_count) = replace_list_destructuring(&current);
+    list_destructure_count += l_count;
+    current = after_lists;
+
+    // Step 0.06: Remove error suppression operator '@' (@unlink() -> unlink())
+    let (after_suppress, s_count) = remove_error_suppression(&current);
+    error_suppress_count += s_count;
+    current = after_suppress;
+
+    // Step 0.07: Replace $_GET[...] query array access with Request::query(...)
+    let (after_get, g_count) = replace_get_array_access(&current);
+    get_replace_count += g_count;
+    current = after_get;
+
+    // Step 0.08: Replace $_POST[...] body array access with Request::body(...)
+    let (after_post, p_count) = replace_post_array_access(&current);
+    post_replace_count += p_count;
+    current = after_post;
+
+    // Step 0.09: Replace var_dump(...) and var_export(...) with dd(...)
+    let (after_dump, vd_count) = replace_var_dump_and_export(&current);
+    var_dump_count += vd_count;
+    current = after_dump;
 
     // Step 0.1: Upgrade Heredoc / Nowdoc blocks to ``` markdown syntax
     let (after_heredocs, h_count) = upgrade_heredoc_blocks(&current);
@@ -175,8 +261,18 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         curl_migrated_count,
         curl_multi_count,
         heredoc_count,
+        declare_count,
+        error_reporting_count,
+        ini_set_count,
+        cast_count,
+        list_destructure_count,
+        get_replace_count,
+        post_replace_count,
+        error_suppress_count,
+        var_dump_count,
         original_content: source.to_string(),
-        migrated_content: current,
+        migrated_content: current.clone(),
+        upgraded_content: current,
     }
 }
 
@@ -1786,3 +1882,2112 @@ fn find_insertion_point(source: &str) -> usize {
         idx
     }
 }
+
+// =========================================================================
+
+/// Strips redundant `declare(...)` directive statements and blocks from PHP source code.
+///
+/// Automatically removes:
+/// - `declare(strict_types=1);`
+/// - `declare(ticks=1);`
+/// - `declare(encoding=...);`
+/// - Combined directives: `declare(strict_types=1, ticks=1);`
+/// - Block forms: `declare(...) { ... }` or `declare(...): ... enddeclare;`
+///
+/// Directives inside comments or strings are preserved intact.
+pub fn strip_declare_statements(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Must be at a word boundary
+        if i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
+            i += 1;
+            continue;
+        }
+
+        // Match "declare" case-insensitively
+        if i + 7 <= n && source[i..i + 7].eq_ignore_ascii_case("declare") {
+            let after_word = i + 7;
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_') {
+                i = after_word;
+                continue;
+            }
+
+            // Skip whitespace up to '('
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' {
+                // Find matching ')'
+                let mut depth = 0;
+                let mut close_paren = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'(' {
+                            depth += 1;
+                        } else if bytes[cur] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_paren = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cp) = close_paren {
+                    let mut after_p = cp + 1;
+                    while after_p < n && (bytes[after_p] == b' ' || bytes[after_p] == b'\t' || bytes[after_p] == b'\r' || bytes[after_p] == b'\n') {
+                        after_p += 1;
+                    }
+
+                    if after_p < n && bytes[after_p] == b';' {
+                        // Statement form: declare(...);
+                        let after_semi = after_p + 1;
+
+                        // Check line before 'declare'
+                        let mut line_start = i;
+                        while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                            line_start -= 1;
+                        }
+                        let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');
+
+                        // Check line after ';'
+                        let mut line_end = after_semi;
+                        while line_end < n && (bytes[line_end] == b' ' || bytes[line_end] == b'\t') {
+                            line_end += 1;
+                        }
+                        // If followed by single-line comment on the same line, consume it as well
+                        if (line_end + 1 < n && bytes[line_end] == b'/' && bytes[line_end + 1] == b'/')
+                            || (line_end < n && bytes[line_end] == b'#')
+                        {
+                            while line_end < n && bytes[line_end] != b'\n' {
+                                line_end += 1;
+                            }
+                        }
+
+                        let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+                        if only_ws_before && only_ws_after {
+                            // Entire line is just the declare statement
+                            let mut full_end = line_end;
+                            if full_end < n && bytes[full_end] == b'\r' {
+                                full_end += 1;
+                            }
+                            if full_end < n && bytes[full_end] == b'\n' {
+                                full_end += 1;
+                            }
+                            edits.push(TextEdit {
+                                start: line_start,
+                                end: full_end,
+                                replacement: String::new(),
+                            });
+                        } else if only_ws_before && !only_ws_after {
+                            // Code follows on the same line: declare(...); $x = 1;
+                            edits.push(TextEdit {
+                                start: line_start,
+                                end: line_end,
+                                replacement: String::new(),
+                            });
+                        } else if !only_ws_before && only_ws_after {
+                            // Something precedes on the line, e.g. <?php declare(...);
+                            let mut start = i;
+                            while start > line_start && (bytes[start - 1] == b' ' || bytes[start - 1] == b'\t') {
+                                start -= 1;
+                            }
+                            let mut full_end = line_end;
+                            if full_end < n && bytes[full_end] == b'\r' {
+                                full_end += 1;
+                            }
+                            if full_end < n && bytes[full_end] == b'\n' {
+                                full_end += 1;
+                            }
+                            let rep = if bytes[line_start..start].ends_with(b"<?php") || bytes[line_start..start].ends_with(b"<?") {
+                                "\n".to_string()
+                            } else {
+                                String::new()
+                            };
+                            edits.push(TextEdit {
+                                start,
+                                end: full_end,
+                                replacement: rep,
+                            });
+                        } else {
+                            // Code before and after on the same line: foo(); declare(...); bar();
+                            let mut start = i;
+                            while start > line_start && (bytes[start - 1] == b' ' || bytes[start - 1] == b'\t') {
+                                start -= 1;
+                            }
+                            let rep = if bytes[line_start..start].ends_with(b"<?php") || bytes[line_start..start].ends_with(b"<?") {
+                                "\n".to_string()
+                            } else {
+                                " ".to_string()
+                            };
+                            edits.push(TextEdit {
+                                start,
+                                end: line_end,
+                                replacement: rep,
+                            });
+                        }
+
+                        count += 1;
+                        i = after_semi;
+                        continue;
+                    } else if after_p < n && bytes[after_p] == b'{' {
+                        // Block form: declare(...) { ... }
+                        let brace_start = after_p;
+                        let mut b_depth = 0;
+                        let mut close_brace = None;
+                        let mut b_cur = brace_start;
+                        while b_cur < n {
+                            if mask[b_cur] {
+                                if bytes[b_cur] == b'{' {
+                                    b_depth += 1;
+                                } else if bytes[b_cur] == b'}' {
+                                    b_depth -= 1;
+                                    if b_depth == 0 {
+                                        close_brace = Some(b_cur);
+                                        break;
+                                    }
+                                }
+                            }
+                            b_cur += 1;
+                        }
+
+                        if let Some(cb) = close_brace {
+                            let mut line_start = i;
+                            while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                                line_start -= 1;
+                            }
+                            let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');
+                            let mut after_open_brace = brace_start + 1;
+                            while after_open_brace < n && (bytes[after_open_brace] == b' ' || bytes[after_open_brace] == b'\t') {
+                                after_open_brace += 1;
+                            }
+                            let only_ws_after = after_open_brace == n || bytes[after_open_brace] == b'\r' || bytes[after_open_brace] == b'\n';
+
+                            if only_ws_before && only_ws_after {
+                                let mut full_end = after_open_brace;
+                                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
+                                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+                                edits.push(TextEdit {
+                                    start: line_start,
+                                    end: full_end,
+                                    replacement: String::new(),
+                                });
+                            } else {
+                                edits.push(TextEdit {
+                                    start: i,
+                                    end: after_open_brace,
+                                    replacement: String::new(),
+                                });
+                            }
+
+                            // Remove closing '}'
+                            let mut cb_line_start = cb;
+                            while cb_line_start > 0 && bytes[cb_line_start - 1] != b'\n' {
+                                cb_line_start -= 1;
+                            }
+                            let cb_ws_before = bytes[cb_line_start..cb].iter().all(|&b| b == b' ' || b == b'\t');
+                            let mut cb_line_end = cb + 1;
+                            while cb_line_end < n && (bytes[cb_line_end] == b' ' || bytes[cb_line_end] == b'\t') {
+                                cb_line_end += 1;
+                            }
+                            let cb_ws_after = cb_line_end == n || bytes[cb_line_end] == b'\r' || bytes[cb_line_end] == b'\n';
+
+                            if cb_ws_before && cb_ws_after {
+                                let mut full_end = cb_line_end;
+                                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
+                                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+                                edits.push(TextEdit {
+                                    start: cb_line_start,
+                                    end: full_end,
+                                    replacement: String::new(),
+                                });
+                            } else {
+                                edits.push(TextEdit {
+                                    start: cb,
+                                    end: cb_line_end,
+                                    replacement: String::new(),
+                                });
+                            }
+
+                            count += 1;
+                            i = brace_start + 1;
+                            continue;
+                        }
+                    } else if after_p < n && bytes[after_p] == b':' {
+                        // Alternative block form: declare(...): ... enddeclare;
+                        let colon_pos = after_p;
+                        let mut ed_pos = None;
+                        let mut ed_end = None;
+                        let mut c_search = colon_pos + 1;
+                        while c_search + 10 <= n {
+                            if mask[c_search] && source[c_search..c_search + 10].eq_ignore_ascii_case("enddeclare") {
+                                let mut after_ed = c_search + 10;
+                                while after_ed < n && (bytes[after_ed] == b' ' || bytes[after_ed] == b'\t') {
+                                    after_ed += 1;
+                                }
+                                if after_ed < n && bytes[after_ed] == b';' {
+                                    ed_pos = Some(c_search);
+                                    ed_end = Some(after_ed + 1);
+                                    break;
+                                }
+                            }
+                            c_search += 1;
+                        }
+
+                        if let (Some(ed_start), Some(ed_finish)) = (ed_pos, ed_end) {
+                            let mut line_start = i;
+                            while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                                line_start -= 1;
+                            }
+                            let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');
+                            let mut after_colon = colon_pos + 1;
+                            while after_colon < n && (bytes[after_colon] == b' ' || bytes[after_colon] == b'\t') {
+                                after_colon += 1;
+                            }
+                            let only_ws_after = after_colon == n || bytes[after_colon] == b'\r' || bytes[after_colon] == b'\n';
+
+                            if only_ws_before && only_ws_after {
+                                let mut full_end = after_colon;
+                                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
+                                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+                                edits.push(TextEdit {
+                                    start: line_start,
+                                    end: full_end,
+                                    replacement: String::new(),
+                                });
+                            } else {
+                                edits.push(TextEdit {
+                                    start: i,
+                                    end: after_colon,
+                                    replacement: String::new(),
+                                });
+                            }
+
+                            // Remove enddeclare;
+                            let mut ed_line_start = ed_start;
+                            while ed_line_start > 0 && bytes[ed_line_start - 1] != b'\n' {
+                                ed_line_start -= 1;
+                            }
+                            let ed_ws_before = bytes[ed_line_start..ed_start].iter().all(|&b| b == b' ' || b == b'\t');
+                            let mut ed_line_end = ed_finish;
+                            while ed_line_end < n && (bytes[ed_line_end] == b' ' || bytes[ed_line_end] == b'\t') {
+                                ed_line_end += 1;
+                            }
+                            let ed_ws_after = ed_line_end == n || bytes[ed_line_end] == b'\r' || bytes[ed_line_end] == b'\n';
+
+                            if ed_ws_before && ed_ws_after {
+                                let mut full_end = ed_line_end;
+                                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
+                                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+                                edits.push(TextEdit {
+                                    start: ed_line_start,
+                                    end: full_end,
+                                    replacement: String::new(),
+                                });
+                            } else {
+                                edits.push(TextEdit {
+                                    start: ed_start,
+                                    end: ed_line_end,
+                                    replacement: String::new(),
+                                });
+                            }
+
+                            count += 1;
+                            i = colon_pos + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    // Sort edits descending by start offset
+    edits.sort_by(|a, b| b.start.cmp(&a.start));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    // Collapse multiple consecutive blank lines leaving at most one blank line
+    while result.contains("\n\n\n") {
+        result = result.replace("\n\n\n", "\n\n");
+    }
+    while result.contains("\r\n\r\n\r\n") {
+        result = result.replace("\r\n\r\n\r\n", "\r\n\r\n");
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 1: Strip error_reporting(...) Calls
+// =========================================================================
+
+/// Strips legacy PHP `error_reporting(...)` calls:
+/// - `error_reporting(E_ALL);`
+/// - `error_reporting(0);`
+/// - `error_reporting(E_ALL & ~E_NOTICE);`
+/// - `error_reporting();`
+/// - `\error_reporting(E_ALL);`
+/// - `@error_reporting(0);`
+///
+/// Preserves:
+/// - Method calls: `$obj->error_reporting(...)`, `$obj?->error_reporting(...)`
+/// - Static calls: `Config::error_reporting(...)`
+/// - Function declarations: `function error_reporting(...)`
+/// - Variable functions: `$error_reporting(...)`
+/// - Occurrences inside strings and comments
+pub fn strip_error_reporting(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Optional leading prefix: '@', '\', or '@\'
+        let prefix_start = i;
+        let mut p_start = i;
+        if bytes[p_start] == b'@' {
+            p_start += 1;
+            while p_start < n && (bytes[p_start] == b' ' || bytes[p_start] == b'\t') {
+                p_start += 1;
+            }
+        }
+        if p_start < n && bytes[p_start] == b'\\' {
+            p_start += 1;
+        }
+
+        // Word boundary check before start
+        if prefix_start > 0 {
+            let prev = bytes[prefix_start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Match "error_reporting" case-insensitively (15 bytes)
+        let word = "error_reporting";
+        if p_start + word.len() <= n && source[p_start..p_start + word.len()].eq_ignore_ascii_case(word) {
+            let after_word = p_start + word.len();
+
+            // Word boundary check after
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Check what precedes (skipping whitespace backwards before prefix_start)
+            let mut b_idx = prefix_start;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+
+            // Reject method calls, static calls, nullsafe calls, variable calls
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"::" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 3 && &bytes[b_idx - 3..b_idx] == b"?->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_word;
+                continue;
+            }
+
+            // Reject function definition: function error_reporting(...)
+            let before_trimmed = source[..b_idx].trim_end();
+            if before_trimmed.ends_with("function") {
+                let prefix_len = before_trimmed.len() - "function".len();
+                if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                    i = after_word;
+                    continue;
+                }
+            }
+            if before_trimmed.ends_with('&') {
+                let before_amp = before_trimmed[..before_trimmed.len() - 1].trim_end();
+                if before_amp.ends_with("function") {
+                    let prefix_len = before_amp.len() - "function".len();
+                    if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                        i = after_word;
+                        continue;
+                    }
+                }
+            }
+
+            // Skip whitespace up to '('
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' && mask[p] {
+                // Find matching ')'
+                let mut depth = 0;
+                let mut close_paren = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'(' {
+                            depth += 1;
+                        } else if bytes[cur] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_paren = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cp) = close_paren {
+                    let mut after_cp = cp + 1;
+                    while after_cp < n && (bytes[after_cp] == b' ' || bytes[after_cp] == b'\t' || bytes[after_cp] == b'\r' || bytes[after_cp] == b'\n') {
+                        after_cp += 1;
+                    }
+
+                    // Check if followed by ';' or '?>'
+                    let has_semi = after_cp < n && bytes[after_cp] == b';';
+                    let after_stmt = if has_semi {
+                        after_cp + 1
+                    } else if after_cp + 1 < n && bytes[after_cp..].starts_with(b"?>") {
+                        after_cp
+                    } else {
+                        // Expression context: remove error_reporting(...) call
+                        cp + 1
+                    };
+
+                    if has_semi {
+                        // Standalone statement: check whitespace before and after to cleanly remove line
+                        let mut line_start = prefix_start;
+                        while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                            line_start -= 1;
+                        }
+                        let only_ws_before = bytes[line_start..prefix_start].iter().all(|&b| b == b' ' || b == b'\t');
+
+                        let mut line_end = after_stmt;
+                        while line_end < n && (bytes[line_end] == b' ' || bytes[line_end] == b'\t') {
+                            line_end += 1;
+                        }
+                        // If followed by single-line comment on the same line, consume it as well
+                        if (line_end + 1 < n && bytes[line_end] == b'/' && bytes[line_end + 1] == b'/')
+                            || (line_end < n && bytes[line_end] == b'#')
+                        {
+                            while line_end < n && bytes[line_end] != b'\n' {
+                                line_end += 1;
+                            }
+                        }
+
+                        let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+                        if only_ws_before && only_ws_after {
+                            // Entire line is just the error_reporting statement
+                            let mut full_end = line_end;
+                            if full_end < n && bytes[full_end] == b'\r' {
+                                full_end += 1;
+                            }
+                            if full_end < n && bytes[full_end] == b'\n' {
+                                full_end += 1;
+                            }
+                            edits.push(TextEdit {
+                                start: line_start,
+                                end: full_end,
+                                replacement: String::new(),
+                            });
+                        } else if only_ws_before && !only_ws_after {
+                            // Code follows on the same line: error_reporting(0); $x = 1;
+                            edits.push(TextEdit {
+                                start: line_start,
+                                end: line_end,
+                                replacement: String::new(),
+                            });
+                        } else if !only_ws_before && only_ws_after {
+                            // Something precedes on line: <?php error_reporting(0);
+                            let mut start_pos = prefix_start;
+                            while start_pos > line_start && (bytes[start_pos - 1] == b' ' || bytes[start_pos - 1] == b'\t') {
+                                start_pos -= 1;
+                            }
+                            let mut full_end = line_end;
+                            if full_end < n && bytes[full_end] == b'\r' {
+                                full_end += 1;
+                            }
+                            if full_end < n && bytes[full_end] == b'\n' {
+                                full_end += 1;
+                            }
+                            let rep = if bytes[line_start..start_pos].ends_with(b"<?php")
+                                || bytes[line_start..start_pos].ends_with(b"<?=")
+                                || bytes[line_start..start_pos].ends_with(b"<?")
+                            {
+                                "\n".to_string()
+                            } else {
+                                String::new()
+                            };
+                            edits.push(TextEdit {
+                                start: start_pos,
+                                end: full_end,
+                                replacement: rep,
+                            });
+                        } else {
+                            // Both preceded and followed by code on the same line
+                            let mut start_pos = prefix_start;
+                            while start_pos > line_start && (bytes[start_pos - 1] == b' ' || bytes[start_pos - 1] == b'\t') {
+                                start_pos -= 1;
+                            }
+                            edits.push(TextEdit {
+                                start: start_pos,
+                                end: line_end,
+                                replacement: " ".to_string(),
+                            });
+                        }
+                    } else {
+                        // Without semicolon (e.g. before closing tag ?>)
+                        edits.push(TextEdit {
+                            start: prefix_start,
+                            end: after_stmt,
+                            replacement: String::new(),
+                        });
+                    }
+
+                    count += 1;
+                    i = after_stmt;
+                    continue;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    // Collapse multiple consecutive blank lines leaving at most one blank line
+    while result.contains("\n\n\n") {
+        result = result.replace("\n\n\n", "\n\n");
+    }
+    while result.contains("\r\n\r\n\r\n") {
+        result = result.replace("\r\n\r\n\r\n", "\r\n\r\n");
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 2: Comment Legacy ini_set(...) Calls
+// =========================================================================
+
+/// Comments out legacy PHP `ini_set(...)` configuration calls everywhere, preserving the line:
+/// - `ini_set('display_errors', '0');` -> `// ini_set('display_errors', '0');`
+/// - `@ini_set('display_errors', '0');` -> `// ini_set('display_errors', '0');`
+/// - `\ini_set('display_errors', '0');` -> `// ini_set('display_errors', '0');`
+/// - `@\ini_set('display_errors', '0');` -> `// ini_set('display_errors', '0');`
+/// - `    ini_set('memory_limit', '512M');` -> `    // ini_set('memory_limit', '512M');`
+///
+/// Preserves:
+/// - Method calls: `$obj->ini_set(...)`, `$obj?->ini_set(...)`
+/// - Static calls: `Config::ini_set(...)`
+/// - Function definitions: `function ini_set(...)`
+/// - Variable functions: `$ini_set(...)`
+/// - Calls already inside comments or strings
+pub fn comment_ini_set_calls(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Optional leading prefix: '@', '\', or '@\'
+        let prefix_start = i;
+        let mut p_start = i;
+        if bytes[p_start] == b'@' {
+            p_start += 1;
+            while p_start < n && (bytes[p_start] == b' ' || bytes[p_start] == b'\t') {
+                p_start += 1;
+            }
+        }
+        if p_start < n && bytes[p_start] == b'\\' {
+            p_start += 1;
+        }
+
+        // Word boundary check before start
+        if prefix_start > 0 {
+            let prev = bytes[prefix_start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Match "ini_set" case-insensitively (7 bytes)
+        let word = "ini_set";
+        if p_start + word.len() <= n && source[p_start..p_start + word.len()].eq_ignore_ascii_case(word) {
+            let after_word = p_start + word.len();
+
+            // Word boundary check after
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Check what precedes (skipping whitespace backwards before prefix_start)
+            let mut b_idx = prefix_start;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+
+            // Reject method calls, static calls, nullsafe calls, variable calls
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"::" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 3 && &bytes[b_idx - 3..b_idx] == b"?->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_word;
+                continue;
+            }
+
+            // Reject function definition: function ini_set(...)
+            let before_trimmed = source[..b_idx].trim_end();
+            if before_trimmed.ends_with("function") {
+                let prefix_len = before_trimmed.len() - "function".len();
+                if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                    i = after_word;
+                    continue;
+                }
+            }
+
+            // Skip whitespace up to '('
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' && mask[p] {
+                // Find matching ')'
+                let mut depth = 0;
+                let mut close_paren = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'(' {
+                            depth += 1;
+                        } else if bytes[cur] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_paren = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cp) = close_paren {
+                    let mut after_cp = cp + 1;
+                    while after_cp < n && (bytes[after_cp] == b' ' || bytes[after_cp] == b'\t' || bytes[after_cp] == b'\r' || bytes[after_cp] == b'\n') {
+                        after_cp += 1;
+                    }
+
+                    // Check if followed by ';'
+                    let has_semi = after_cp < n && bytes[after_cp] == b';';
+                    let after_stmt = if has_semi {
+                        after_cp + 1
+                    } else {
+                        cp + 1
+                    };
+
+                    // Check whitespace before prefix_start on the current line
+                    let mut line_start = prefix_start;
+                    while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                        line_start -= 1;
+                    }
+                    let only_ws_before = bytes[line_start..prefix_start].iter().all(|&b| b == b' ' || b == b'\t');
+
+                    // Check trailing content on the same line after after_stmt
+                    let mut line_end = after_stmt;
+                    while line_end < n && (bytes[line_end] == b' ' || bytes[line_end] == b'\t') {
+                        line_end += 1;
+                    }
+                    if (line_end + 1 < n && bytes[line_end] == b'/' && bytes[line_end + 1] == b'/')
+                        || (line_end < n && bytes[line_end] == b'#')
+                    {
+                        while line_end < n && bytes[line_end] != b'\n' {
+                            line_end += 1;
+                        }
+                    }
+                    let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+                    let stmt_code = &source[p_start..after_stmt];
+                    let commented_lines: Vec<String> = stmt_code
+                        .lines()
+                        .enumerate()
+                        .map(|(_, l)| {
+                            format!("// {}", l)
+                        })
+                        .collect();
+                    let replacement_text = commented_lines.join("\n");
+
+                    if only_ws_before {
+                        if only_ws_after {
+                            // Standalone line: replace from prefix_start to after_stmt
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: after_stmt,
+                                replacement: replacement_text,
+                            });
+                        } else {
+                            // Code follows on the same line: ini_set(...); $x = 1;
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: line_end,
+                                replacement: format!("{}\n", replacement_text),
+                            });
+                        }
+                    } else {
+                        // Preceded by something on the line: e.g. <?php ini_set(...) or foo(); ini_set(...)
+                        let before_text = &source[line_start..prefix_start];
+                        if before_text.ends_with("<?php ") || before_text.ends_with("<?php\t") {
+                            let start_edit = line_start + 5;
+                            edits.push(TextEdit {
+                                start: start_edit,
+                                end: after_stmt,
+                                replacement: format!("\n// {}", stmt_code),
+                            });
+                        } else if before_text.ends_with("<?php") || before_text.ends_with("<?=") || before_text.ends_with("<?") {
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: after_stmt,
+                                replacement: format!("\n// {}", stmt_code),
+                            });
+                        } else {
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: after_stmt,
+                                replacement: format!("\n// {}", stmt_code),
+                            });
+                        }
+                    }
+
+                    count += 1;
+                    i = after_stmt;
+                    continue;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 3: Replace Parenthesized Type Casts ((int)$x -> int($x))
+// =========================================================================
+
+/// Replaces legacy PHP-style parenthesized casts with functional conversions:
+/// - `(int)$x` / `(integer)$x` -> `int($x)`
+/// - `(string)$x` / `(binary)$x` -> `string($x)`
+/// - `(float)$x` / `(double)$x` / `(real)$x` -> `float($x)`
+/// - `(bool)$x` / `(boolean)$x` -> `bool($x)`
+///
+/// Preserves occurrences inside string literals or comments.
+pub fn replace_type_casts(source: &str) -> (String, usize) {
+    let mut current = source.to_string();
+    let mut total_count = 0;
+
+    // Loop until no more casts are found (handles nested/chained casts like `(int)(string)$x`)
+    loop {
+        let mask = build_code_mask(&current);
+        let bytes = current.as_bytes();
+        let n = bytes.len();
+        let mut edits: Vec<TextEdit> = Vec::new();
+        let mut i = 0;
+
+        while i < n {
+            if !mask[i] {
+                i += 1;
+                continue;
+            }
+
+            if bytes[i] == b'(' {
+                let mut p = i + 1;
+                while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                    p += 1;
+                }
+
+                let word_start = p;
+                while p < n && bytes[p].is_ascii_alphabetic() {
+                    p += 1;
+                }
+                let word = &current[word_start..p];
+
+                while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                    p += 1;
+                }
+
+                if p < n && bytes[p] == b')' {
+                    let target_type = match word.to_ascii_lowercase().as_str() {
+                        "int" | "integer" => "int",
+                        "string" | "binary" => "string",
+                        "float" | "double" | "real" => "float",
+                        "bool" | "boolean" => "bool",
+                        _ => {
+                            i += 1;
+                            continue;
+                        }
+                    };
+
+                    let close_paren = p;
+                    let mut op_start = close_paren + 1;
+                    while op_start < n && (bytes[op_start] == b' ' || bytes[op_start] == b'\t' || bytes[op_start] == b'\r' || bytes[op_start] == b'\n') {
+                        op_start += 1;
+                    }
+
+                    if op_start < n {
+                        // Check if immediately followed by another cast (e.g. `(int)(string)$x`).
+                        // If so, let the inner cast convert first.
+                        let is_another_cast = if bytes[op_start] == b'(' {
+                            let mut cp = op_start + 1;
+                            while cp < n && (bytes[cp] == b' ' || bytes[cp] == b'\t') {
+                                cp += 1;
+                            }
+                            let ws = cp;
+                            while cp < n && bytes[cp].is_ascii_alphabetic() {
+                                cp += 1;
+                            }
+                            let w = current[ws..cp].to_ascii_lowercase();
+                            while cp < n && (bytes[cp] == b' ' || bytes[cp] == b'\t') {
+                                cp += 1;
+                            }
+                            cp < n && bytes[cp] == b')' && matches!(w.as_str(), "int" | "integer" | "string" | "binary" | "float" | "double" | "real" | "bool" | "boolean")
+                        } else {
+                            false
+                        };
+
+                        if !is_another_cast {
+                            if let Some(op_end) = find_cast_operand_end(&current, &mask, op_start) {
+                                if op_end > op_start {
+                                    let operand_str = &current[op_start..op_end];
+                                    let trimmed = operand_str.trim();
+
+                                    // If operand is already enclosed in balanced parentheses, e.g. `($a + $b)`
+                                    let inner = if trimmed.starts_with('(') && trimmed.ends_with(')') && is_balanced_parens(trimmed) {
+                                        &trimmed[1..trimmed.len() - 1]
+                                    } else {
+                                        trimmed
+                                    };
+
+                                    let replacement = format!("{}({})", target_type, inner.trim());
+                                    edits.push(TextEdit {
+                                        start: i,
+                                        end: op_end,
+                                        replacement,
+                                    });
+
+                                    i = op_end;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            i += 1;
+        }
+
+        if edits.is_empty() {
+            break;
+        }
+
+        total_count += edits.len();
+        edits.sort_by(|a, b| b.start.cmp(&a.start));
+
+        for edit in edits {
+            current.replace_range(edit.start..edit.end, &edit.replacement);
+        }
+    }
+
+    (current, total_count)
+}
+
+fn is_balanced_parens(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
+        return false;
+    }
+    let mut depth = 0;
+    for (idx, &b) in bytes.iter().enumerate() {
+        if b == b'(' {
+            depth += 1;
+        } else if b == b')' {
+            depth -= 1;
+            if depth == 0 && idx < bytes.len() - 1 {
+                return false;
+            }
+        }
+    }
+    depth == 0
+}
+
+fn find_cast_operand_end(source: &str, mask: &[bool], start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    if start >= n || !mask[start] {
+        return None;
+    }
+
+    let mut cur = start;
+
+    // 1. Optional unary prefix operators: +, -, !, @
+    while cur < n && mask[cur] && (bytes[cur] == b'+' || bytes[cur] == b'-' || bytes[cur] == b'!' || bytes[cur] == b'@') {
+        cur += 1;
+        while cur < n && (bytes[cur] == b' ' || bytes[cur] == b'\t' || bytes[cur] == b'\r' || bytes[cur] == b'\n') {
+            cur += 1;
+        }
+    }
+    if cur >= n || !mask[cur] {
+        return None;
+    }
+
+    // 2. Primary term
+    if bytes[cur] == b'(' {
+        // Parenthesized expression (...)
+        let mut depth = 0;
+        let mut close_idx = None;
+        let mut p = cur;
+        while p < n {
+            if mask[p] {
+                if bytes[p] == b'(' {
+                    depth += 1;
+                } else if bytes[p] == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_idx = Some(p + 1);
+                        break;
+                    }
+                }
+            }
+            p += 1;
+        }
+        cur = close_idx?;
+    } else if bytes[cur] == b'[' {
+        // Array literal [...]
+        let mut depth = 0;
+        let mut close_idx = None;
+        let mut p = cur;
+        while p < n {
+            if mask[p] {
+                if bytes[p] == b'[' {
+                    depth += 1;
+                } else if bytes[p] == b']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_idx = Some(p + 1);
+                        break;
+                    }
+                }
+            }
+            p += 1;
+        }
+        cur = close_idx?;
+    } else if bytes[cur] == b'\'' || bytes[cur] == b'"' || bytes[cur] == b'`' {
+        // String literal
+        let quote = bytes[cur];
+        cur += 1;
+        while cur < n {
+            if bytes[cur] == b'\\' && cur + 1 < n {
+                cur += 2;
+                continue;
+            }
+            if bytes[cur] == quote {
+                cur += 1;
+                break;
+            }
+            cur += 1;
+        }
+    } else if bytes[cur] == b'$' {
+        // Variable: $foo, $$foo
+        cur += 1;
+        while cur < n && bytes[cur] == b'$' {
+            cur += 1;
+        }
+        if cur < n && (bytes[cur].is_ascii_alphabetic() || bytes[cur] == b'_' || bytes[cur] >= 0x80) {
+            cur += 1;
+            while cur < n && (bytes[cur].is_ascii_alphanumeric() || bytes[cur] == b'_' || bytes[cur] >= 0x80) {
+                cur += 1;
+            }
+        } else {
+            return None;
+        }
+    } else if bytes[cur].is_ascii_digit() {
+        // Numeric literal: 123, 123.45, 0x1a
+        while cur < n && (bytes[cur].is_ascii_alphanumeric() || bytes[cur] == b'.' || bytes[cur] == b'_') {
+            cur += 1;
+        }
+    } else if bytes[cur].is_ascii_alphabetic() || bytes[cur] == b'_' || bytes[cur] == b'\\' || bytes[cur] >= 0x80 {
+        // Identifier / function name / class name / true / false / null
+        while cur < n && (bytes[cur].is_ascii_alphanumeric() || bytes[cur] == b'_' || bytes[cur] == b'\\' || bytes[cur] >= 0x80) {
+            cur += 1;
+        }
+    } else {
+        return None;
+    }
+
+    // 3. Postfix chain loop: ->prop, ?->prop, ::prop/method, [idx], (args)
+    loop {
+        let mut p = cur;
+        while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+            p += 1;
+        }
+        if p >= n || !mask[p] {
+            break;
+        }
+
+        if bytes[p..].starts_with(b"?->") {
+            p += 3;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p < n && (bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                p += 1;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                    p += 1;
+                }
+                cur = p;
+                continue;
+            } else {
+                break;
+            }
+        } else if bytes[p..].starts_with(b"->") {
+            p += 2;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p < n && (bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                p += 1;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                    p += 1;
+                }
+                cur = p;
+                continue;
+            } else {
+                break;
+            }
+        } else if bytes[p..].starts_with(b"::") {
+            p += 2;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p < n && bytes[p] == b'$' {
+                p += 1;
+            }
+            if p < n && (bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                p += 1;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] >= 0x80) {
+                    p += 1;
+                }
+                cur = p;
+                continue;
+            } else {
+                break;
+            }
+        } else if bytes[p] == b'[' {
+            // Array subscript [ ... ]
+            let mut depth = 0;
+            let mut close_idx = None;
+            let mut s = p;
+            while s < n {
+                if mask[s] {
+                    if bytes[s] == b'[' {
+                        depth += 1;
+                    } else if bytes[s] == b']' {
+                        depth -= 1;
+                        if depth == 0 {
+                            close_idx = Some(s + 1);
+                            break;
+                        }
+                    }
+                }
+                s += 1;
+            }
+            if let Some(ci) = close_idx {
+                cur = ci;
+                continue;
+            } else {
+                break;
+            }
+        } else if bytes[p] == b'(' {
+            // Function or method call args ( ... )
+            let mut depth = 0;
+            let mut close_idx = None;
+            let mut s = p;
+            while s < n {
+                if mask[s] {
+                    if bytes[s] == b'(' {
+                        depth += 1;
+                    } else if bytes[s] == b')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            close_idx = Some(s + 1);
+                            break;
+                        }
+                    }
+                }
+                s += 1;
+            }
+            if let Some(ci) = close_idx {
+                cur = ci;
+                continue;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    Some(cur)
+}
+
+// =========================================================================
+// Step 2: Replace Legacy list(...) Destructuring with [...] Array Destructuring
+// =========================================================================
+
+/// Replaces legacy PHP `list(...)` destructuring syntax with modern bracket `[...]` destructuring.
+///
+/// Handles:
+/// - Basic destructuring: `list($a, $b) = $coords;` -> `[$a, $b] = $coords;`
+/// - Element skipping: `list($r, , $b) = getColors();` -> `[$r, , $b] = getColors();`
+/// - Keyed destructuring: `list('id' => $id, 'role' => $role) = $user;` -> `['id' => $id, 'role' => $role] = $user;`
+/// - Nested destructuring: `list($a, list($b, $c)) = $nested;` -> `[$a, [$b, $c]] = $nested;`
+/// - Inside foreach: `foreach ($rows as list($a, $b))` -> `foreach ($rows as [$a, $b])`
+///
+/// Preserves:
+/// - Method calls: `$obj->list(...)`, `$obj?->list(...)`
+/// - Static calls: `Arr::list(...)`
+/// - Variable functions: `$list(...)`
+/// - Function declarations: `function list(...)`
+/// - Occurrences inside strings and comments
+pub fn replace_list_destructuring(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Must be at a word boundary
+        if i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_' || bytes[i - 1] == b'$' || bytes[i - 1] >= 0x80) {
+            i += 1;
+            continue;
+        }
+
+        // Match "list" case-insensitively
+        if i + 4 <= n && source[i..i + 4].eq_ignore_ascii_case("list") {
+            let after_word = i + 4;
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Check what precedes 'list' (skipping whitespace)
+            let mut b_idx = i;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+
+            // Check method calls, static calls, nullsafe calls, variable calls, namespace references
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"::" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 3 && &bytes[b_idx - 3..b_idx] == b"?->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 1 && (bytes[b_idx - 1] == b'$' || bytes[b_idx - 1] == b'\\') {
+                i = after_word;
+                continue;
+            }
+
+            // Check if preceded by 'function' (e.g. function list() or function &list())
+            let before_trimmed = source[..b_idx].trim_end();
+            if before_trimmed.ends_with("function") {
+                let prefix_len = before_trimmed.len() - "function".len();
+                if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                    i = after_word;
+                    continue;
+                }
+            }
+            if before_trimmed.ends_with('&') {
+                let before_amp = before_trimmed[..before_trimmed.len() - 1].trim_end();
+                if before_amp.ends_with("function") {
+                    let prefix_len = before_amp.len() - "function".len();
+                    if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                        i = after_word;
+                        continue;
+                    }
+                }
+            }
+
+            // Skip whitespace up to '('
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' && mask[p] {
+                let open_paren = p;
+
+                // Find matching ')'
+                let mut depth = 0;
+                let mut close_paren = None;
+                let mut cur = open_paren;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'(' {
+                            depth += 1;
+                        } else if bytes[cur] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_paren = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cp) = close_paren {
+                    edits.push(TextEdit {
+                        start: i,
+                        end: open_paren + 1,
+                        replacement: "[".to_string(),
+                    });
+                    edits.push(TextEdit {
+                        start: cp,
+                        end: cp + 1,
+                        replacement: "]".to_string(),
+                    });
+                    count += 1;
+                    i = after_word;
+                    continue;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 3: Remove Error Suppression '@' Operator (@unlink(...) -> unlink(...))
+// =========================================================================
+
+/// Removes legacy PHP error suppression operator `@`:
+/// - `@unlink($file);` -> `unlink($file);`
+/// - `@file_get_contents($url)` -> `file_get_contents($url)`
+/// - `@$arr['key']` -> `$arr['key']`
+/// - `@mkdir($dir, 0777, true)` -> `mkdir($dir, 0777, true)`
+/// - `@@foo()` -> `foo()`
+/// - `return @json_decode($str);` -> `return json_decode($str);`
+/// - `if (@($a / $b))` -> `if (($a / $b))`
+///
+/// Preserves:
+/// - Email addresses inside strings and HTML (`admin@example.com`)
+/// - PHPDoc / annotations in comments (`@param`, `@return`, `@var`, `@deprecated`)
+/// - Template directives (`@if`, `@foreach`, `@extends`, `@section`, etc.)
+pub fn remove_error_suppression(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    // Track whether we are inside <?php ... ?> tags
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        // Track PHP tag boundaries if file uses <?php tags
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] || bytes[i] != b'@' {
+            i += 1;
+            continue;
+        }
+
+        // Check preceding character (skipping whitespace backwards)
+        let mut b_idx = i;
+        while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+            b_idx -= 1;
+        }
+
+        let before_ws = &source[..b_idx];
+        if before_ws.ends_with("<?php") || before_ws.ends_with("<?=") || before_ws.ends_with("<?") {
+            // Preceded by PHP opening tag -> valid position for expression / statement
+        } else if b_idx > 0 {
+            let prev_byte = bytes[b_idx - 1];
+
+            // If preceded by a closing delimiter, literal quote, or backslash, it's NOT error suppression
+            if prev_byte == b')' || prev_byte == b']' || prev_byte == b'}' || prev_byte == b'\'' || prev_byte == b'"' || prev_byte == b'`' || prev_byte == b'\\' {
+                i += 1;
+                continue;
+            }
+
+            // If preceded by an alphanumeric char or '_' or '$' or unicode:
+            if prev_byte.is_ascii_alphanumeric() || prev_byte == b'_' || prev_byte == b'$' || prev_byte >= 0x80 {
+                // Check if the preceding word is a PHP keyword that can precede an expression
+                let mut word_start = b_idx - 1;
+                while word_start > 0 && (bytes[word_start - 1].is_ascii_alphanumeric() || bytes[word_start - 1] == b'_') {
+                    word_start -= 1;
+                }
+                let prev_word = &source[word_start..b_idx];
+
+                let is_preceding_keyword = matches!(
+                    prev_word.to_ascii_lowercase().as_str(),
+                    "return" | "yield" | "echo" | "print" | "case" | "throw" | "and" | "or" | "xor" | "clone" | "new" | "instanceof" | "match"
+                );
+
+                if !is_preceding_keyword {
+                    // Preceded by an identifier / variable / number like `admin@` or `$x@` -> NOT error suppression
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Check following character (skipping whitespace forwards)
+        let mut p = i + 1;
+        while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+            p += 1;
+        }
+
+        if p >= n {
+            i += 1;
+            continue;
+        }
+
+        let next_byte = bytes[p];
+
+        // In PHP, the silenced operand must be a valid expression:
+        // - variable: $foo
+        // - parenthesized expression: (...)
+        // - array: [...]
+        // - namespace separator: \foo()
+        // - unary operator: !, ~, +, -, @
+        // - identifier / function call: unlink(...)
+        let is_valid_operand = match next_byte {
+            b'$' | b'(' | b'[' | b'\\' | b'!' | b'~' | b'+' | b'-' | b'@' => true,
+            b if b.is_ascii_alphabetic() || b == b'_' || b >= 0x80 => {
+                // Read identifier
+                let id_start = p;
+                let mut id_end = p;
+                while id_end < n && (bytes[id_end].is_ascii_alphanumeric() || bytes[id_end] == b'_' || bytes[id_end] >= 0x80) {
+                    id_end += 1;
+                }
+                let id = &source[id_start..id_end];
+
+                // Ensure it's not a template/Blade directive
+                !is_blade_directive(id)
+            }
+            _ => false,
+        };
+
+        if !is_valid_operand {
+            i += 1;
+            continue;
+        }
+
+        // Found error suppression operator '@'.
+        // Consume '@' and any following horizontal spaces/tabs between '@' and the operand.
+        let mut edit_end = i + 1;
+        while edit_end < n && (bytes[edit_end] == b' ' || bytes[edit_end] == b'\t') {
+            edit_end += 1;
+        }
+
+        edits.push(TextEdit {
+            start: i,
+            end: edit_end,
+            replacement: String::new(),
+        });
+        count += 1;
+        i = edit_end;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+fn is_blade_directive(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "if" | "elseif" | "else" | "endif"
+            | "unless" | "endunless"
+            | "isset" | "endisset"
+            | "empty" | "endempty"
+            | "auth" | "endauth"
+            | "guest" | "endguest"
+            | "production" | "endproduction"
+            | "env" | "endenv"
+            | "hassection" | "sectionmissing"
+            | "switch" | "case" | "default" | "endswitch" | "break" | "continue"
+            | "for" | "endfor"
+            | "foreach" | "endforeach"
+            | "forelse" | "endforelse"
+            | "while" | "endwhile"
+            | "extends" | "section" | "endsection" | "yield" | "show"
+            | "includeif" | "includewhen" | "includeunless" | "includefirst"
+            | "each" | "once" | "endonce"
+            | "push" | "endpush" | "stack" | "prepend" | "endprepend"
+            | "inject" | "component" | "endcomponent" | "slot" | "endslot"
+            | "props" | "aware"
+            | "vite" | "livewire" | "csrf" | "method" | "dd" | "dump"
+    )
+}
+
+// =========================================================================
+// Step 6: Replace $_GET[...] Array Access with Request::query(...)
+// =========================================================================
+
+/// Replaces legacy PHP `$_GET[...]` query parameter accesses with modern `Request::query(...)`:
+/// - `$_GET['id']` -> `Request::query('id')`
+/// - `$_GET["id"]` -> `Request::query("id")`
+/// - `$_GET[$key]` -> `Request::query($key)`
+/// - `$_GET[0]` -> `Request::query(0)`
+/// - `$_GET['filter']['sub']` -> `Request::query('filter')['sub']`
+///
+/// Preserves:
+/// - Plain `$_GET` variable references (e.g. `$params = $_GET;`, `foreach ($_GET as $k => $v)`)
+/// - Occurrences inside string literals or comments
+pub fn replace_get_array_access(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Word boundary check before start
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Check for "$_GET" (5 bytes)
+        let word = "$_GET";
+        if i + word.len() <= n && source[i..i + word.len()].eq_ignore_ascii_case(word) {
+            let after_word = i + word.len();
+
+            // Word boundary check after $_GET
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Skip whitespace up to '['
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'[' && mask[p] {
+                // Find matching ']'
+                let mut depth = 0;
+                let mut close_bracket = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'[' {
+                            depth += 1;
+                        } else if bytes[cur] == b']' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_bracket = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cb) = close_bracket {
+                    let inner = &source[p + 1..cb];
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        edits.push(TextEdit {
+                            start: i,
+                            end: cb + 1,
+                            replacement: format!("Request::query({})", trimmed),
+                        });
+                        count += 1;
+                        i = cb + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 7: Replace $_POST[...] array access with Request::body(...)
+// =========================================================================
+
+/// Replaces legacy `$_POST[...]` body array accesses with `Request::body(...)`.
+///
+/// Converts:
+/// - `$_POST['id']` -> `Request::body('id')`
+/// - `$_POST["id"]` -> `Request::body("id")`
+/// - `$_POST[$key]` -> `Request::body($key)`
+/// - `$_POST[0]` -> `Request::body(0)`
+/// - `$_POST['filter']['sub']` -> `Request::body('filter')['sub']`
+///
+/// Preserves:
+/// - Plain `$_POST` variable references (e.g. `$params = $_POST;`, `foreach ($_POST as $k => $v)`)
+/// - Occurrences inside string literals or comments
+pub fn replace_post_array_access(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Word boundary check before start
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Check for "$_POST" (6 bytes)
+        let word = "$_POST";
+        if i + word.len() <= n && source[i..i + word.len()].eq_ignore_ascii_case(word) {
+            let after_word = i + word.len();
+
+            // Word boundary check after $_POST
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Skip whitespace up to '['
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'[' && mask[p] {
+                // Find matching ']'
+                let mut depth = 0;
+                let mut close_bracket = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'[' {
+                            depth += 1;
+                        } else if bytes[cur] == b']' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_bracket = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cb) = close_bracket {
+                    let inner = &source[p + 1..cb];
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        edits.push(TextEdit {
+                            start: i,
+                            end: cb + 1,
+                            replacement: format!("Request::body({})", trimmed),
+                        });
+                        count += 1;
+                        i = cb + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 8: Replace var_dump(...) and var_export(...) with dd(...)
+// =========================================================================
+
+/// Replaces legacy PHP debugging calls `var_dump(...)` and `var_export(...)` with `dd(...)`.
+///
+/// Converts:
+/// - `var_dump($a);` -> `dd($a);`
+/// - `var_dump($a, $b);` -> `dd($a, $b);`
+/// - `var_export($x);` -> `dd($x);`
+/// - `\var_dump($x);` -> `dd($x);`
+/// - `\var_export($x);` -> `dd($x);`
+///
+/// Preserves:
+/// - Method calls: `$obj->var_dump(...)`, `$obj?->var_export(...)`
+/// - Static calls: `Dumper::var_dump(...)`, `Exporter::var_export(...)`
+/// - Function declarations: `function var_dump(...)`
+/// - Variable functions: `$var_dump(...)`
+/// - Occurrences inside strings and comments
+pub fn replace_var_dump_and_export(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Check for optional leading backslash: \var_dump or \var_export
+        let has_leading_backslash = bytes[i] == b'\\';
+        let word_start = if has_leading_backslash { i + 1 } else { i };
+
+        // Must be at a word boundary before
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Check if word is "var_dump" (8 bytes) or "var_export" (10 bytes)
+        let matched_len = if word_start + 8 <= n && source[word_start..word_start + 8].eq_ignore_ascii_case("var_dump") {
+            Some(8)
+        } else if word_start + 10 <= n && source[word_start..word_start + 10].eq_ignore_ascii_case("var_export") {
+            Some(10)
+        } else {
+            None
+        };
+
+        if let Some(wlen) = matched_len {
+            let after_word = word_start + wlen;
+
+            // Must be at a word boundary after
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Check what precedes (skipping whitespace backwards before i)
+            let mut b_idx = i;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+
+            // Reject method calls, static calls, nullsafe calls, variable calls
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"::" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 3 && &bytes[b_idx - 3..b_idx] == b"?->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_word;
+                continue;
+            }
+
+            // Reject function definition: function var_dump(...) or function &var_dump(...)
+            let before_trimmed = source[..b_idx].trim_end();
+            if before_trimmed.ends_with("function") {
+                let prefix_len = before_trimmed.len() - "function".len();
+                if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                    i = after_word;
+                    continue;
+                }
+            }
+            if before_trimmed.ends_with('&') {
+                let before_amp = before_trimmed[..before_trimmed.len() - 1].trim_end();
+                if before_amp.ends_with("function") {
+                    let prefix_len = before_amp.len() - "function".len();
+                    if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                        i = after_word;
+                        continue;
+                    }
+                }
+            }
+
+            // Must be followed by '(' (skipping whitespace forwards)
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' && mask[p] {
+                edits.push(TextEdit {
+                    start: i,
+                    end: after_word,
+                    replacement: "dd".to_string(),
+                });
+                count += 1;
+                i = after_word;
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+

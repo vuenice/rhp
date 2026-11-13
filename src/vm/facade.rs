@@ -5765,7 +5765,7 @@ fn cast_request_value(val: &PhpValue, target_type: &str) -> PhpValue {
 
 fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
-        "get" | "input" | "query" => {
+        "get" | "input" => {
             if args.is_empty() {
                 return REQUEST_PARAMS.with(|cell| {
                     Ok(PhpValue::dict_from_map(cell.borrow().clone()))
@@ -5777,6 +5777,23 @@ fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(cell.borrow().get(&key).cloned().unwrap_or(default_val))
             })
         }
+        "query" => {
+            if args.is_empty() {
+                return REQUEST_PARAMS.with(|cell| {
+                    Ok(PhpValue::dict_from_map(cell.borrow().clone()))
+                });
+            }
+            let key = get_arg_str(args, 0, "Request::query")?;
+            let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
+            REQUEST_PARAMS.with(|cell| {
+                let val = cell.borrow().get(&key).cloned().unwrap_or(default_val);
+                Ok(match val {
+                    PhpValue::String(_) => val,
+                    PhpValue::Null => PhpValue::string(""),
+                    other => PhpValue::string(other.to_php_string()),
+                })
+            })
+        }
         "body" | "post" => {
             if args.is_empty() {
                 return REQUEST_PARAMS.with(|cell| {
@@ -5786,7 +5803,12 @@ fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
             let key = get_arg_str(args, 0, "Request::body")?;
             let default_val = args.get(1).cloned().unwrap_or(PhpValue::Null);
             REQUEST_PARAMS.with(|cell| {
-                Ok(cell.borrow().get(&key).cloned().unwrap_or(default_val))
+                let val = cell.borrow().get(&key).cloned().unwrap_or(default_val);
+                Ok(match val {
+                    PhpValue::String(_) => val,
+                    PhpValue::Null => PhpValue::string(""),
+                    other => PhpValue::string(other.to_php_string()),
+                })
             })
         }
         "all" => {

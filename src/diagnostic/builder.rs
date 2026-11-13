@@ -174,6 +174,12 @@ impl<'a> DiagnosticBuilder<'a> {
                 Some(construct.clone()),
                 Some(vec!["use".to_string(), "import".to_string()]),
             ),
+            ParseErrorKind::DeclareDirectiveForbidden => (
+                "RHP0121".to_string(),
+                "directive statement 'declare(...)' is not supported in RHP. Run 'rhp migrate' to remove declare() directives.".to_string(),
+                Some("declare".to_string()),
+                None,
+            ),
             ParseErrorKind::Lex(lex_err) => match lex_err {
                 crate::lexer::error::LexError::UnterminatedString => (
                     "RHP0002".to_string(),

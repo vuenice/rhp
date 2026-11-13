@@ -107,6 +107,9 @@ pub enum ParseErrorKind {
         construct: String,
     },
 
+    #[error("Compile Error: Directive statement 'declare(...)' is not supported in RHP. Strict typing is enabled project-wide by default; run 'rhp migrate' to remove declare() directives.")]
+    DeclareDirectiveForbidden,
+
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 }
