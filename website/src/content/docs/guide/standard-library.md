@@ -72,11 +72,24 @@ RHP abandons PHP's legacy monolithic "everything-is-a-hash-table" array in favor
 list $numbers = [10, 20, 30, 40];
 list $items = [];
 
-// 2. Static Factory Helpers
+// 2. Static Factory Helpers & Arr::from()
 list $seq = Arr::range(1, 10, 2);       // [1, 3, 5, 7, 9]
 list $repeated = Arr::repeat('rhp', 3); // ['rhp', 'rhp', 'rhp']
 list $wrapped = Arr::wrap(42);          // [42]
-list $fromDict = Arr::from(['a' => 1, 'b' => 2]); // [1, 2]
+
+// Arr::from() checks the structure/type of the array inside and generates the respective native subtype:
+list    $fromList = Arr::from([1, 2, 3]);           // list: [1, 2, 3]
+dict    $fromDict = Arr::from(['a' => 1, 'b' => 2]); // dict: ['a' => 1, 'b' => 2]
+set     $fromSet  = Arr::from(Arr::set(['x', 'y'])); // set: {'x', 'y'}
+hashMap $fromMap  = Arr::from(Arr::hashMap(['k' => 'v'])); // hashMap
+
+// Passing a scalar automatically wraps it into a single-element list:
+list $fromStr   = Arr::from('str'); // ['str']
+list $fromInt   = Arr::from(123);   // [123]
+list $fromFloat = Arr::from(12.34); // [12.34]
+
+// Arr::from() returns native collection types, allowing immediate arrow operator chaining:
+string $joined = Arr::from([1, 2, 3])->join(); // "1,2,3"
 
 // 3. Higher-Order Transforms & Pipelines
 list $doubled = $numbers
@@ -886,24 +899,64 @@ string $sub     = $title->trim()->substr(0, 5); // "Hello"
 
 The `Str` facade class is reserved for **factory methods, non-instance utilities, and character encoding operations** that generate new strings from scratch:
 
-```php
-// 1. CSPRNG Cryptographically Secure Random String
+// 1. Constructing Strings with Str::from()
+string $s1 = Str::from('hello'); // "hello"
+string $s2 = Str::from(123);     // "123"
+string $s3 = Str::from(45.67);   // "45.67"
+
+// Str::from() returns native string, allowing immediate fluent arrow operator chaining:
+list $chars = Str::from('str')->split(); // ['s', 't', 'r']
+
+// 2. CSPRNG Cryptographically Secure Random String
 string $token = Str::random(32);
 
-// 2. Joining List Elements into a String
+// 3. Joining List Elements into a String
 string $csv = Str::join(", ", ["alpha", "beta", "gamma"]);
 
-// 3. Constructing from Raw Byte Arrays
+// 4. Constructing from Raw Byte Arrays
 string $raw = Str::fromBytes([72, 101, 108, 108, 111]); // "Hello"
 
-// 4. Character Encoding & Legacy Multi-Byte Conversion (Shift-JIS, EUC-JP)
+// 5. Character Encoding & Legacy Multi-Byte Conversion (Shift-JIS, EUC-JP)
 string $jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
 string $safeUtf8 = Str::utf8($userInput);
 string $rawJis = Str::toEncoding($greeting, 'Shift-JIS');
 
-// 5. Explicit Loose String Coercion Comparison
+// 6. Explicit Loose String Coercion Comparison
 bool $match = Str::compare("42", 42); // true
 bool $same  = Str::compare("hello", "HELLO", true); // true (case-insensitive)
+```
+
+### 3. Syntactic Sugar: `explode()` and `implode()`
+
+In RHP, classic procedural PHP string functions are first-class syntactic sugar for native fluent arrow methods:
+
+- **`explode()`** is sugar syntax for `$str->split()` (or `$str->explode()`):
+  ```php
+  // Canonical RHP fluent syntax:
+  list $arr = $str->split();        // Splits into characters
+  list $arr = $str->split(',');     // Splits by delimiter
+
+  // Equivalent procedural sugar syntax:
+  list $arr = explode(',', $str);
+  ```
+
+- **`implode()`** is sugar syntax for `$arr->join()` (or `$arr->implode()`):
+  ```php
+  // Canonical RHP fluent syntax:
+  string $str = $arr->join();       // Joins with default separator
+  string $str = $arr->join(',');    // Joins with custom separator
+
+  // Equivalent procedural sugar syntax:
+  string $str = implode(',', $arr);
+  ```
+
+Because `Arr::from()` and `Str::from()` return native types, both data type helper functions and the arrow operator work seamlessly together:
+```php
+string $joined = Arr::from([1, 2, 3])->join(); // "1,2,3"
+list $parts    = Str::from('str')->split();     // ['s', 't', 'r']
+
+// Direct type casts also support immediate arrow method chaining:
+list $digits   = string(123)->split();          // ['1', '2', '3']
 ```
 
 ### 3. Immutable Helpers & Explicit Variable Reassignment

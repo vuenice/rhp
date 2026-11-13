@@ -853,3 +853,166 @@ fn test_strncmp_negative_length_rejected() {
     assert!(res4.is_err(), "legacy strncasecmp with negative length must return error");
 }
 
+#[test]
+fn test_arr_from_type_inspection_and_scalar_wrapping() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        // 1. Array type inspection
+        $empty = Arr::from([]);
+        $list = Arr::from([1, 2, 3]);
+        $dict = Arr::from(['a' => 10, 'b' => 20]);
+        $set = Arr::from(Arr::set(['alpha', 'beta']));
+        $map = Arr::from(Arr::hashMap(['k1' => 'v1']));
+
+        // Check types via Arr::check
+        $is_empty_list = Arr::check($empty, 'list');
+        $is_list = Arr::check($list, 'list');
+        $is_dict = Arr::check($dict, 'dict');
+        $is_set = Arr::check($set, 'set');
+        $is_map = Arr::check($map, 'hashMap');
+
+        // 2. Scalars wrapping
+        $from_str = Arr::from('str');
+        $from_int = Arr::from(123);
+        $from_float = Arr::from(45.67);
+
+        return [
+            $is_empty_list, $is_list, $is_dict, $is_set, $is_map,
+            $from_str, $from_int, $from_float
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        assert_eq!(b[0], PhpValue::Bool(true));
+        assert_eq!(b[1], PhpValue::Bool(true));
+        assert_eq!(b[2], PhpValue::Bool(true));
+        assert_eq!(b[3], PhpValue::Bool(true));
+        assert_eq!(b[4], PhpValue::Bool(true));
+
+        assert_eq!(b[5], PhpValue::list(vec![PhpValue::string("str")]));
+        assert_eq!(b[6], PhpValue::list(vec![PhpValue::Int(123)]));
+        assert_eq!(b[7], PhpValue::list(vec![PhpValue::Float(45.67)]));
+    } else {
+        panic!("expected array/list result");
+    }
+}
+
+#[test]
+fn test_from_syntax_arrow_operator_chaining() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        // Arr::from returning native types, allowing arrow operator methods
+        $joined_list = Arr::from([1, 2, 3])->join();
+        $joined_custom = Arr::from(['x', 'y', 'z'])->join('-');
+        $joined_dict = Arr::from(['a' => 10, 'b' => 20])->join(',');
+
+        // Str::from returning native string, allowing arrow operator methods
+        $str = Str::from('str');
+        $str_split = $str->split();
+        $str_direct_split = Str::from('str')->split();
+        $str_split_delim = Str::from('a,b,c')->split(',');
+        $str_from_int = Str::from(123);
+        $str_from_float = Str::from(45.67);
+        $cast_split = string(123)->split();
+
+        return [
+            $joined_list,
+            $joined_custom,
+            $joined_dict,
+            $str_split,
+            $str_direct_split,
+            $str_split_delim,
+            $str_from_int,
+            $str_from_float,
+            $cast_split
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        assert_eq!(b[0], PhpValue::string("1,2,3"));
+        assert_eq!(b[1], PhpValue::string("x-y-z"));
+        assert_eq!(b[2], PhpValue::string("10,20"));
+
+        let chars = PhpValue::list(vec![
+            PhpValue::string("s"),
+            PhpValue::string("t"),
+            PhpValue::string("r"),
+        ]);
+        assert_eq!(b[3], chars);
+        assert_eq!(b[4], chars);
+
+        let parts = PhpValue::list(vec![
+            PhpValue::string("a"),
+            PhpValue::string("b"),
+            PhpValue::string("c"),
+        ]);
+        assert_eq!(b[5], parts);
+        assert_eq!(b[6], PhpValue::string("123"));
+        assert_eq!(b[7], PhpValue::string("45.67"));
+        let digits = PhpValue::list(vec![
+            PhpValue::string("1"),
+            PhpValue::string("2"),
+            PhpValue::string("3"),
+        ]);
+        assert_eq!(b[8], digits);
+    } else {
+        panic!("expected array/list result");
+    }
+}
+
+#[test]
+fn test_explode_and_implode_sugar_syntax() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        $str = "hello,world,rhp";
+        $arr = ["apple", "banana", "cherry"];
+
+        // explode is sugar syntax for list $arr = $str->split()
+        $parts_arrow = $str->split(',');
+        $parts_explode_method = $str->explode(',');
+        $parts_explode_fn = explode(',', $str);
+
+        // implode is sugar syntax for string $str = $arr->join()
+        $joined_arrow = $arr->join(',');
+        $joined_implode_method = $arr->implode(',');
+        $joined_implode_fn = implode(',', $arr);
+
+        return [
+            $parts_arrow,
+            $parts_explode_method,
+            $parts_explode_fn,
+            $joined_arrow,
+            $joined_implode_method,
+            $joined_implode_fn
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        let expected_parts = PhpValue::list(vec![
+            PhpValue::string("hello"),
+            PhpValue::string("world"),
+            PhpValue::string("rhp"),
+        ]);
+        assert_eq!(b[0], expected_parts);
+        assert_eq!(b[1], expected_parts);
+        assert_eq!(b[2], expected_parts);
+
+        let expected_joined = PhpValue::string("apple,banana,cherry");
+        assert_eq!(b[3], expected_joined);
+        assert_eq!(b[4], expected_joined);
+        assert_eq!(b[5], expected_joined);
+    } else {
+        panic!("expected array/list result");
+    }
+}
+
+

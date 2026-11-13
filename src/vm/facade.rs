@@ -1120,6 +1120,17 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::string(arg2.replace(&arg0, &arg1)))
             }
         }
+        "from" => {
+            let val = match args.first() {
+                None | Some(PhpValue::Null) => PhpValue::string(""),
+                Some(PhpValue::String(s)) => PhpValue::String(s.clone()),
+                Some(PhpValue::Int(i)) => PhpValue::string(i.to_string()),
+                Some(PhpValue::Float(f)) => PhpValue::string(f.to_string()),
+                Some(PhpValue::Bool(b)) => PhpValue::string(if *b { "1" } else { "" }),
+                Some(other) => PhpValue::string(other.to_php_string()),
+            };
+            Ok(val)
+        }
         "fromEncoding" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Str::fromEncoding".to_string(),
@@ -1618,12 +1629,19 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::list(vec![val; count]))
         }
         "from" => {
-            let items = if let Some(first) = args.first() {
-                extract_array_elements(first)
-            } else {
-                Vec::new()
-            };
-            Ok(PhpValue::list(items))
+            if args.len() > 1 {
+                return Ok(PhpValue::list(args.to_vec()));
+            }
+            match args.first() {
+                None | Some(PhpValue::Null) => Ok(PhpValue::list(Vec::new())),
+                Some(PhpValue::EmptyArray) => Ok(PhpValue::list(Vec::new())),
+                Some(PhpValue::List(l)) => Ok(PhpValue::List(l.clone())),
+                Some(PhpValue::Dict(d)) => Ok(PhpValue::Dict(d.clone())),
+                Some(PhpValue::Set(s)) => Ok(PhpValue::Set(s.clone())),
+                Some(PhpValue::HashMap(m)) => Ok(PhpValue::HashMap(m.clone())),
+                Some(PhpValue::Array(a)) => Ok(PhpValue::list(a.borrow().clone())),
+                Some(other) => Ok(PhpValue::list(vec![other.clone()])),
+            }
         }
         // Return the first element of an array, or `$default` if empty.
         // Example: `Arr::first([10, 20], null)` -> `10`
@@ -5203,6 +5221,20 @@ fn dispatch_int(method: &str, args: &[PhpValue]) -> FacadeResult {
         "i64" | "i32" | "i16" | "i8" | "u64" | "u32" | "u16" | "u8" => Err(RuntimeErrorKind::Custom {
             message: format!("Int::{}() is not a type. The only integer type is int (i64)", method),
         }),
+        "from" => {
+            let val = match args.first() {
+                None | Some(PhpValue::Null) => PhpValue::Int(0),
+                Some(PhpValue::Int(i)) => PhpValue::Int(*i),
+                Some(PhpValue::Float(f)) => PhpValue::Int(*f as i64),
+                Some(PhpValue::Bool(b)) => PhpValue::Int(if *b { 1 } else { 0 }),
+                Some(PhpValue::String(s)) => {
+                    let parsed = s.trim().parse::<i64>().unwrap_or(0);
+                    PhpValue::Int(parsed)
+                }
+                Some(other) => PhpValue::Int(other.to_i64().unwrap_or(0)),
+            };
+            Ok(val)
+        }
         "abs" => {
             let val = args.first().and_then(|v| v.to_i64()).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Int::abs".to_string(),
@@ -5372,6 +5404,20 @@ fn dispatch_float(method: &str, args: &[PhpValue]) -> FacadeResult {
                 }
                 _ => Ok(PhpValue::Bool(false)),
             }
+        }
+        "from" => {
+            let val = match args.first() {
+                None | Some(PhpValue::Null) => PhpValue::Float(0.0),
+                Some(PhpValue::Float(f)) => PhpValue::Float(*f),
+                Some(PhpValue::Int(i)) => PhpValue::Float(*i as f64),
+                Some(PhpValue::Bool(b)) => PhpValue::Float(if *b { 1.0 } else { 0.0 }),
+                Some(PhpValue::String(s)) => {
+                    let parsed = s.trim().parse::<f64>().unwrap_or(0.0);
+                    PhpValue::Float(parsed)
+                }
+                Some(other) => PhpValue::Float(other.to_f64().unwrap_or(0.0)),
+            };
+            Ok(val)
         }
         "f64" | "f32" => {
             let val = args.first().and_then(|v| v.to_f64()).unwrap_or(0.0);

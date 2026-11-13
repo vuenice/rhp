@@ -843,7 +843,7 @@ pub fn infer_expression_type_name(
         // Recognize list, dict, or hashMap if array is defined at the same time and not empty
         ExprKind::Array(elements) => classify_array_literal(elements),
 
-        ExprKind::StaticCall { target, method, .. } => {
+        ExprKind::StaticCall { target, method, args } => {
             if let ExprKind::Ident(target_id) = &target.kind {
                 match target_id.name {
                     "Request" => match method.name {
@@ -857,9 +857,25 @@ pub fn infer_expression_type_name(
                         "dict" => Some("dict".to_string()),
                         "set" => Some("set".to_string()),
                         "map" | "hashMap" => Some("hashMap".to_string()),
+                        "from" => {
+                            if let Some(arg) = args.first() {
+                                match &arg.value.kind {
+                                    ExprKind::Array(elements) => classify_array_literal(elements),
+                                    ExprKind::Literal(Literal::String { .. })
+                                    | ExprKind::Literal(Literal::InterpolatedString { .. })
+                                    | ExprKind::Literal(Literal::Int { .. })
+                                    | ExprKind::Literal(Literal::Float { .. })
+                                    | ExprKind::Literal(Literal::Bool { .. }) => Some("list".to_string()),
+                                    _ => infer_expression_type_name(&arg.value, type_info, known_vars),
+                                }
+                            } else {
+                                Some("list".to_string())
+                            }
+                        }
                         _ => Some("array".to_string()),
                     },
                     "Str" => match method.name {
+                        "from" => Some("string".to_string()),
                         "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => Some("bool".to_string()),
                         "length" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" | "countOccurrences"
                         | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
