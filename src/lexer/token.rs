@@ -445,8 +445,7 @@ pub enum Token<'s> {
     #[token("\"", err_unterminated_double_quote)]
     UnterminatedDoubleQuote,
 
-    #[regex(r#"(?s:```[a-zA-Z0-9_-]*[ \t]*\r?\n.*?```)"#, |lex| lex.slice())]
-    #[regex(r#"(?s:```.*?```)"#, |lex| lex.slice())]
+    #[regex(r#"(?s:```[a-zA-Z]*\r?\n.*?```)"#, |lex| lex.slice())]
     #[regex(r#"(?s:`([^`\\]|\\.)*`)"#, |lex| lex.slice())]
     BacktickString(&'s str),
 
@@ -1009,12 +1008,21 @@ impl<'s> Token<'s> {
                 if s.starts_with("```") && s.ends_with("```") && s.len() >= 6 {
                     let mut inner = &s[3..s.len() - 3];
                     if let Some(nl_pos) = inner.find('\n') {
-                        let tag = inner[..nl_pos].trim();
-                        if tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                        let tag = inner[..nl_pos].trim_end_matches('\r');
+                        if tag.chars().all(|c| c.is_ascii_alphabetic()) {
                             inner = &inner[nl_pos + 1..];
                         }
                     }
-                    if inner.ends_with("\r\n") {
+                    if let Some(last_nl) = inner.rfind('\n') {
+                        let trailing_after_nl = &inner[last_nl + 1..];
+                        if trailing_after_nl.chars().all(|c| c == ' ' || c == '\t') {
+                            let mut end = last_nl;
+                            if end > 0 && inner.as_bytes()[end - 1] == b'\r' {
+                                end -= 1;
+                            }
+                            inner = &inner[..end];
+                        }
+                    } else if inner.ends_with("\r\n") {
                         inner = &inner[..inner.len() - 2];
                     } else if inner.ends_with('\n') {
                         inner = &inner[..inner.len() - 1];
@@ -1037,10 +1045,17 @@ impl<'s> Token<'s> {
         }
     }
 
-    /// Checks if a double-quoted string contains potential interpolation (`$` or `{$`).
+    /// Checks if a double-quoted or markdown heredoc string contains potential interpolation (`$` or `{$`).
     pub fn has_interpolation(&self) -> bool {
         match self {
             Token::DoubleQuotedString(s) => s.contains('$'),
+            Token::BacktickString(s) => {
+                if s.starts_with("```") && s.ends_with("```") {
+                    has_curly_interpolation_str(s)
+                } else {
+                    false
+                }
+            }
             _ => false,
         }
     }
@@ -1065,6 +1080,8 @@ impl<'s> Token<'s> {
                     Some('"') => result.push('"'),
                     Some('`') => result.push('`'),
                     Some('$') => result.push('$'),
+                    Some('{') => result.push('{'),
+                    Some('}') => result.push('}'),
                     Some('0') => result.push('\0'),
                     Some('u') => {
                         // Unicode escape: \u{HEX}
@@ -1334,4 +1351,43 @@ pub fn unescape_string_to_bytes(raw: &str) -> Vec<u8> {
     }
 
     result
+}
+
+/// Helper that checks if a string contains curly braces variable interpolation (e.g. `{$name}` or `{ $name }`).
+pub fn has_curly_interpolation_str(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'{' {
+            let mut p = i + 1;
+            while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+            if p < bytes.len() && bytes[p] == b'$' {
+                let mut j = p;
+                let mut depth = 1;
+                while j < bytes.len() {
+                    if bytes[j] == b'\\' {
+                        j += 2;
+                        continue;
+                    }
+                    if bytes[j] == b'{' {
+                        depth += 1;
+                    } else if bytes[j] == b'}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            return true;
+                        }
+                    }
+                    j += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
