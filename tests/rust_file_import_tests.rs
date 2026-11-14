@@ -7,8 +7,11 @@ use rhp::{
     WorkerRequest,
 };
 
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_import_rust_file_cache_facade() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -70,6 +73,7 @@ pub fn delete(key: &str) -> bool { true }
 
 #[test]
 fn test_use_rust_file_with_alias() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -108,6 +112,7 @@ pub fn set(k: &str, v: &str) -> bool { true }
 
 #[test]
 fn test_import_rust_file_log_facade() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -157,6 +162,7 @@ pub fn warn(msg: &str) {}
 
 #[test]
 fn test_import_alias_from_syntax() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -190,6 +196,7 @@ pub fn set(k: &str, v: &str) -> bool { true }
 
 #[test]
 fn test_imported_rust_class_is_static_only_facade() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -229,6 +236,7 @@ fn test_imported_rust_class_is_static_only_facade() {
 
 #[test]
 fn test_parent_process_boot_with_rust_import() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
@@ -271,6 +279,7 @@ pub fn set(k: &str, v: &str) -> bool { true }
 
 #[test]
 fn test_native_rustc_cdylib_compilation_and_execution() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 

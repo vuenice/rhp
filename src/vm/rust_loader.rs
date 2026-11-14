@@ -408,6 +408,7 @@ pub fn get_in_process_native_function(
 /// Remove all loaded Rust modules and native registrations (for testing and dev hot reload).
 pub fn clear_rust_modules() {
     clear_blocking_native_functions();
+    crate::vm::facade::clear_tier2_plugins();
     if let Ok(mut g) = get_in_process_registry().write() {
         g.clear();
     }
@@ -770,7 +771,7 @@ pub fn load_and_register_rust_file(
 
     // 1. Check if already loaded in registry
     if let Ok(guard) = get_loaded_modules().read() {
-        if guard.contains_key(&facade_name) {
+        if guard.contains_key(&facade_name) && crate::vm::facade::has_tier2_plugin(&facade_name) {
             // Already registered, ensure facade tier is active
             if get_static_facade(&facade_name).is_none() {
                 register_tier2_facade(
