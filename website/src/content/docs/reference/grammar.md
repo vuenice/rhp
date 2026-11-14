@@ -135,7 +135,7 @@ $numbers = [1, 2, 3, 4, 5]
     ->filter(fn($n) => $n > 4);
 
 $title = "  Hello World  ";
-$slug = $title->trim()->lower()->slug();
+$slug = $title->trim()->lowerCase()->slug();
 
 float $price = 99.99;
 $formatted = $price->toDecimal(2);

@@ -39,6 +39,7 @@ chardetng = "0.1"
 unicode-segmentation = "1.12"
 flate2 = "1.1.10"
 corosensei = "0.3.4"
+parking_lot = "0.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

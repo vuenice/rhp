@@ -608,14 +608,14 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     LegacyPhpFunctionMapping {
         php_name: "strtolower",
         rhp_facade: "Str",
-        rhp_method: "lower",
-        rhp_signature: "Str::lower(string $string): string",
+        rhp_method: "lowerCase",
+        rhp_signature: "Str::lowerCase(string $string): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "strtoupper",
         rhp_facade: "Str",
-        rhp_method: "upper",
-        rhp_signature: "Str::upper(string $string): string",
+        rhp_method: "upperCase",
+        rhp_signature: "Str::upperCase(string $string): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "trim",

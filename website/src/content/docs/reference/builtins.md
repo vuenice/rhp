@@ -78,6 +78,8 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `strcasecmp($s1, $s2)` | `phpFun::strcasecmp($s1, $s2)` | `Str::strcasecmp($s1, $s2)` |
 | `strncmp($s1, $s2, $len)` | `phpFun::strncmp($s1, $s2, $len)` | `Str::strncmp($s1, $s2, $len)` |
 | `strncasecmp($s1, $s2, $len)` | `phpFun::strncasecmp($s1, $s2, $len)` | `Str::strncasecmp($s1, $s2, $len)` |
+| `strtolower($str)` | `phpFun::strtolower($str)` | `Str::lowerCase($str)` |
+| `strtoupper($str)` | `phpFun::strtoupper($str)` | `Str::upperCase($str)` |
 | `implode($glue, $arr)` | `phpFun::implode($glue, $arr)` | `Arr::implode($glue, $arr)` |
 | `ctype_digit($str)` | `phpFun::ctype_digit($str)` | `Str::digit($str)` |
 | `ctype_alpha($str)` | `phpFun::ctype_alpha($str)` | `Str::alpha($str)` |

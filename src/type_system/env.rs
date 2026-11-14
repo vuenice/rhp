@@ -351,7 +351,8 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Bool)
             }
-            "upper" | "lower" | "trim" | "ltrim" | "rtrim" | "substr" | "replace" | "join"
+            "upper" | "upperCase" | "lower" | "lowerCase" | "camelCase" | "pascalCase" | "snakeCase"
+            | "trim" | "ltrim" | "rtrim" | "substr" | "replace" | "join"
             | "format" => {
                 check_arg_type(
                     &format!("Str::{}", method),
@@ -1034,7 +1035,8 @@ pub fn resolve_builtin_fluent_method(
 
         // Fluent string helper methods (`$str->trim()`, `$str->lower()`, `$str->upper()`, etc.)
         RhpType::String => match method {
-            "trim" | "ltrim" | "rtrim" | "upper" | "toUpper" | "lower" | "toLower" | "slug"
+            "trim" | "ltrim" | "rtrim" | "upper" | "upperCase" | "toUpper" | "lower" | "lowerCase" | "toLower"
+            | "camelCase" | "pascalCase" | "snakeCase" | "slug"
             | "replace" | "substr" | "reverse" | "repeat" | "utf8" | "mbSubstr" | "mb_substr" => Some(RhpType::String),
             "length" | "byteLength" | "bytesCount" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len"
             | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"

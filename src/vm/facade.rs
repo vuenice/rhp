@@ -1041,13 +1041,25 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let s = get_arg_str(args, 0, "Str::length")?;
             Ok(PhpValue::Int(s.chars().count() as i64))
         }
-        "upper" => {
-            let s = get_arg_str(args, 0, "Str::upper")?;
+        "upperCase" | "upper" | "uppercase" => {
+            let s = get_arg_str(args, 0, "Str::upperCase")?;
             Ok(PhpValue::string(s.to_uppercase()))
         }
-        "lower" => {
-            let s = get_arg_str(args, 0, "Str::lower")?;
+        "lowerCase" | "lower" | "lowercase" => {
+            let s = get_arg_str(args, 0, "Str::lowerCase")?;
             Ok(PhpValue::string(s.to_lowercase()))
+        }
+        "camelCase" | "camelcase" => {
+            let s = get_arg_str(args, 0, "Str::camelCase")?;
+            Ok(PhpValue::string(crate::lint::to_camel_case(&s)))
+        }
+        "pascalCase" | "pascalcase" => {
+            let s = get_arg_str(args, 0, "Str::pascalCase")?;
+            Ok(PhpValue::string(crate::lint::to_pascal_case(&s)))
+        }
+        "snakeCase" | "snakecase" => {
+            let s = get_arg_str(args, 0, "Str::snakeCase")?;
+            Ok(PhpValue::string(crate::lint::to_snake_case(&s)))
         }
         "trim" => {
             let s = get_arg_str(args, 0, "Str::trim")?;
@@ -6902,8 +6914,13 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "trim" => dispatch_str("trim", args),
         "ltrim" => dispatch_str("ltrim", args),
         "rtrim" => dispatch_str("rtrim", args),
-        "strtolower" => dispatch_str("lower", args),
-        "strtoupper" => dispatch_str("upper", args),
+        "strtolower" => dispatch_str("lowerCase", args),
+        "strtoupper" => dispatch_str("upperCase", args),
+        "lowerCase" | "lowercase" | "lower" => dispatch_str("lowerCase", args),
+        "upperCase" | "uppercase" | "upper" => dispatch_str("upperCase", args),
+        "camelCase" | "camelcase" => dispatch_str("camelCase", args),
+        "pascalCase" | "pascalcase" => dispatch_str("pascalCase", args),
+        "snakeCase" | "snakecase" => dispatch_str("snakeCase", args),
         "str_replace" => dispatch_str("replace", args),
         "strpos" => dispatch_str("find", args),
         "ctype_digit" => dispatch_str("digit", args),

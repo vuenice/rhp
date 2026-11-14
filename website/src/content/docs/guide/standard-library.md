@@ -855,8 +855,13 @@ Just like collections (`$list->map()->filter()`), all string transformations, se
 ```php
 $title = "  Hello World RHP!  ";
 
-// 1. Fluent transformations (returns new string; original untouched)
-$slug = $title->trim()->lower()->slug(); // "hello-world-rhp"
+// 1. Fluent transformations & casing (returns new string; original untouched)
+$slug   = $title->trim()->lowerCase()->slug(); // "hello-world-rhp"
+$lower  = $title->trim()->lowerCase();  // "hello world rhp!"
+$upper  = $title->trim()->upperCase();  // "HELLO WORLD RHP!"
+$camel  = $title->trim()->camelCase();  // "helloWorldRhp!"
+$pascal = $title->trim()->pascalCase(); // "HelloWorldRhp!"
+$snake  = $title->trim()->snakeCase();  // "hello_world_rhp!"
 
 // 2. Inspection and searching
 bool $hasWorld = $title->contains("World"); // true
@@ -872,14 +877,14 @@ string $sub     = $title->trim()->substr(0, 5); // "Hello"
 
 > [!NOTE]
 > **No Method Calls on Direct String Literals:**
-> The compiler restricts invoking member functions directly on bare string literals (e.g. `""->trim()` or `"test"->upper()`). Always invoke methods on string variables or parenthesized expressions:
+> The compiler restricts invoking member functions directly on bare string literals (e.g. `""->trim()` or `"test"->upperCase()`). Always invoke methods on string variables or parenthesized expressions:
 > ```php
 > // ❌ Restricted:
-> // "hello"->upper();
+> // "hello"->upperCase();
 > 
 > // ✅ Idiomatic:
 > $greeting = "hello";
-> $loud = $greeting->upper();
+> $loud = $greeting->upperCase();
 > ```
 
 ### 2. Static Factory & Encoding Methods (`Str::`)
