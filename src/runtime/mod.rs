@@ -40,9 +40,12 @@ pub use types::{
     WorkerKind,
 };
 pub use websocket::{
-    build_upgrade_response, compute_sec_websocket_accept, get_websocket_hub, is_websocket_upgrade,
-    next_connection_id, read_frame, write_close, write_frame, write_ping, write_pong,
-    write_text, TcpWebSocketSender, WebSocketError, WebSocketFrame, WebSocketHub, WebSocketOpcode,
+    build_upgrade_response, compute_sec_websocket_accept, get_current_ws_backend,
+    get_websocket_hub, is_websocket_upgrade, next_connection_id, read_client_frame, read_frame,
+    read_frame_role, read_server_frame, set_current_ws_backend, write_client_frame, write_close,
+    write_frame, write_ping, write_pong, write_text, FrameRole, IpcWebSocketBackend,
+    LocalHubBackend, MessageAssembler, QueuedWebSocketSender, TcpWebSocketSender, WebSocketBackend,
+    WebSocketError, WebSocketFrame, WebSocketHub, WebSocketMessage, WebSocketOpcode,
     WebSocketSender,
 };
 pub use worker::{fiber_yield_io, run_worker, ResumeSignal, YieldCause};

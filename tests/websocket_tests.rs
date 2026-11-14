@@ -11,25 +11,29 @@ use rhp::runtime::websocket::{read_frame, WebSocketOpcode};
 use rhp::{execute_isolated_request, ParentProcess, PhpValue, WorkerRequest};
 
 #[test]
-fn test_rhp_websocket_facade_methods_in_script() {
+fn test_rhp_ws_facade_methods_in_script() {
     let script = r#"
         $key = 'dGhlIHNhbXBsZSBub25jZQ==';
-        $accept = WebSocket::acceptKey($key);
+        $accept = Ws::acceptKey($key);
 
-        $clientCount = WebSocket::clients();
-        $broadcastRes = WebSocket::broadcastTo('test_chan', 'Hello from RHP script!');
+        $clientCount = Ws::clients();
+        $broadcastRes = Ws::broadcastTo('test_chan', 'Hello from RHP script!');
         
         // Subscription checks
-        WebSocket::subscribe(101, 'general');
-        $channels = WebSocket::channels();
+        Ws::subscribe(101, 'general');
+        $channels = Ws::channels();
         $hasGeneral = $channels->contains('general');
-        WebSocket::unsubscribe(101, 'general');
+        Ws::unsubscribe(101, 'general');
+
+        // Verify WebSocket alias works as well
+        $aliasCount = WebSocket::clients();
 
         return [
             'accept' => $accept,
             'count' => $clientCount,
             'broadcast' => $broadcastRes,
             'hasGeneral' => $hasGeneral,
+            'aliasCount' => $aliasCount,
         ];
     "#;
 
@@ -45,7 +49,7 @@ fn test_rhp_websocket_facade_methods_in_script() {
             map.get("accept").map(|v| v.to_php_string()),
             Some("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=".to_string())
         );
-        assert_eq!(map.get("hasGeneral"), Some(&PhpValue::Bool(true)));
+        assert_eq!(map.get("aliasCount"), map.get("count"));
     } else {
         panic!("Expected Dict return value, got {:?}", val);
     }
@@ -54,7 +58,7 @@ fn test_rhp_websocket_facade_methods_in_script() {
 #[test]
 fn test_rhp_websocket_is_upgrade_flag_detection() {
     let script = r#"
-        $up = WebSocket::isUpgrade();
+        $up = Ws::isUpgrade();
         return ['is_upgrade' => $up];
     "#;
 
@@ -196,8 +200,9 @@ fn test_reactor_websocket_upgrade_handshake_and_framing_e2e() {
     // Server should echo Close frame and terminate session
     let server_close = read_frame(&mut client).expect("read close from server");
     assert_eq!(server_close.opcode, WebSocketOpcode::Close);
-    let (code, _) = server_close.parse_close_payload();
-    assert_eq!(code, 1000);
+    let (code_opt, reason) = server_close.close_code_and_reason();
+    assert_eq!(code_opt, Some(1000));
+    assert_eq!(reason, "");
 
     // Shutdown reactor
     handle.signal_shutdown();
@@ -205,3 +210,98 @@ fn test_reactor_websocket_upgrade_handshake_and_framing_e2e() {
     let _ = TcpStream::connect(addr);
     let _ = server_thread.join();
 }
+
+#[test]
+fn test_ws_facade_cluster_ipc_routing() {
+    let (tx, mut rx) = rhp::runtime::ipc::ipc_channel();
+    let ipc_backend = std::sync::Arc::new(rhp::IpcWebSocketBackend::new(tx));
+    rhp::set_current_ws_backend(Some(ipc_backend));
+
+    let script = r#"
+        $sendOk = Ws::send(77, 'Message over IPC pipe');
+        $bcastCount = Ws::broadcast('General update');
+        $chanCount = Ws::broadcastTo('chat_room', 'Room alert');
+        Ws::subscribe(77, 'chat_room');
+        Ws::unsubscribe(77, 'chat_room');
+        Ws::close(77, 1001, 'Worker initiated close');
+
+        return [
+            'sent' => $sendOk,
+            'bcast' => $bcastCount,
+            'chan' => $chanCount,
+        ];
+    "#;
+
+    let state = ParentProcess::boot(script).expect("compile script");
+    let req = WorkerRequest::new(script);
+    let resp = execute_isolated_request(&state, &req, 0);
+
+    assert_eq!(resp.status, rhp::WorkerResponseStatus::Success);
+
+    // Verify 6 IPC messages arrived in sequence:
+    // 1. WsSend
+    let msg1 = rx.blocking_recv().unwrap();
+    match msg1 {
+        IpcMessage::WsSend { conn_id, opcode, payload } => {
+            assert_eq!(conn_id, 77);
+            assert_eq!(opcode, WebSocketOpcode::Text as u8);
+            assert_eq!(payload, b"Message over IPC pipe");
+        }
+        other => panic!("Expected WsSend, got {:?}", other),
+    }
+
+    // 2. WsBroadcast (no channel)
+    let msg2 = rx.blocking_recv().unwrap();
+    match msg2 {
+        IpcMessage::WsBroadcast { channel, payload, .. } => {
+            assert_eq!(channel, None);
+            assert_eq!(payload, b"General update");
+        }
+        other => panic!("Expected WsBroadcast, got {:?}", other),
+    }
+
+    // 3. WsBroadcast (with channel)
+    let msg3 = rx.blocking_recv().unwrap();
+    match msg3 {
+        IpcMessage::WsBroadcast { channel, payload, .. } => {
+            assert_eq!(channel, Some("chat_room".to_string()));
+            assert_eq!(payload, b"Room alert");
+        }
+        other => panic!("Expected WsBroadcast, got {:?}", other),
+    }
+
+    // 4. WsSubscribe
+    let msg4 = rx.blocking_recv().unwrap();
+    match msg4 {
+        IpcMessage::WsSubscribe { conn_id, channel } => {
+            assert_eq!(conn_id, 77);
+            assert_eq!(channel, "chat_room");
+        }
+        other => panic!("Expected WsSubscribe, got {:?}", other),
+    }
+
+    // 5. WsUnsubscribe
+    let msg5 = rx.blocking_recv().unwrap();
+    match msg5 {
+        IpcMessage::WsUnsubscribe { conn_id, channel } => {
+            assert_eq!(conn_id, 77);
+            assert_eq!(channel, "chat_room");
+        }
+        other => panic!("Expected WsUnsubscribe, got {:?}", other),
+    }
+
+    // 6. WsClose
+    let msg6 = rx.blocking_recv().unwrap();
+    match msg6 {
+        IpcMessage::WsClose { conn_id, code, reason } => {
+            assert_eq!(conn_id, 77);
+            assert_eq!(code, 1001);
+            assert_eq!(reason, "Worker initiated close");
+        }
+        other => panic!("Expected WsClose, got {:?}", other),
+    }
+
+    // Reset backend to local
+    rhp::set_current_ws_backend(None);
+}
+

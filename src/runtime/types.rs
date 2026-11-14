@@ -113,6 +113,16 @@ pub enum IpcMessage {
         opcode: u8,
         payload: Vec<u8>,
     },
+    /// Worker → Master: Subscribe WebSocket connection to a Pub/Sub channel.
+    WsSubscribe {
+        conn_id: u64,
+        channel: String,
+    },
+    /// Worker → Master: Unsubscribe WebSocket connection from a Pub/Sub channel.
+    WsUnsubscribe {
+        conn_id: u64,
+        channel: String,
+    },
     /// Master ↔ Worker: WebSocket connection closed.
     WsClose {
         conn_id: u64,
