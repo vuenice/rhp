@@ -1035,7 +1035,7 @@ fn serve_http_connection(
         let conn_id = rhp::next_connection_id();
         let hub = rhp::get_websocket_hub();
         if let Ok(cloned) = stream.try_clone() {
-            let sender = std::sync::Arc::new(rhp::TcpWebSocketSender::new(cloned));
+            let sender = std::sync::Arc::new(rhp::QueuedWebSocketSender::new(conn_id, cloned));
             hub.register(conn_id, sender);
         }
 
@@ -1267,54 +1267,79 @@ fn handle_main_websocket_session(
     conn_id: u64,
     script_path: &str,
 ) {
+    let mut assembler = rhp::MessageAssembler::new();
+
     loop {
-        match rhp::read_frame(stream) {
-            Ok(frame) => match frame.opcode {
-                rhp::WebSocketOpcode::Ping => {
-                    let _ = rhp::write_pong(stream, &frame.payload);
+        match rhp::read_client_frame(stream) {
+            Ok(frame) => match assembler.process_frame(frame) {
+                Ok(Some(msg)) => match msg.opcode {
+                    rhp::WebSocketOpcode::Ping => {
+                        let _ = rhp::write_pong(stream, &msg.payload);
+                    }
+                    rhp::WebSocketOpcode::Pong => {}
+                    rhp::WebSocketOpcode::Close => {
+                        let frame = rhp::WebSocketFrame {
+                            opcode: rhp::WebSocketOpcode::Close,
+                            fin: true,
+                            payload: msg.payload,
+                        };
+                        let (code_opt, reason) = frame.close_code_and_reason();
+                        let code = code_opt.unwrap_or(1000);
+                        let _ = rhp::write_close(stream, code, &reason);
+                        break;
+                    }
+                    rhp::WebSocketOpcode::Text | rhp::WebSocketOpcode::Binary => {
+                        let msg_text = String::from_utf8_lossy(&msg.payload).into_owned();
+
+                        // If an RHP script is provided and can be read, invoke it with the WebSocket message
+                        if let Ok(raw_source) = std::fs::read_to_string(script_path) {
+                            let source = resolve_autoloaded_source(Path::new(script_path), &raw_source);
+                            let mut req = rhp::WorkerRequest::new(&source);
+                            req = req
+                                .with_server("REQUEST_METHOD", "WEBSOCKET")
+                                .with_server("HTTP_UPGRADE", "websocket")
+                                .with_server("WEBSOCKET_MESSAGE", &msg_text)
+                                .with_server("WEBSOCKET_CONN_ID", &conn_id.to_string())
+                                .with_post("message", rhp::FrozenValue::from_php_value(&rhp::PhpValue::string(&msg_text)))
+                                .with_post("conn_id", rhp::FrozenValue::from_php_value(&rhp::PhpValue::Int(conn_id as i64)));
+
+                            let canonical_path = std::fs::canonicalize(script_path)
+                                .unwrap_or_else(|_| std::path::PathBuf::from(script_path))
+                                .to_string_lossy()
+                                .to_string();
+
+                            if let Ok(state) = rhp::ParentProcess::boot_with_path(&source, &canonical_path) {
+                                let resp = rhp::execute_isolated_request(&state, &req, 0);
+                                let out = resp.output();
+                                if !out.is_empty() {
+                                    let _ = rhp::write_text(stream, out);
+                                }
+                            }
+                        } else {
+                            // Fallback: Echo message
+                            let reply = format!("{{\"event\":\"echo\",\"message\":{}}}", serde_json::to_string(&msg_text).unwrap_or_default());
+                            let _ = rhp::write_text(stream, &reply);
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(None) => {
+                    // Frame buffered in assembler, waiting for more fragments
                 }
-                rhp::WebSocketOpcode::Pong => {}
-                rhp::WebSocketOpcode::Close => {
-                    let (code, reason) = frame.parse_close_payload();
+                Err(e) => {
+                    let code = e.close_code();
+                    let reason = e.to_string();
                     let _ = rhp::write_close(stream, code, &reason);
                     break;
                 }
-                rhp::WebSocketOpcode::Text | rhp::WebSocketOpcode::Binary => {
-                    let msg_text = String::from_utf8_lossy(&frame.payload).into_owned();
-
-                    // If an RHP script is provided and can be read, invoke it with the WebSocket message
-                    if let Ok(raw_source) = std::fs::read_to_string(script_path) {
-                        let source = resolve_autoloaded_source(Path::new(script_path), &raw_source);
-                        let mut req = rhp::WorkerRequest::new(&source);
-                        req = req
-                            .with_server("REQUEST_METHOD", "WEBSOCKET")
-                            .with_server("HTTP_UPGRADE", "websocket")
-                            .with_server("WEBSOCKET_MESSAGE", &msg_text)
-                            .with_server("WEBSOCKET_CONN_ID", &conn_id.to_string())
-                            .with_post("message", rhp::FrozenValue::from_php_value(&rhp::PhpValue::string(&msg_text)))
-                            .with_post("conn_id", rhp::FrozenValue::from_php_value(&rhp::PhpValue::Int(conn_id as i64)));
-
-                        let canonical_path = std::fs::canonicalize(script_path)
-                            .unwrap_or_else(|_| std::path::PathBuf::from(script_path))
-                            .to_string_lossy()
-                            .to_string();
-
-                        if let Ok(state) = rhp::ParentProcess::boot_with_path(&source, &canonical_path) {
-                            let resp = rhp::execute_isolated_request(&state, &req, 0);
-                            let out = resp.output();
-                            if !out.is_empty() {
-                                let _ = rhp::write_text(stream, out);
-                            }
-                        }
-                    } else {
-                        // Fallback: Echo message
-                        let reply = format!("{{\"event\":\"echo\",\"message\":{}}}", serde_json::to_string(&msg_text).unwrap_or_default());
-                        let _ = rhp::write_text(stream, &reply);
-                    }
-                }
-                rhp::WebSocketOpcode::Continuation => {}
             },
-            Err(_) => break,
+            Err(e) => {
+                let code = e.close_code();
+                if e.is_protocol_error() {
+                    let _ = rhp::write_close(stream, code, "Protocol violation");
+                }
+                break;
+            }
         }
     }
 }

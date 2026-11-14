@@ -124,6 +124,11 @@ async fn worker_event_loop(
     let max_requests = config.max_requests_per_worker;
     let max_fibers = config.max_active_fibers;
 
+    // Direct all Ws:: facade calls in this worker to the Master Reactor over IPC
+    crate::runtime::websocket::set_current_ws_backend(Some(Arc::new(
+        crate::runtime::websocket::IpcWebSocketBackend::new(ipc_tx.clone()),
+    )));
+
     loop {
         // Check shutdown flag and request cap (graceful recycling)
         if shutdown.load(Ordering::Relaxed) {

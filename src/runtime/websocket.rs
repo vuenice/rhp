@@ -29,6 +29,9 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use base64::prelude::*;
 use sha1::{Digest, Sha1};
 
+use crate::runtime::ipc::IpcSender;
+use crate::runtime::types::IpcMessage;
+
 /// Standard RFC 6455 WebSocket GUID string used for handshake verification.
 pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -195,14 +198,46 @@ impl WebSocketFrame {
         }
     }
 
-    /// Parse the 2-byte status code and optional reason from a Close frame payload.
-    pub fn parse_close_payload(&self) -> (u16, String) {
-        if self.payload.len() < 2 {
-            return (1000, String::new());
+    /// Parse the 2-byte status code and optional reason from a Close frame payload according to RFC 6455 §5.5.1 and §7.4.
+    ///
+    /// Returns:
+    /// - `Ok(Some((code, reason)))` if a 2-byte code and valid UTF-8 reason are present.
+    /// - `Ok(None)` if the payload is empty (0 bytes) indicating an unannotated closure (no status code).
+    /// - `Err(WebSocketError)` if the payload is 1 byte, status code is invalid/reserved, or reason is invalid UTF-8.
+    pub fn parse_close_payload(&self) -> Result<Option<(u16, String)>, WebSocketError> {
+        if self.payload.is_empty() {
+            return Ok(None);
+        }
+        if self.payload.len() == 1 {
+            return Err(WebSocketError::Protocol {
+                code: 1002,
+                reason: "Close frame payload of 1 byte is invalid; status code must be 2 bytes".to_string(),
+            });
         }
         let code = u16::from_be_bytes([self.payload[0], self.payload[1]]);
-        let reason = String::from_utf8_lossy(&self.payload[2..]).into_owned();
-        (code, reason)
+        if !is_valid_close_code(code) {
+            return Err(WebSocketError::Protocol {
+                code: 1002,
+                reason: format!("Invalid or reserved close status code: {}", code),
+            });
+        }
+        let reason = std::str::from_utf8(&self.payload[2..])
+            .map_err(|_| WebSocketError::Protocol {
+                code: 1007,
+                reason: "Close frame reason is not valid UTF-8".to_string(),
+            })?
+            .to_string();
+
+        Ok(Some((code, reason)))
+    }
+
+    /// Extract close code and reason, defaulting empty closures to `(None, "")` or error codes if invalid.
+    pub fn close_code_and_reason(&self) -> (Option<u16>, String) {
+        match self.parse_close_payload() {
+            Ok(Some((code, reason))) => (Some(code), reason),
+            Ok(None) => (None, String::new()),
+            Err(e) => (Some(e.close_code()), e.to_string()),
+        }
     }
 
     /// Get payload as a UTF-8 string slice if valid.
@@ -211,24 +246,56 @@ impl WebSocketFrame {
     }
 }
 
+/// Check if a WebSocket Close status code is allowed over the wire (RFC 6455 §7.4.1/§7.4.2).
+pub fn is_valid_close_code(code: u16) -> bool {
+    matches!(
+        code,
+        1000 | 1001 | 1002 | 1003 | 1007 | 1008 | 1009 | 1010 | 1011 | 3000..=4999
+    )
+}
+
 /// Errors that can occur during WebSocket frame reading or writing.
 #[derive(Debug)]
 pub enum WebSocketError {
     Io(std::io::Error),
-    Protocol(String),
+    Protocol { code: u16, reason: String },
     UnexpectedEof,
     InvalidOpcode(u8),
     PayloadTooLarge(usize),
+}
+
+impl WebSocketError {
+    /// Return the corresponding RFC 6455 Close status code for this error.
+    pub fn close_code(&self) -> u16 {
+        match self {
+            Self::Protocol { code, .. } => *code,
+            Self::InvalidOpcode(_) => 1002,
+            Self::PayloadTooLarge(_) => 1009,
+            Self::UnexpectedEof | Self::Io(_) => 1006,
+        }
+    }
+
+    /// Check if this error represents a protocol violation that warrants sending a Close frame.
+    pub fn is_protocol_error(&self) -> bool {
+        matches!(
+            self,
+            Self::Protocol { .. } | Self::InvalidOpcode(_) | Self::PayloadTooLarge(_)
+        )
+    }
 }
 
 impl std::fmt::Display for WebSocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "WebSocket I/O error: {}", e),
-            Self::Protocol(msg) => write!(f, "WebSocket protocol violation: {}", msg),
+            Self::Protocol { code, reason } => {
+                write!(f, "WebSocket protocol violation (code {}): {}", code, reason)
+            }
             Self::UnexpectedEof => write!(f, "WebSocket stream ended unexpectedly"),
             Self::InvalidOpcode(op) => write!(f, "Invalid WebSocket opcode: 0x{:02x}", op),
-            Self::PayloadTooLarge(sz) => write!(f, "WebSocket payload size exceeds limit: {} bytes", sz),
+            Self::PayloadTooLarge(sz) => {
+                write!(f, "WebSocket payload size exceeds limit: {} bytes", sz)
+            }
         }
     }
 }
@@ -242,16 +309,25 @@ impl From<std::io::Error> for WebSocketError {
 }
 
 // ============================================================================
-// 3. Frame Serializer and Deserializer
+// 3. Frame Serializer, Deserializer & Message Assembler
 // ============================================================================
 
 /// Maximum allowed payload size for a single frame (16 MB by default to prevent memory exhaustion).
 pub const MAX_WS_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
-/// Read and decode a single RFC 6455 frame from any readable byte stream.
-///
-/// Automatically unmasks client-sent frames using the 4-byte masking key.
-pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketError> {
+/// Connection role determining masking requirements (RFC 6455 §5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameRole {
+    /// Server reading from client: Client frames MUST be masked.
+    Server,
+    /// Client reading from server: Server frames MUST NOT be masked.
+    Client,
+    /// Lenient (for testing/roundtrip): Accepts either masked or unmasked frames.
+    Lenient,
+}
+
+/// Read and decode a single RFC 6455 frame with specific role masking enforcement.
+pub fn read_frame_role<R: Read>(reader: &mut R, role: FrameRole) -> Result<WebSocketFrame, WebSocketError> {
     let mut header = [0u8; 2];
     reader.read_exact(&mut header).map_err(|e| {
         if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -264,6 +340,15 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketEr
     let byte0 = header[0];
     let byte1 = header[1];
 
+    // RFC 6455 §5.2: RSV1, RSV2, RSV3 MUST be 0 unless an extension is negotiated.
+    let rsv = byte0 & 0x70;
+    if rsv != 0 {
+        return Err(WebSocketError::Protocol {
+            code: 1002,
+            reason: "RSV bits must be 0 when no extension is negotiated".to_string(),
+        });
+    }
+
     let fin = (byte0 & 0x80) != 0;
     let opcode_raw = byte0 & 0x0F;
     let opcode = WebSocketOpcode::from_u8(opcode_raw)
@@ -271,6 +356,43 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketEr
 
     let is_masked = (byte1 & 0x80) != 0;
     let len_indicator = (byte1 & 0x7F) as usize;
+
+    // RFC 6455 §5.5: Control frames MUST NOT be fragmented and payload MUST be <= 125 bytes.
+    if opcode.is_control() {
+        if !fin {
+            return Err(WebSocketError::Protocol {
+                code: 1002,
+                reason: "Control frames MUST NOT be fragmented (FIN bit must be 1)".to_string(),
+            });
+        }
+        if len_indicator > 125 {
+            return Err(WebSocketError::Protocol {
+                code: 1002,
+                reason: "Control frame payload length MUST be <= 125 bytes".to_string(),
+            });
+        }
+    }
+
+    // RFC 6455 §5.1: Masking verification based on endpoint role
+    match role {
+        FrameRole::Server => {
+            if !is_masked {
+                return Err(WebSocketError::Protocol {
+                    code: 1002,
+                    reason: "Client-to-server frames MUST be masked (RFC 6455 §5.1)".to_string(),
+                });
+            }
+        }
+        FrameRole::Client => {
+            if is_masked {
+                return Err(WebSocketError::Protocol {
+                    code: 1002,
+                    reason: "Server-to-client frames MUST NOT be masked (RFC 6455 §5.1)".to_string(),
+                });
+            }
+        }
+        FrameRole::Lenient => {}
+    }
 
     let payload_len: usize = match len_indicator {
         0..=125 => len_indicator,
@@ -283,6 +405,13 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketEr
             let mut ext = [0u8; 8];
             reader.read_exact(&mut ext)?;
             let len64 = u64::from_be_bytes(ext);
+            // RFC 6455 §5.2: Most significant bit of 64-bit length MUST be 0
+            if (len64 & 0x8000_0000_0000_0000) != 0 {
+                return Err(WebSocketError::Protocol {
+                    code: 1002,
+                    reason: "64-bit payload length MSB must be 0".to_string(),
+                });
+            }
             if len64 > (MAX_WS_FRAME_SIZE as u64) {
                 return Err(WebSocketError::PayloadTooLarge(len64 as usize));
             }
@@ -324,6 +453,21 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketEr
     })
 }
 
+/// Read a client-sent RFC 6455 frame, strictly enforcing masking (Server reader).
+pub fn read_client_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketError> {
+    read_frame_role(reader, FrameRole::Server)
+}
+
+/// Read a server-sent RFC 6455 frame, strictly enforcing unmasked payloads (Client reader).
+pub fn read_server_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketError> {
+    read_frame_role(reader, FrameRole::Client)
+}
+
+/// Read and decode a single RFC 6455 frame (lenient masking for tests/utilities).
+pub fn read_frame<R: Read>(reader: &mut R) -> Result<WebSocketFrame, WebSocketError> {
+    read_frame_role(reader, FrameRole::Lenient)
+}
+
 /// Serialize and write an unmasked RFC 6455 frame to any writable byte stream (server-to-client).
 ///
 /// Note: As per RFC 6455 §5.1, servers MUST NOT mask frames sent to the client.
@@ -359,6 +503,46 @@ pub fn write_frame<W: Write>(
     Ok(())
 }
 
+/// Serialize and write a masked RFC 6455 frame to any writable byte stream (client-to-server).
+pub fn write_client_frame<W: Write>(
+    writer: &mut W,
+    opcode: WebSocketOpcode,
+    payload: &[u8],
+    mask: [u8; 4],
+) -> Result<(), WebSocketError> {
+    let mut header = Vec::with_capacity(14);
+
+    // Byte 0: FIN = 1, RSV = 0, Opcode
+    let byte0 = 0x80 | (opcode as u8 & 0x0F);
+    header.push(byte0);
+
+    // Byte 1+: Payload length with MASK bit (0x80)
+    let len = payload.len();
+    if len <= 125 {
+        header.push(0x80 | (len as u8));
+    } else if len <= 65535 {
+        header.push(0x80 | 126);
+        header.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        header.push(0x80 | 127);
+        header.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+
+    header.extend_from_slice(&mask);
+    writer.write_all(&header)?;
+
+    let mut masked = payload.to_vec();
+    for (i, byte) in masked.iter_mut().enumerate() {
+        *byte ^= mask[i % 4];
+    }
+    if !masked.is_empty() {
+        writer.write_all(&masked)?;
+    }
+    writer.flush()?;
+
+    Ok(())
+}
+
 /// Write a text message frame to a client stream.
 pub fn write_text<W: Write>(writer: &mut W, text: &str) -> Result<(), WebSocketError> {
     write_frame(writer, WebSocketOpcode::Text, text.as_bytes())
@@ -383,6 +567,125 @@ pub fn write_pong<W: Write>(writer: &mut W, ping_payload: &[u8]) -> Result<(), W
 pub fn write_close<W: Write>(writer: &mut W, code: u16, reason: &str) -> Result<(), WebSocketError> {
     let frame = WebSocketFrame::close(code, reason);
     write_frame(writer, WebSocketOpcode::Close, &frame.payload)
+}
+
+/// A reassembled WebSocket message ready for application processing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSocketMessage {
+    /// Message Opcode (Text, Binary, or Control).
+    pub opcode: WebSocketOpcode,
+    /// Complete unfragmented or reassembled payload bytes.
+    pub payload: Vec<u8>,
+}
+
+impl WebSocketMessage {
+    /// Return the payload as a UTF-8 string slice if valid.
+    pub fn as_text(&self) -> Result<&str, std::str::Utf8Error> {
+        std::str::from_utf8(&self.payload)
+    }
+}
+
+/// RFC 6455 Frame Assembler for reassembling fragmented messages and validating UTF-8 (§5.4).
+#[derive(Debug, Clone)]
+pub struct MessageAssembler {
+    current_opcode: Option<WebSocketOpcode>,
+    buffer: Vec<u8>,
+    max_message_size: usize,
+}
+
+impl MessageAssembler {
+    pub fn new() -> Self {
+        Self {
+            current_opcode: None,
+            buffer: Vec::new(),
+            max_message_size: MAX_WS_FRAME_SIZE,
+        }
+    }
+
+    pub fn with_max_size(max_message_size: usize) -> Self {
+        Self {
+            current_opcode: None,
+            buffer: Vec::new(),
+            max_message_size,
+        }
+    }
+
+    /// Process a frame according to RFC 6455 §5.4 fragmentation and UTF-8 validation rules.
+    pub fn process_frame(&mut self, frame: WebSocketFrame) -> Result<Option<WebSocketMessage>, WebSocketError> {
+        // Control frames can be interleaved between fragments (§5.4).
+        if frame.opcode.is_control() {
+            return Ok(Some(WebSocketMessage {
+                opcode: frame.opcode,
+                payload: frame.payload,
+            }));
+        }
+
+        match frame.opcode {
+            WebSocketOpcode::Continuation => {
+                let opcode = self.current_opcode.ok_or_else(|| WebSocketError::Protocol {
+                    code: 1002,
+                    reason: "Unexpected continuation frame without prior fragmented message".to_string(),
+                })?;
+
+                if self.buffer.len().saturating_add(frame.payload.len()) > self.max_message_size {
+                    return Err(WebSocketError::PayloadTooLarge(
+                        self.buffer.len() + frame.payload.len(),
+                    ));
+                }
+
+                self.buffer.extend_from_slice(&frame.payload);
+
+                if frame.fin {
+                    self.current_opcode = None;
+                    let payload = std::mem::take(&mut self.buffer);
+                    if opcode == WebSocketOpcode::Text {
+                        std::str::from_utf8(&payload).map_err(|_| WebSocketError::Protocol {
+                            code: 1007,
+                            reason: "Fragmented text message is not valid UTF-8".to_string(),
+                        })?;
+                    }
+                    Ok(Some(WebSocketMessage { opcode, payload }))
+                } else {
+                    Ok(None)
+                }
+            }
+            WebSocketOpcode::Text | WebSocketOpcode::Binary => {
+                if self.current_opcode.is_some() {
+                    return Err(WebSocketError::Protocol {
+                        code: 1002,
+                        reason: "New data frame arrived before previous fragmented message completed".to_string(),
+                    });
+                }
+
+                if frame.fin {
+                    if frame.opcode == WebSocketOpcode::Text {
+                        std::str::from_utf8(&frame.payload).map_err(|_| WebSocketError::Protocol {
+                            code: 1007,
+                            reason: "Text frame payload is not valid UTF-8".to_string(),
+                        })?;
+                    }
+                    Ok(Some(WebSocketMessage {
+                        opcode: frame.opcode,
+                        payload: frame.payload,
+                    }))
+                } else {
+                    if frame.payload.len() > self.max_message_size {
+                        return Err(WebSocketError::PayloadTooLarge(frame.payload.len()));
+                    }
+                    self.current_opcode = Some(frame.opcode);
+                    self.buffer = frame.payload;
+                    Ok(None)
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Default for MessageAssembler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ============================================================================
@@ -414,6 +717,53 @@ impl WebSocketSender for TcpWebSocketSender {
         } else {
             Err("Stream mutex poisoned".to_string())
         }
+    }
+}
+
+/// A non-blocking, bounded-queue WebSocket connection sender that prevents slow clients
+/// from stalling the broadcast loop.
+pub struct QueuedWebSocketSender {
+    pub conn_id: u64,
+    tx: std::sync::mpsc::SyncSender<WebSocketFrame>,
+}
+
+impl QueuedWebSocketSender {
+    pub const DEFAULT_QUEUE_CAPACITY: usize = 256;
+
+    /// Create a new queued sender with a dedicated background writer thread.
+    pub fn new(conn_id: u64, stream: TcpStream) -> Self {
+        Self::with_capacity(conn_id, stream, Self::DEFAULT_QUEUE_CAPACITY)
+    }
+
+    /// Create a queued sender with custom capacity.
+    pub fn with_capacity(conn_id: u64, mut stream: TcpStream, capacity: usize) -> Self {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WebSocketFrame>(capacity);
+        std::thread::Builder::new()
+            .name(format!("rhp-ws-writer-{}", conn_id))
+            .spawn(move || {
+                while let Ok(frame) = rx.recv() {
+                    if write_frame(&mut stream, frame.opcode, &frame.payload).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("Failed to spawn ws writer thread");
+
+        Self { conn_id, tx }
+    }
+}
+
+impl WebSocketSender for QueuedWebSocketSender {
+    fn send_frame(&self, opcode: WebSocketOpcode, payload: &[u8]) -> Result<(), String> {
+        let frame = WebSocketFrame {
+            opcode,
+            fin: true,
+            payload: payload.to_vec(),
+        };
+        self.tx.try_send(frame).map_err(|e| match e {
+            std::sync::mpsc::TrySendError::Full(_) => "Outbound queue full (slow client)".to_string(),
+            std::sync::mpsc::TrySendError::Disconnected(_) => "Connection closed".to_string(),
+        })
     }
 }
 
@@ -487,40 +837,57 @@ impl WebSocketHub {
         }
     }
 
-    /// Send a text frame to a specific connection by ID.
-    pub fn send_text(&self, conn_id: u64, message: &str) -> Result<bool, String> {
+    /// Send a frame with arbitrary opcode to a specific connection by ID.
+    pub fn send_frame(&self, conn_id: u64, opcode: WebSocketOpcode, payload: &[u8]) -> Result<bool, String> {
         let sender = {
             let conns = self.connections.read().map_err(|e| e.to_string())?;
             conns.get(&conn_id).cloned()
         };
 
         if let Some(s) = sender {
-            s.send_frame(WebSocketOpcode::Text, message.as_bytes())?;
+            s.send_frame(opcode, payload)?;
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    /// Broadcast a text message to all connected clients.
-    pub fn broadcast(&self, message: &str) -> usize {
+    /// Send a text frame to a specific connection by ID.
+    pub fn send_text(&self, conn_id: u64, message: &str) -> Result<bool, String> {
+        self.send_frame(conn_id, WebSocketOpcode::Text, message.as_bytes())
+    }
+
+    /// Broadcast an arbitrary opcode frame to all connected clients, pruning dead/stalled connections.
+    pub fn broadcast_opcode(&self, opcode: WebSocketOpcode, payload: &[u8]) -> usize {
         let conns = match self.connections.read() {
-            Ok(c) => c.values().cloned().collect::<Vec<_>>(),
+            Ok(c) => c.clone(),
             Err(_) => return 0,
         };
 
         let mut sent = 0;
-        let payload = message.as_bytes();
-        for sender in conns {
-            if sender.send_frame(WebSocketOpcode::Text, payload).is_ok() {
-                sent += 1;
+        let mut dead = Vec::new();
+
+        for (&id, sender) in &conns {
+            match sender.send_frame(opcode, payload) {
+                Ok(()) => sent += 1,
+                Err(_) => dead.push(id),
             }
         }
+
+        for id in dead {
+            self.unregister(id);
+        }
+
         sent
     }
 
-    /// Broadcast a text message to all subscribers of a specific channel.
-    pub fn broadcast_channel(&self, channel: &str, message: &str) -> usize {
+    /// Broadcast a text message to all connected clients.
+    pub fn broadcast(&self, message: &str) -> usize {
+        self.broadcast_opcode(WebSocketOpcode::Text, message.as_bytes())
+    }
+
+    /// Broadcast an arbitrary opcode frame to all subscribers of a specific channel, pruning dead connections.
+    pub fn broadcast_channel_opcode(&self, channel: &str, opcode: WebSocketOpcode, payload: &[u8]) -> usize {
         let target_ids: Vec<u64> = {
             let chans = match self.channels.read() {
                 Ok(c) => c,
@@ -532,25 +899,37 @@ impl WebSocketHub {
             }
         };
 
-        let senders: Vec<Arc<dyn WebSocketSender>> = {
+        let senders: Vec<(u64, Arc<dyn WebSocketSender>)> = {
             let conns = match self.connections.read() {
                 Ok(c) => c,
                 Err(_) => return 0,
             };
             target_ids
                 .into_iter()
-                .filter_map(|id| conns.get(&id).cloned())
+                .filter_map(|id| conns.get(&id).map(|s| (id, s.clone())))
                 .collect()
         };
 
         let mut sent = 0;
-        let payload = message.as_bytes();
-        for sender in senders {
-            if sender.send_frame(WebSocketOpcode::Text, payload).is_ok() {
-                sent += 1;
+        let mut dead = Vec::new();
+
+        for (id, sender) in senders {
+            match sender.send_frame(opcode, payload) {
+                Ok(()) => sent += 1,
+                Err(_) => dead.push(id),
             }
         }
+
+        for id in dead {
+            self.unregister(id);
+        }
+
         sent
+    }
+
+    /// Broadcast a text message to all subscribers of a specific channel.
+    pub fn broadcast_channel(&self, channel: &str, message: &str) -> usize {
+        self.broadcast_channel_opcode(channel, WebSocketOpcode::Text, message.as_bytes())
     }
 
     /// Return the count of currently active WebSocket connections.
@@ -586,6 +965,194 @@ pub fn get_websocket_hub() -> &'static WebSocketHub {
     static HUB: OnceLock<WebSocketHub> = OnceLock::new();
     HUB.get_or_init(WebSocketHub::new)
 }
+
+// ============================================================================
+// 5. Dual-Mode WebSocket Facade Backend Abstraction
+// ============================================================================
+
+/// Pluggable backend for Ws:: / WebSocket:: facade methods.
+pub trait WebSocketBackend: Send + Sync {
+    fn send(&self, conn_id: u64, opcode: u8, payload: Vec<u8>) -> bool;
+    fn broadcast(&self, channel: Option<String>, opcode: u8, payload: Vec<u8>) -> usize;
+    fn subscribe(&self, conn_id: u64, channel: &str) -> bool;
+    fn unsubscribe(&self, conn_id: u64, channel: &str) -> bool;
+    fn close(&self, conn_id: u64, code: u16, reason: &str) -> bool;
+    fn active_client_count(&self) -> usize;
+    fn active_client_ids(&self) -> Vec<u64>;
+    fn active_channels(&self) -> Vec<String>;
+}
+
+/// In-process local hub backend (for single process `rhp serve` & unit tests).
+pub struct LocalHubBackend {
+    hub: &'static WebSocketHub,
+}
+
+impl LocalHubBackend {
+    pub fn new() -> Self {
+        Self {
+            hub: get_websocket_hub(),
+        }
+    }
+}
+
+impl Default for LocalHubBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WebSocketBackend for LocalHubBackend {
+    fn send(&self, conn_id: u64, opcode: u8, payload: Vec<u8>) -> bool {
+        if let Some(op) = WebSocketOpcode::from_u8(opcode) {
+            self.hub.send_frame(conn_id, op, &payload).is_ok()
+        } else {
+            false
+        }
+    }
+
+    fn broadcast(&self, channel: Option<String>, opcode: u8, payload: Vec<u8>) -> usize {
+        if let Some(op) = WebSocketOpcode::from_u8(opcode) {
+            if let Some(chan) = channel {
+                self.hub.broadcast_channel_opcode(&chan, op, &payload)
+            } else {
+                self.hub.broadcast_opcode(op, &payload)
+            }
+        } else {
+            0
+        }
+    }
+
+    fn subscribe(&self, conn_id: u64, channel: &str) -> bool {
+        self.hub.subscribe(conn_id, channel);
+        true
+    }
+
+    fn unsubscribe(&self, conn_id: u64, channel: &str) -> bool {
+        self.hub.unsubscribe(conn_id, channel);
+        true
+    }
+
+    fn close(&self, conn_id: u64, code: u16, reason: &str) -> bool {
+        let _ = self.hub.send_frame(
+            conn_id,
+            WebSocketOpcode::Close,
+            &WebSocketFrame::close(code, reason).payload,
+        );
+        self.hub.unregister(conn_id);
+        true
+    }
+
+    fn active_client_count(&self) -> usize {
+        self.hub.active_connection_count()
+    }
+
+    fn active_client_ids(&self) -> Vec<u64> {
+        self.hub.active_connection_ids()
+    }
+
+    fn active_channels(&self) -> Vec<String> {
+        self.hub.active_channels()
+    }
+}
+
+/// Cluster IPC backend routing WebSocket operations from Worker to Master Reactor.
+pub struct IpcWebSocketBackend {
+    sender: IpcSender,
+}
+
+impl IpcWebSocketBackend {
+    pub fn new(sender: IpcSender) -> Self {
+        Self { sender }
+    }
+}
+
+impl WebSocketBackend for IpcWebSocketBackend {
+    fn send(&self, conn_id: u64, opcode: u8, payload: Vec<u8>) -> bool {
+        self.sender
+            .send(IpcMessage::WsSend {
+                conn_id,
+                opcode,
+                payload,
+            })
+            .is_ok()
+    }
+
+    fn broadcast(&self, channel: Option<String>, opcode: u8, payload: Vec<u8>) -> usize {
+        let res = self.sender.send(IpcMessage::WsBroadcast {
+            channel,
+            opcode,
+            payload,
+        });
+        if res.is_ok() {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn subscribe(&self, conn_id: u64, channel: &str) -> bool {
+        self.sender
+            .send(IpcMessage::WsSubscribe {
+                conn_id,
+                channel: channel.to_string(),
+            })
+            .is_ok()
+    }
+
+    fn unsubscribe(&self, conn_id: u64, channel: &str) -> bool {
+        self.sender
+            .send(IpcMessage::WsUnsubscribe {
+                conn_id,
+                channel: channel.to_string(),
+            })
+            .is_ok()
+    }
+
+    fn close(&self, conn_id: u64, code: u16, reason: &str) -> bool {
+        self.sender
+            .send(IpcMessage::WsClose {
+                conn_id,
+                code,
+                reason: reason.to_string(),
+            })
+            .is_ok()
+    }
+
+    fn active_client_count(&self) -> usize {
+        get_websocket_hub().active_connection_count()
+    }
+
+    fn active_client_ids(&self) -> Vec<u64> {
+        get_websocket_hub().active_connection_ids()
+    }
+
+    fn active_channels(&self) -> Vec<String> {
+        get_websocket_hub().active_channels()
+    }
+}
+
+thread_local! {
+    static CURRENT_WS_BACKEND: std::cell::RefCell<Option<Arc<dyn WebSocketBackend>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set the current thread's WebSocket backend (e.g. for worker processes).
+pub fn set_current_ws_backend(backend: Option<Arc<dyn WebSocketBackend>>) {
+    CURRENT_WS_BACKEND.with(|cell| {
+        *cell.borrow_mut() = backend;
+    });
+}
+
+/// Get the active WebSocket backend, falling back to [`LocalHubBackend`] if unset.
+pub fn get_current_ws_backend() -> Arc<dyn WebSocketBackend> {
+    CURRENT_WS_BACKEND.with(|cell| {
+        if let Some(ref b) = *cell.borrow() {
+            b.clone()
+        } else {
+            Arc::new(LocalHubBackend::new())
+        }
+    })
+}
+
 
 // ============================================================================
 // 5. Unit Tests
@@ -705,7 +1272,7 @@ mod tests {
         let mut reader2 = Cursor::new(close_buf);
         let close_frame = read_frame(&mut reader2).unwrap();
         assert_eq!(close_frame.opcode, WebSocketOpcode::Close);
-        let (code, reason) = close_frame.parse_close_payload();
+        let (code, reason) = close_frame.parse_close_payload().unwrap().unwrap();
         assert_eq!(code, 1000);
         assert_eq!(reason, "Normal Closure");
     }
@@ -759,5 +1326,186 @@ mod tests {
         assert_eq!(hub.active_connection_count(), 1);
         let count_after = hub.broadcast_channel("chat", "Second Msg");
         assert_eq!(count_after, 1);
+    }
+
+    #[test]
+    fn test_rfc6455_rsv_bits_must_be_zero() {
+        // Frame with RSV1 bit set (0x40 in byte 0 -> byte0 = 0x81 | 0x40 = 0xC1)
+        let raw = vec![0xC1, 0x00];
+        let mut reader = Cursor::new(raw);
+        let err = read_frame(&mut reader).unwrap_err();
+        assert_eq!(err.close_code(), 1002);
+    }
+
+    #[test]
+    fn test_rfc6455_client_frame_must_be_masked() {
+        // Unmasked text frame sent to server: byte0=0x81, byte1=0x05 (mask bit clear)
+        let raw = vec![0x81, 0x05, b'H', b'e', b'l', b'l', b'o'];
+        let mut reader = Cursor::new(raw);
+        let err = read_client_frame(&mut reader).unwrap_err();
+        assert_eq!(err.close_code(), 1002);
+        assert!(err.to_string().contains("Client-to-server frames MUST be masked"));
+    }
+
+    #[test]
+    fn test_rfc6455_control_frames_fin_and_payload_limits() {
+        // Fragmented Ping (FIN = 0, byte0 = 0x09)
+        let frag_ping = vec![0x09, 0x00];
+        let mut reader = Cursor::new(frag_ping);
+        let err = read_frame(&mut reader).unwrap_err();
+        assert_eq!(err.close_code(), 1002);
+
+        // Oversized Ping (payload length indicator 126 > 125)
+        let big_ping = vec![0x89, 126, 0x00, 126];
+        let mut reader2 = Cursor::new(big_ping);
+        let err2 = read_frame(&mut reader2).unwrap_err();
+        assert_eq!(err2.close_code(), 1002);
+    }
+
+    #[test]
+    fn test_rfc6455_64bit_length_msb_must_be_zero() {
+        // 64-bit length with MSB set (0x8000_0000_0000_0001)
+        let mut raw = vec![0x82, 127];
+        raw.extend_from_slice(&0x8000_0000_0000_0001u64.to_be_bytes());
+        let mut reader = Cursor::new(raw);
+        let err = read_frame(&mut reader).unwrap_err();
+        assert_eq!(err.close_code(), 1002);
+    }
+
+    #[test]
+    fn test_rfc6455_empty_close_frame_has_no_status_code() {
+        let frame = WebSocketFrame {
+            opcode: WebSocketOpcode::Close,
+            fin: true,
+            payload: Vec::new(),
+        };
+        let res = frame.parse_close_payload().unwrap();
+        assert_eq!(res, None);
+
+        let (code, reason) = frame.close_code_and_reason();
+        assert_eq!(code, None);
+        assert_eq!(reason, "");
+    }
+
+    #[test]
+    fn test_rfc6455_invalid_close_payloads() {
+        // 1-byte payload is invalid according to RFC 6455
+        let frame1 = WebSocketFrame {
+            opcode: WebSocketOpcode::Close,
+            fin: true,
+            payload: vec![0x03],
+        };
+        assert_eq!(frame1.parse_close_payload().unwrap_err().close_code(), 1002);
+
+        // Reserved code 1005 cannot be sent on the wire
+        let frame2 = WebSocketFrame {
+            opcode: WebSocketOpcode::Close,
+            fin: true,
+            payload: 1005u16.to_be_bytes().to_vec(),
+        };
+        assert_eq!(frame2.parse_close_payload().unwrap_err().close_code(), 1002);
+
+        // Invalid UTF-8 reason string fails with 1007
+        let mut payload3 = 1000u16.to_be_bytes().to_vec();
+        payload3.extend_from_slice(&[0xFF, 0xFE]); // invalid UTF-8 bytes
+        let frame3 = WebSocketFrame {
+            opcode: WebSocketOpcode::Close,
+            fin: true,
+            payload: payload3,
+        };
+        assert_eq!(frame3.parse_close_payload().unwrap_err().close_code(), 1007);
+    }
+
+    #[test]
+    fn test_rfc6455_message_assembler_fragmentation_and_utf8() {
+        let mut assembler = MessageAssembler::new();
+
+        // Fragment 1: Text opcode, FIN = 0, payload "Hello "
+        let f1 = WebSocketFrame {
+            opcode: WebSocketOpcode::Text,
+            fin: false,
+            payload: b"Hello ".to_vec(),
+        };
+        assert_eq!(assembler.process_frame(f1).unwrap(), None);
+
+        // Interleaved control frame: Ping
+        let ping = WebSocketFrame {
+            opcode: WebSocketOpcode::Ping,
+            fin: true,
+            payload: b"heartbeat".to_vec(),
+        };
+        let ping_msg = assembler.process_frame(ping).unwrap().unwrap();
+        assert_eq!(ping_msg.opcode, WebSocketOpcode::Ping);
+        assert_eq!(ping_msg.payload, b"heartbeat");
+
+        // Fragment 2: Continuation, FIN = 1, payload "World!"
+        let f2 = WebSocketFrame {
+            opcode: WebSocketOpcode::Continuation,
+            fin: true,
+            payload: b"World!".to_vec(),
+        };
+        let final_msg = assembler.process_frame(f2).unwrap().unwrap();
+        assert_eq!(final_msg.opcode, WebSocketOpcode::Text);
+        assert_eq!(final_msg.as_text().unwrap(), "Hello World!");
+
+        // Fragmented text message with invalid UTF-8 fails with 1007
+        let mut assembler2 = MessageAssembler::new();
+        let bad_f1 = WebSocketFrame {
+            opcode: WebSocketOpcode::Text,
+            fin: false,
+            payload: vec![0xC3], // Incomplete 2-byte sequence
+        };
+        assert_eq!(assembler2.process_frame(bad_f1).unwrap(), None);
+
+        let bad_f2 = WebSocketFrame {
+            opcode: WebSocketOpcode::Continuation,
+            fin: true,
+            payload: vec![0x28], // Invalid continuation byte
+        };
+        let err = assembler2.process_frame(bad_f2).unwrap_err();
+        assert_eq!(err.close_code(), 1007);
+    }
+
+    #[test]
+    fn test_broadcast_prunes_dead_connections() {
+        struct DeadSender;
+        impl WebSocketSender for DeadSender {
+            fn send_frame(&self, _opcode: WebSocketOpcode, _payload: &[u8]) -> Result<(), String> {
+                Err("Broken pipe".to_string())
+            }
+        }
+
+        let hub = WebSocketHub::new();
+        hub.register(201, Arc::new(DeadSender));
+        assert_eq!(hub.active_connection_count(), 1);
+
+        let sent = hub.broadcast("Ping");
+        assert_eq!(sent, 0);
+        // Dead connection must be pruned from hub
+        assert_eq!(hub.active_connection_count(), 0);
+    }
+
+    #[test]
+    fn test_facade_dual_mode_backend_switch() {
+        let (tx, mut rx) = crate::runtime::ipc::ipc_channel();
+        let ipc_backend = Arc::new(IpcWebSocketBackend::new(tx));
+        set_current_ws_backend(Some(ipc_backend));
+
+        let backend = get_current_ws_backend();
+        assert!(backend.send(55, WebSocketOpcode::Text as u8, b"Hi IPC".to_vec()));
+
+        let received = rx.blocking_recv().unwrap();
+        match received {
+            IpcMessage::WsSend { conn_id, payload, .. } => {
+                assert_eq!(conn_id, 55);
+                assert_eq!(payload, b"Hi IPC");
+            }
+            other => panic!("Unexpected IPC message: {:?}", other),
+        }
+
+        // Reset to default local backend
+        set_current_ws_backend(None);
+        let default_backend = get_current_ws_backend();
+        assert_eq!(default_backend.active_client_count(), 0);
     }
 }

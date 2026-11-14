@@ -229,7 +229,7 @@ pub fn run_reactor_simple(
                 let conn_id = crate::runtime::websocket::next_connection_id();
                 let hub = crate::runtime::websocket::get_websocket_hub();
                 if let Ok(cloned) = stream.try_clone() {
-                    let sender = std::sync::Arc::new(crate::runtime::websocket::TcpWebSocketSender::new(cloned));
+                    let sender = std::sync::Arc::new(crate::runtime::websocket::QueuedWebSocketSender::new(conn_id, cloned));
                     hub.register(conn_id, sender);
                 }
 
@@ -272,21 +272,69 @@ pub fn handle_reactor_websocket_session(
     router: WorkerRouter,
 ) {
     let hub = crate::runtime::websocket::get_websocket_hub();
+    let mut assembler = crate::runtime::websocket::MessageAssembler::new();
 
     loop {
-        match crate::runtime::websocket::read_frame(&mut stream) {
-            Ok(frame) => match frame.opcode {
-                crate::runtime::websocket::WebSocketOpcode::Ping => {
-                    // RFC 6455 §5.5.2: MUST respond with Pong containing identical payload
-                    let _ = crate::runtime::websocket::write_pong(&mut stream, &frame.payload);
+        match crate::runtime::websocket::read_client_frame(&mut stream) {
+            Ok(frame) => match assembler.process_frame(frame) {
+                Ok(Some(msg)) => match msg.opcode {
+                    crate::runtime::websocket::WebSocketOpcode::Ping => {
+                        // RFC 6455 §5.5.2: MUST respond with Pong containing identical payload
+                        let _ = hub.send_frame(
+                            conn_id,
+                            crate::runtime::websocket::WebSocketOpcode::Pong,
+                            &msg.payload,
+                        );
+                    }
+                    crate::runtime::websocket::WebSocketOpcode::Pong => {
+                        // Ignore unsolicited heartbeats
+                    }
+                    crate::runtime::websocket::WebSocketOpcode::Close => {
+                        // RFC 6455 §5.5.1: Reply with Close frame and terminate
+                        let frame = crate::runtime::websocket::WebSocketFrame {
+                            opcode: crate::runtime::websocket::WebSocketOpcode::Close,
+                            fin: true,
+                            payload: msg.payload,
+                        };
+                        let (code_opt, reason) = frame.close_code_and_reason();
+                        let code = code_opt.unwrap_or(1000);
+                        let close_payload = crate::runtime::websocket::WebSocketFrame::close(code, &reason).payload;
+                        let _ = hub.send_frame(
+                            conn_id,
+                            crate::runtime::websocket::WebSocketOpcode::Close,
+                            &close_payload,
+                        );
+                        let _ = router.route(IpcMessage::WsClose {
+                            conn_id,
+                            code,
+                            reason,
+                        });
+                        break;
+                    }
+                    crate::runtime::websocket::WebSocketOpcode::Text
+                    | crate::runtime::websocket::WebSocketOpcode::Binary => {
+                        // Forward incoming reassembled data frame to worker coroutine fiber
+                        let _ = router.route(IpcMessage::WsFrame {
+                            conn_id,
+                            opcode: msg.opcode as u8,
+                            payload: msg.payload,
+                        });
+                    }
+                    _ => {}
+                },
+                Ok(None) => {
+                    // Frame buffered in assembler, awaiting continuation fragments
                 }
-                crate::runtime::websocket::WebSocketOpcode::Pong => {
-                    // Ignore unsolicited heartbeats
-                }
-                crate::runtime::websocket::WebSocketOpcode::Close => {
-                    // RFC 6455 §5.5.1: Reply with Close frame and terminate
-                    let (code, reason) = frame.parse_close_payload();
-                    let _ = crate::runtime::websocket::write_close(&mut stream, code, &reason);
+                Err(e) => {
+                    // RFC 6455 protocol violation or UTF-8 error
+                    let code = e.close_code();
+                    let reason = e.to_string();
+                    let close_payload = crate::runtime::websocket::WebSocketFrame::close(code, &reason).payload;
+                    let _ = hub.send_frame(
+                        conn_id,
+                        crate::runtime::websocket::WebSocketOpcode::Close,
+                        &close_payload,
+                    );
                     let _ = router.route(IpcMessage::WsClose {
                         conn_id,
                         code,
@@ -294,25 +342,21 @@ pub fn handle_reactor_websocket_session(
                     });
                     break;
                 }
-                crate::runtime::websocket::WebSocketOpcode::Text
-                | crate::runtime::websocket::WebSocketOpcode::Binary => {
-                    // Forward incoming data frame to worker coroutine fiber
-                    let _ = router.route(IpcMessage::WsFrame {
-                        conn_id,
-                        opcode: frame.opcode as u8,
-                        payload: frame.payload,
-                    });
-                }
-                crate::runtime::websocket::WebSocketOpcode::Continuation => {
-                    // Fragmented frames
-                }
             },
-            Err(_) => {
-                // Connection error or client disconnected abruptly
+            Err(e) => {
+                let code = e.close_code();
+                if e.is_protocol_error() {
+                    let close_payload = crate::runtime::websocket::WebSocketFrame::close(code, "Protocol violation").payload;
+                    let _ = hub.send_frame(
+                        conn_id,
+                        crate::runtime::websocket::WebSocketOpcode::Close,
+                        &close_payload,
+                    );
+                }
                 let _ = router.route(IpcMessage::WsClose {
                     conn_id,
-                    code: 1006,
-                    reason: "Abnormal Closure".to_string(),
+                    code,
+                    reason: e.to_string(),
                 });
                 break;
             }
