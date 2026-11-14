@@ -72,7 +72,7 @@ impl Manager {
     pub fn spawn_worker(&mut self) -> IpcSender {
         let worker_id = self.next_worker_id.fetch_add(1, Ordering::Relaxed);
         let (master_tx, worker_rx) = ipc_channel();
-        let (worker_tx, _master_rx) = ipc_channel();
+        let (worker_tx, mut master_rx) = ipc_channel();
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let cfg = self.config.clone();
@@ -86,6 +86,48 @@ impl Manager {
 
         let ipc_tx_clone = worker_tx;
         let shutdown_clone = shutdown.clone();
+
+        // Spawn master receiver thread for messages originating from worker (WsSend, WsBroadcast, etc.)
+        let hub = crate::runtime::websocket::get_websocket_hub();
+        thread::Builder::new()
+            .name(format!("rhpm-worker-{}-rx", worker_id))
+            .spawn(move || {
+                while let Some(msg) = master_rx.blocking_recv() {
+                    match msg {
+                        IpcMessage::WsSend { conn_id, opcode, payload } => {
+                            if let Some(op) = crate::runtime::websocket::WebSocketOpcode::from_u8(opcode) {
+                                let _ = hub.send_frame(conn_id, op, &payload);
+                            }
+                        }
+                        IpcMessage::WsBroadcast { channel, opcode, payload } => {
+                            if let Some(op) = crate::runtime::websocket::WebSocketOpcode::from_u8(opcode) {
+                                if let Some(chan) = channel {
+                                    hub.broadcast_channel_opcode(&chan, op, &payload);
+                                } else {
+                                    hub.broadcast_opcode(op, &payload);
+                                }
+                            }
+                        }
+                        IpcMessage::WsSubscribe { conn_id, channel } => {
+                            hub.subscribe(conn_id, &channel);
+                        }
+                        IpcMessage::WsUnsubscribe { conn_id, channel } => {
+                            hub.unsubscribe(conn_id, &channel);
+                        }
+                        IpcMessage::WsClose { conn_id, code, reason } => {
+                            let close_payload = crate::runtime::websocket::WebSocketFrame::close(code, &reason).payload;
+                            let _ = hub.send_frame(
+                                conn_id,
+                                crate::runtime::websocket::WebSocketOpcode::Close,
+                                &close_payload,
+                            );
+                            hub.unregister(conn_id);
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .expect("Failed to spawn worker rx handler");
 
         let handle = thread::Builder::new()
             .name(format!("rhpm-worker-{}", worker_id))

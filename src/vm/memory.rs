@@ -355,6 +355,14 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
         PhpValue::Closure(_) | PhpValue::Future(_) | PhpValue::Resource(_) => {
             std::mem::size_of::<PhpValue>() + 64
         }
+        PhpValue::SharedObject(obj) => {
+            let guard = obj.properties.read();
+            let props_size: usize = guard.iter().map(|(k, _)| k.len() + 32).sum();
+            std::mem::size_of::<PhpValue>() + 64 + props_size
+        }
+        PhpValue::SharedAtomic(_) | PhpValue::SharedArray(_) | PhpValue::SharedValue(_) => {
+            std::mem::size_of::<PhpValue>() + 32
+        }
     }
 }
 

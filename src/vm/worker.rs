@@ -45,9 +45,9 @@ pub enum WorkerModel {
     #[default]
     MultiThreaded,
 
-    /// Process-level Copy-on-Write model. On Unix, utilizes `fork()` to leverage
-    /// kernel MMU page-level copy-on-write, guaranteeing hardware-enforced fault isolation
-    /// (segfaults, aborts, or panics never crash the parent process).
+    /// Process-level Copy-on-Write model. In-process request execution uses isolated
+    /// multi-threaded sandboxes to prevent POSIX fork lock/pipe deadlocks; OS-level
+    /// process isolation is supervised across independent processes by RHPM (`rhpm --mode cluster`).
     ProcessCow,
 }
 
@@ -1560,6 +1560,27 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
             buf.extend_from_slice(&len.to_le_bytes());
             buf.extend_from_slice(b);
         }
+        FrozenValue::SharedObject(so) => {
+            buf.push(14);
+            write_string(buf, &so.class_name);
+            let guard = so.properties.read();
+            let len = guard.len() as u32;
+            buf.extend_from_slice(&len.to_le_bytes());
+            for (k, v) in guard.iter() {
+                write_string(buf, k);
+                let frozen_v = FrozenValue::from_php_value(&PhpValue::from(v.clone()));
+                write_frozen(buf, &frozen_v);
+            }
+        }
+        FrozenValue::SharedAtomic(a) => {
+            buf.push(15);
+            let n = a.load(std::sync::atomic::Ordering::SeqCst);
+            buf.extend_from_slice(&n.to_le_bytes());
+        }
+        FrozenValue::Resource(_) => {
+            // Native trait objects cannot cross external byte streams; serialize as null marker
+            buf.push(16);
+        }
     }
 }
 
@@ -1647,6 +1668,22 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
             *cursor += len;
             Ok(FrozenValue::Bytes(slice.to_vec()))
         }
+        14 => {
+            let class_name = read_string(data, cursor)?;
+            let count = read_u32(data, cursor)? as usize;
+            let shared_obj = crate::vm::value::VmSharedObject::new(class_name);
+            for _ in 0..count {
+                let k = read_string(data, cursor)?;
+                let v = read_frozen(data, cursor)?;
+                let _ = shared_obj.set_property(k, v.to_php_value());
+            }
+            Ok(FrozenValue::SharedObject(Arc::new(shared_obj)))
+        }
+        15 => {
+            let n = read_u64(data, cursor)? as i64;
+            Ok(FrozenValue::SharedAtomic(Arc::new(std::sync::atomic::AtomicI64::new(n))))
+        }
+        16 => Ok(FrozenValue::Null),
         other => Err(WorkerError::SerializationError(format!(
             "Unknown FrozenValue tag: {}",
             other

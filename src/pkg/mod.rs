@@ -30,7 +30,10 @@ pub use manifest::{
     Manifest, NativeConfig, PackageMetadata, PackageSafety, PackageType,
     ALT_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
-pub use opaque_handle::{get_handle_registry, OpaqueHandleRegistry};
+pub use opaque_handle::{
+    clear_request_handles, get_handle_registry, with_request_handle_registry, HandleError,
+    OpaqueHandleRegistry,
+};
 pub use resolver::{
     add_package, init_project, install, install_all, install_package, remove_package,
     uninstall_package, update, update_all, AddOptions, InstallOptions, PackageOperationResult,

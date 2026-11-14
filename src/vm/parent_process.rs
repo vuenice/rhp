@@ -28,7 +28,7 @@ use crate::vm::ExecutionError;
 ///
 /// Contains zero raw thread-local reference counters (`Rc`), making `EngineState`
 /// safely shareable across multi-threaded worker pools and Tokio execution fibers (`Send + Sync`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum FrozenValue {
     Null,
     Bool(bool),
@@ -46,7 +46,54 @@ pub enum FrozenValue {
     },
     /// Untyped empty array that has not been promoted yet.
     EmptyArray,
+    SharedObject(Arc<crate::vm::value::VmSharedObject>),
+    SharedAtomic(Arc<std::sync::atomic::AtomicI64>),
+    Resource(Arc<dyn std::any::Any + Send + Sync>),
 }
+
+impl PartialEq for FrozenValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => {
+                if a.is_nan() && b.is_nan() {
+                    true
+                } else {
+                    a == b
+                }
+            }
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (Self::List(a), Self::List(b)) => a == b,
+            (Self::Dict(a), Self::Dict(b)) => a == b,
+            (Self::Set(a), Self::Set(b)) => a == b,
+            (Self::HashMap(a), Self::HashMap(b)) => a == b,
+            (
+                Self::Object {
+                    class_name: c1,
+                    properties: p1,
+                },
+                Self::Object {
+                    class_name: c2,
+                    properties: p2,
+                },
+            ) => c1 == c2 && p1 == p2,
+            (Self::EmptyArray, Self::EmptyArray) => true,
+            (Self::SharedObject(a), Self::SharedObject(b)) => a == b,
+            (Self::SharedAtomic(a), Self::SharedAtomic(b)) => {
+                Arc::ptr_eq(a, b)
+                    || a.load(std::sync::atomic::Ordering::SeqCst)
+                        == b.load(std::sync::atomic::Ordering::SeqCst)
+            }
+            (Self::Resource(a), Self::Resource(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for FrozenValue {}
 
 impl FrozenValue {
     /// Convert an active execution [`PhpValue`] into a thread-safe [`FrozenValue`].
@@ -98,6 +145,17 @@ impl FrozenValue {
                     properties: props,
                 }
             }
+            PhpValue::SharedObject(so) => FrozenValue::SharedObject(Arc::clone(so)),
+            PhpValue::SharedAtomic(sa) => FrozenValue::SharedAtomic(Arc::clone(sa)),
+            PhpValue::SharedArray(sa) => {
+                let guard = sa.read();
+                let vec = guard
+                    .iter()
+                    .map(|item| Self::from_php_value(&PhpValue::from(item.clone())))
+                    .collect();
+                FrozenValue::List(vec)
+            }
+            PhpValue::SharedValue(sv) => Self::from_php_value(&PhpValue::from(sv.clone())),
             PhpValue::Future(fut) => {
                 let mut b = fut.borrow_mut();
                 b.poll_completion();
@@ -107,7 +165,8 @@ impl FrozenValue {
                     FrozenValue::Null
                 }
             }
-            PhpValue::Closure(_) | PhpValue::Resource(_) => FrozenValue::Null,
+            PhpValue::Closure(_) => FrozenValue::Null,
+            PhpValue::Resource(r) => FrozenValue::Resource(Arc::clone(r)),
         }
     }
 
@@ -155,6 +214,9 @@ impl FrozenValue {
                 }
                 PhpValue::object(obj)
             }
+            FrozenValue::SharedObject(so) => PhpValue::SharedObject(Arc::clone(so)),
+            FrozenValue::SharedAtomic(sa) => PhpValue::SharedAtomic(Arc::clone(sa)),
+            FrozenValue::Resource(r) => PhpValue::Resource(Arc::clone(r)),
         }
     }
 }

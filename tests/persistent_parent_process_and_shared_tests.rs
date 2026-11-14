@@ -523,3 +523,245 @@ fn test_boot_phase_db_and_future_calls_forbidden() {
         err2_msg
     );
 }
+
+#[test]
+fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
+    let src = r#"
+        shared class AppConfig {
+            public readonly string $appName;
+            public readonly int $version;
+
+            public function __construct(string $name, int $ver) {
+                $this->appName = $name;
+                $this->version = $ver;
+            }
+
+            public function getAppName(): string {
+                return $this->appName;
+            }
+
+            public function getVersion(): int {
+                return $this->version;
+            }
+        }
+
+        class NormalRequestState {
+            public string $requestId = "req-1";
+        }
+    "#;
+
+    let (mut vm, _) = run_source_with_vm(src).expect("Booting VM should succeed");
+
+    // 1. Normal class MUST be represented by single-threaded Rc<RefCell<VmObject>>
+    let normal_inst = vm
+        .instantiate_and_construct("NormalRequestState", vec![], rhp::Span::default())
+        .expect("Normal class instantiation should succeed");
+    assert!(
+        matches!(normal_inst, PhpValue::Object(_)),
+        "Normal class must be represented by Rc<RefCell<VmObject>>"
+    );
+
+    // 2. Shared class MUST be represented by Arc<VmSharedObject>
+    let shared_inst = vm
+        .instantiate_and_construct(
+            "AppConfig",
+            vec![PhpValue::string("RhpCore"), PhpValue::Int(3)],
+            rhp::Span::default(),
+        )
+        .expect("Shared class instantiation should succeed");
+
+    let shared_arc = match &shared_inst {
+        PhpValue::SharedObject(arc) => {
+            assert_eq!(arc.class_name, "AppConfig");
+            assert_eq!(arc.get_property("appName"), Some(PhpValue::string("RhpCore")));
+            assert_eq!(arc.get_property("version"), Some(PhpValue::Int(3)));
+            assert!(arc.is_readonly("appName"));
+            assert!(arc.is_readonly("version"));
+            Arc::clone(arc)
+        }
+        other => panic!("Expected PhpValue::SharedObject, got: {:?}", other),
+    };
+
+    // 3. Compile-time Send + Sync check
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<rhp::VmSharedObject>();
+    assert_send_sync::<rhp::SharedValue>();
+    assert_send_sync::<Arc<rhp::VmSharedObject>>();
+
+    // 4. Multi-threaded concurrency: 16 threads concurrently dispatching instance methods
+    let mut handles = Vec::new();
+    for thread_idx in 0..16 {
+        let arc_clone = Arc::clone(&shared_arc);
+        let handle = thread::spawn(move || {
+            let shared_val = PhpValue::SharedObject(arc_clone);
+            let worker_src = r##"
+                shared class AppConfig {
+                    public readonly string $appName;
+                    public readonly int $version;
+
+                    public function getAppName(): string {
+                        return $this->appName;
+                    }
+
+                    public function getVersion(): int {
+                        return $this->version;
+                    }
+                }
+
+                class RequestWorker {
+                    public function describe(AppConfig $cfg, string $id): string {
+                        return $cfg->getAppName() + "#" + string($cfg->getVersion()) + "@" + $id;
+                    }
+                }
+            "##;
+            let (mut worker_vm, _) = run_source_with_vm(worker_src).expect("Worker VM should boot");
+            let worker = worker_vm
+                .instantiate_and_construct("RequestWorker", vec![], rhp::Span::default())
+                .expect("Worker instantiation should succeed");
+
+            let res = worker_vm
+                .invoke_method_sync(
+                    worker,
+                    "describe",
+                    vec![shared_val.clone(), PhpValue::string(thread_idx.to_string())],
+                    rhp::Span::default(),
+                )
+                .expect("Invoking describe on worker should succeed");
+
+            assert_eq!(
+                res,
+                PhpValue::string(format!("RhpCore#3@{}", thread_idx))
+            );
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().expect("Worker thread panicked");
+    }
+}
+
+#[test]
+fn test_shared_atomic_multi_threaded_concurrency() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    let atomic = Arc::new(AtomicI64::new(0));
+    let shared_atomic = PhpValue::SharedAtomic(Arc::clone(&atomic));
+
+    let mut handles = Vec::new();
+    for _ in 0..16 {
+        let atomic_ref = Arc::clone(&atomic);
+        let handle = thread::spawn(move || {
+            for _ in 0..1000 {
+                atomic_ref.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    assert_eq!(atomic.load(Ordering::SeqCst), 16000);
+    assert_eq!(shared_atomic.to_i64(), Some(16000));
+}
+
+#[test]
+fn test_parent_process_zero_copy_shared_object_arc() {
+    use rhp::{FrozenValue, VmSharedObject};
+
+    let shared_obj = VmSharedObject::new("SharedConfig");
+    let _ = shared_obj.set_property("env".to_string(), PhpValue::string("production"));
+    shared_obj.set_readonly("env".to_string(), true);
+    let original_arc = Arc::new(shared_obj);
+    let php_val = PhpValue::SharedObject(Arc::clone(&original_arc));
+
+    // Freeze into FrozenValue
+    let frozen = FrozenValue::from_php_value(&php_val);
+    let frozen_arc = match &frozen {
+        FrozenValue::SharedObject(arc) => Arc::clone(arc),
+        other => panic!("Expected FrozenValue::SharedObject, got {:?}", other),
+    };
+
+    // Both point to the exact same pointer address (zero-copy!)
+    assert!(
+        Arc::ptr_eq(&original_arc, &frozen_arc),
+        "FrozenValue::SharedObject must retain the exact same Arc allocation without copying"
+    );
+
+    // Unfreeze back to PhpValue
+    let thawed = frozen.to_php_value();
+    let thawed_arc = match &thawed {
+        PhpValue::SharedObject(arc) => Arc::clone(arc),
+        other => panic!("Expected PhpValue::SharedObject, got {:?}", other),
+    };
+
+    assert!(
+        Arc::ptr_eq(&original_arc, &thawed_arc),
+        "Thawed PhpValue::SharedObject must retain the exact same Arc allocation (zero-copy!)"
+    );
+    assert_eq!(thawed_arc.get_property("env"), Some(PhpValue::string("production")));
+}
+
+struct MockDbPool {
+    connection_string: String,
+    max_connections: u32,
+}
+
+#[test]
+fn test_shared_class_native_driver_pool_attachment() {
+    use rhp::{FrozenValue, VmSharedObject};
+
+    let pool = Arc::new(MockDbPool {
+        connection_string: "postgres://cluster.local:5432/rhp_prod".to_string(),
+        max_connections: 50,
+    });
+
+    let shared_service = VmSharedObject::new("DatabasePoolService");
+    shared_service.set_native_resource("pool", pool);
+
+    let shared_arc = Arc::new(shared_service);
+    let php_val = PhpValue::SharedObject(Arc::clone(&shared_arc));
+
+    // Freeze into Parent Process state
+    let frozen = FrozenValue::from_php_value(&php_val);
+    let thawed = frozen.to_php_value();
+
+    if let PhpValue::SharedObject(so) = thawed {
+        let fetched_pool = so
+            .get_native_resource::<MockDbPool>("pool")
+            .expect("Native pool should be retrievable from shared class");
+        assert_eq!(fetched_pool.connection_string, "postgres://cluster.local:5432/rhp_prod");
+        assert_eq!(fetched_pool.max_connections, 50);
+    } else {
+        panic!("Expected PhpValue::SharedObject");
+    }
+}
+
+#[test]
+fn test_request_opaque_handle_isolation_across_requests() {
+    use rhp::pkg::{get_handle_registry, with_request_handle_registry};
+
+    // Request 1: inserts an opaque handle into the request registry
+    let h1 = with_request_handle_registry(|reg| {
+        reg.insert("SessionCursor", "cursor_req_1".to_string())
+    });
+    assert!(with_request_handle_registry(|reg| reg.has(h1, "SessionCursor")));
+
+    // Global registry handle for Request 1
+    let g1 = get_handle_registry().insert("GlobalCursor", "cursor_req_1".to_string());
+    assert!(get_handle_registry().has(g1, "GlobalCursor"));
+
+    // Simulate Request 1 completion / tear-down
+    rhp::clear_request_context();
+
+    // Request 2 runs: must NOT see handles from Request 1
+    assert!(!with_request_handle_registry(|reg| reg.has(h1, "SessionCursor")));
+    assert_eq!(with_request_handle_registry(|reg| reg.count()), 0);
+
+    assert!(!get_handle_registry().has(g1, "GlobalCursor"));
+    assert_eq!(get_handle_registry().count(), 0);
+}
+
+

@@ -356,6 +356,8 @@ pub fn clear_request_context() {
     REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
     REQUEST_HEADERS.with(|cell| cell.borrow_mut().clear());
     REQUEST_SERVER.with(|cell| cell.borrow_mut().clear());
+    crate::pkg::opaque_handle::clear_request_handles();
+    crate::pkg::opaque_handle::get_handle_registry().clear();
     clear_response_context();
 }
 
@@ -8654,6 +8656,29 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Closure(_) => "Closure".to_string(),
                 PhpValue::Future(_) => "Future".to_string(),
                 PhpValue::Resource(_) => "resource".to_string(),
+                PhpValue::SharedObject(obj) => {
+                    let cls = obj.class_name.clone();
+                    if cls.is_empty() {
+                        "object".to_string()
+                    } else {
+                        cls
+                    }
+                }
+                PhpValue::SharedAtomic(_) => "int".to_string(),
+                PhpValue::SharedArray(_) => "array".to_string(),
+                PhpValue::SharedValue(sv) => match sv {
+                    crate::vm::value::SharedValue::Null => "null".to_string(),
+                    crate::vm::value::SharedValue::Bool(_) => "bool".to_string(),
+                    crate::vm::value::SharedValue::Int(_) | crate::vm::value::SharedValue::AtomicInt(_) => "int".to_string(),
+                    crate::vm::value::SharedValue::Float(_) => "float".to_string(),
+                    crate::vm::value::SharedValue::String(_) => "string".to_string(),
+                    crate::vm::value::SharedValue::Bytes(_) => "bytes".to_string(),
+                    crate::vm::value::SharedValue::AtomicBool(_) => "bool".to_string(),
+                    crate::vm::value::SharedValue::SharedObject(o) => o.class_name.clone(),
+                    crate::vm::value::SharedValue::SharedArray(_) => "array".to_string(),
+                    crate::vm::value::SharedValue::SharedDict(_) => "Arr::dict".to_string(),
+                    crate::vm::value::SharedValue::Resource(_) => "resource".to_string(),
+                },
             };
             Ok(PhpValue::string(type_str))
         }
@@ -9003,14 +9028,14 @@ pub fn dispatch_binary(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 // =========================================================================
-// WebSocket Facade
+// Ws / WebSocket Facade
 // =========================================================================
 
 pub fn dispatch_websocket(method: &str, args: &[PhpValue]) -> FacadeResult {
-    let hub = crate::runtime::websocket::get_websocket_hub();
+    let backend = crate::runtime::websocket::get_current_ws_backend();
 
     match method {
-        // WebSocket::isUpgrade() -> bool
+        // Ws::isUpgrade() -> bool
         "isUpgrade" | "is_upgrade" => {
             let from_headers = REQUEST_HEADERS.with(|cell| {
                 for (k, v) in cell.borrow().iter() {
@@ -9034,98 +9059,121 @@ pub fn dispatch_websocket(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::Bool(from_headers || from_server))
         }
 
-        // WebSocket::acceptKey(string $key) -> string
+        // Ws::acceptKey(string $key) -> string
         "acceptKey" | "accept_key" => {
-            let key = get_arg_str(args, 0, "WebSocket::acceptKey")?;
+            let key = get_arg_str(args, 0, "Ws::acceptKey")?;
             let accept = crate::runtime::websocket::compute_sec_websocket_accept(&key);
             Ok(PhpValue::string(accept))
         }
 
-        // WebSocket::broadcast(string $channel_or_msg, ?string $message = null) -> int
+        // Ws::broadcast(string $channel_or_msg, ?string $message = null) -> int
         "broadcast" => {
             let count = if args.len() >= 2 {
-                let channel = get_arg_str(args, 0, "WebSocket::broadcast")?;
-                let message = get_arg_str(args, 1, "WebSocket::broadcast")?;
-                hub.broadcast_channel(&channel, &message)
+                let channel = get_arg_str(args, 0, "Ws::broadcast")?;
+                let message = get_arg_str(args, 1, "Ws::broadcast")?;
+                backend.broadcast(Some(channel), crate::runtime::websocket::WebSocketOpcode::Text as u8, message.into_bytes())
             } else if let Some(msg_val) = args.first() {
                 let message = msg_val.to_php_string();
-                hub.broadcast(&message)
+                backend.broadcast(None, crate::runtime::websocket::WebSocketOpcode::Text as u8, message.into_bytes())
             } else {
                 0
             };
             Ok(PhpValue::Int(count as i64))
         }
 
-        // WebSocket::broadcastTo(string $channel, string $message) -> int
+        // Ws::broadcastTo(string $channel, string $message) -> int
         "broadcastTo" | "broadcast_to" | "to" => {
-            let channel = get_arg_str(args, 0, "WebSocket::broadcastTo")?;
-            let message = get_arg_str(args, 1, "WebSocket::broadcastTo")?;
-            let count = hub.broadcast_channel(&channel, &message);
+            let channel = get_arg_str(args, 0, "Ws::broadcastTo")?;
+            let message = get_arg_str(args, 1, "Ws::broadcastTo")?;
+            let count = backend.broadcast(Some(channel), crate::runtime::websocket::WebSocketOpcode::Text as u8, message.into_bytes());
             Ok(PhpValue::Int(count as i64))
         }
 
-        // WebSocket::send(int $connId, string $message) -> bool
+        // Ws::send(int $connId, string $message) -> bool
         "send" | "sendTo" | "send_to" => {
             let conn_id = args
                 .first()
                 .and_then(|v| v.to_i64())
                 .ok_or_else(|| RuntimeErrorKind::TooFewArguments {
-                    callable: "WebSocket::send".to_string(),
+                    callable: "Ws::send".to_string(),
                     passed: args.len(),
                     expected: 2,
                 })? as u64;
-            let message = get_arg_str(args, 1, "WebSocket::send")?;
-            match hub.send_text(conn_id, &message) {
-                Ok(sent) => Ok(PhpValue::Bool(sent)),
-                Err(_) => Ok(PhpValue::Bool(false)),
-            }
+            let message = get_arg_str(args, 1, "Ws::send")?;
+            let sent = backend.send(
+                conn_id,
+                crate::runtime::websocket::WebSocketOpcode::Text as u8,
+                message.into_bytes(),
+            );
+            Ok(PhpValue::Bool(sent))
         }
 
-        // WebSocket::clients() -> int
+        // Ws::sendBinary(int $connId, string $data) -> bool
+        "sendBinary" | "send_binary" => {
+            let conn_id = args
+                .first()
+                .and_then(|v| v.to_i64())
+                .ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                    callable: "Ws::sendBinary".to_string(),
+                    passed: args.len(),
+                    expected: 2,
+                })? as u64;
+            let data = get_arg_str(args, 1, "Ws::sendBinary")?;
+            let sent = backend.send(
+                conn_id,
+                crate::runtime::websocket::WebSocketOpcode::Binary as u8,
+                data.into_bytes(),
+            );
+            Ok(PhpValue::Bool(sent))
+        }
+
+        // Ws::clients() -> int
         "clients" | "activeClients" | "count" => {
-            let count = hub.active_connection_count();
+            let count = backend.active_client_count();
             Ok(PhpValue::Int(count as i64))
         }
 
-        // WebSocket::connectionIds() -> array
+        // Ws::connectionIds() -> array
         "connectionIds" | "clientIds" | "ids" => {
-            let ids = hub.active_connection_ids();
+            let ids = backend.active_client_ids();
             let php_ids: Vec<PhpValue> = ids.into_iter().map(|id| PhpValue::Int(id as i64)).collect();
             Ok(PhpValue::list(php_ids))
         }
 
-        // WebSocket::channels() -> array
+        // Ws::channels() -> array
         "channels" | "activeChannels" => {
-            let chans = hub.active_channels();
+            let chans = backend.active_channels();
             let php_chans: Vec<PhpValue> = chans.into_iter().map(PhpValue::string).collect();
             Ok(PhpValue::list(php_chans))
         }
 
-        // WebSocket::subscribe(int $connId, string $channel) -> bool
+        // Ws::subscribe(int $connId, string $channel) -> bool
         "subscribe" => {
             let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
-            let channel = get_arg_str(args, 1, "WebSocket::subscribe")?;
-            hub.subscribe(conn_id, &channel);
-            Ok(PhpValue::Bool(true))
+            let channel = get_arg_str(args, 1, "Ws::subscribe")?;
+            let ok = backend.subscribe(conn_id, &channel);
+            Ok(PhpValue::Bool(ok))
         }
 
-        // WebSocket::unsubscribe(int $connId, string $channel) -> bool
+        // Ws::unsubscribe(int $connId, string $channel) -> bool
         "unsubscribe" => {
             let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
-            let channel = get_arg_str(args, 1, "WebSocket::unsubscribe")?;
-            hub.unsubscribe(conn_id, &channel);
-            Ok(PhpValue::Bool(true))
+            let channel = get_arg_str(args, 1, "Ws::unsubscribe")?;
+            let ok = backend.unsubscribe(conn_id, &channel);
+            Ok(PhpValue::Bool(ok))
         }
 
-        // WebSocket::close(int $connId, int $code = 1000, string $reason = "") -> bool
+        // Ws::close(int $connId, int $code = 1000, string $reason = "") -> bool
         "close" | "disconnect" => {
             let conn_id = args.first().and_then(|v| v.to_i64()).unwrap_or(0) as u64;
-            hub.unregister(conn_id);
-            Ok(PhpValue::Bool(true))
+            let code = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1000) as u16;
+            let reason = args.get(2).map(|v| v.to_php_string()).unwrap_or_default();
+            let ok = backend.close(conn_id, code, &reason);
+            Ok(PhpValue::Bool(ok))
         }
 
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
-            facade: "WebSocket".to_string(),
+            facade: "Ws".to_string(),
             method: method.to_string(),
         }),
     }

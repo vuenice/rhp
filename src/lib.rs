@@ -111,7 +111,7 @@ pub use vm::{
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, FrozenValue, IndexMap,
     IoKind, IoWaitInfo, LogRecord, ParentProcess, PhpValue, StrictEq, PluginFacade, parse_json_value, RunMode, RuntimeError,
     RuntimeErrorKind, SchedulerStats, StackTraceEntry, Tier2PluginHandler, Value, VmClosure,
-    VmFuture, FutureState, VmObject, WorkerError, WorkerHandle, WorkerModel, WorkerPayload, WorkerPool,
+    VmFuture, FutureState, VmObject, VmSharedObject, SharedValue, WorkerError, WorkerHandle, WorkerModel, WorkerPayload, WorkerPool,
     WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats, WorkerRequest, WorkerResponse,
     WorkerResponseStatus, cow_detachments, current_usage, estimate_value_size, gc_pause_ms,
     gc_runs, get_memory_stats, is_gc_free, live_objects, peak_usage, record_alloc,

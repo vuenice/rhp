@@ -5,9 +5,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
+use parking_lot::RwLock;
 
 use crate::ir::opcode::{ClassId, FunctionId};
 use crate::ir::ClosureCategory;
@@ -530,6 +532,170 @@ impl VmObject {
     }
 }
 
+/// Thread-safe value representation for `shared class` state and concurrency primitives.
+/// Guaranteed `Send + Sync` by the Rust compiler.
+#[derive(Debug, Clone)]
+pub enum SharedValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(RhpString),
+    Bytes(Arc<[u8]>),
+    AtomicInt(Arc<AtomicI64>),
+    AtomicBool(Arc<AtomicBool>),
+    SharedObject(Arc<VmSharedObject>),
+    SharedArray(Arc<RwLock<Vec<SharedValue>>>),
+    SharedDict(Arc<RwLock<IndexMap<String, SharedValue>>>),
+    Resource(Arc<dyn std::any::Any + Send + Sync>),
+}
+
+unsafe impl Send for SharedValue {}
+unsafe impl Sync for SharedValue {}
+
+impl SharedValue {
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Self::Null => false,
+            Self::Bool(b) => *b,
+            Self::Int(n) => *n != 0,
+            Self::Float(f) => *f != 0.0 && !f.is_nan(),
+            Self::String(s) => !s.is_empty() && s.as_str() != "0",
+            Self::Bytes(b) => !b.is_empty() && &**b != b"0",
+            Self::AtomicInt(a) => a.load(AtomicOrdering::SeqCst) != 0,
+            Self::AtomicBool(b) => b.load(AtomicOrdering::SeqCst),
+            Self::SharedObject(_) => true,
+            Self::SharedArray(a) => !a.read().is_empty(),
+            Self::SharedDict(d) => !d.read().is_empty(),
+            Self::Resource(_) => true,
+        }
+    }
+}
+
+impl PartialEq for SharedValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => {
+                if a.is_nan() && b.is_nan() {
+                    true
+                } else {
+                    a == b
+                }
+            }
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (Self::AtomicInt(a), Self::AtomicInt(b)) => {
+                Arc::ptr_eq(a, b) || a.load(AtomicOrdering::SeqCst) == b.load(AtomicOrdering::SeqCst)
+            }
+            (Self::AtomicBool(a), Self::AtomicBool(b)) => {
+                Arc::ptr_eq(a, b) || b.load(AtomicOrdering::SeqCst) == b.load(AtomicOrdering::SeqCst)
+            }
+            (Self::SharedObject(a), Self::SharedObject(b)) => a == b,
+            (Self::SharedArray(a), Self::SharedArray(b)) => {
+                Arc::ptr_eq(a, b) || *a.read() == *b.read()
+            }
+            (Self::SharedDict(a), Self::SharedDict(b)) => {
+                Arc::ptr_eq(a, b) || *a.read() == *b.read()
+            }
+            (Self::Resource(a), Self::Resource(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SharedValue {}
+
+/// Shared Object representation for `shared class`.
+/// Backed by `Arc` and `parking_lot::RwLock` for multi-threaded, zero-copy, lock-free concurrency.
+#[derive(Debug, Clone)]
+pub struct VmSharedObject {
+    pub class_id: Option<ClassId>,
+    pub class_name: String,
+    pub properties: Arc<RwLock<IndexMap<String, SharedValue>>>,
+    pub readonly_props: Arc<RwLock<HashMap<String, bool>>>,
+}
+
+unsafe impl Send for VmSharedObject {}
+unsafe impl Sync for VmSharedObject {}
+
+impl VmSharedObject {
+    pub fn new(class_name: impl Into<String>) -> Self {
+        Self {
+            class_id: None,
+            class_name: class_name.into(),
+            properties: Arc::new(RwLock::new(IndexMap::new())),
+            readonly_props: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn with_class_id(class_id: ClassId, class_name: impl Into<String>) -> Self {
+        Self {
+            class_id: Some(class_id),
+            class_name: class_name.into(),
+            properties: Arc::new(RwLock::new(IndexMap::new())),
+            readonly_props: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn get_property(&self, name: &str) -> Option<PhpValue> {
+        let guard = self.properties.read();
+        guard.get(name).map(|v| PhpValue::from(v.clone()))
+    }
+
+    pub fn has_property(&self, name: &str) -> bool {
+        self.properties.read().contains_key(name)
+    }
+
+    pub fn set_property(&self, name: impl Into<String>, value: PhpValue) -> Result<(), &'static str> {
+        let shared_val = SharedValue::try_from(value)?;
+        let name_str = name.into();
+        self.properties.write().insert(name_str, shared_val);
+        Ok(())
+    }
+
+    pub fn set_readonly(&self, name: impl Into<String>, is_ro: bool) {
+        let name_str = name.into();
+        self.readonly_props.write().insert(name_str, is_ro);
+    }
+
+    pub fn is_readonly(&self, name: &str) -> bool {
+        self.readonly_props.read().get(name).copied().unwrap_or(false)
+    }
+
+    /// Attach a native driver, connection pool, or client resource directly to this shared object instance.
+    pub fn set_native_resource(&self, name: impl Into<String>, resource: Arc<dyn std::any::Any + Send + Sync>) {
+        self.properties.write().insert(name.into(), SharedValue::Resource(resource));
+    }
+
+    /// Retrieve an attached native driver, connection pool, or client resource downcast to target type `T`.
+    pub fn get_native_resource<T: Send + Sync + 'static>(&self, name: &str) -> Option<Arc<T>> {
+        let guard = self.properties.read();
+        match guard.get(name) {
+            Some(SharedValue::Resource(arc)) => arc.clone().downcast::<T>().ok(),
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq for VmSharedObject {
+    fn eq(&self, other: &Self) -> bool {
+        if self.class_name != other.class_name {
+            return false;
+        }
+        if Arc::ptr_eq(&self.properties, &other.properties) {
+            return true;
+        }
+        let g1 = self.properties.read();
+        let g2 = other.properties.read();
+        *g1 == *g2
+    }
+}
+
+impl Eq for VmSharedObject {}
+
 /// Unified core runtime value enum representing all primitive and complex RHP values.
 ///
 /// Implements Technical Point #7 of the RHP Architecture Specification:
@@ -539,6 +705,7 @@ impl VmObject {
 /// - Strings utilize Small-String-Optimization (`RhpString`) for zero heap allocations on <= 23 bytes.
 /// - Standard arrays and subtyped collections are heap-allocated with reference-counting.
 /// - Objects, Closures, and Futures pass by reference handles (`Rc<RefCell<...>>`).
+/// - Shared Objects and Concurrency Primitives use `Arc` and `parking_lot::RwLock` (`Send + Sync`).
 #[derive(Clone, Default)]
 pub enum PhpValue {
     #[default]
@@ -562,6 +729,68 @@ pub enum PhpValue {
     Closure(Rc<VmClosure>),
     Future(Rc<RefCell<VmFuture>>),
     Resource(Arc<dyn std::any::Any + Send + Sync>),
+
+    // 2. Shared Class / Concurrency Primitives (Arc-backed, Send + Sync)
+    SharedObject(Arc<VmSharedObject>),
+    SharedArray(Arc<RwLock<Vec<SharedValue>>>),
+    SharedAtomic(Arc<AtomicI64>),
+    SharedValue(SharedValue),
+}
+
+impl From<SharedValue> for PhpValue {
+    fn from(val: SharedValue) -> Self {
+        match val {
+            SharedValue::Null => PhpValue::Null,
+            SharedValue::Bool(b) => PhpValue::Bool(b),
+            SharedValue::Int(n) => PhpValue::Int(n),
+            SharedValue::Float(f) => PhpValue::float(f),
+            SharedValue::String(s) => PhpValue::String(s),
+            SharedValue::Bytes(b) => PhpValue::bytes(b),
+            SharedValue::AtomicInt(a) => PhpValue::SharedAtomic(a),
+            SharedValue::AtomicBool(b) => PhpValue::SharedValue(SharedValue::AtomicBool(b)),
+            SharedValue::SharedObject(o) => PhpValue::SharedObject(o),
+            SharedValue::SharedArray(a) => PhpValue::SharedArray(a),
+            SharedValue::SharedDict(d) => PhpValue::SharedValue(SharedValue::SharedDict(d)),
+            SharedValue::Resource(r) => PhpValue::Resource(r),
+        }
+    }
+}
+
+impl TryFrom<PhpValue> for SharedValue {
+    type Error = &'static str;
+
+    fn try_from(val: PhpValue) -> Result<Self, Self::Error> {
+        match val {
+            PhpValue::Null => Ok(SharedValue::Null),
+            PhpValue::Bool(b) => Ok(SharedValue::Bool(b)),
+            PhpValue::Int(n) => Ok(SharedValue::Int(n)),
+            PhpValue::Float(f) => Ok(SharedValue::Float(f)),
+            PhpValue::String(s) => Ok(SharedValue::String(s)),
+            PhpValue::SharedObject(o) => Ok(SharedValue::SharedObject(o)),
+            PhpValue::SharedAtomic(a) => Ok(SharedValue::AtomicInt(a)),
+            PhpValue::SharedArray(a) => Ok(SharedValue::SharedArray(a)),
+            PhpValue::SharedValue(v) => Ok(v),
+            PhpValue::Resource(r) => Ok(SharedValue::Resource(r)),
+            PhpValue::EmptyArray => Ok(SharedValue::SharedArray(Arc::new(RwLock::new(Vec::new())))),
+            PhpValue::Array(items) | PhpValue::List(items) => {
+                let borrowed = items.borrow();
+                let mut shared_items = Vec::with_capacity(borrowed.len());
+                for item in borrowed.iter() {
+                    shared_items.push(SharedValue::try_from(item.clone())?);
+                }
+                Ok(SharedValue::SharedArray(Arc::new(RwLock::new(shared_items))))
+            }
+            PhpValue::Dict(d) => {
+                let borrowed = d.borrow();
+                let mut map = IndexMap::with_capacity(borrowed.len());
+                for (k, v) in borrowed.iter() {
+                    map.insert(k.clone(), SharedValue::try_from(v.clone())?);
+                }
+                Ok(SharedValue::SharedDict(Arc::new(RwLock::new(map))))
+            }
+            _ => Err("Cannot store non-thread-safe request-scoped reference (such as standard Object, Closure, or Future) inside a shared class"),
+        }
+    }
 }
 
 /// Runtime closure and arrow-function handle referencing a compiled function and captured upvalues.
@@ -1030,6 +1259,21 @@ impl PhpValue {
         }))
     }
 
+    #[inline]
+    pub fn shared_object(obj: VmSharedObject) -> Self {
+        Self::SharedObject(Arc::new(obj))
+    }
+
+    #[inline]
+    pub fn shared_atomic(val: i64) -> Self {
+        Self::SharedAtomic(Arc::new(AtomicI64::new(val)))
+    }
+
+    #[inline]
+    pub fn shared_array(items: Vec<SharedValue>) -> Self {
+        Self::SharedArray(Arc::new(RwLock::new(items)))
+    }
+
     // =========================================================================
     // Type Inspection & Conversions
     // =========================================================================
@@ -1050,10 +1294,25 @@ impl PhpValue {
             Self::Dict(_) => "Arr::dict",
             Self::Set(_) => "Arr::set",
             Self::HashMap(_) => "Arr::hashMap",
-            Self::Object(_) => "object",
+            Self::Object(_) | Self::SharedObject(_) => "object",
             Self::Closure(_) => "Closure",
             Self::Future(_) => "Future",
             Self::Resource(_) => "resource",
+            Self::SharedAtomic(_) => "int",
+            Self::SharedArray(_) => "array",
+            Self::SharedValue(sv) => match sv {
+                SharedValue::Null => "null",
+                SharedValue::Bool(_) => "bool",
+                SharedValue::Int(_) | SharedValue::AtomicInt(_) => "int",
+                SharedValue::Float(_) => "float",
+                SharedValue::String(_) => "string",
+                SharedValue::Bytes(_) => "bytes",
+                SharedValue::AtomicBool(_) => "bool",
+                SharedValue::SharedObject(_) => "object",
+                SharedValue::SharedArray(_) => "array",
+                SharedValue::SharedDict(_) => "Arr::dict",
+                SharedValue::Resource(_) => "resource",
+            },
         }
     }
 
@@ -1089,7 +1348,9 @@ impl PhpValue {
             Self::Dict(dict) => !dict.borrow().is_empty(),
             Self::Set(set) => !set.borrow().is_empty(),
             Self::HashMap(map) => !map.borrow().is_empty(),
-            Self::Object(_) | Self::Closure(_) | Self::Future(_) | Self::Resource(_) => true,
+            Self::Object(_) | Self::SharedObject(_) | Self::SharedAtomic(_) | Self::Closure(_) | Self::Future(_) | Self::Resource(_) => true,
+            Self::SharedArray(arr) => !arr.read().is_empty(),
+            Self::SharedValue(sv) => sv.is_truthy(),
         }
     }
 
@@ -1136,6 +1397,7 @@ impl PhpValue {
     pub fn signed_bits(&self) -> Option<i128> {
         match self {
             Self::Int(n) => Some(*n as i128),
+            Self::SharedAtomic(a) => Some(a.load(AtomicOrdering::SeqCst) as i128),
             Self::Bool(b) => Some(if *b { 1 } else { 0 }),
             _ => None,
         }
@@ -1144,7 +1406,7 @@ impl PhpValue {
     pub fn is_integer_value(&self) -> bool {
         matches!(
             self,
-            Self::Int(_)
+            Self::Int(_) | Self::SharedAtomic(_)
         )
     }
 
@@ -1229,6 +1491,23 @@ impl PhpValue {
                 }
                 format!("class@{}", b.class_name)
             }
+            Self::SharedObject(obj) => format!("class@{}", obj.class_name),
+            Self::SharedAtomic(a) => a.load(AtomicOrdering::SeqCst).to_string(),
+            Self::SharedArray(_) => "Array".to_string(),
+            Self::SharedValue(sv) => match sv {
+                SharedValue::Null => String::new(),
+                SharedValue::Bool(b) => (if *b { "1" } else { "" }).to_string(),
+                SharedValue::Int(n) => n.to_string(),
+                SharedValue::Float(f) => f.to_string(),
+                SharedValue::String(s) => s.to_string(),
+                SharedValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                SharedValue::AtomicInt(a) => a.load(AtomicOrdering::SeqCst).to_string(),
+                SharedValue::AtomicBool(b) => (if b.load(AtomicOrdering::SeqCst) { "1" } else { "" }).to_string(),
+                SharedValue::SharedObject(o) => format!("class@{}", o.class_name),
+                SharedValue::SharedArray(_) => "Array".to_string(),
+                SharedValue::SharedDict(_) => "Arr::dict".to_string(),
+                SharedValue::Resource(_) => "Resource".to_string(),
+            },
             Self::Closure(c) => format!("Closure({})", c.name),
             Self::Future(_) => "Future".to_string(),
             Self::Resource(_) => "Resource".to_string(),
@@ -1328,6 +1607,53 @@ impl PhpValue {
                 out.push(')');
                 out
             }
+            Self::SharedObject(obj) => {
+                let guard = obj.properties.read();
+                let mut out = format!("{} Object\n{}(\n", obj.class_name, pad);
+                for (k, val) in guard.iter() {
+                    let php_val = PhpValue::from(val.clone());
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, k, php_val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::SharedAtomic(a) => a.load(AtomicOrdering::SeqCst).to_string(),
+            Self::SharedArray(arr) => {
+                let guard = arr.read();
+                let mut out = String::from("Array\n") + &pad + "(\n";
+                for (idx, val) in guard.iter().enumerate() {
+                    let php_val = PhpValue::from(val.clone());
+                    out.push_str(&format!("{}[{}] => {}\n", inner_pad, idx, php_val.format_print_r(indent + 1)));
+                }
+                out.push_str(&pad);
+                out.push(')');
+                out
+            }
+            Self::SharedValue(sv) => match sv {
+                SharedValue::Null => String::new(),
+                SharedValue::Bool(b) => (if *b { "1" } else { "" }).to_string(),
+                SharedValue::Int(n) => n.to_string(),
+                SharedValue::Float(f) => f.to_string(),
+                SharedValue::String(s) => s.to_string(),
+                SharedValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                SharedValue::AtomicInt(a) => a.load(AtomicOrdering::SeqCst).to_string(),
+                SharedValue::AtomicBool(b) => (if b.load(AtomicOrdering::SeqCst) { "1" } else { "" }).to_string(),
+                SharedValue::SharedObject(o) => PhpValue::SharedObject(o.clone()).format_print_r(indent),
+                SharedValue::SharedArray(a) => PhpValue::SharedArray(a.clone()).format_print_r(indent),
+                SharedValue::SharedDict(d) => {
+                    let guard = d.read();
+                    let mut out = String::from("Arr::dict\n") + &pad + "(\n";
+                    for (k, val) in guard.iter() {
+                        let php_val = PhpValue::from(val.clone());
+                        out.push_str(&format!("{}[{}] => {}\n", inner_pad, k, php_val.format_print_r(indent + 1)));
+                    }
+                    out.push_str(&pad);
+                    out.push(')');
+                    out
+                }
+                SharedValue::Resource(_) => "Resource".to_string(),
+            },
             Self::Closure(c) => format!("Closure({})", c.name),
             Self::Future(fut) => format!("Future(completed={})", fut.borrow().is_completed),
             Self::Resource(_) => "Resource".to_string(),
@@ -1404,6 +1730,12 @@ impl PhpValue {
                 a == b
             }
             (Self::Object(x), Self::Object(y)) => Rc::ptr_eq(x, y),
+            (Self::SharedObject(x), Self::SharedObject(y)) => Arc::ptr_eq(x, y),
+            (Self::SharedAtomic(x), Self::SharedAtomic(y)) => {
+                Arc::ptr_eq(x, y) || x.load(AtomicOrdering::SeqCst) == y.load(AtomicOrdering::SeqCst)
+            }
+            (Self::SharedArray(x), Self::SharedArray(y)) => Arc::ptr_eq(x, y),
+            (Self::SharedValue(x), Self::SharedValue(y)) => x == y,
             (Self::Closure(x), Self::Closure(y)) => Rc::ptr_eq(x, y),
             (Self::Future(x), Self::Future(y)) => Rc::ptr_eq(x, y),
             (Self::Resource(x), Self::Resource(y)) => Arc::ptr_eq(x, y),
@@ -1531,7 +1863,7 @@ impl PhpValue {
                 _ => false,
             },
             RhpType::Future(_) => matches!(self, Self::Future(_)),
-            RhpType::Object => matches!(self, Self::Object(_) | Self::Closure(_) | Self::Future(_)),
+            RhpType::Object => matches!(self, Self::Object(_) | Self::SharedObject(_) | Self::Closure(_) | Self::Future(_)),
             RhpType::Class(class_name) => match self {
                 Self::Object(obj) => {
                     let obj_cls = &obj.borrow().class_name;
@@ -1559,6 +1891,19 @@ impl PhpValue {
                         } else {
                             false
                         }
+                    }
+                }
+                Self::SharedObject(obj) => {
+                    let obj_cls = &obj.class_name;
+                    let obj_clean = obj_cls.strip_prefix('\\').unwrap_or(obj_cls);
+                    let cls_clean = class_name.strip_prefix('\\').unwrap_or(class_name);
+                    if obj_clean == cls_clean {
+                        return true;
+                    }
+                    if let Some(h) = hierarchy {
+                        h.is_subtype_of(obj_clean, cls_clean)
+                    } else {
+                        false
                     }
                 }
                 Self::Future(_) if class_name == "Future" => true,
@@ -1594,6 +1939,9 @@ impl PhpValue {
             Self::Set(rc) => Rc::strong_count(rc),
             Self::HashMap(rc) => Rc::strong_count(rc),
             Self::Object(rc) => Rc::strong_count(rc),
+            Self::SharedObject(arc) => Arc::strong_count(arc),
+            Self::SharedAtomic(arc) => Arc::strong_count(arc),
+            Self::SharedArray(arc) => Arc::strong_count(arc),
             Self::Closure(rc) => Rc::strong_count(rc),
             Self::Future(rc) => Rc::strong_count(rc),
             _ => 1,
@@ -1913,6 +2261,10 @@ impl PhpValue {
                 let inner = obj.borrow();
                 Self::Object(Rc::new(RefCell::new(inner.clone())))
             }
+            Self::SharedObject(so) => Self::SharedObject(Arc::clone(so)),
+            Self::SharedAtomic(sa) => Self::SharedAtomic(Arc::clone(sa)),
+            Self::SharedArray(sa) => Self::SharedArray(Arc::clone(sa)),
+            Self::SharedValue(sv) => Self::SharedValue(sv.clone()),
             other => other.clone(),
         }
     }
@@ -2058,6 +2410,22 @@ impl Hash for PhpValue {
                 14u8.hash(state);
                 Arc::as_ptr(r).hash(state);
             }
+            Self::SharedObject(so) => {
+                16u8.hash(state);
+                Arc::as_ptr(so).hash(state);
+            }
+            Self::SharedAtomic(sa) => {
+                17u8.hash(state);
+                Arc::as_ptr(sa).hash(state);
+            }
+            Self::SharedArray(sa) => {
+                18u8.hash(state);
+                Arc::as_ptr(sa).hash(state);
+            }
+            Self::SharedValue(sv) => {
+                19u8.hash(state);
+                format!("{:?}", sv).hash(state);
+            }
         }
     }
 }
@@ -2080,6 +2448,10 @@ impl fmt::Debug for PhpValue {
             Self::Closure(c) => write!(f, "Closure({}, upvals={})", c.name, c.upvalues.len()),
             Self::Future(fut) => write!(f, "Future(completed={})", fut.borrow().is_completed),
             Self::Resource(_) => write!(f, "Resource(<dyn>)"),
+            Self::SharedObject(obj) => write!(f, "SharedObject({:?})", obj),
+            Self::SharedAtomic(a) => write!(f, "SharedAtomic({})", a.load(AtomicOrdering::SeqCst)),
+            Self::SharedArray(a) => write!(f, "SharedArray({:?})", a.read()),
+            Self::SharedValue(v) => write!(f, "SharedValue({:?})", v),
         }
     }
 }
