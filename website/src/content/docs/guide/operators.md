@@ -374,13 +374,37 @@ if ($handler instanceof RequestHandler) {
 }
 ```
 
-### `@` (Error Suppression Operator)
+### `@` (Error Suppression & Safe Evaluation Operator)
 
-RHP parses the unary `@` operator as an expression silence modifier:
+In RHP, the unary prefix `@` operator evaluates fallible expressions safely without throwing uncaught exceptions. Instead of indiscriminately silencing errors or altering engine globals, `@expr` produces a structured 2-element tuple:
+
+$$\text{@expr} \longrightarrow (T \mid \text{null},\; \text{Throwable} \mid \text{null})$$
 
 ```php
-$val = @$service->optionalOperation();
+[$result, $err] = @helperFun();
 ```
+
+#### Key Semantics:
+1. **Failure slot (`$err`)**: Populated with the thrown `Throwable` or `Exception` object on failure; evaluates to `null` on success.
+2. **Success slot (`$result`)**: Contains the evaluated value of the expression on success; evaluates to `null` on failure.
+3. **Void return type**: Functions returning `void` return `null` as their result type:
+   ```php
+   [$result, $err] = @saveLogs(); // [$result: null, $err: null] on success
+   ```
+4. **Single-slot destructuring**: Checking the second slot is optional:
+   ```php
+   [$result] = @unlink("cache.tmp");
+   ```
+5. **Checked exceptions only**: `@` captures thrown exceptions and throwables. It does not swallow or capture notices, warnings, or compile-time type errors as the second slot (second slot remains `null` in those cases). If a function returns `false` or `null` on failure without throwing an exception, it is the caller's responsibility to check `$result` accordingly.
+6. **Direct tuple assignment**:
+   ```php
+   $tuple = @compute();
+   if ($tuple[1] != null) {
+       echo "Failed: " + $tuple[1]->getMessage();
+   } else {
+       echo "Result: " + $tuple[0];
+   }
+   ```
 
 > [!NOTE]
 > In RHP, `@` is strictly restricted to expressions. Template directives starting with `@` (such as Blade's `@if` or `@foreach`) in RHP code files will trigger a parse error indicating they are not permitted in raw RHP source.

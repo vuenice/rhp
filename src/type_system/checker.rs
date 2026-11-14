@@ -2737,7 +2737,15 @@ impl TypeChecker {
                             RhpType::Int
                         }
                     }
-                    UnaryOp::Silence => operand_ty,
+                    UnaryOp::Silence => {
+                        let res_ty = if operand_ty == RhpType::Void || operand_ty == RhpType::Never {
+                            RhpType::Null
+                        } else {
+                            operand_ty.into_nullable()
+                        };
+                        let err_ty = RhpType::Class("Throwable".to_string()).into_nullable();
+                        RhpType::Tuple(vec![res_ty, err_ty])
+                    }
                 }
             }
 

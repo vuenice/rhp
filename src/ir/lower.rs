@@ -1496,6 +1496,92 @@ impl<'a> IrLowerer<'a> {
                         let is_prefix = matches!(op, UnaryOp::PreInc | UnaryOp::PreDec);
                         self.lower_inc_dec(b, inner, is_inc, is_prefix, target_reg, expr.span)
                     }
+                    UnaryOp::Silence => {
+                        let dst = match target_reg {
+                            Some(r) => r,
+                            None => b.alloc_temp(inferred_ty, expr.span)?,
+                        };
+
+                        let inner_ty = self
+                            .type_info
+                            .and_then(|ti| ti.expr_type(&inner.span).cloned())
+                            .unwrap_or(RhpType::Dynamic);
+
+                        let res_ty = if inner_ty == RhpType::Void || inner_ty == RhpType::Never {
+                            RhpType::Null
+                        } else {
+                            inner_ty.into_nullable()
+                        };
+
+                        let res_reg = b.alloc_temp(res_ty, expr.span)?;
+                        let err_reg = b.alloc_temp(
+                            RhpType::Class("Throwable".to_string()).into_nullable(),
+                            expr.span,
+                        )?;
+
+                        let handler_id = b.chunk.exception_handlers.len() as u16;
+                        b.chunk.exception_handlers.push(ExceptionHandler {
+                            handler_id,
+                            try_start: 0,
+                            try_end: 0,
+                            catches: Vec::new(),
+                            finally_target: None,
+                        });
+
+                        b.emit(OpCode::EnterTry { handler_id }, expr.span);
+                        let try_start = b.current_ip();
+
+                        let val_reg = self.lower_expr(b, inner, Some(res_reg))?;
+                        if val_reg != res_reg {
+                            b.emit(OpCode::Move { dst: res_reg, src: val_reg }, expr.span);
+                        }
+                        b.emit(OpCode::LoadNull { dst: err_reg }, expr.span);
+
+                        let try_end = b.current_ip();
+                        b.emit(OpCode::LeaveTry { handler_id }, expr.span);
+
+                        let jump_to_join = b.emit(OpCode::Jump { target: 0 }, expr.span);
+
+                        let catch_ip = b.current_ip();
+                        b.emit(OpCode::LoadNull { dst: res_reg }, expr.span);
+
+                        let join_ip = b.current_ip();
+                        b.patch_jump(jump_to_join, join_ip);
+
+                        let handler = &mut b.chunk.exception_handlers[handler_id as usize];
+                        handler.try_start = try_start;
+                        handler.try_end = try_end;
+                        handler.catches = vec![CatchTarget {
+                            catch_types: Vec::new(),
+                            exception_reg: err_reg,
+                            target_ip: catch_ip,
+                        }];
+                        handler.finally_target = None;
+
+                        b.emit(
+                            OpCode::NewArray {
+                                dst,
+                                capacity: 2,
+                            },
+                            expr.span,
+                        );
+                        b.emit(
+                            OpCode::ArrayPush {
+                                array: dst,
+                                value: res_reg,
+                            },
+                            expr.span,
+                        );
+                        b.emit(
+                            OpCode::ArrayPush {
+                                array: dst,
+                                value: err_reg,
+                            },
+                            expr.span,
+                        );
+
+                        Ok(dst)
+                    }
                     _ => {
                         let src = self.lower_expr(b, inner, None)?;
                         let dst = match target_reg {
@@ -1507,7 +1593,6 @@ impl<'a> IrLowerer<'a> {
                             UnaryOp::Neg => IrUnaryOp::Neg,
                             UnaryOp::Not => IrUnaryOp::Not,
                             UnaryOp::BitNot => IrUnaryOp::BitNot,
-                            UnaryOp::Silence => IrUnaryOp::Silence,
                             _ => unreachable!(),
                         };
                         b.emit(
