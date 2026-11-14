@@ -41,7 +41,7 @@ Arr::pluck(array|list $items, string $key, ?string $keyBy = null): list|dict;
 Arr::collapse(array|list $array): list;                        // Collapses list of arrays into flat list
 Arr::flatten(mixed $array): list;                              // Recursively flattens nested arrays
 Arr::chunk(mixed $array, int $size): list;                     // Chunks array into list of lists
-Arr::from(mixed $items): list;                                 // Converts any iterable/collection to list
+Arr::from(mixed $items): list|dict|set|hashMap;                 // Inspects inner array/collection type; wraps scalars in list [item]
 Arr::first(mixed $array, mixed $default = null): mixed;        // Returns first element or default
 Arr::last(mixed $array, mixed $default = null): mixed;         // Returns last element or default
 Arr::firstKey(mixed $array): mixed;                            // Returns first key or null
@@ -178,6 +178,8 @@ $list->sum(): int|float;
 $list->avg(): float;                    // Also: average()
 $list->min(): mixed;
 $list->max(): mixed;
+$list->join(?string $separator = ','): string; // Joins elements into string (implode() sugar)
+$list->implode(?string $separator = ','): string; // Alias for join()
 $list->toJson(): string;
 
 // Operators & Iteration (Zero-Allocation ActiveIterator::List)
@@ -411,6 +413,7 @@ foreach ($map as $val) {                                  // Iterates values onl
 
 ```php
 // Static Utility, Factory & Encoding Methods (Str::)
+Str::from(mixed $value): string;                                // Converts scalar or value to native string
 Str::random(int $length = 16): string;
 Str::join(string $glue, array|list $pieces): string;
 Str::fromBytes(array|list $bytes): string;
@@ -447,7 +450,8 @@ $str->endsWith(string $suffix): bool;
 $str->find(string $needle, int $offset = 0): ?int;
 $str->length(): int;
 $str->byteLength(): int;
-$str->split(string $delimiter): list;
+$str->split(?string $delimiter = null): list;                   // Splits string into list of substrings or chars (explode() sugar)
+$str->explode(?string $delimiter = null): list;                 // Alias for split()
 $str->replace(string $search, string $replace): string;
 $str->replaceAt(string $replacement, int $start, ?int $length = null): string;
 $str->pad(int $length, string $pad = " ", string|int $side = "right"): string;

@@ -1886,6 +1886,23 @@ impl<'a> IrLowerer<'a> {
                         }
                     }
 
+                    // Lower Str::from, Int::from, Float::from directly to single OpCode::Cast
+                    if (target_name == "Str" || target_name == "\\Str") && method_name == "from" && args.len() == 1 {
+                        let src = self.lower_expr(b, &args[0].value, None)?;
+                        b.emit(OpCode::Cast { dst, kind: CastType::String, src }, expr.span);
+                        return Ok(dst);
+                    }
+                    if (target_name == "Int" || target_name == "\\Int") && method_name == "from" && args.len() == 1 {
+                        let src = self.lower_expr(b, &args[0].value, None)?;
+                        b.emit(OpCode::Cast { dst, kind: CastType::Int, src }, expr.span);
+                        return Ok(dst);
+                    }
+                    if (target_name == "Float" || target_name == "\\Float") && method_name == "from" && args.len() == 1 {
+                        let src = self.lower_expr(b, &args[0].value, None)?;
+                        b.emit(OpCode::Cast { dst, kind: CastType::Float, src }, expr.span);
+                        return Ok(dst);
+                    }
+
                     // 2. Legacy PHP function bridge (`phpFun::array_merge` -> canonical `Arr::merge`)
                     if target_name == "phpFun" {
                         let (resolved_facade, resolved_method) =

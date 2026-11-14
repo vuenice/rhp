@@ -5593,6 +5593,19 @@ impl VM {
                         let vals: Vec<PhpValue> = dict.borrow().values().cloned().collect();
                         Ok(PhpValue::list(vals))
                     }
+                    "join" | "implode" => {
+                        let sep = args
+                            .first()
+                            .map(|v| v.to_php_string())
+                            .unwrap_or_else(|| ",".to_string());
+                        let joined = dict
+                            .borrow()
+                            .values()
+                            .map(|v| v.to_php_string())
+                            .collect::<Vec<_>>()
+                            .join(&sep);
+                        Ok(PhpValue::string(joined))
+                    }
                     "get" => {
                         let key = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                         let default = args.get(1).cloned().unwrap_or(PhpValue::Null);
@@ -6520,6 +6533,19 @@ impl VM {
                         let items: Vec<PhpValue> = set.borrow().iter().cloned().collect();
                         Ok(PhpValue::list(items))
                     }
+                    "join" | "implode" => {
+                        let sep = args
+                            .first()
+                            .map(|v| v.to_php_string())
+                            .unwrap_or_else(|| ",".to_string());
+                        let joined = set
+                            .borrow()
+                            .iter()
+                            .map(|v| v.to_php_string())
+                            .collect::<Vec<_>>()
+                            .join(&sep);
+                        Ok(PhpValue::string(joined))
+                    }
                     "map" => {
                         if let Some(PhpValue::Closure(cb)) = args.first() {
                             let mut out = HashSet::new();
@@ -6881,6 +6907,19 @@ impl VM {
                     "values" => {
                         let vals: Vec<PhpValue> = map.borrow().values().cloned().collect();
                         Ok(PhpValue::list(vals))
+                    }
+                    "join" | "implode" => {
+                        let sep = args
+                            .first()
+                            .map(|v| v.to_php_string())
+                            .unwrap_or_else(|| ",".to_string());
+                        let joined = map
+                            .borrow()
+                            .values()
+                            .map(|v| v.to_php_string())
+                            .collect::<Vec<_>>()
+                            .join(&sep);
+                        Ok(PhpValue::string(joined))
                     }
                     "entries" | "all" | "toArray" => {
                         let entries: Vec<PhpValue> = map
@@ -8538,7 +8577,7 @@ impl VM {
                 "length" => {
                     Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i64))
                 }
-                "split" => {
+                "split" | "explode" => {
                     let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let str_val = s.to_str_lossy();
                     let parts: Vec<PhpValue> = if sep.is_empty() {

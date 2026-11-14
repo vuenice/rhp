@@ -22,9 +22,11 @@ pub use casing::{
 pub use diagnostics::{run_typecheck, type_error_to_code};
 pub use formatter::{format_source, split_statements_on_semicolons};
 pub use migrate::{
-    migrate_file, migrate_path, migrate_source, remove_php_tags, upgrade_php_file, upgrade_php_path,
-    upgrade_php_source, MigrateFileResult, MigrateOptions, MigrateReport, UpgradeFileResult,
-    UpgradeOptions, UpgradeReport,
+    comment_ini_set_calls, migrate_file, migrate_path, migrate_source, remove_error_suppression,
+    remove_php_tags, replace_get_array_access, replace_list_destructuring, replace_post_array_access,
+    replace_type_casts, replace_var_dump_and_export, strip_declare_statements, strip_error_reporting,
+    upgrade_php_file, upgrade_php_path, upgrade_php_source, MigrateFileResult, MigrateOptions,
+    MigrateReport, UpgradeFileResult, UpgradeOptions, UpgradeReport,
 };
 pub use param_order::{check_parameter_order, fix_parameter_order, has_required_after_optional};
 pub use ref_params::convert_mutated_array_params_to_ref;

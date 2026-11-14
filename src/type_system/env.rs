@@ -272,10 +272,21 @@ pub fn resolve_facade_static_call(
             "range" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
                 RhpType::Int,
             )))),
-            "wrap" | "repeat" | "from" | "flatten" | "chunk" | "pluck" => {
+            "wrap" | "repeat" | "flatten" | "chunk" | "pluck" => {
                 Ok(RhpType::Collection(CollectionSubtype::List(Box::new(
                     RhpType::Mixed,
                 ))))
+            }
+            "from" => {
+                match arg_types.first() {
+                    Some(RhpType::Collection(sub)) => Ok(RhpType::Collection(sub.clone())),
+                    Some(RhpType::Array(inner)) => Ok(RhpType::Collection(CollectionSubtype::List(inner.clone()))),
+                    Some(RhpType::String) => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
+                    Some(RhpType::Int) => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
+                    Some(RhpType::Float) => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Float)))),
+                    Some(RhpType::Bool) => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Bool)))),
+                    _ => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
+                }
             }
             "merge" | "keys" | "values" | "unique" | "slice" | "reverse" | "filter" | "map"
             | "fill" | "fillKeys" | "pad" => {
@@ -351,6 +362,7 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::Bool)
             }
+            "from" => Ok(RhpType::String),
             "upper" | "upperCase" | "lower" | "lowerCase" | "camelCase" | "pascalCase" | "snakeCase"
             | "trim" | "ltrim" | "rtrim" | "substr" | "replace" | "join"
             | "format" => {
@@ -678,6 +690,7 @@ pub fn resolve_facade_static_call(
             "has" => Ok(RhpType::Bool),
             "set" => Ok(RhpType::String),
             "clear" => Ok(RhpType::Void),
+            "query" | "body" => Ok(RhpType::String),
             "get" | "input" => Ok(RhpType::Mixed),
             "all" | "only" | "format" | "merge" => {
                 Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))))
