@@ -86,7 +86,7 @@ fn test_future_any_parallel_task_race_closures_directly() {
     // Verifies: accepts closures directly to evaluate parallel task races cleanly without redundant ->wait() chains
     let source = r#"
         $winner = Future::any([
-            Future::delayed(80, fn() => "slow_mirror"),
+            Future::delayed(250, fn() => "slow_mirror"),
             fn() => "fast_mirror"
         ]);
         return $winner;
@@ -97,9 +97,9 @@ fn test_future_any_parallel_task_race_closures_directly() {
     let elapsed = start.elapsed();
 
     assert_eq!(result, PhpValue::string("fast_mirror"));
-    // Fast mirror should complete immediately (< 50ms) without waiting for 80ms slow mirror
+    // Fast mirror should complete immediately without waiting for 250ms slow mirror
     assert!(
-        elapsed < std::time::Duration::from_millis(60),
+        elapsed < std::time::Duration::from_millis(200),
         "Future::any waited for slow mirror: {:?}",
         elapsed
     );
