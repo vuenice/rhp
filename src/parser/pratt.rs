@@ -1473,6 +1473,18 @@ impl<'s> CombinatorStream<'s> {
                         return Ok(Expr::static_call("Time", "date", args, callee_span, span));
                     }
 
+                    if matches!(
+                        callee_name,
+                        "camelCase" | "pascalCase" | "snakeCase" | "lowerCase" | "upperCase"
+                    ) && !self.is_user_defined_function(callee_name) {
+                        return Ok(Expr::static_call("Str", callee_name, args, callee_span, span));
+                    }
+
+                    if (callee_name == "lower" || callee_name == "upper") && !self.is_user_defined_function(callee_name) {
+                        let target_method = if callee_name == "lower" { "lowerCase" } else { "upperCase" };
+                        return Ok(Expr::static_call("Str", target_method, args, callee_span, span));
+                    }
+
                     let call_node = if is_reserved_intrinsic(callee_name) {
                         // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
                         let method = match callee_name {

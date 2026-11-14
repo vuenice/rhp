@@ -149,7 +149,7 @@ final class MySlugger {
     private function __construct() {}
 
     public static function slugify(string $text): string {
-        return $text->lower()->replace(' ', '-');
+        return $text->lowerCase()->replace(' ', '-');
     }
 }
 ```

@@ -901,6 +901,78 @@ fn test_arr_from_type_inspection_and_scalar_wrapping() {
 }
 
 #[test]
+fn test_str_casing_helpers_lowercase_uppercase_camelcase_pascalcase_snakecase() {
+    clear_runtime_closure_macros();
+
+    let code = r#"
+        $text = "hello_world_php";
+
+        // 1. Static Str facade calls
+        $s_lower = Str::lowerCase("HELLO WORLD");
+        $s_upper = Str::upperCase("hello world");
+        $s_camel = Str::camelCase($text);
+        $s_pascal = Str::pascalCase($text);
+        $s_snake = Str::snakeCase("helloWorldPhp");
+
+        // 2. Fluent instance method calls
+        $u_lower = "HELLO WORLD"->lowerCase();
+        $u_upper = "hello world"->upperCase();
+        $u_camel = $text->camelCase();
+        $u_pascal = $text->pascalCase();
+        $u_snake = "HelloWorldPhp"->snakeCase();
+
+        // 3. Standalone global function calls
+        $g_lower = lowerCase("HELLO WORLD");
+        $g_upper = upperCase("hello world");
+        $g_camel = camelCase($text);
+        $g_pascal = pascalCase($text);
+        $g_snake = snakeCase("HelloWorldPhp");
+
+        // 4. Legacy compatibility
+        $leg_lower = strtolower("HELLO WORLD");
+        $leg_upper = strtoupper("hello world");
+
+        return [
+            $s_lower, $s_upper, $s_camel, $s_pascal, $s_snake,
+            $u_lower, $u_upper, $u_camel, $u_pascal, $u_snake,
+            $g_lower, $g_upper, $g_camel, $g_pascal, $g_snake,
+            $leg_lower, $leg_upper,
+        ];
+    "#;
+
+    let res = run_source(code).expect("evaluation failed");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let b = arr.borrow();
+        // 1. Static
+        assert_eq!(b[0].to_php_string(), "hello world");
+        assert_eq!(b[1].to_php_string(), "HELLO WORLD");
+        assert_eq!(b[2].to_php_string(), "helloWorldPhp");
+        assert_eq!(b[3].to_php_string(), "HelloWorldPhp");
+        assert_eq!(b[4].to_php_string(), "hello_world_php");
+
+        // 2. Fluent instance
+        assert_eq!(b[5].to_php_string(), "hello world");
+        assert_eq!(b[6].to_php_string(), "HELLO WORLD");
+        assert_eq!(b[7].to_php_string(), "helloWorldPhp");
+        assert_eq!(b[8].to_php_string(), "HelloWorldPhp");
+        assert_eq!(b[9].to_php_string(), "hello_world_php");
+
+        // 3. Standalone
+        assert_eq!(b[10].to_php_string(), "hello world");
+        assert_eq!(b[11].to_php_string(), "HELLO WORLD");
+        assert_eq!(b[12].to_php_string(), "helloWorldPhp");
+        assert_eq!(b[13].to_php_string(), "HelloWorldPhp");
+        assert_eq!(b[14].to_php_string(), "hello_world_php");
+
+        // 4. Legacy
+        assert_eq!(b[15].to_php_string(), "hello world");
+        assert_eq!(b[16].to_php_string(), "HELLO WORLD");
+    } else {
+        panic!("expected array/list result");
+    }
+}
+
+#[test]
 fn test_from_syntax_arrow_operator_chaining() {
     clear_runtime_closure_macros();
 

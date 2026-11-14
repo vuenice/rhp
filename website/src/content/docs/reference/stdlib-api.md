@@ -427,14 +427,22 @@ Str::encoding(string $text): string;                               // Detects pr
 Str::compare(mixed $a, mixed $b, bool $caseInsensitive = false): bool; // String coercion comparison (optional case-insensitive)
 Str::natCompare(string $string1, string $string2): int;                    // Natural order string comparison (strnatcmp, < 0, 0, > 0)
 Str::natCaseCompare(string $string1, string $string2): int;                // Case-insensitive natural order string comparison (strnatcasecmp)
+Str::lowerCase(string $text): string;                                   // Converts string to lowercase
+Str::upperCase(string $text): string;                                   // Converts string to uppercase
+Str::camelCase(string $text): string;                                   // Converts identifier/string to camelCase
+Str::pascalCase(string $text): string;                                  // Converts identifier/string to PascalCase
+Str::snakeCase(string $text): string;                                   // Converts identifier/string to snake_case
 Str::macro(string $name, callable $closure): void;                 // Registers dynamic macro bound to string instances
 
-// Fluent Immutable Instance Methods ($str->trim()->upper())
+// Fluent Immutable Instance Methods ($str->trim()->upperCase())
 $str->trim(?string $chars = null): string;
 $str->ltrim(?string $chars = null): string;
 $str->rtrim(?string $chars = null): string;
-$str->upper(): string;
-$str->lower(): string;
+$str->lowerCase(): string;
+$str->upperCase(): string;
+$str->camelCase(): string;
+$str->pascalCase(): string;
+$str->snakeCase(): string;
 $str->slug(string $separator = '-'): string;
 $str->contains(string $needle): bool;
 $str->startsWith(string $prefix): bool;

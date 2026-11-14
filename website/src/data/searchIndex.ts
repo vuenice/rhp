@@ -76,11 +76,11 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["classes", "objects", "shared", "shared class", "singleton", "interfaces", "traits", "enums", "enum", "cases", "from", "tryfrom", "unitenum", "backedenum", "invokable", "__invoke", "single action controller", "oop", "macro", "macros", "macroable", "extends arr", "facade extension"]
   },
   {
-    title: "Error Handling",
+    title: "Errors, Warnings, Notices & Exceptions",
     section: "Language Guide",
-    description: "Exceptions, try/catch/finally blocks, fatal type errors, and stack traces.",
+    description: "Compiler diagnostics, runtime errors, warnings, notices, try/catch, Go-style safe @ evaluation, and OpenTelemetry error tracking.",
     url: "/docs/guide/error-handling",
-    keywords: ["error", "handling", "exceptions", "try", "catch", "throw", "finally", "panics"]
+    keywords: ["error", "handling", "exceptions", "warnings", "notices", "try", "catch", "throw", "finally", "panics", "@", "suppress", "tuple", "go style", "opentelemetry", "diagnostics", "explain"]
   },
   {
     title: "Modules and Imports",

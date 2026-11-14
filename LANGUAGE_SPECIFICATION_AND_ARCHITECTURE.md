@@ -369,7 +369,7 @@ $text = "  hello world  ";
 $trimmed = $text->trim()->upper(); 
 
 // Explicit reassignment to update the variable in place cleanly
-$text = $text->trim()->upper(); 
+$text = $text->trim()->upperCase(); 
 ```
 
 #### 4. Summary of String Architecture
@@ -382,7 +382,7 @@ $text = $text->trim()->upper();
 
 #### 5. Key Facade & Instance Methods
 - **Inspection & Validation:** `Str::contains()`, `Str::startsWith()`, `Str::endsWith()`, `Str::isUtf8()`, `Str::byteLength()`, `Str::encoding()`.
-- **Transformation & Slicing:** `Str::slug()`, `Str::upper()`, `Str::lower()`, `Str::trim()`, `Str::ltrim()`, `Str::rtrim()`, `Str::replace()`, `Str::substr()`, `Str::reverse()`, `Str::repeat()`, `Str::fromLast()`, `Str::afterLast()`.
+- **Transformation & Slicing:** `Str::slug()`, `Str::upperCase()`, `Str::lowerCase()`, `Str::camelCase()`, `Str::pascalCase()`, `Str::snakeCase()`, `Str::trim()`, `Str::ltrim()`, `Str::rtrim()`, `Str::replace()`, `Str::substr()`, `Str::reverse()`, `Str::repeat()`, `Str::fromLast()`, `Str::afterLast()`.
   - `Str::fromLast(string $haystack, string $needle): string|false`: Returns the portion of `$haystack` starting from the last occurrence of `$needle` through to the end of the string, or `false` if not found (direct canonical replacement for legacy PHP `strrchr`).
   - `Str::afterLast(string $haystack, string $needle): string|false`: Returns the portion of `$haystack` strictly after the last occurrence of `$needle` (excluding the delimiter), or `false` if not found.
 - **Encoding & Conversion:** `Str::fromEncoding()`, `Str::toEncoding()`, `Str::utf8()`, `Str::fromBytes()`, `Str::bytes()`.

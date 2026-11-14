@@ -167,7 +167,33 @@ The generated JSON payloads match upstream OpenTelemetry specifications and are 
 
 ## Native Error Tracking & APM Bridges (Sentry & Datadog)
 
-### 1. Sentry Crash Reporting Bridge
+RHP's observability engine natively tracks errors, warnings, notices, and exceptions across all execution modes:
+
+### 1. Automatic Exception Recording on Spans
+Whenever an unhandled exception or worker panic occurs within a traced span, RHP automatically:
+- Transitions span status to `ERROR`.
+- Records an OpenTelemetry `exception` event containing `exception.type`, `exception.message`, and `exception.stacktrace`.
+- Attaches the active W3C `traceparent` context so downstream APM dashboards (Datadog, Sentry, Honeycomb, Jaeger) link the error directly to the root request.
+
+### 2. Capturing Go-Style `@` Safe Evaluation Errors
+When using RHP's Go-style `@` safe evaluation operator (`[$result, $err] = @fn();`), errors do not bubble up as unhandled crashes. You can record them explicitly into the active span:
+
+```php
+[$order, $err] = @processPayment($cart);
+if ($err != null) {
+    // Record error event onto the active span without crashing the worker
+    Trace::addEvent('payment_failed', [
+        'error.type' => get_class($err),
+        'error.message' => $err->getMessage(),
+        'trace.id' => Trace::traceId(),
+    ]);
+    return Response::error("Payment failed", 402);
+}
+```
+
+For more on RHP's error taxonomy and the `@` operator, see the **[Errors, Warnings, Notices & Exceptions Guide](/docs/guide/error-handling)**.
+
+### 3. Sentry Crash Reporting Bridge
 
 Generate standard Sentry event payloads with stack traces and trace context on uncaught errors:
 
@@ -183,7 +209,7 @@ try {
 }
 ```
 
-### 2. Datadog APM Tracing Bridge
+### 4. Datadog APM Tracing Bridge
 
 Export completed spans in canonical Datadog APM trace format:
 

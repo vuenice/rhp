@@ -8340,13 +8340,25 @@ impl VM {
                     let trimmed = str_val.trim_end_matches(|c| chars.contains(c));
                     Ok(PhpValue::string(trimmed))
                 }
-                "upper" | "toUpper" => {
+                "upperCase" | "upper" | "toUpper" | "uppercase" => {
                     let str_val = s.to_str_lossy();
                     Ok(PhpValue::string(str_val.to_uppercase()))
                 }
-                "lower" | "toLower" => {
+                "lowerCase" | "lower" | "toLower" | "lowercase" => {
                     let str_val = s.to_str_lossy();
                     Ok(PhpValue::string(str_val.to_lowercase()))
+                }
+                "camelCase" | "camelcase" | "toCamelCase" => {
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(crate::lint::to_camel_case(&str_val)))
+                }
+                "pascalCase" | "pascalcase" | "toPascalCase" => {
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(crate::lint::to_pascal_case(&str_val)))
+                }
+                "snakeCase" | "snakecase" | "toSnakeCase" => {
+                    let str_val = s.to_str_lossy();
+                    Ok(PhpValue::string(crate::lint::to_snake_case(&str_val)))
                 }
                 "slug" => {
                     let str_val = s.to_str_lossy();
