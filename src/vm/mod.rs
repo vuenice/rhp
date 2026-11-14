@@ -92,7 +92,7 @@ pub use rust_loader::{
     register_in_process_native_function, resolve_rust_file_path, sanitize_rust_source_for_rustc,
     to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry, RustLogStore,
 };
-pub use value::{FutureState, PhpValue, StrictEq, VmClosure, VmFuture, VmObject};
+pub use value::{FutureState, PhpValue, SharedValue, StrictEq, VmClosure, VmFuture, VmObject, VmSharedObject};
 pub use worker::{
     deserialize_response, execute_isolated_request, serialize_response, WorkerError, WorkerHandle,
     WorkerModel, WorkerPayload, WorkerPool, WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats,

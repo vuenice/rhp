@@ -356,6 +356,8 @@ pub fn clear_request_context() {
     REQUEST_FILES.with(|cell| cell.borrow_mut().clear());
     REQUEST_HEADERS.with(|cell| cell.borrow_mut().clear());
     REQUEST_SERVER.with(|cell| cell.borrow_mut().clear());
+    crate::pkg::opaque_handle::clear_request_handles();
+    crate::pkg::opaque_handle::get_handle_registry().clear();
     clear_response_context();
 }
 
@@ -8654,6 +8656,29 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Closure(_) => "Closure".to_string(),
                 PhpValue::Future(_) => "Future".to_string(),
                 PhpValue::Resource(_) => "resource".to_string(),
+                PhpValue::SharedObject(obj) => {
+                    let cls = obj.class_name.clone();
+                    if cls.is_empty() {
+                        "object".to_string()
+                    } else {
+                        cls
+                    }
+                }
+                PhpValue::SharedAtomic(_) => "int".to_string(),
+                PhpValue::SharedArray(_) => "array".to_string(),
+                PhpValue::SharedValue(sv) => match sv {
+                    crate::vm::value::SharedValue::Null => "null".to_string(),
+                    crate::vm::value::SharedValue::Bool(_) => "bool".to_string(),
+                    crate::vm::value::SharedValue::Int(_) | crate::vm::value::SharedValue::AtomicInt(_) => "int".to_string(),
+                    crate::vm::value::SharedValue::Float(_) => "float".to_string(),
+                    crate::vm::value::SharedValue::String(_) => "string".to_string(),
+                    crate::vm::value::SharedValue::Bytes(_) => "bytes".to_string(),
+                    crate::vm::value::SharedValue::AtomicBool(_) => "bool".to_string(),
+                    crate::vm::value::SharedValue::SharedObject(o) => o.class_name.clone(),
+                    crate::vm::value::SharedValue::SharedArray(_) => "array".to_string(),
+                    crate::vm::value::SharedValue::SharedDict(_) => "Arr::dict".to_string(),
+                    crate::vm::value::SharedValue::Resource(_) => "resource".to_string(),
+                },
             };
             Ok(PhpValue::string(type_str))
         }

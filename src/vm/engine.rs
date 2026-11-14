@@ -1627,6 +1627,9 @@ impl VM {
                         (PhpValue::Object(obj), RhpType::Class(target_cls)) => {
                             self.is_class_instance_of(&obj.borrow().class_name, target_cls)
                         }
+                        (PhpValue::SharedObject(obj), RhpType::Class(target_cls)) => {
+                            self.is_class_instance_of(&obj.class_name, target_cls)
+                        }
                         _ => actual_val.matches_type_contract(&expected_ty, self.type_hierarchy.as_ref()),
                     };
                     if !is_match {
@@ -2657,6 +2660,28 @@ impl VM {
                                 ));
                             }
                         }
+                        PhpValue::SharedObject(ref shared_rc) => {
+                            let cls_name = shared_rc.class_name.clone();
+
+                            if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
+                                self.push_compiled_call_frame(
+                                    target_id,
+                                    Some(callee_val),
+                                    &staged,
+                                    &[],
+                                    Some(base_reg + dst.index()),
+                                    Some(cls_name),
+                                    span,
+                                )?;
+                            } else {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::NotCallable {
+                                        type_name: cls_name,
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
                         PhpValue::String(fn_name) => {
                             let target_id = self
                                 .module
@@ -2840,8 +2865,12 @@ impl VM {
                         let mut instance_dispatched = false;
                         if class_name == "parent" || class_name == "self" {
                             let this_val = self.registers[base_reg].clone();
-                            if let PhpValue::Object(ref obj_rc) = this_val {
-                                let obj_class = obj_rc.borrow().class_name.clone();
+                            let obj_class = match &this_val {
+                                PhpValue::Object(obj_rc) => Some(obj_rc.borrow().class_name.clone()),
+                                PhpValue::SharedObject(shared_rc) => Some(shared_rc.class_name.clone()),
+                                _ => None,
+                            };
+                            if let Some(obj_class) = obj_class {
                                 let target_cls = if class_name == "parent" {
                                     self.module.get_class_by_name(&obj_class).and_then(|c| c.extends.clone())
                                 } else {
@@ -3034,6 +3063,7 @@ impl VM {
 
                     let cls_name = match &receiver {
                         PhpValue::Object(obj_rc) => obj_rc.borrow().class_name.clone(),
+                        PhpValue::SharedObject(shared_rc) => shared_rc.class_name.clone(),
                         _ => self
                             .module
                             .functions
@@ -3240,6 +3270,9 @@ impl VM {
                             .get_property(&prop_name)
                             .cloned()
                             .unwrap_or(PhpValue::Null),
+                        PhpValue::SharedObject(shared_rc) => shared_rc
+                            .get_property(&prop_name)
+                            .unwrap_or(PhpValue::Null),
                         PhpValue::Future(f_rc) => {
                             let mut fut = f_rc.borrow_mut();
                             match prop_name.as_str() {
@@ -3300,6 +3333,9 @@ impl VM {
                             .borrow()
                             .get_property(&prop_name)
                             .cloned()
+                            .unwrap_or(PhpValue::Null),
+                        PhpValue::SharedObject(shared_rc) => shared_rc
+                            .get_property(&prop_name)
                             .unwrap_or(PhpValue::Null),
                         PhpValue::Future(f_rc) => {
                             let mut fut = f_rc.borrow_mut();
@@ -3387,6 +3423,25 @@ impl VM {
                             }
                             obj.set_property(prop_name, val);
                         }
+                        PhpValue::SharedObject(shared_rc) => {
+                            if shared_rc.is_readonly(&prop_name) && !is_in_constructor && shared_rc.has_property(&prop_name) {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::ReadonlyPropertyModification {
+                                        class: shared_rc.class_name.clone(),
+                                        property: prop_name,
+                                    },
+                                    span,
+                                ));
+                            }
+                            if let Err(e) = shared_rc.set_property(prop_name.clone(), val) {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::Custom {
+                                        message: format!("Shared class '{}' property '{}': {}", shared_rc.class_name, prop_name, e),
+                                    },
+                                    span,
+                                ));
+                            }
+                        }
                         PhpValue::Dict(_) => {
                             return Err(self.make_error(
                                 RuntimeErrorKind::Custom {
@@ -3434,6 +3489,25 @@ impl VM {
                                 }
                             }
                             obj.set_property(prop_name, val);
+                        }
+                        PhpValue::SharedObject(shared_rc) => {
+                            if shared_rc.is_readonly(&prop_name) && !is_in_constructor && shared_rc.has_property(&prop_name) {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::ReadonlyPropertyModification {
+                                        class: shared_rc.class_name.clone(),
+                                        property: prop_name,
+                                    },
+                                    span,
+                                ));
+                            }
+                            if let Err(e) = shared_rc.set_property(prop_name.clone(), val) {
+                                return Err(self.make_error(
+                                    RuntimeErrorKind::Custom {
+                                        message: format!("Shared class '{}' property '{}': {}", shared_rc.class_name, prop_name, e),
+                                    },
+                                    span,
+                                ));
+                            }
                         }
                         PhpValue::Dict(_) => {
                             return Err(self.make_error(
@@ -3584,6 +3658,10 @@ impl VM {
                             let actual_cls = &obj_rc.borrow().class_name;
                             self.is_class_instance_of(actual_cls, &target_cls)
                         }
+                        PhpValue::SharedObject(shared_rc) => {
+                            let actual_cls = &shared_rc.class_name;
+                            self.is_class_instance_of(actual_cls, &target_cls)
+                        }
                         PhpValue::Future(_) => target_cls == "Future",
                         PhpValue::Closure(_) => target_cls == "Closure",
                         _ => false,
@@ -3595,6 +3673,7 @@ impl VM {
                     let raw_cls = match &self.registers[base_reg + class.index()] {
                         PhpValue::String(s) => s.as_str().to_string(),
                         PhpValue::Object(obj_rc) => obj_rc.borrow().class_name.clone(),
+                        PhpValue::SharedObject(shared_rc) => shared_rc.class_name.clone(),
                         _ => String::new(),
                     };
                     let target_cls = raw_cls.strip_prefix('\\').unwrap_or(&raw_cls).to_string();
@@ -3602,6 +3681,10 @@ impl VM {
                     let is_inst = match obj_val {
                         PhpValue::Object(obj_rc) => {
                             let actual_cls = &obj_rc.borrow().class_name;
+                            self.is_class_instance_of(actual_cls, &target_cls)
+                        }
+                        PhpValue::SharedObject(shared_rc) => {
+                            let actual_cls = &shared_rc.class_name;
                             self.is_class_instance_of(actual_cls, &target_cls)
                         }
                         PhpValue::Future(_) => target_cls == "Future",
@@ -4078,12 +4161,10 @@ impl VM {
             .into_iter()
             .map(StagedArg::simple)
             .collect();
-        let called_cls = this_val.as_ref().and_then(|t| {
-            if let PhpValue::Object(o) = t {
-                Some(o.borrow().class_name.clone())
-            } else {
-                None
-            }
+        let called_cls = this_val.as_ref().and_then(|t| match t {
+            PhpValue::Object(o) => Some(o.borrow().class_name.clone()),
+            PhpValue::SharedObject(s) => Some(s.class_name.clone()),
+            _ => None,
         });
         let depth_before = self.frames.len();
         self.push_compiled_call_frame(
@@ -4110,6 +4191,33 @@ impl VM {
             PhpValue::Closure(closure) => self.invoke_closure_sync(closure, args, span),
             PhpValue::Object(obj_rc) => {
                 let cls_name = obj_rc.borrow().class_name.clone();
+                let staged: Vec<StagedArg> = args
+                    .into_iter()
+                    .map(StagedArg::simple)
+                    .collect();
+                if let Some(target_id) = self.resolve_method_id(&cls_name, "__invoke") {
+                    let depth_before = self.frames.len();
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(callable.clone()),
+                        &staged,
+                        &[],
+                        None,
+                        Some(cls_name),
+                        span,
+                    )?;
+                    self.dispatch_loop(depth_before)
+                } else {
+                    Err(self.make_error(
+                        RuntimeErrorKind::NotCallable {
+                            type_name: cls_name,
+                        },
+                        span,
+                    ))
+                }
+            }
+            PhpValue::SharedObject(shared_rc) => {
+                let cls_name = shared_rc.class_name.clone();
                 let staged: Vec<StagedArg> = args
                     .into_iter()
                     .map(StagedArg::simple)
@@ -4167,6 +4275,11 @@ impl VM {
                             drop(items);
                             return self.invoke_method_sync(obj, &method_name, args, span);
                         }
+                        PhpValue::SharedObject(o) => {
+                            let obj = PhpValue::SharedObject(o.clone());
+                            drop(items);
+                            return self.invoke_method_sync(obj, &method_name, args, span);
+                        }
                         PhpValue::String(cls) => {
                             let cls_str = cls.to_string();
                             drop(items);
@@ -4208,6 +4321,31 @@ impl VM {
         match &receiver {
             PhpValue::Object(obj_rc) => {
                 let cls_name = obj_rc.borrow().class_name.clone();
+
+                if let Some(target_id) = self.resolve_method_id(&cls_name, method_name) {
+                    let depth_before = self.frames.len();
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(receiver),
+                        &staged,
+                        &[],
+                        None,
+                        Some(cls_name),
+                        span,
+                    )?;
+                    self.dispatch_loop(depth_before)
+                } else {
+                    self.exec_builtin_object_method(
+                        &cls_name,
+                        &receiver,
+                        method_name,
+                        &flat_args,
+                        span,
+                    )
+                }
+            }
+            PhpValue::SharedObject(shared_rc) => {
+                let cls_name = shared_rc.class_name.clone();
 
                 if let Some(target_id) = self.resolve_method_id(&cls_name, method_name) {
                     let depth_before = self.frames.len();
@@ -9937,6 +10075,53 @@ impl VM {
             }
         }
 
+        let is_shared_class = self.module.get_class_by_name(clean_name)
+            .map(|c| c.modifiers.is_shared)
+            .unwrap_or(false);
+
+        if is_shared_class {
+            let mut shared_obj = crate::vm::value::VmSharedObject::new(clean_name);
+            if let Some(ci) = self.module.get_class_info_by_name(clean_name) {
+                shared_obj.class_id = Some(ci.id);
+            }
+
+            for cls in hierarchy_chain.into_iter().rev() {
+                // Initialize trait properties
+                for trait_name in &cls.traits {
+                    if let Some(tr) = self.module.get_class_by_name(trait_name).cloned() {
+                        for prop in &tr.properties {
+                            if !prop.is_static {
+                                let val = if let Some(ref chunk) = prop.default_chunk {
+                                    self.eval_isolated_chunk(chunk)?
+                                } else {
+                                    PhpValue::Null
+                                };
+                                let _ = shared_obj.set_property(prop.name.clone(), val);
+                                shared_obj.set_readonly(prop.name.clone(), prop.is_readonly);
+                            }
+                        }
+                    }
+                }
+
+                // Initialize class instance properties
+                for prop in &cls.properties {
+                    if !prop.is_static {
+                        let val = if let Some(ref chunk) = prop.default_chunk {
+                            self.eval_isolated_chunk(chunk)?
+                        } else {
+                            PhpValue::Null
+                        };
+                        let _ = shared_obj.set_property(prop.name.clone(), val);
+                        shared_obj.set_readonly(prop.name.clone(), prop.is_readonly);
+                    }
+                }
+            }
+
+            let instance = PhpValue::shared_object(shared_obj);
+            self.track_live_object(&instance);
+            return Ok(instance);
+        }
+
         for cls in hierarchy_chain.into_iter().rev() {
             // Initialize trait properties
             for trait_name in &cls.traits {
@@ -10209,6 +10394,72 @@ impl VM {
                     self.registers[base_reg + dst.index()] = res;
                     return Ok(false);
                 }
+
+                if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
+                    self.push_compiled_call_frame(
+                        target_id,
+                        Some(receiver),
+                        &staged,
+                        &[],
+                        Some(base_reg + dst.index()),
+                        Some(cls_name),
+                        span,
+                    )?;
+                    return Ok(true);
+                } else {
+                    // Dynamic Magic Fallback: Check for instance __call
+                    let call_mid = self
+                        .module
+                        .get_class_info_by_name(&cls_name)
+                        .and_then(|ci| ci.call_slot)
+                        .or_else(|| self.resolve_method_id(&cls_name, "__call"));
+
+                    if let Some(call_mid) = call_mid {
+                        let call_args = vec![
+                            StagedArg::simple(PhpValue::string(method_name.clone())),
+                            StagedArg::simple(PhpValue::list(flat_args)),
+                        ];
+                        self.push_compiled_call_frame(
+                            call_mid,
+                            Some(receiver),
+                            &call_args,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+
+                    match self.exec_enum_static_method(
+                        &cls_name,
+                        &method_name,
+                        &flat_args,
+                        stop_depth,
+                        span,
+                    )? {
+                        EnumStaticCallResult::Handled(res) => {
+                            self.registers[base_reg + dst.index()] = res;
+                            return Ok(false);
+                        }
+                        EnumStaticCallResult::DispatchedToCatch => {
+                            return Ok(true);
+                        }
+                        EnumStaticCallResult::NotAnEnumMethod => {}
+                    }
+                    let res = self.exec_builtin_object_method(
+                        &cls_name,
+                        &receiver,
+                        &method_name,
+                        &flat_args,
+                        span,
+                    )?;
+                    self.registers[base_reg + dst.index()] = res;
+                    return Ok(false);
+                }
+            }
+            PhpValue::SharedObject(shared_rc) => {
+                let cls_name = shared_rc.class_name.clone();
 
                 if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
                     self.push_compiled_call_frame(
@@ -10561,6 +10812,13 @@ impl VM {
                     .unwrap_or_default();
                 (b.class_name.clone(), msg)
             }
+            PhpValue::SharedObject(s) => {
+                let msg = s
+                    .get_property("message")
+                    .map(|v| v.to_php_string())
+                    .unwrap_or_default();
+                (s.class_name.clone(), msg)
+            }
             other => ("Exception".to_string(), other.to_php_string()),
         };
 
@@ -10590,6 +10848,7 @@ impl VM {
     fn try_dispatch_to_catch(&mut self, exc_val: PhpValue, stop_depth: usize) -> bool {
         let exc_class = match &exc_val {
             PhpValue::Object(o) => o.borrow().class_name.clone(),
+            PhpValue::SharedObject(s) => s.class_name.clone(),
             _ => "Exception".to_string(),
         };
 
@@ -11009,6 +11268,7 @@ impl VM {
     fn runtime_type_label(&self, val: &PhpValue) -> String {
         match val {
             PhpValue::Object(o) => o.borrow().class_name.clone(),
+            PhpValue::SharedObject(s) => s.class_name.clone(),
             other => other.type_name().to_string(),
         }
     }
