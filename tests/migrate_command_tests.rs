@@ -2206,3 +2206,310 @@ fn test_migrate_binary_strings_updates_function_arguments() {
     );
 }
 
+#[test]
+fn test_migrate_named_arguments_reordered_to_proper_declaration_order() {
+    let input = concat!(
+        "<?php\n",
+        "function add(int $a, int $b): int {\n",
+        "    return $a + $b;\n",
+        "}\n",
+        "$val = add(b: 20, a: 5);\n",
+        "return $val;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 1);
+    assert!(res.migrated_content.contains("$val = add(5, 20);"), "Got:\n{}", res.migrated_content);
+    assert!(!res.migrated_content.contains("b:"));
+    assert!(!res.migrated_content.contains("a:"));
+
+    // Verify it executes cleanly in RHP VM
+    let vm_res = rhp::run_source(&res.migrated_content).expect("Migrated code must execute in RHP");
+    assert_eq!(vm_res, rhp::vm::PhpValue::Int(25));
+}
+
+#[test]
+fn test_migrate_named_arguments_with_skipped_optional_arguments() {
+    let input = concat!(
+        "<?php\n",
+        "function configureApp(string $name, string $env = 'production', string $port = '8080', bool $debug = false, string $logLevel = 'info'): string {\n",
+        "    return $name + ':' + $env + ':' + $port + ':' + ($debug ? '1' : '0') + ':' + $logLevel;\n",
+        "}\n",
+        "$cfg1 = configureApp('myApp', debug: true);\n",
+        "$cfg2 = configureApp(logLevel: 'debug', name: 'apiServer', env: 'staging');\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 2);
+    assert!(
+        res.migrated_content.contains("$cfg1 = configureApp('myApp', , , true);"),
+        "Expected skipped commas for $env and $port, got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("$cfg2 = configureApp('apiServer', 'staging', , , 'debug');"),
+        "Expected skipped commas for $port and $debug, got:\n{}",
+        res.migrated_content
+    );
+
+    // Verify it executes cleanly in RHP VM
+    let (vm, _) = rhp::run_source_with_vm(&res.migrated_content).expect("Must run");
+    assert_eq!(
+        vm.get_main_variable("$cfg1"),
+        Some(&rhp::vm::PhpValue::string("myApp:production:8080:1:info"))
+    );
+    assert_eq!(
+        vm.get_main_variable("$cfg2"),
+        Some(&rhp::vm::PhpValue::string("apiServer:staging:8080:0:debug"))
+    );
+}
+
+#[test]
+fn test_migrate_named_arguments_leading_skipped_parameters() {
+    let input = concat!(
+        "<?php\n",
+        "function coords(string $x = '0', string $y = '0', string $z = '0'): string {\n",
+        "    return $x + ',' + $y + ',' + $z;\n",
+        "}\n",
+        "$c1 = coords(y: '50');\n",
+        "$c2 = coords(z: '100');\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 2);
+    assert!(
+        res.migrated_content.contains("$c1 = coords(, '50');"),
+        "Expected coords(, '50'), got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("$c2 = coords(, , '100');"),
+        "Expected coords(, , '100'), got:\n{}",
+        res.migrated_content
+    );
+
+    let (vm, _) = rhp::run_source_with_vm(&res.migrated_content).expect("Must run");
+    assert_eq!(vm.get_main_variable("$c1"), Some(&rhp::vm::PhpValue::string("0,50,0")));
+    assert_eq!(vm.get_main_variable("$c2"), Some(&rhp::vm::PhpValue::string("0,0,100")));
+}
+
+#[test]
+fn test_migrate_named_arguments_class_methods_and_constructors() {
+    let input = concat!(
+        "<?php\n",
+        "class Service {\n",
+        "    public function __construct(public string $host, public string $port = '3306', public string $user = 'root', public string $database = 'main') {\n",
+        "    }\n",
+        "    public function query(string $sql, string $timeout = '30', bool $fetchAssoc = true): string {\n",
+        "        return $this->host + ':' + $this->port + '|' + $sql + '|' + $timeout + '|' + ($fetchAssoc ? 'assoc' : 'list');\n",
+        "    }\n",
+        "}\n",
+        "$svc = new Service(database: 'ecommerce', host: 'db.local');\n",
+        "$res = $svc->query('SELECT 1', fetchAssoc: false);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 2);
+    assert!(
+        res.migrated_content.contains("$svc = new Service('db.local', , , 'ecommerce');"),
+        "Constructor call should put host first and database at index 3: got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("$res = $svc->query('SELECT 1', , false);"),
+        "Method call should skip $timeout: got:\n{}",
+        res.migrated_content
+    );
+
+    let (vm, _) = rhp::run_source_with_vm(&res.migrated_content).expect("Must run");
+    assert_eq!(
+        vm.get_main_variable("$res"),
+        Some(&rhp::vm::PhpValue::string("db.local:3306|SELECT 1|30|list"))
+    );
+}
+
+#[test]
+fn test_migrate_named_arguments_static_calls() {
+    let input = concat!(
+        "<?php\n",
+        "class MathHelper {\n",
+        "    public static function clamp(int $value, int $min, int $max): int {\n",
+        "        if ($value < $min) { return $min; }\n",
+        "        if ($value > $max) { return $max; }\n",
+        "        return $value;\n",
+        "    }\n",
+        "}\n",
+        "$clamped = MathHelper::clamp(max: 100, min: 0, value: 50);\n",
+        "return $clamped;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 1);
+    assert!(
+        res.migrated_content.contains("$clamped = MathHelper::clamp(50, 0, 100);"),
+        "Got:\n{}",
+        res.migrated_content
+    );
+
+    let vm_res = rhp::run_source(&res.migrated_content).expect("Must run");
+    assert_eq!(vm_res, rhp::vm::PhpValue::Int(50));
+}
+
+#[test]
+fn test_migrate_named_arguments_builtins() {
+    let input = concat!(
+        "<?php\n",
+        "$items = [10, 20, 30, 40, 50];\n",
+        "$slice = array_slice($items, length: 2, offset: 1);\n",
+        "$html = htmlspecialchars('hello & world', double_encode: false);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 2);
+    assert!(
+        res.migrated_content.contains("$slice = array_slice($items, 1, 2);"),
+        "array_slice should reorder offset and length: got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("$html = htmlspecialchars('hello & world', , , false);"),
+        "htmlspecialchars should skip flags and encoding: got:\n{}",
+        res.migrated_content
+    );
+}
+
+#[test]
+fn test_migrate_named_arguments_unknown_function_preserves_order_and_removes_names() {
+    let input = concat!(
+        "<?php\n",
+        "$res = customExternalFunc(foo: 1, bar: 2, baz: 3);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$res = customExternalFunc(1, 2, 3);\n"
+    );
+}
+
+#[test]
+fn test_migrate_named_arguments_pass_by_reference() {
+    let input = concat!(
+        "<?php\n",
+        "function applyBonus(int &$score, int $bonus): void {\n",
+        "    $score = $score + $bonus;\n",
+        "}\n",
+        "$playerScore = 100;\n",
+        "applyBonus(bonus: 50, score: &$playerScore);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 1);
+    assert!(
+        res.migrated_content.contains("applyBonus(&$playerScore, 50);"),
+        "Pass-by-reference must be preserved: got:\n{}",
+        res.migrated_content
+    );
+
+    let (vm, _) = rhp::run_source_with_vm(&res.migrated_content).expect("Must run");
+    assert_eq!(vm.get_main_variable("$playerScore"), Some(&rhp::vm::PhpValue::Int(150)));
+}
+
+#[test]
+fn test_migrate_named_arguments_nested_calls() {
+    let input = concat!(
+        "<?php\n",
+        "function add(int $a, int $b): int { return $a + $b; }\n",
+        "function mul(int $x, int $y): int { return $x * $y; }\n",
+        "$val = add(b: mul(y: 4, x: 5), a: 10);\n",
+        "return $val;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.named_arg_count, 2);
+    assert!(
+        res.migrated_content.contains("$val = add(10, mul(5, 4));"),
+        "Nested calls must both be reordered: got:\n{}",
+        res.migrated_content
+    );
+
+    let vm_res = rhp::run_source(&res.migrated_content).expect("Must run");
+    assert_eq!(vm_res, rhp::vm::PhpValue::Int(30));
+}
+
+#[test]
+fn test_migrate_named_arguments_preserves_attributes() {
+    let input = concat!(
+        "<?php\n",
+        "#[Route(path: '/api/v1', methods: ['GET'])]\n",
+        "class ApiController {\n",
+        "    public function handle($req) {\n",
+        "        return true;\n",
+        "    }\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(
+        res.migrated_content.contains("#[Route(path: '/api/v1', methods: ['GET'])]"),
+        "Attribute annotations must preserve their named arguments: got:\n{}",
+        res.migrated_content
+    );
+}
+
+#[test]
+fn test_migrate_fixes_function_parameter_order_and_named_arguments() {
+    let input = concat!(
+        "<?php\n",
+        "function badSignature(int $opt = 10, int $req): int {\n",
+        "    return $req - $opt;\n",
+        "}\n",
+        "$ans = badSignature(opt: 10, req: 50);\n",
+        "return $ans;\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.named_arg_count >= 1);
+    assert!(res.param_order_count >= 1);
+    assert!(
+        res.migrated_content.contains("function badSignature(int $req, int $opt = 10): int"),
+        "Function definition parameters must have required before optional: got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("$ans = badSignature(50, 10);"),
+        "Call site must place required argument first according to normalized definition: got:\n{}",
+        res.migrated_content
+    );
+
+    let vm_res = rhp::run_source(&res.migrated_content).expect("Must run");
+    assert_eq!(vm_res, rhp::vm::PhpValue::Int(40));
+}
+
+#[test]
+fn test_migrate_byte_parameters_automatically_added() {
+    let input = concat!(
+        "<?php\n",
+        "function parsePacket(binary $header, $payload = b\"\\x00\\x01\\x02\") {\n",
+        "    return true;\n",
+        "}\n",
+        "$fn = function($raw = \"\\xFF\\xFE\") {\n",
+        "    return true;\n",
+        "};\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.byte_param_count >= 3, "Expected at least 3 byte parameters updated, got: {}", res.byte_param_count);
+    assert!(
+        res.migrated_content.contains("function parsePacket(byte $header, byte $payload = b\"\\x00\\x01\\x02\")"),
+        "Expected byte $header and byte $payload in parsePacket, got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("function(byte $raw = \"\\xFF\\xFE\")"),
+        "Expected byte $raw in closure, got:\n{}",
+        res.migrated_content
+    );
+}
+
+
