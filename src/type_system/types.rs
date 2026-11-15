@@ -170,7 +170,7 @@ impl RhpType {
                     )),
                     "float" | "Float" | "f32" | "f64" => Ok(RhpType::Float),
                     "string" => Ok(RhpType::String),
-                    "bytes" | "Bytes" => Ok(RhpType::Bytes),
+                    "bytes" | "Bytes" | "byte" | "Byte" => Ok(RhpType::Bytes),
                     "bool" | "Bool" | "true" | "false" => Ok(RhpType::Bool),
                     "void" => Ok(RhpType::Void),
                     "never" => Ok(RhpType::Never),

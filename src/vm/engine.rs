@@ -1588,6 +1588,11 @@ impl VM {
                         CastType::Int => PhpValue::Int(val.to_i64().unwrap_or(0)),
                         CastType::Float => PhpValue::float(val.to_f64().unwrap_or(0.0)),
                         CastType::String => PhpValue::string(val.to_php_string()),
+                        CastType::Bytes => match val {
+                            PhpValue::Bytes(b) => PhpValue::Bytes(b),
+                            PhpValue::String(s) => PhpValue::bytes(s.as_bytes()),
+                            other => PhpValue::bytes(other.to_php_string().into_bytes()),
+                        },
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
                         CastType::Array => match val {
                             PhpValue::EmptyArray | PhpValue::Array(_) | PhpValue::List(_) => val,
@@ -2058,7 +2063,28 @@ impl VM {
                                 if idx >= 0 {
                                     let repl_char = v.to_php_string().chars().next().unwrap_or('\0');
                                     if let PhpValue::String(s) = &mut self.registers[target_idx] {
-                                        s.set_char(idx as usize, repl_char);
+                                        let mut chars: Vec<char> = s.chars().collect();
+                                        if (idx as usize) < chars.len() {
+                                            chars[idx as usize] = repl_char;
+                                            *s = chars.into_iter().collect::<String>().into();
+                                        }
+                                    }
+                                }
+                            }
+                            PhpValue::Bytes(_) => {
+                                let idx = k.to_i64().unwrap_or(-1);
+                                if idx >= 0 {
+                                    let byte_val = if let PhpValue::Int(n) = v {
+                                        n as u8
+                                    } else {
+                                        v.to_php_string().bytes().next().unwrap_or(0)
+                                    };
+                                    if let PhpValue::Bytes(b) = &mut self.registers[target_idx] {
+                                        let mut vec = b.to_vec();
+                                        if (idx as usize) < vec.len() {
+                                            vec[idx as usize] = byte_val;
+                                            *b = Rc::from(vec);
+                                        }
                                     }
                                 }
                             }
@@ -2661,7 +2687,7 @@ impl VM {
                             let target_id = self
                                 .module
                                 .function_index
-                                .get(fn_name.as_str())
+                                .get(fn_name.as_ref())
                                 .copied()
                                 .ok_or_else(|| {
                                     self.make_error(
@@ -3593,7 +3619,7 @@ impl VM {
 
                 OpCode::InstanceofDynamic { dst, object, class } => {
                     let raw_cls = match &self.registers[base_reg + class.index()] {
-                        PhpValue::String(s) => s.as_str().to_string(),
+                        PhpValue::String(s) => s.to_string(),
                         PhpValue::Object(obj_rc) => obj_rc.borrow().class_name.clone(),
                         _ => String::new(),
                     };
@@ -4143,7 +4169,7 @@ impl VM {
                 let target_id = self
                     .module
                     .function_index
-                    .get(fn_name.as_str())
+                    .get(fn_name.as_ref())
                     .copied()
                     .ok_or_else(|| {
                         self.make_error(
@@ -5016,7 +5042,7 @@ impl VM {
                         if let Some(arg) = args.first() {
                             match arg {
                                 PhpValue::String(s) => {
-                                    print!("{}", s.as_str());
+                                    print!("{}", s);
                                     use std::io::Write;
                                     let _ = std::io::stdout().flush();
                                     exit_code = 0;
@@ -5105,7 +5131,7 @@ impl VM {
                         if let Some(arg) = args.first() {
                             match arg {
                                 PhpValue::String(s) => {
-                                    print!("{}", s.as_str());
+                                    print!("{}", s);
                                     use std::io::Write;
                                     let _ = std::io::stdout().flush();
                                     exit_code = 0;
@@ -5195,7 +5221,7 @@ impl VM {
                                 }
                             }
                             PhpValue::String(fn_name) => {
-                                let name = fn_name.as_str();
+                                let name = fn_name.as_ref();
                                 for (_idx, item) in items.into_iter().enumerate() {
                                     let res = dispatch_facade_call("phpFun", name, &[item.clone()], span)?;
                                     mapped.push(res);
@@ -8127,24 +8153,32 @@ impl VM {
 
             // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
             // String helper methods are immutable by default, returning a new instance.
-            PhpValue::String(s) if s.is_bytes() => match method {
-                "len" | "length" => Ok(PhpValue::Int(s.len() as i64)),
+            PhpValue::Bytes(b) => match method {
+                "len" | "length" => Ok(PhpValue::Int(b.len() as i64)),
                 "slice" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
                     let length = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
-                    let b = s.as_bytes();
                     let (st, en) = crate::vm::encoding::calc_mb_slice(b.len() as i64, start, length);
                     Ok(PhpValue::bytes(&b[st..en]))
                 }
                 "decode" => {
                     let encoding = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) }).unwrap_or_else(|| "UTF-8".to_string());
                     let invalid = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) }).unwrap_or_else(|| "strict".to_string());
-                    let decoded = crate::vm::encoding::decode_bytes(s.as_bytes(), &encoding, &invalid)
+                    let decoded = crate::vm::encoding::decode_bytes(b.as_ref(), &encoding, &invalid)
                         .map_err(|(msg, _)| self.make_error(RuntimeErrorKind::UncaughtException {
                             class: "InvalidEncodingException".to_string(),
                             message: msg,
                         }, span))?;
                     Ok(PhpValue::string(decoded))
+                }
+                "check" => {
+                    if let Some(enc_val) = args.first() {
+                        let enc_str = enc_val.to_php_string();
+                        let is_valid = crate::vm::encoding::is_valid_encoding(b.as_ref(), &enc_str);
+                        Ok(PhpValue::Bool(is_valid))
+                    } else {
+                        Ok(PhpValue::Bool(true))
+                    }
                 }
                 "convert" => {
                     let to = args.first().ok_or_else(|| self.make_error(RuntimeErrorKind::TooFewArguments {
@@ -8157,7 +8191,7 @@ impl VM {
                         passed: args.len(),
                         expected: 2,
                     }, span))?.to_php_string();
-                    let converted = crate::vm::encoding::convert_encoding(s.as_bytes(), &to, Some(&from), "throw")
+                    let converted = crate::vm::encoding::convert_encoding(b.as_ref(), &to, Some(&from), "throw")
                         .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
                     Ok(PhpValue::bytes(converted))
                 }
@@ -8176,7 +8210,7 @@ impl VM {
                         if s.is_ascii() {
                             Ok(PhpValue::Int(s.len() as i64))
                         } else {
-                            Ok(PhpValue::Int(s.as_str().chars().count() as i64))
+                            Ok(PhpValue::Int(s.chars().count() as i64))
                         }
                     } else {
                         let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
@@ -8185,14 +8219,14 @@ impl VM {
                     }
                 }
                 "graphemeLen" | "grapheme_len" => {
-                    let count = crate::vm::encoding::grapheme_len(s.as_str());
+                    let count = crate::vm::encoding::grapheme_len(s.as_ref());
                     Ok(PhpValue::Int(count as i64))
                 }
                 "mbSubstr" | "mb_substr" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
                     let len = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
                     let enc = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
-                    let sub = crate::vm::encoding::mb_substr(s.as_str(), s.is_ascii(), start, len, enc.as_deref())
+                    let sub = crate::vm::encoding::mb_substr(s.as_ref(), s.is_ascii(), start, len, enc.as_deref())
                         .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
                     Ok(PhpValue::string(sub))
                 }
@@ -8211,7 +8245,7 @@ impl VM {
                 "compare" => {
                     let other = args.first().unwrap_or(&PhpValue::Null);
                     let case_insensitive = args.get(1).and_then(|v| v.to_bool()).unwrap_or(false);
-                    let s1 = s.to_str_lossy();
+                    let s1 = s.as_ref();
                     let s2 = other.to_php_string();
                     let eq = if case_insensitive {
                         s1.eq_ignore_ascii_case(&s2)
@@ -8311,7 +8345,7 @@ impl VM {
                     Ok(PhpValue::Bool(!b.is_empty() && b.iter().all(|c| c.is_ascii_alphanumeric())))
                 }
                 "trim" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let chars = if let Some(arg1) = args.first() {
                         arg1.to_php_string()
                     } else {
@@ -8321,7 +8355,7 @@ impl VM {
                     Ok(PhpValue::string(trimmed))
                 }
                 "ltrim" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let chars = if let Some(arg1) = args.first() {
                         arg1.to_php_string()
                     } else {
@@ -8331,7 +8365,7 @@ impl VM {
                     Ok(PhpValue::string(trimmed))
                 }
                 "rtrim" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let chars = if let Some(arg1) = args.first() {
                         arg1.to_php_string()
                     } else {
@@ -8341,27 +8375,27 @@ impl VM {
                     Ok(PhpValue::string(trimmed))
                 }
                 "upperCase" | "upper" | "toUpper" | "uppercase" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.to_uppercase()))
                 }
                 "lowerCase" | "lower" | "toLower" | "lowercase" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.to_lowercase()))
                 }
                 "camelCase" | "camelcase" | "toCamelCase" => {
-                    let str_val = s.to_str_lossy();
-                    Ok(PhpValue::string(crate::lint::to_camel_case(&str_val)))
+                    let str_val = s.as_ref();
+                    Ok(PhpValue::string(crate::lint::to_camel_case(str_val)))
                 }
                 "pascalCase" | "pascalcase" | "toPascalCase" => {
-                    let str_val = s.to_str_lossy();
-                    Ok(PhpValue::string(crate::lint::to_pascal_case(&str_val)))
+                    let str_val = s.as_ref();
+                    Ok(PhpValue::string(crate::lint::to_pascal_case(str_val)))
                 }
                 "snakeCase" | "snakecase" | "toSnakeCase" => {
-                    let str_val = s.to_str_lossy();
-                    Ok(PhpValue::string(crate::lint::to_snake_case(&str_val)))
+                    let str_val = s.as_ref();
+                    Ok(PhpValue::string(crate::lint::to_snake_case(str_val)))
                 }
                 "slug" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let mut slug = String::with_capacity(str_val.len());
                     let mut last_was_dash = false;
                     for c in str_val.chars() {
@@ -8380,20 +8414,20 @@ impl VM {
                 }
                 "contains" | "includes" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    Ok(PhpValue::Bool(s.to_str_lossy().contains(&needle)))
+                    Ok(PhpValue::Bool(s.contains(&needle)))
                 }
                 "startsWith" | "starts_with" => {
                     let prefix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    Ok(PhpValue::Bool(s.to_str_lossy().starts_with(&prefix)))
+                    Ok(PhpValue::Bool(s.starts_with(&prefix)))
                 }
                 "endsWith" | "ends_with" => {
                     let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    Ok(PhpValue::Bool(s.to_str_lossy().ends_with(&suffix)))
+                    Ok(PhpValue::Bool(s.ends_with(&suffix)))
                 }
                 "find" | "indexOf" | "index_of" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let char_indices: Vec<(usize, char)> = str_val.char_indices().collect();
                     let total_chars = char_indices.len();
                     let start_char_idx = if offset < 0 {
@@ -8418,16 +8452,16 @@ impl VM {
                     }
                 }
                 "testRegex" | "regex" | "matchesPattern" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     match args.first() {
                         None => {
-                            Ok(PhpValue::Bool(crate::vm::facade::parse_regex_pattern(&str_val).is_ok()))
+                            Ok(PhpValue::Bool(crate::vm::facade::parse_regex_pattern(str_val).is_ok()))
                         }
                         Some(pattern_val) => {
                             let pat_str = pattern_val.to_php_string();
                             let matched = if let Ok(re) = crate::vm::facade::parse_regex_pattern(&pat_str) {
-                                re.is_match(&str_val)
-                            } else if let Ok(re) = crate::vm::facade::parse_regex_pattern(&str_val) {
+                                re.is_match(str_val)
+                            } else if let Ok(re) = crate::vm::facade::parse_regex_pattern(str_val) {
                                 re.is_match(&pat_str)
                             } else {
                                 false
@@ -8437,11 +8471,11 @@ impl VM {
                     }
                 }
                 "length" => {
-                    Ok(PhpValue::Int(s.to_str_lossy().chars().count() as i64))
+                    Ok(PhpValue::Int(s.chars().count() as i64))
                 }
                 "split" | "explode" => {
                     let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let parts: Vec<PhpValue> = if sep.is_empty() {
                         str_val.chars().map(|c| PhpValue::string(c.to_string())).collect()
                     } else {
@@ -8452,13 +8486,13 @@ impl VM {
                 "replace" => {
                     let search = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let replace = args.get(1).map(|v| v.to_php_string()).unwrap_or_default();
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.replace(&search, &replace)))
                 }
                 "substr" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
                     let length = args.get(1).and_then(|v| v.to_i64());
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let chars: Vec<char> = str_val.chars().collect();
                     let total_len = chars.len() as i64;
                     let actual_start = if start < 0 {
@@ -8479,31 +8513,30 @@ impl VM {
                     Ok(PhpValue::string(sub))
                 }
                 "reverse" => {
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     let rev: String = str_val.chars().rev().collect();
                     Ok(PhpValue::string(rev))
                 }
                 "repeat" => {
                     let times = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as usize;
-                    let str_val = s.to_str_lossy();
+                    let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.repeat(times)))
                 }
                 "toEncoding" => {
                     let encoding = args.first().map(|v| v.to_php_string()).unwrap_or_else(|| "UTF-8".to_string());
-                    let encoded_bytes = crate::vm::encoding::encode_from_utf8(&s.to_str_lossy(), &encoding)
+                    let encoded_bytes = crate::vm::encoding::encode_from_utf8(s.as_ref(), &encoding)
                         .map_err(|msg| self.make_error(RuntimeErrorKind::Custom { message: msg }, span))?;
-                    Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(encoded_bytes)))
+                    Ok(PhpValue::bytes(encoded_bytes))
                 }
                 "utf8" => {
-                    let clean = String::from_utf8_lossy(s.as_bytes()).into_owned();
-                    Ok(PhpValue::string(clean))
+                    Ok(PhpValue::String(s.clone()))
                 }
                 "bytes" => {
                     let byte_list: Vec<PhpValue> = s.as_bytes().iter().map(|&b| PhpValue::Int(b as i64)).collect();
                     Ok(PhpValue::list(byte_list))
                 }
                 "isUtf8" => {
-                    Ok(PhpValue::Bool(s.is_utf8()))
+                    Ok(PhpValue::Bool(true))
                 }
                 "isEmpty" => {
                     Ok(PhpValue::Bool(s.is_empty()))
@@ -9036,6 +9069,7 @@ impl VM {
                     let b = o.borrow();
                     if let Some(raw_prop) = b.get_property("raw_bytes") {
                         let bytes: &[u8] = match &raw_prop {
+                            PhpValue::Bytes(b) => b.as_ref(),
                             PhpValue::String(s) => s.as_bytes(),
                             _ => b"",
                         };
@@ -10314,7 +10348,7 @@ impl VM {
             }
             _ => {
                 if let PhpValue::String(ref cls_str) = receiver {
-                    let cls_name = cls_str.as_str();
+                    let cls_name = cls_str.as_ref();
                     match self.exec_enum_static_method(
                         cls_name,
                         &method_name,

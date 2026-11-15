@@ -279,13 +279,13 @@ fn test_csv_parse_and_generate_helpers() {
     }
 
     if let Some(PhpValue::String(generated_str)) = vm.get_main_variable("$generated") {
-        assert_eq!(generated_str.as_str(), "id,name\n1,Alice\n2,Bob\n");
+        assert_eq!(generated_str.as_ref(), "id,name\n1,Alice\n2,Bob\n");
     } else {
         panic!("expected string for generated");
     }
 
     if let Some(PhpValue::String(row_str)) = vm.get_main_variable("$rowText") {
-        assert_eq!(row_str.as_str(), "hello,\"world, wide\"\n");
+        assert_eq!(row_str.as_ref(), "hello,\"world, wide\"\n");
     } else {
         panic!("expected string for rowText");
     }

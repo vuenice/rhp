@@ -679,15 +679,13 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             match val {
-                PhpValue::String(s) => match s {
-                    crate::vm::value::StrValue::Utf8 { .. } => Ok(val.clone()),
-                    crate::vm::value::StrValue::Bytes(b) => match std::str::from_utf8(b) {
-                        Ok(valid) => Ok(PhpValue::string(valid)),
-                        Err(e) => Err(RuntimeErrorKind::UncaughtException {
-                            class: "InvalidEncodingException".to_string(),
-                            message: format!("Invalid UTF-8 sequence at byte offset {}", e.valid_up_to()),
-                        }),
-                    },
+                PhpValue::String(_) => Ok(val.clone()),
+                PhpValue::Bytes(b) => match std::str::from_utf8(b) {
+                    Ok(valid) => Ok(PhpValue::string(valid)),
+                    Err(e) => Err(RuntimeErrorKind::UncaughtException {
+                        class: "InvalidEncodingException".to_string(),
+                        message: format!("Invalid UTF-8 sequence at byte offset {}", e.valid_up_to()),
+                    }),
                 },
                 PhpValue::Int(_) | PhpValue::Float(_) | PhpValue::Bool(_) => {
                     Ok(PhpValue::string(val.to_php_string()))
@@ -704,10 +702,8 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             match val {
-                PhpValue::String(s) => match s {
-                    crate::vm::value::StrValue::Bytes(_) => Ok(val.clone()),
-                    crate::vm::value::StrValue::Utf8 { .. } => Ok(PhpValue::bytes(s.as_bytes())),
-                },
+                PhpValue::Bytes(_) => Ok(val.clone()),
+                PhpValue::String(s) => Ok(PhpValue::bytes(s.as_bytes())),
                 other => Err(RuntimeErrorKind::TypeError {
                     message: format!("Str::bytes() expects string or bytes, got {}", other.type_name()),
                 }),
@@ -734,17 +730,15 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let enc = args.get(1).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
             match val {
+                PhpValue::Bytes(_) => Err(RuntimeErrorKind::TypeError {
+                    message: "Method mbStrlen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                }),
                 PhpValue::String(s) => {
-                    if s.is_bytes() {
-                        return Err(RuntimeErrorKind::TypeError {
-                            message: "Method mbStrlen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
-                        });
-                    }
                     if enc.as_deref().map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8")).unwrap_or(true) {
                         if s.is_ascii() {
                             Ok(PhpValue::Int(s.len() as i64))
                         } else {
-                            Ok(PhpValue::Int(s.as_str().chars().count() as i64))
+                            Ok(PhpValue::Int(s.chars().count() as i64))
                         }
                     } else {
                         let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
@@ -764,13 +758,11 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             match val {
+                PhpValue::Bytes(_) => Err(RuntimeErrorKind::TypeError {
+                    message: "Method graphemeLen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                }),
                 PhpValue::String(s) => {
-                    if s.is_bytes() {
-                        return Err(RuntimeErrorKind::TypeError {
-                            message: "Method graphemeLen() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
-                        });
-                    }
-                    let count = crate::vm::encoding::grapheme_len(s.as_str());
+                    let count = crate::vm::encoding::grapheme_len(s.as_ref());
                     Ok(PhpValue::Int(count as i64))
                 }
                 other => Err(RuntimeErrorKind::TypeError {
@@ -788,13 +780,11 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let len = args.get(2).and_then(|v| if v.is_null() { None } else { v.to_i64() });
             let enc = args.get(3).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
             match val {
+                PhpValue::Bytes(_) => Err(RuntimeErrorKind::TypeError {
+                    message: "Method mbSubstr() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
+                }),
                 PhpValue::String(s) => {
-                    if s.is_bytes() {
-                        return Err(RuntimeErrorKind::TypeError {
-                            message: "Method mbSubstr() is not supported on bytes. Call ->decode() first to get a string.".to_string(),
-                        });
-                    }
-                    let res = crate::vm::encoding::mb_substr(s.as_str(), s.is_ascii(), start, len, enc.as_deref())
+                    let res = crate::vm::encoding::mb_substr(s.as_ref(), s.is_ascii(), start, len, enc.as_deref())
                         .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?;
                     Ok(PhpValue::string(res))
                 }
@@ -840,6 +830,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             let bytes = match val {
                 PhpValue::String(s) => s.as_bytes(),
+                PhpValue::Bytes(b) => b.as_ref(),
                 other => return Err(RuntimeErrorKind::TypeError {
                     message: format!("Str::detectEncoding() expects string or bytes, got {}", other.type_name()),
                 }),
@@ -909,13 +900,14 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::Int((binary_strncasecmp(&s1, &s2, len_i64 as usize)) as i64))
         }
         "check" => {
-            let target = match args.first() {
-                Some(PhpValue::String(s)) => s,
+            let bytes = match args.first() {
+                Some(PhpValue::String(s)) => s.as_bytes(),
+                Some(PhpValue::Bytes(b)) => b.as_ref(),
                 _ => return Ok(PhpValue::Bool(false)),
             };
             if let Some(enc_val) = args.get(1) {
                 let enc_str = enc_val.to_php_string();
-                let is_valid = crate::vm::encoding::is_valid_encoding(target.as_bytes(), &enc_str);
+                let is_valid = crate::vm::encoding::is_valid_encoding(bytes, &enc_str);
                 Ok(PhpValue::Bool(is_valid))
             } else {
                 Ok(PhpValue::Bool(true))
@@ -1160,7 +1152,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             let encoding = get_arg_str(args, 1, "Str::toEncoding").unwrap_or_else(|_| "UTF-8".to_string());
             let encoded_bytes = crate::vm::encoding::encode_from_utf8(&target, &encoding)
                 .map_err(|msg| RuntimeErrorKind::Custom { message: msg })?;
-            Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(encoded_bytes)))
+            Ok(PhpValue::bytes(encoded_bytes))
         }
         "isUtf8" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
@@ -1169,7 +1161,8 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             let is_valid = match target {
-                PhpValue::String(s) => s.is_utf8(),
+                PhpValue::String(_) => true,
+                PhpValue::Bytes(b) => std::str::from_utf8(b).is_ok(),
                 _ => true,
             };
             Ok(PhpValue::Bool(is_valid))
@@ -1184,10 +1177,11 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Array(a) | PhpValue::List(a) => {
                     a.borrow().iter().map(|v| v.to_i64().unwrap_or(0) as u8).collect::<Vec<u8>>()
                 }
+                PhpValue::Bytes(b) => b.to_vec(),
                 PhpValue::String(s) => s.as_bytes().to_vec(),
                 _ => target.to_php_string().into_bytes(),
             };
-            Ok(PhpValue::string(crate::vm::value::RhpString::from_vec(bytes)))
+            Ok(PhpValue::bytes(bytes))
         }
         "byteLength" => {
             let target = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
@@ -1197,6 +1191,7 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let len = match target {
                 PhpValue::String(s) => s.len(),
+                PhpValue::Bytes(b) => b.len(),
                 _ => target.to_php_string().len(),
             };
             Ok(PhpValue::Int(len as i64))
@@ -1429,28 +1424,8 @@ fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
 
 pub fn extract_raw_byte_payload(val: &PhpValue) -> Vec<u8> {
     match val {
-        PhpValue::String(s) => {
-            if !s.is_utf8() {
-                s.as_bytes().to_vec()
-            } else {
-                let mut maybe_latin1 = true;
-                let mut bytes_from_chars = Vec::new();
-                for ch in s.as_str().chars() {
-                    let cp = ch as u32;
-                    if cp <= 0xFF {
-                        bytes_from_chars.push(cp as u8);
-                    } else {
-                        maybe_latin1 = false;
-                        break;
-                    }
-                }
-                if maybe_latin1 && bytes_from_chars.len() < s.len() {
-                    bytes_from_chars
-                } else {
-                    s.as_bytes().to_vec()
-                }
-            }
-        }
+        PhpValue::Bytes(b) => b.to_vec(),
+        PhpValue::String(s) => s.as_bytes().to_vec(),
         PhpValue::Array(a) | PhpValue::List(a) => {
             a.borrow()
                 .iter()
@@ -2404,7 +2379,7 @@ fn dispatch_arr(method: &str, args: &[PhpValue]) -> FacadeResult {
         "macro" => {
             if let Some(PhpValue::String(name)) = args.first() {
                 if let Some(PhpValue::Closure(closure)) = args.get(1) {
-                    register_runtime_closure_macro("Arr", name.as_str(), (**closure).clone());
+                    register_runtime_closure_macro("Arr", name.as_ref(), (**closure).clone());
                     return Ok(PhpValue::Bool(true));
                 }
             }
@@ -2916,7 +2891,7 @@ pub fn execute_exit_signal(args: &[PhpValue]) -> FacadeResult {
         match arg {
             PhpValue::String(s) => {
                 use std::io::Write;
-                print!("{}", s.as_str());
+                print!("{}", s);
                 let _ = std::io::stdout().flush();
                 exit_code = 0;
             }
@@ -2937,7 +2912,7 @@ pub fn execute_process_exit(args: &[PhpValue]) -> FacadeResult {
         match arg {
             PhpValue::String(s) => {
                 use std::io::Write;
-                print!("{}", s.as_str());
+                print!("{}", s);
                 let _ = std::io::stdout().flush();
                 exit_code = 0;
             }
@@ -3297,7 +3272,7 @@ pub fn parse_file_mode_str(s: &str) -> Option<u32> {
 /// Helper that only accepts PhpValue::String and parses permissions mode.
 pub fn parse_file_mode(val: &PhpValue) -> Option<u32> {
     match val {
-        PhpValue::String(s) => parse_file_mode_str(&s.to_str_lossy()),
+        PhpValue::String(s) => parse_file_mode_str(s.as_ref()),
         _ => None,
     }
 }
@@ -3528,15 +3503,18 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let enc = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
             let bytes_to_write: Vec<u8> = match data_val {
+                PhpValue::Bytes(b) => {
+                    if let Some(target_enc) = enc {
+                        crate::vm::encoding::convert_encoding(b.as_ref(), &target_enc, None, "throw")
+                            .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
+                    } else {
+                        b.to_vec()
+                    }
+                }
                 PhpValue::String(s) => {
                     if let Some(target_enc) = enc {
-                        if s.is_bytes() {
-                            crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, None, "throw")
-                                .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
-                        } else {
-                            crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, Some("UTF-8"), "throw")
-                                .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
-                        }
+                        crate::vm::encoding::convert_encoding(s.as_bytes(), &target_enc, Some("UTF-8"), "throw")
+                            .map_err(|(cls, msg)| RuntimeErrorKind::UncaughtException { class: cls, message: msg })?
                     } else {
                         s.as_bytes().to_vec()
                     }
@@ -3743,10 +3721,10 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
                 let uid = match user_val {
                     PhpValue::Int(uid) => *uid as libc::uid_t,
                     PhpValue::String(s) => {
-                        let user_str = s.to_str_lossy();
+                        let user_str = s.as_ref();
                         if let Ok(uid_num) = user_str.parse::<libc::uid_t>() {
                             uid_num
-                        } else if let Ok(c_user) = CString::new(user_str.as_ref()) {
+                        } else if let Ok(c_user) = CString::new(user_str) {
                             unsafe {
                                 let pwd = libc::getpwnam(c_user.as_ptr());
                                 if pwd.is_null() {
@@ -3769,10 +3747,10 @@ fn dispatch_file(method: &str, args: &[PhpValue]) -> FacadeResult {
                     match g_val {
                         PhpValue::Int(gid) => *gid as libc::gid_t,
                         PhpValue::String(s) => {
-                            let grp_str = s.to_str_lossy();
+                            let grp_str = s.as_ref();
                             if let Ok(gid_num) = grp_str.parse::<libc::gid_t>() {
                                 gid_num
-                            } else if let Ok(c_grp) = CString::new(grp_str.as_ref()) {
+                            } else if let Ok(c_grp) = CString::new(grp_str) {
                                 unsafe {
                                     let grp = libc::getgrnam(c_grp.as_ptr());
                                     if grp.is_null() {
@@ -6695,7 +6673,7 @@ fn dispatch_html(method: &str, args: &[PhpValue]) -> FacadeResult {
             let s = get_arg_str(args, 0, "Html::stripTags")?;
             let allowed_tags = args.get(1).and_then(|v| match v {
                 PhpValue::Null => None,
-                PhpValue::String(str_val) => Some(html::parse_allowed_tags_string(str_val.as_str())),
+                PhpValue::String(str_val) => Some(html::parse_allowed_tags_string(str_val.as_ref())),
                 PhpValue::Array(_) | PhpValue::List(_) | PhpValue::Set(_) => {
                     let items = extract_array_elements(v);
                     Some(items.into_iter().map(|it| it.to_php_string()).collect())
@@ -8618,12 +8596,10 @@ pub fn dispatch_validate(method: &str, args: &[PhpValue]) -> FacadeResult {
             let res = match val {
                 PhpValue::Int(_) => true,
                 PhpValue::Float(f) => !f.is_nan() && !f.is_infinite(),
-                PhpValue::String(s) => match s {
-                    crate::vm::value::StrValue::Utf8 { s, .. } => is_numeric_str(s),
-                    crate::vm::value::StrValue::Bytes(b) => match std::str::from_utf8(b) {
-                        Ok(utf8_str) => is_numeric_str(utf8_str),
-                        Err(_) => false,
-                    },
+                PhpValue::String(s) => is_numeric_str(s),
+                PhpValue::Bytes(b) => match std::str::from_utf8(b) {
+                    Ok(utf8_str) => is_numeric_str(utf8_str),
+                    Err(_) => false,
                 },
                 _ => false,
             };
@@ -8702,10 +8678,8 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Bool(_) => "bool".to_string(),
                 PhpValue::Int(_) => "int".to_string(),
                 PhpValue::Float(_) => "float".to_string(),
-                PhpValue::String(s) => match s {
-                    crate::vm::value::StrValue::Utf8 { .. } => "string".to_string(),
-                    crate::vm::value::StrValue::Bytes(_) => "bytes".to_string(),
-                },
+                PhpValue::String(_) => "string".to_string(),
+                PhpValue::Bytes(_) => "bytes".to_string(),
                 PhpValue::EmptyArray | PhpValue::Array(_) => "array".to_string(),
                 PhpValue::List(_) => "Arr::list".to_string(),
                 PhpValue::Dict(_) => "Arr::dict".to_string(),

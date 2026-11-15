@@ -309,13 +309,8 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
         | PhpValue::Bool(_)
         | PhpValue::Int(_)
         | PhpValue::Float(_) => std::mem::size_of::<PhpValue>(),
-        PhpValue::String(s) => {
-            if s.is_inline() {
-                std::mem::size_of::<PhpValue>()
-            } else {
-                std::mem::size_of::<PhpValue>() + s.len() + 16
-            }
-        }
+        PhpValue::String(s) => std::mem::size_of::<PhpValue>() + s.len() + 16,
+        PhpValue::Bytes(b) => std::mem::size_of::<PhpValue>() + b.len() + 16,
         PhpValue::EmptyArray => std::mem::size_of::<PhpValue>(),
         PhpValue::Array(items) | PhpValue::List(items) => {
             let b = items.borrow();

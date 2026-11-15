@@ -3,7 +3,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -14,371 +13,8 @@ use crate::ir::ClosureCategory;
 use crate::type_system::types::{CollectionSubtype, RhpType, TypeHierarchy};
 use crate::vm::parent_process::FrozenValue;
 
-/// String value representation in RHP supporting Utf8 and Bytes subtypes.
-///
-/// Under the hood:
-/// - `Utf8` is the default subtype. Invariant: always valid UTF-8, enforced at construction.
-///   `ascii` is cached at construction for O(1) fast paths.
-/// - `Bytes` is raw binary data with no encoding claim, backed by `Arc<[u8]>`.
-#[derive(Clone, Debug)]
-pub enum StrValue {
-    Utf8 { s: Arc<str>, ascii: bool },
-    Bytes(Arc<[u8]>),
-}
-
-pub type RhpString = StrValue;
-
-impl StrValue {
-    #[inline]
-    pub fn new_utf8(s: impl AsRef<str>) -> Self {
-        let s_ref = s.as_ref();
-        let ascii = s_ref.is_ascii();
-        Self::Utf8 {
-            s: Arc::from(s_ref),
-            ascii,
-        }
-    }
-
-    #[inline]
-    pub fn from_utf8_arc(s: Arc<str>) -> Self {
-        let ascii = s.is_ascii();
-        Self::Utf8 { s, ascii }
-    }
-
-    #[inline]
-    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, std::str::Utf8Error> {
-        let valid_str = std::str::from_utf8(bytes)?;
-        let ascii = bytes.is_ascii();
-        Ok(Self::Utf8 {
-            s: Arc::from(valid_str),
-            ascii,
-        })
-    }
-
-    #[inline]
-    pub fn new_bytes(bytes: impl Into<Arc<[u8]>>) -> Self {
-        Self::Bytes(bytes.into())
-    }
-
-    #[inline]
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self::Bytes(Arc::from(bytes))
-    }
-
-    #[inline]
-    pub fn from_vec(bytes: Vec<u8>) -> Self {
-        Self::Bytes(Arc::from(bytes))
-    }
-
-    #[inline]
-    pub fn new(s: &str) -> Self {
-        Self::new_utf8(s)
-    }
-
-    #[inline]
-    pub fn is_utf8(&self) -> bool {
-        matches!(self, Self::Utf8 { .. })
-    }
-
-    #[inline]
-    pub fn is_bytes(&self) -> bool {
-        matches!(self, Self::Bytes(_))
-    }
-
-    #[inline]
-    pub fn is_ascii(&self) -> bool {
-        match self {
-            Self::Utf8 { ascii, .. } => *ascii,
-            Self::Bytes(b) => b.is_ascii(),
-        }
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Utf8 { s, .. } => s.len(),
-            Self::Bytes(b) => b.len(),
-        }
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Utf8 { s, .. } => s.as_bytes(),
-            Self::Bytes(b) => b.as_ref(),
-        }
-    }
-
-    #[inline]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Utf8 { s, .. } => s.as_ref(),
-            Self::Bytes(_) => "",
-        }
-    }
-
-    #[inline]
-    pub fn as_utf8_str(&self) -> Option<&str> {
-        match self {
-            Self::Utf8 { s, .. } => Some(s.as_ref()),
-            Self::Bytes(_) => None,
-        }
-    }
-
-    #[inline]
-    pub fn to_str_lossy(&self) -> std::borrow::Cow<'_, str> {
-        match self {
-            Self::Utf8 { s, .. } => std::borrow::Cow::Borrowed(s.as_ref()),
-            Self::Bytes(b) => String::from_utf8_lossy(b.as_ref()),
-        }
-    }
-
-    #[inline]
-    pub fn ref_count(&self) -> usize {
-        match self {
-            Self::Utf8 { s, .. } => Arc::strong_count(s),
-            Self::Bytes(b) => Arc::strong_count(b),
-        }
-    }
-
-    #[inline]
-    pub fn is_shared(&self) -> bool {
-        self.ref_count() > 1
-    }
-
-    #[inline]
-    pub fn is_inline(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    pub fn is_heap(&self) -> bool {
-        true
-    }
-
-    pub fn push_str(&mut self, other: &str) {
-        match self {
-            Self::Utf8 { s, ascii } => {
-                let mut new_s = String::with_capacity(s.len() + other.len());
-                new_s.push_str(s);
-                new_s.push_str(other);
-                *ascii = *ascii && other.is_ascii();
-                *s = Arc::from(new_s);
-            }
-            Self::Bytes(b) => {
-                let mut vec = Vec::with_capacity(b.len() + other.len());
-                vec.extend_from_slice(b);
-                vec.extend_from_slice(other.as_bytes());
-                *b = Arc::from(vec);
-            }
-        }
-    }
-
-    /// Mutate a character at char index using COW semantics.
-    pub fn set_char(&mut self, index: usize, ch: char) {
-        match self {
-            Self::Utf8 { s, ascii } => {
-                let mut chars: Vec<char> = s.chars().collect();
-                if index < chars.len() {
-                    chars[index] = ch;
-                    let new_str: String = chars.into_iter().collect();
-                    *ascii = new_str.is_ascii();
-                    *s = Arc::from(new_str);
-                }
-            }
-            Self::Bytes(b) => {
-                if index < b.len() {
-                    let mut vec = b.to_vec();
-                    let mut buf = [0u8; 4];
-                    let enc = ch.encode_utf8(&mut buf).as_bytes();
-                    if !enc.is_empty() {
-                        vec[index] = enc[0];
-                        *b = Arc::from(vec);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Mutate a byte at byte index using COW semantics.
-    pub fn set_byte(&mut self, index: usize, byte: u8) {
-        match self {
-            Self::Bytes(b) => {
-                if index < b.len() {
-                    let mut vec = b.to_vec();
-                    vec[index] = byte;
-                    *b = Arc::from(vec);
-                }
-            }
-            Self::Utf8 { s, ascii } => {
-                let mut bytes = s.as_bytes().to_vec();
-                if index < bytes.len() {
-                    bytes[index] = byte;
-                    if let Ok(valid) = std::str::from_utf8(&bytes) {
-                        *ascii = valid.is_ascii();
-                        *s = Arc::from(valid);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl Deref for StrValue {
-    type Target = str;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-impl AsRef<str> for StrValue {
-    #[inline]
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<[u8]> for StrValue {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.as_bytes()
-    }
-}
-
-impl fmt::Display for StrValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_str_lossy())
-    }
-}
-
-impl PartialEq for StrValue {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Utf8 { s: s1, .. }, Self::Utf8 { s: s2, .. }) => s1 == s2,
-            (Self::Bytes(b1), Self::Bytes(b2)) => b1 == b2,
-            _ => false,
-        }
-    }
-}
-
-impl PartialEq<str> for StrValue {
-    #[inline]
-    fn eq(&self, other: &str) -> bool {
-        match self {
-            Self::Utf8 { s, .. } => s.as_ref() == other,
-            Self::Bytes(_) => false,
-        }
-    }
-}
-
-impl PartialEq<&str> for StrValue {
-    #[inline]
-    fn eq(&self, other: &&str) -> bool {
-        match self {
-            Self::Utf8 { s, .. } => s.as_ref() == *other,
-            Self::Bytes(_) => false,
-        }
-    }
-}
-
-impl PartialEq<[u8]> for StrValue {
-    #[inline]
-    fn eq(&self, other: &[u8]) -> bool {
-        self.as_bytes() == other
-    }
-}
-
-impl PartialEq<&[u8]> for StrValue {
-    #[inline]
-    fn eq(&self, other: &&[u8]) -> bool {
-        self.as_bytes() == *other
-    }
-}
-
-impl Eq for StrValue {}
-
-impl PartialOrd for StrValue {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Self::Utf8 { s: s1, .. }, Self::Utf8 { s: s2, .. }) => s1.partial_cmp(s2),
-            (Self::Bytes(b1), Self::Bytes(b2)) => b1.partial_cmp(b2),
-            _ => None,
-        }
-    }
-}
-
-impl Hash for StrValue {
-    #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            Self::Utf8 { s, .. } => {
-                0u8.hash(state);
-                s.hash(state);
-            }
-            Self::Bytes(b) => {
-                1u8.hash(state);
-                b.hash(state);
-            }
-        }
-    }
-}
-
-impl From<&str> for StrValue {
-    #[inline]
-    fn from(s: &str) -> Self {
-        Self::new_utf8(s)
-    }
-}
-
-impl From<String> for StrValue {
-    #[inline]
-    fn from(s: String) -> Self {
-        Self::new_utf8(s)
-    }
-}
-
-impl From<&String> for StrValue {
-    #[inline]
-    fn from(s: &String) -> Self {
-        Self::new_utf8(s)
-    }
-}
-
-impl From<Arc<str>> for StrValue {
-    #[inline]
-    fn from(s: Arc<str>) -> Self {
-        Self::from_utf8_arc(s)
-    }
-}
-
-impl From<Arc<[u8]>> for StrValue {
-    #[inline]
-    fn from(bytes: Arc<[u8]>) -> Self {
-        Self::new_bytes(bytes)
-    }
-}
-
-impl From<&[u8]> for StrValue {
-    #[inline]
-    fn from(bytes: &[u8]) -> Self {
-        Self::from_bytes(bytes)
-    }
-}
-
-impl From<Vec<u8>> for StrValue {
-    #[inline]
-    fn from(bytes: Vec<u8>) -> Self {
-        Self::from_vec(bytes)
-    }
-}
+/// String value representation in RHP backed by `Rc<str>`.
+pub type RhpString = Rc<str>;
 
 /// Object Shape (Hidden Class) structure inspired by Bun & JavaScriptCore.
 ///
@@ -548,7 +184,8 @@ pub enum PhpValue {
     Int(i64),
     /// The only float. Stored as `f64`.
     Float(f64),
-    String(RhpString),
+    String(Rc<str>),
+    Bytes(Rc<[u8]>),
     /// Untyped `[]` before the first write. No heap buffer.
     /// A later read treats it as both an empty list and an empty dict.
     /// The first write promotes it to `List`, `Dict`, or `HashMap`.
@@ -906,13 +543,13 @@ impl PhpValue {
     }
 
     #[inline]
-    pub fn string(s: impl Into<StrValue>) -> Self {
-        Self::String(s.into())
+    pub fn string(s: impl AsRef<str>) -> Self {
+        Self::String(Rc::from(s.as_ref()))
     }
 
     #[inline]
-    pub fn bytes(b: impl Into<Arc<[u8]>>) -> Self {
-        Self::String(StrValue::new_bytes(b))
+    pub fn bytes(b: impl AsRef<[u8]>) -> Self {
+        Self::Bytes(Rc::from(b.as_ref()))
     }
 
     /// Empty untyped array literal. Promotion happens on the first write.
@@ -1040,10 +677,8 @@ impl PhpValue {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
-            Self::String(s) => match s {
-                StrValue::Utf8 { .. } => "string",
-                StrValue::Bytes(_) => "bytes",
-            },
+            Self::String(_) => "string",
+            Self::Bytes(_) => "bytes",
             Self::EmptyArray => "array",
             Self::Array(_) => "array",
             Self::List(_) => "Arr::list",
@@ -1058,15 +693,15 @@ impl PhpValue {
     }
 
     pub fn is_string(&self) -> bool {
-        matches!(self, Self::String(StrValue::Utf8 { .. }))
+        matches!(self, Self::String(_))
     }
 
     pub fn is_utf8(&self) -> bool {
-        matches!(self, Self::String(StrValue::Utf8 { .. }))
+        matches!(self, Self::String(_))
     }
 
     pub fn is_bytes(&self) -> bool {
-        matches!(self, Self::String(StrValue::Bytes(_)))
+        matches!(self, Self::Bytes(_))
     }
 
     pub fn is_null(&self) -> bool {
@@ -1079,10 +714,8 @@ impl PhpValue {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
-            Self::String(s) => match s {
-                StrValue::Utf8 { s, .. } => !s.is_empty() && &**s != "0",
-                StrValue::Bytes(b) => !b.is_empty() && &**b != b"0",
-            },
+            Self::String(s) => !s.is_empty() && &**s != "0",
+            Self::Bytes(b) => !b.is_empty() && &**b != b"0",
             Self::EmptyArray => false,
             Self::Array(arr) => !arr.borrow().is_empty(),
             Self::List(list) => !list.borrow().is_empty(),
@@ -1173,6 +806,7 @@ impl PhpValue {
         match self {
             Self::Float(f) => Some(*f as i64),
             Self::String(s) => s.trim().parse::<i64>().ok(),
+            Self::Bytes(b) => std::str::from_utf8(b).ok().and_then(|s| s.trim().parse::<i64>().ok()),
             _ => None,
         }
     }
@@ -1183,6 +817,7 @@ impl PhpValue {
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             other => other.to_i64().map(|n| n as f32).or_else(|| match other {
                 Self::String(s) => s.trim().parse::<f32>().ok(),
+                Self::Bytes(b) => std::str::from_utf8(b).ok().and_then(|s| s.trim().parse::<f32>().ok()),
                 _ => None,
             }),
         }
@@ -1194,6 +829,7 @@ impl PhpValue {
             Self::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             other => other.to_i64().map(|n| n as f64).or_else(|| match other {
                 Self::String(s) => s.trim().parse::<f64>().ok(),
+                Self::Bytes(b) => std::str::from_utf8(b).ok().and_then(|s| s.trim().parse::<f64>().ok()),
                 _ => None,
             }),
         }
@@ -1206,6 +842,7 @@ impl PhpValue {
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::String(s) => s.to_string(),
+            Self::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
             Self::EmptyArray => "Array".to_string(),
             Self::Array(_) => "Array".to_string(),
             Self::List(_) => "Arr::list".to_string(),
@@ -1252,6 +889,7 @@ impl PhpValue {
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
             Self::String(s) => s.to_string(),
+            Self::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
             Self::EmptyArray => "Array\n(\n)".to_string(),
             Self::Array(arr) => {
                 let borrowed = arr.borrow();
@@ -1334,12 +972,23 @@ impl PhpValue {
         }
     }
 
-    /// Access raw byte slice if this value is a binary string.
+    /// Access raw byte slice if this value is bytes or string.
     #[inline]
     pub fn raw_bytes(&self) -> Option<&[u8]> {
         match self {
+            Self::Bytes(b) => Some(b.as_ref()),
             Self::String(s) => Some(s.as_bytes()),
             _ => None,
+        }
+    }
+
+    /// Lossy UTF-8 conversion for string/bytes or general php values.
+    #[inline]
+    pub fn to_str_lossy(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::String(s) => std::borrow::Cow::Borrowed(s.as_ref()),
+            Self::Bytes(b) => String::from_utf8_lossy(b.as_ref()),
+            _ => std::borrow::Cow::Owned(self.to_php_string()),
         }
     }
 
@@ -1368,6 +1017,7 @@ impl PhpValue {
                 }
             }
             (Self::String(x), Self::String(y)) => x == y,
+            (Self::Bytes(x), Self::Bytes(y)) => x == y,
             (Self::EmptyArray, Self::EmptyArray) => true,
             (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
                 if Rc::ptr_eq(x, y) {
@@ -1424,8 +1074,8 @@ impl PhpValue {
             RhpType::Bool => matches!(self, Self::Bool(_)),
             RhpType::Int => self.to_i64().is_some() && self.is_integer_value(),
             RhpType::Float => matches!(self, Self::Float(_) | Self::Int(_)),
-            RhpType::String => matches!(self, Self::String(StrValue::Utf8 { .. })),
-            RhpType::Bytes => matches!(self, Self::String(StrValue::Bytes(_))),
+            RhpType::String => matches!(self, Self::String(_)),
+            RhpType::Bytes => matches!(self, Self::Bytes(_)),
             RhpType::Array(inner) => {
                 if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
                     matches!(
@@ -1588,7 +1238,8 @@ impl PhpValue {
     /// Primitives, scalars, and inline SSO strings always return 1.
     pub fn ref_count(&self) -> usize {
         match self {
-            Self::String(s) => s.ref_count(),
+            Self::String(s) => Rc::strong_count(s),
+            Self::Bytes(b) => Rc::strong_count(b),
             Self::Array(rc) | Self::List(rc) => Rc::strong_count(rc),
             Self::Dict(rc) => Rc::strong_count(rc),
             Self::Set(rc) => Rc::strong_count(rc),
@@ -1958,6 +1609,7 @@ impl PartialOrd for PhpValue {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
             (Self::String(a), Self::String(b)) => a.partial_cmp(b),
+            (Self::Bytes(a), Self::Bytes(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
             _ => None,
         }
@@ -1992,6 +1644,10 @@ impl Hash for PhpValue {
             Self::String(s) => {
                 6u8.hash(state);
                 s.hash(state);
+            }
+            Self::Bytes(b) => {
+                16u8.hash(state);
+                b.hash(state);
             }
             Self::EmptyArray => {
                 15u8.hash(state);
@@ -2070,6 +1726,7 @@ impl fmt::Debug for PhpValue {
             Self::Int(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
             Self::String(s) => write!(f, "\"{}\"", s),
+            Self::Bytes(b) => write!(f, "b\"{}\"", String::from_utf8_lossy(b)),
             Self::EmptyArray => write!(f, "EmptyArray"),
             Self::Array(arr) => write!(f, "Array({:?})", arr.borrow()),
             Self::List(list) => write!(f, "Arr::list({:?})", list.borrow()),
@@ -2115,6 +1772,48 @@ impl From<f64> for PhpValue {
     #[inline]
     fn from(fl: f64) -> Self {
         PhpValue::float(fl)
+    }
+}
+
+impl From<&str> for PhpValue {
+    #[inline]
+    fn from(s: &str) -> Self {
+        PhpValue::string(s)
+    }
+}
+
+impl From<String> for PhpValue {
+    #[inline]
+    fn from(s: String) -> Self {
+        PhpValue::string(s)
+    }
+}
+
+impl From<Rc<str>> for PhpValue {
+    #[inline]
+    fn from(s: Rc<str>) -> Self {
+        PhpValue::String(s)
+    }
+}
+
+impl From<Vec<u8>> for PhpValue {
+    #[inline]
+    fn from(b: Vec<u8>) -> Self {
+        PhpValue::bytes(b)
+    }
+}
+
+impl From<&[u8]> for PhpValue {
+    #[inline]
+    fn from(b: &[u8]) -> Self {
+        PhpValue::bytes(b)
+    }
+}
+
+impl From<Rc<[u8]>> for PhpValue {
+    #[inline]
+    fn from(b: Rc<[u8]>) -> Self {
+        PhpValue::Bytes(b)
     }
 }
 

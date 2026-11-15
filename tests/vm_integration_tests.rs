@@ -479,7 +479,7 @@ fn test_unhandled_match_error_and_division_by_zero_diagnostics() {
 
 #[test]
 fn test_bun_inspired_improvements_i64_f32_sso_and_shapes() {
-    use rhp::vm::value::{RhpString, VmObject};
+    use rhp::vm::value::VmObject;
 
     // 1. Verify i32 and f32 default runtime values and operations
     let source = r#"
@@ -496,15 +496,16 @@ fn test_bun_inspired_improvements_i64_f32_sso_and_shapes() {
     assert_eq!(vm.get_main_variable("$divInt"), Some(&PhpValue::Int(4_i64)));
     assert_eq!(vm.get_main_variable("$addFloat"), Some(&PhpValue::Float(45.5_f64)));
 
-    // 2. Verify RhpString Utf8 behavior
-    let short_s = RhpString::new("small_string");
+    // 2. Verify PhpValue String and Bytes behavior
+    let short_s = PhpValue::string("small_string");
+    assert!(short_s.is_string());
     assert!(short_s.is_utf8());
-    assert!(short_s.is_ascii());
-    assert_eq!(short_s.as_str(), "small_string");
+    assert_eq!(short_s.to_php_string(), "small_string");
 
-    let long_s = RhpString::new("this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
-    assert!(long_s.is_utf8());
-    assert_eq!(long_s.as_str(), "this_is_a_very_long_string_that_exceeds_twenty_three_bytes");
+    let bytes_val = PhpValue::bytes(b"byte_payload");
+    assert!(bytes_val.is_bytes());
+    assert!(!bytes_val.is_string());
+    assert_eq!(bytes_val.raw_bytes().unwrap(), b"byte_payload");
 
     // 3. Verify Shape-based slot indexing on VmObject
     let mut obj = VmObject::new("User");
@@ -524,7 +525,7 @@ fn test_bun_inspired_improvements_i64_f32_sso_and_shapes() {
 
 #[test]
 fn test_dynamic_value_enum_and_copy_on_write_semantics() {
-    use rhp::vm::value::{PhpValue, RhpString};
+    use rhp::vm::value::PhpValue;
 
     // 1. Core PhpValue enum representation & Ref-counting inspection
     let scalar_int = PhpValue::Int(42);
@@ -626,32 +627,22 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
         _ => panic!("Expected objects"),
     }
 
-    // 6. String COW and In-place Mutation
-    let mut s = RhpString::new("hello");
-    assert!(s.is_utf8());
+    // 6. String and Bytes Reference Counting
+    let s = PhpValue::string("hello world");
     assert_eq!(s.ref_count(), 1);
-
-    // In-place COW push_str
-    s.push_str(" world");
-    assert!(s.is_utf8());
-    assert_eq!(s.as_str(), "hello world");
-
-    // Exceeding SSO capacity promotes to Heap with COW
-    s.push_str(" with a very long string exceeding 23 bytes");
-    assert!(s.is_heap());
-    assert_eq!(s.ref_count(), 1);
-
-    // Heap string sharing & COW modification
-    let mut s_shared = s.clone();
+    let s_shared = s.clone();
     assert_eq!(s.ref_count(), 2);
     assert!(s.is_shared());
-
-    s_shared.push_str(" - mutated");
-    // After write, s_shared detached via COW
-    assert_eq!(s_shared.ref_count(), 1);
+    drop(s_shared);
     assert_eq!(s.ref_count(), 1);
-    assert!(s_shared.as_str().ends_with("- mutated"));
-    assert!(!s.as_str().ends_with("- mutated"));
+
+    let b = PhpValue::bytes(b"hello bytes");
+    assert_eq!(b.ref_count(), 1);
+    let b_shared = b.clone();
+    assert_eq!(b.ref_count(), 2);
+    assert_eq!(b.raw_bytes().unwrap(), b"hello bytes");
+    drop(b_shared);
+    assert_eq!(b.ref_count(), 1);
 
     // 7. VM string index mutation with COW
     let source_str_idx = r#"

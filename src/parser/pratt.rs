@@ -1221,12 +1221,13 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            Token::TypeInt | Token::TypeString | Token::TypeFloat | Token::TypeBool
+            Token::TypeInt | Token::TypeString | Token::TypeBytes | Token::TypeFloat | Token::TypeBool
                 if self.check(&Token::OpenParen) =>
             {
                 let kind = match spanned.token {
                     Token::TypeInt => CastType::Int,
                     Token::TypeString => CastType::String,
+                    Token::TypeBytes => CastType::Bytes,
                     Token::TypeFloat => CastType::Float,
                     Token::TypeBool => CastType::Bool,
                     _ => unreachable!(),

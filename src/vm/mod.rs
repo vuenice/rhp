@@ -350,6 +350,11 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                 CastType::Int => Ok(PhpValue::Int(v.to_i64().unwrap_or(0))),
                 CastType::Float => Ok(PhpValue::float(v.to_f64().unwrap_or(0.0))),
                 CastType::String => Ok(PhpValue::string(v.to_php_string())),
+                CastType::Bytes => match v {
+                    PhpValue::Bytes(b) => Ok(PhpValue::Bytes(b)),
+                    PhpValue::String(s) => Ok(PhpValue::bytes(s.as_bytes())),
+                    other => Ok(PhpValue::bytes(other.to_php_string().into_bytes())),
+                },
                 CastType::Bool => Ok(PhpValue::Bool(v.is_truthy())),
                 _ => Ok(v),
             }
@@ -377,6 +382,24 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                             return Ok(PhpValue::Bool(v.is_truthy()));
                         }
                         return Ok(PhpValue::Bool(false));
+                    }
+                    "string" | "String" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return Ok(PhpValue::string(v.to_php_string()));
+                        }
+                        return Ok(PhpValue::string(""));
+                    }
+                    "byte" | "Byte" | "bytes" | "Bytes" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return match v {
+                                PhpValue::Bytes(b) => Ok(PhpValue::Bytes(b)),
+                                PhpValue::String(s) => Ok(PhpValue::bytes(s.as_bytes())),
+                                other => Ok(PhpValue::bytes(other.to_php_string().into_bytes())),
+                            };
+                        }
+                        return Ok(PhpValue::bytes(Vec::new()));
                     }
                     _ => {}
                 }

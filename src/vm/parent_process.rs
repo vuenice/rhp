@@ -56,10 +56,8 @@ impl FrozenValue {
             PhpValue::Bool(b) => FrozenValue::Bool(*b),
             PhpValue::Int(n) => FrozenValue::Int(*n),
             PhpValue::Float(f) => FrozenValue::Float(*f),
-            PhpValue::String(s) => match s {
-                crate::vm::value::StrValue::Utf8 { s, .. } => FrozenValue::String(s.to_string()),
-                crate::vm::value::StrValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
-            },
+            PhpValue::String(s) => FrozenValue::String(s.to_string()),
+            PhpValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
             PhpValue::EmptyArray => FrozenValue::EmptyArray,
             PhpValue::Array(items) | PhpValue::List(items) => {
                 let vec = items.borrow().iter().map(Self::from_php_value).collect();
