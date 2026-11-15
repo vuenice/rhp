@@ -8,14 +8,12 @@ use crate::lint::reporter::{Issue, IssueLevel};
 use crate::parser::parse;
 
 /// Automatically fixes parameter orders in function, method, closure, and arrow function definitions
-/// so that all required parameters precede optional parameters (parameters with default values).
-///
-/// Preserves relative order of required parameters, relative order of optional parameters,
-/// and trailing variadic parameter if present.
-pub fn fix_parameter_order(source: &str) -> String {
+/// so that all required parameters precede optional parameters (parameters with default values),
+/// returning the transformed code along with the count of parameter lists modified.
+pub fn fix_parameter_order_with_count(source: &str) -> (String, usize) {
     let program = match parse(source) {
         Ok(p) => p,
-        Err(_) => return source.to_string(),
+        Err(_) => return (source.to_string(), 0),
     };
 
     let mut collector = ParamOrderFixCollector {
@@ -28,13 +26,14 @@ pub fn fix_parameter_order(source: &str) -> String {
     }
 
     if collector.edits.is_empty() {
-        return source.to_string();
+        return (source.to_string(), 0);
     }
 
     // Sort edits by start span descending to replace from back to front
     collector.edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
     collector.edits.dedup_by(|a, b| a.0.start == b.0.start && a.0.end == b.0.end);
 
+    let count = collector.edits.len();
     let mut result = source.to_string();
     for (span, replacement) in collector.edits {
         if span.end <= result.len() && span.start <= span.end {
@@ -42,7 +41,16 @@ pub fn fix_parameter_order(source: &str) -> String {
         }
     }
 
-    result
+    (result, count)
+}
+
+/// Automatically fixes parameter orders in function, method, closure, and arrow function definitions
+/// so that all required parameters precede optional parameters (parameters with default values).
+///
+/// Preserves relative order of required parameters, relative order of optional parameters,
+/// and trailing variadic parameter if present.
+pub fn fix_parameter_order(source: &str) -> String {
+    fix_parameter_order_with_count(source).0
 }
 
 /// Collects issues where a required parameter follows an optional parameter without modifying source.

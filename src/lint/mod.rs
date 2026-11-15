@@ -28,7 +28,10 @@ pub use migrate::{
     upgrade_php_file, upgrade_php_path, upgrade_php_source, MigrateFileResult, MigrateOptions,
     MigrateReport, UpgradeFileResult, UpgradeOptions, UpgradeReport,
 };
-pub use param_order::{check_parameter_order, fix_parameter_order, has_required_after_optional};
+pub use param_order::{
+    check_parameter_order, fix_parameter_order, fix_parameter_order_with_count,
+    has_required_after_optional,
+};
 pub use ref_params::convert_mutated_array_params_to_ref;
 pub use reporter::{Issue, IssueLevel, IssueSpan, LintReport};
 

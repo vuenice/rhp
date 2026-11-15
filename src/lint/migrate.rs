@@ -39,6 +39,7 @@ pub struct MigrateFileResult {
     pub post_replace_count: usize,
     pub error_suppress_count: usize,
     pub var_dump_count: usize,
+    pub byte_param_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -110,6 +111,9 @@ impl MigrateReport {
                     }
                     if res.var_dump_count > 0 {
                         out.push_str(&format!("      ~ {} var_dump / var_export call(s) replaced with dd()\n", res.var_dump_count));
+                    }
+                    if res.byte_param_count > 0 {
+                        out.push_str(&format!("      ~ {} function parameter(s) receiving binary strings updated to 'byte'\n", res.byte_param_count));
                     }
                     if res.dot_concat_count > 0 {
                         out.push_str(&format!("      ~ {} dot concatenation operator(s) replaced with '+'\n", res.dot_concat_count));
@@ -248,6 +252,10 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let (after_lines, added_lines) = add_superglobal_declarations(&current);
     current = after_lines;
 
+    // Step 5: Detect non-UTF-8 strings and update function parameters receiving them to 'byte'
+    let (after_bytes, byte_param_count) = upgrade_binary_string_arguments(&current);
+    current = after_bytes;
+
     let modified = current != source;
 
     MigrateFileResult {
@@ -270,6 +278,7 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         post_replace_count,
         error_suppress_count,
         var_dump_count,
+        byte_param_count,
         original_content: source.to_string(),
         migrated_content: current.clone(),
         upgraded_content: current,
@@ -3988,6 +3997,372 @@ pub fn replace_var_dump_and_export(source: &str) -> (String, usize) {
     }
 
     (result, count)
+}
+
+// =========================================================================
+// Step 5: Detect non-UTF-8 strings and update function parameters to 'byte'
+// =========================================================================
+
+/// Detects non-UTF-8 strings in PHP source code (literals with \x80..\xFF or raw bytes),
+/// determines if they or variables holding them are passed as arguments to functions or methods,
+/// and updates those parameter type hints to `byte`.
+pub fn upgrade_binary_string_arguments(source: &str) -> (String, usize) {
+    let program = match crate::parser::parse(source) {
+        Ok(p) => p,
+        Err(_) => return (source.to_string(), 0),
+    };
+
+    // 1. Identify which variables hold non-UTF-8 strings
+    let mut binary_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+    find_binary_assignments(&program.statements, &mut binary_vars);
+
+    // 2. Map (fn_name, arg_index) -> bool (is_binary)
+    let mut binary_args: std::collections::HashSet<(String, usize)> = std::collections::HashSet::new();
+    find_binary_calls(&program.statements, &binary_vars, &mut binary_args);
+
+    if binary_args.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    // 3. Locate matching function and method definitions and collect edits
+    let mut edits: Vec<TextEdit> = Vec::new();
+    collect_param_type_edits(&program.statements, &binary_args, &mut edits, source);
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    let count = edits.len();
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    edits.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+fn is_expr_binary(expr: &crate::ast::expr::Expr<'_>, binary_vars: &std::collections::HashSet<String>) -> bool {
+    use crate::ast::expr::{ExprKind, Literal};
+    match &expr.kind {
+        ExprKind::Literal(Literal::String { raw, .. }) => {
+            crate::lexer::token::find_invalid_utf8_escape(raw).is_some()
+        }
+        ExprKind::Literal(Literal::Bytes { .. }) => true,
+        ExprKind::Cast { kind: crate::ast::types::CastType::Bytes, .. } => true,
+        ExprKind::Variable(var) => binary_vars.contains(var.name),
+        ExprKind::Call { callee, .. } => {
+            if let ExprKind::Ident(id) = &callee.kind {
+                matches!(id.name, "byte" | "Byte" | "bytes" | "Bytes")
+            } else {
+                false
+            }
+        }
+        ExprKind::MethodCall { method, .. } => {
+            matches!(method.name, "toEncoding" | "slice" | "convert")
+        }
+        ExprKind::StaticCall { target, method, .. } => {
+            if let ExprKind::Ident(target_id) = &target.kind {
+                if target_id.name == "Str" {
+                    matches!(method.name, "bytes" | "toEncoding" | "convertEncoding" | "fromBytes")
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        ExprKind::Grouping(inner) => is_expr_binary(inner, binary_vars),
+        _ => false,
+    }
+}
+
+fn find_binary_assignments(stmts: &[crate::ast::stmt::Stmt<'_>], binary_vars: &mut std::collections::HashSet<String>) {
+    use crate::ast::expr::ExprKind;
+    use crate::ast::stmt::StmtKind;
+
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::VarDecl { var, init: Some(init), .. } => {
+                if is_expr_binary(init, binary_vars) {
+                    binary_vars.insert(var.name.to_string());
+                }
+            }
+            StmtKind::Expr(expr) => {
+                if let ExprKind::Assign { target, value, .. } = &expr.kind {
+                    if let ExprKind::Variable(var) = &target.kind {
+                        if is_expr_binary(value, binary_vars) {
+                            binary_vars.insert(var.name.to_string());
+                        }
+                    }
+                }
+            }
+            StmtKind::Block(inner) | StmtKind::Namespace { body: Some(inner), .. } => {
+                find_binary_assignments(inner, binary_vars);
+            }
+            StmtKind::If { then_branch, elseif_branches, else_branch, .. } => {
+                find_binary_assignments(std::slice::from_ref(then_branch.as_ref()), binary_vars);
+                for elif in elseif_branches {
+                    find_binary_assignments(std::slice::from_ref(&elif.body), binary_vars);
+                }
+                if let Some(eb) = else_branch {
+                    find_binary_assignments(std::slice::from_ref(eb.as_ref()), binary_vars);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::ForIn { body, .. }
+            | StmtKind::Loop { body } => {
+                find_binary_assignments(std::slice::from_ref(body.as_ref()), binary_vars);
+            }
+            StmtKind::FunctionDecl(f) => {
+                if let Some(ref body) = f.body {
+                    find_binary_assignments(body, binary_vars);
+                }
+            }
+            StmtKind::ClassDecl(c) => {
+                for member in &c.members {
+                    if let crate::ast::stmt::ClassMemberKind::Method(m) = &member.kind {
+                        if let Some(ref body) = m.function.body {
+                            find_binary_assignments(body, binary_vars);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn find_binary_calls(
+    stmts: &[crate::ast::stmt::Stmt<'_>],
+    binary_vars: &std::collections::HashSet<String>,
+    binary_args: &mut std::collections::HashSet<(String, usize)>,
+) {
+    use crate::ast::stmt::StmtKind;
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => {
+                inspect_expr_for_calls(expr, binary_vars, binary_args);
+            }
+            StmtKind::VarDecl { init: Some(init), .. } => {
+                inspect_expr_for_calls(init, binary_vars, binary_args);
+            }
+            StmtKind::Return(Some(expr)) => {
+                inspect_expr_for_calls(expr, binary_vars, binary_args);
+            }
+            StmtKind::Echo(exprs) => {
+                for e in exprs {
+                    inspect_expr_for_calls(e, binary_vars, binary_args);
+                }
+            }
+            StmtKind::Block(inner) | StmtKind::Namespace { body: Some(inner), .. } => {
+                find_binary_calls(inner, binary_vars, binary_args);
+            }
+            StmtKind::If { condition, then_branch, elseif_branches, else_branch } => {
+                inspect_expr_for_calls(condition, binary_vars, binary_args);
+                find_binary_calls(std::slice::from_ref(then_branch.as_ref()), binary_vars, binary_args);
+                for elif in elseif_branches {
+                    inspect_expr_for_calls(&elif.condition, binary_vars, binary_args);
+                    find_binary_calls(std::slice::from_ref(&elif.body), binary_vars, binary_args);
+                }
+                if let Some(eb) = else_branch {
+                    find_binary_calls(std::slice::from_ref(eb.as_ref()), binary_vars, binary_args);
+                }
+            }
+            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+                inspect_expr_for_calls(condition, binary_vars, binary_args);
+                find_binary_calls(std::slice::from_ref(body.as_ref()), binary_vars, binary_args);
+            }
+            StmtKind::For { init, condition, update, body } => {
+                for e in init {
+                    inspect_expr_for_calls(e, binary_vars, binary_args);
+                }
+                for e in condition {
+                    inspect_expr_for_calls(e, binary_vars, binary_args);
+                }
+                for e in update {
+                    inspect_expr_for_calls(e, binary_vars, binary_args);
+                }
+                find_binary_calls(std::slice::from_ref(body.as_ref()), binary_vars, binary_args);
+            }
+            StmtKind::Foreach { expr, body, .. } => {
+                inspect_expr_for_calls(expr, binary_vars, binary_args);
+                find_binary_calls(std::slice::from_ref(body.as_ref()), binary_vars, binary_args);
+            }
+            StmtKind::FunctionDecl(f) => {
+                if let Some(ref body) = f.body {
+                    find_binary_calls(body, binary_vars, binary_args);
+                }
+            }
+            StmtKind::ClassDecl(c) => {
+                for member in &c.members {
+                    if let crate::ast::stmt::ClassMemberKind::Method(m) = &member.kind {
+                        if let Some(ref body) = m.function.body {
+                            find_binary_calls(body, binary_vars, binary_args);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn inspect_expr_for_calls(
+    expr: &crate::ast::expr::Expr<'_>,
+    binary_vars: &std::collections::HashSet<String>,
+    binary_args: &mut std::collections::HashSet<(String, usize)>,
+) {
+    use crate::ast::expr::ExprKind;
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Ident(id) = &callee.kind {
+                for (idx, arg) in args.iter().enumerate() {
+                    if is_expr_binary(&arg.value, binary_vars) {
+                        binary_args.insert((id.name.to_string(), idx));
+                    }
+                }
+            }
+            inspect_expr_for_calls(callee, binary_vars, binary_args);
+            for arg in args {
+                inspect_expr_for_calls(&arg.value, binary_vars, binary_args);
+            }
+        }
+        ExprKind::MethodCall { object, method, args, .. } => {
+            for (idx, arg) in args.iter().enumerate() {
+                if is_expr_binary(&arg.value, binary_vars) {
+                    binary_args.insert((method.name.to_string(), idx));
+                }
+            }
+            inspect_expr_for_calls(object, binary_vars, binary_args);
+            for arg in args {
+                inspect_expr_for_calls(&arg.value, binary_vars, binary_args);
+            }
+        }
+        ExprKind::StaticCall { method, args, .. } => {
+            for (idx, arg) in args.iter().enumerate() {
+                if is_expr_binary(&arg.value, binary_vars) {
+                    binary_args.insert((method.name.to_string(), idx));
+                }
+            }
+            for arg in args {
+                inspect_expr_for_calls(&arg.value, binary_vars, binary_args);
+            }
+        }
+        ExprKind::Assign { target, value, .. } => {
+            inspect_expr_for_calls(target, binary_vars, binary_args);
+            inspect_expr_for_calls(value, binary_vars, binary_args);
+        }
+        ExprKind::Binary { left, right, .. } => {
+            inspect_expr_for_calls(left, binary_vars, binary_args);
+            inspect_expr_for_calls(right, binary_vars, binary_args);
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Grouping(expr) => {
+            inspect_expr_for_calls(expr, binary_vars, binary_args);
+        }
+        ExprKind::Ternary { condition, if_true, if_false } => {
+            inspect_expr_for_calls(condition, binary_vars, binary_args);
+            if let Some(t) = if_true {
+                inspect_expr_for_calls(t, binary_vars, binary_args);
+            }
+            inspect_expr_for_calls(if_false, binary_vars, binary_args);
+        }
+        ExprKind::Array(elements) => {
+            for el in elements {
+                if let Some(k) = &el.key {
+                    inspect_expr_for_calls(k, binary_vars, binary_args);
+                }
+                inspect_expr_for_calls(&el.value, binary_vars, binary_args);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_param_type_edits(
+    stmts: &[crate::ast::stmt::Stmt<'_>],
+    binary_args: &std::collections::HashSet<(String, usize)>,
+    edits: &mut Vec<TextEdit>,
+    source: &str,
+) {
+    use crate::ast::stmt::StmtKind;
+
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl(func) => {
+                check_fn_params(func.name.name, &func.params, binary_args, edits, source);
+                if let Some(ref body) = func.body {
+                    collect_param_type_edits(body, binary_args, edits, source);
+                }
+            }
+            StmtKind::ClassDecl(class_decl) => {
+                for member in &class_decl.members {
+                    if let crate::ast::stmt::ClassMemberKind::Method(method) = &member.kind {
+                        check_fn_params(method.function.name.name, &method.function.params, binary_args, edits, source);
+                        if let Some(ref body) = method.function.body {
+                            collect_param_type_edits(body, binary_args, edits, source);
+                        }
+                    }
+                }
+            }
+            StmtKind::Block(inner) | StmtKind::Namespace { body: Some(inner), .. } => {
+                collect_param_type_edits(inner, binary_args, edits, source);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_fn_params(
+    fn_name: &str,
+    params: &[crate::ast::stmt::Param<'_>],
+    binary_args: &std::collections::HashSet<(String, usize)>,
+    edits: &mut Vec<TextEdit>,
+    source: &str,
+) {
+    for (idx, param) in params.iter().enumerate() {
+        if binary_args.contains(&(fn_name.to_string(), idx)) {
+            // Check if parameter is already typed or untyped
+            if let Some(ref hint) = param.type_hint {
+                // If it's already "byte" or "bytes", nothing to change
+                let raw_hint = &source[hint.span.start..hint.span.end];
+                if raw_hint.trim() != "byte" {
+                    edits.push(TextEdit {
+                        start: hint.span.start,
+                        end: hint.span.end,
+                        replacement: "byte".to_string(),
+                    });
+                }
+            } else {
+                // Untyped parameter: insert "byte " before param name (or ampersand if reference)
+                let insert_pos = if param.is_reference {
+                    // Find '&' before param.name.span.start
+                    let bytes = source.as_bytes();
+                    let mut p = param.name.span.start;
+                    while p > param.span.start && bytes[p - 1] != b'&' {
+                        p -= 1;
+                    }
+                    if p > param.span.start && bytes[p - 1] == b'&' {
+                        p - 1
+                    } else {
+                        param.name.span.start
+                    }
+                } else {
+                    param.name.span.start
+                };
+                edits.push(TextEdit {
+                    start: insert_pos,
+                    end: insert_pos,
+                    replacement: "byte ".to_string(),
+                });
+            }
+        }
+    }
 }
 
 

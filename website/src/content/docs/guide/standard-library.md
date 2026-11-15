@@ -857,9 +857,9 @@ $csv = $nums->toCsv(); // "1,2,3"
 
 ---
 
-## Str Facade & Binary-Safe String Architecture
+## Str Facade, String & Byte Architecture
 
-In RHP, strings are fundamentally **binary-safe byte buffers** (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization (SSO) and larger buffers via `Arc<str>` / `Arc<[u8]>`). This matches the Zend Engine's binary safety while maintaining Rust's memory safety guarantees.
+In RHP, text strings (`string`, stored as `Rc<str>`) and raw byte payloads (`byte`, stored as `Rc<[u8]>`) are separate, first-class types. This eliminates internal string-representation ambiguity while delivering clean native performance.
 
 ### 1. String Manipulation via Fluent Arrow Syntax (`$str->...`)
 
@@ -902,8 +902,9 @@ string $sub     = $title->trim()->substr(0, 5); // "Hello"
 
 ### 2. Static Factory & Encoding Methods (`Str::`)
 
-The `Str` facade class is reserved for **factory methods, non-instance utilities, and character encoding operations** that generate new strings from scratch:
+The `Str` facade class is reserved for **factory methods, non-instance utilities, and character encoding operations** that generate new strings or bytes:
 
+```php
 // 1. Constructing Strings with Str::from()
 string $s1 = Str::from('hello'); // "hello"
 string $s2 = Str::from(123);     // "123"
@@ -918,13 +919,13 @@ string $token = Str::random(32);
 // 3. Joining List Elements into a String
 string $csv = Str::join(", ", ["alpha", "beta", "gamma"]);
 
-// 4. Constructing from Raw Byte Arrays
-string $raw = Str::fromBytes([72, 101, 108, 108, 111]); // "Hello"
+// 4. Constructing from Raw Byte Arrays / Encodings
+byte $rawBytes = Str::fromBytes([72, 101, 108, 108, 111]); // "Hello" bytes
+byte $rawJis   = Str::toEncoding($greeting, 'Shift-JIS');
 
 // 5. Character Encoding & Legacy Multi-Byte Conversion (Shift-JIS, EUC-JP)
-string $jisText = Str::fromEncoding($rawBytes, 'Shift-JIS');
+string $jisText  = Str::fromEncoding($rawBytes, 'Shift-JIS');
 string $safeUtf8 = Str::utf8($userInput);
-string $rawJis = Str::toEncoding($greeting, 'Shift-JIS');
 
 // 6. Explicit Loose String Coercion Comparison
 bool $match = Str::compare("42", 42); // true

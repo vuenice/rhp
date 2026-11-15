@@ -50,6 +50,22 @@ $dict = Arr::dict(['name' => 'Alice']);
 }
 
 #[test]
+fn test_autotype_bytes_and_string_literals() {
+    let unformatted = r#"
+$utf8 = "Hello world";
+$b1 = b"abc";
+$b2 = byte("xyz");
+$b3 = Str::toEncoding($utf8, "Shift-JIS");
+"#;
+
+    let typed = add_variable_types(unformatted);
+    assert!(typed.contains("string $utf8 = \"Hello world\";"), "Got: {}", typed);
+    assert!(typed.contains("byte $b1 = b\"abc\";"), "Got: {}", typed);
+    assert!(typed.contains("byte $b2 = byte(\"xyz\");"), "Got: {}", typed);
+    assert!(typed.contains("byte $b3 = Str::toEncoding($utf8, \"Shift-JIS\");"), "Got: {}", typed);
+}
+
+#[test]
 fn test_autotype_recognizes_list_dict_hashmap_from_array_literals() {
     // Recognize list, dict, or hashMap if array is defined at declaration time and not empty
     let code = r#"

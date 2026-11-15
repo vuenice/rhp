@@ -832,8 +832,15 @@ pub fn infer_expression_type_name(
     // 1. Direct AST Pattern Matching
     match &expr.kind {
         ExprKind::Literal(lit) => match lit {
-            Literal::String { .. } | Literal::InterpolatedString { .. } => Some("string".to_string()),
-            Literal::Bytes { .. } => Some("bytes".to_string()),
+            Literal::String { raw, .. } => {
+                if crate::lexer::token::find_invalid_utf8_escape(raw).is_some() {
+                    Some("byte".to_string())
+                } else {
+                    Some("string".to_string())
+                }
+            }
+            Literal::InterpolatedString { .. } => Some("string".to_string()),
+            Literal::Bytes { .. } => Some("byte".to_string()),
             Literal::Int { .. } => Some("int".to_string()),
             Literal::Float { .. } => Some("float".to_string()),
             Literal::Bool(_) => Some("bool".to_string()),
@@ -883,6 +890,7 @@ pub fn infer_expression_type_name(
                         | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
                         | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some("int".to_string()),
                         "find" | "indexOf" => Some("?int".to_string()),
+                        "bytes" | "toEncoding" | "convertEncoding" | "fromBytes" => Some("byte".to_string()),
                         _ => Some("string".to_string()),
                     },
                     "Regex" => match method.name {
@@ -953,6 +961,27 @@ pub fn infer_expression_type_name(
             }
         }
 
+        ExprKind::Call { callee, .. } => {
+            if let ExprKind::Ident(ident) = &callee.kind {
+                match ident.name {
+                    "byte" | "Byte" | "bytes" | "Bytes" => Some("byte".to_string()),
+                    "string" | "String" => Some("string".to_string()),
+                    "int" | "Int" | "integer" | "Integer" => Some("int".to_string()),
+                    "float" | "Float" | "double" | "Double" => Some("float".to_string()),
+                    "bool" | "Bool" | "boolean" | "Boolean" => Some("bool".to_string()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ExprKind::MethodCall { method, .. } => match method.name {
+            "toEncoding" | "slice" | "convert" => Some("byte".to_string()),
+            "decode" => Some("string".to_string()),
+            _ => None,
+        },
+
         ExprKind::Binary { op, left, right } => match op {
             BinaryOp::Concat => Some("string".to_string()),
             BinaryOp::Eq
@@ -1006,7 +1035,7 @@ pub fn infer_expression_type_name(
             CastType::Int => Some("int".to_string()),
             CastType::Float => Some("float".to_string()),
             CastType::String => Some("string".to_string()),
-            CastType::Bytes => Some("bytes".to_string()),
+            CastType::Bytes => Some("byte".to_string()),
             CastType::Bool => Some("bool".to_string()),
             CastType::Array => Some("array".to_string()),
             CastType::Object => Some("object".to_string()),
@@ -1052,6 +1081,7 @@ fn rhp_type_to_syntax_name(ty: &RhpType) -> Option<String> {
         RhpType::Int => Some("int".to_string()),
         RhpType::Float => Some("float".to_string()),
         RhpType::String => Some("string".to_string()),
+        RhpType::Bytes => Some("byte".to_string()),
         RhpType::Bool => Some("bool".to_string()),
         RhpType::Array(_) => Some("array".to_string()),
         RhpType::Collection(CollectionSubtype::List(_)) => Some("list".to_string()),

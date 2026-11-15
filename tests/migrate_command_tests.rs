@@ -2173,3 +2173,36 @@ fn test_request_query_and_body_return_string_type() {
     }
 }
 
+#[test]
+fn test_migrate_binary_strings_updates_function_arguments() {
+    let input = concat!(
+        "<?php\n",
+        "function handleRawPayload($payload, string $name) {\n",
+        "    return Str::byteLength($payload);\n",
+        "}\n",
+        "class ImageProcessor {\n",
+        "    public function process($header, $tag) {\n",
+        "        return true;\n",
+        "    }\n",
+        "}\n",
+        "$data = \"\\x89PNG\\r\\n\\x1a\\n\";\n",
+        "handleRawPayload($data, \"avatar.png\");\n",
+        "$proc = new ImageProcessor();\n",
+        "$proc->process(\"\\xFF\\xD8\\xFF\\xE0\", \"jpeg\");\n"
+    );
+
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert!(res.byte_param_count >= 2, "Expected at least 2 byte params updated, got: {}", res.byte_param_count);
+    assert!(
+        res.migrated_content.contains("function handleRawPayload(byte $payload, string $name)"),
+        "Expected byte $payload in handleRawPayload, got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        res.migrated_content.contains("public function process(byte $header, $tag)"),
+        "Expected byte $header in process, got:\n{}",
+        res.migrated_content
+    );
+}
+
