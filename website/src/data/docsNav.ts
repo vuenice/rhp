@@ -58,6 +58,7 @@ export const docsNavigation: DocNavSection[] = [
     title: "Tooling",
     items: [
       item("Package Manager", "tooling/package-manager"),
+      item("Migrate", "tooling/migrate"),
       item("Auto-Formatter", "tooling/formatter"),
       item("Linter & Static Typing", "tooling/linter"),
       item("Editor Setup & LSP", "tooling/editor-setup"),

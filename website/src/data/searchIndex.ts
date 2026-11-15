@@ -164,6 +164,13 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["packages", "composer", "cargo", "dependencies", "modules"]
   },
   {
+    title: "Migrate",
+    section: "Tooling",
+    description: "Automated migration from legacy PHP to modern RHP: tag stripping, functional casts, list() modernization, cURL to Http facade, parameter ordering, and named argument reordering.",
+    url: "/docs/tooling/migrate",
+    keywords: ["migrate", "migration", "php to rhp", "php migration", "named arguments", "argument order", "parameter order", "curl modernization", "http facade", "list destructuring", "superglobals", "error reporting", "ini_set", "declare", "casts", "tags"]
+  },
+  {
     title: "Auto-Formatter",
     section: "Tooling",
     description: "AST-guided code formatting, 4-space indent rule, semicolon statement splitting, parameter spacing, and brace normalization.",

@@ -1,8 +1,12 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
 use regex::Regex;
 use serde::Serialize;
+
+use crate::lexer::facade::LEGACY_PHP_FUNCTIONS;
+use crate::lint::param_order::fix_parameter_order_with_count;
 
 /// Options for the migrate command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +44,8 @@ pub struct MigrateFileResult {
     pub error_suppress_count: usize,
     pub var_dump_count: usize,
     pub byte_param_count: usize,
+    pub named_arg_count: usize,
+    pub param_order_count: usize,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -115,6 +121,12 @@ impl MigrateReport {
                     if res.byte_param_count > 0 {
                         out.push_str(&format!("      ~ {} function parameter(s) receiving binary strings updated to 'byte'\n", res.byte_param_count));
                     }
+                    if res.named_arg_count > 0 {
+                        out.push_str(&format!("      ~ {} named argument call(s) converted to positional in proper order\n", res.named_arg_count));
+                    }
+                    if res.param_order_count > 0 {
+                        out.push_str(&format!("      ~ {} function parameter order(s) fixed (required before optional)\n", res.param_order_count));
+                    }
                     if res.dot_concat_count > 0 {
                         out.push_str(&format!("      ~ {} dot concatenation operator(s) replaced with '+'\n", res.dot_concat_count));
                     }
@@ -155,6 +167,15 @@ pub use migrate_path as upgrade_php_path;
 
 /// Migrate a source string in memory.
 pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
+    migrate_source_with_context(source, file_name, &HashMap::new())
+}
+
+/// Migrate a source string in memory with additional project-wide function signatures.
+pub fn migrate_source_with_context(
+    source: &str,
+    file_name: &str,
+    extra_signatures: &HashMap<String, Vec<String>>,
+) -> MigrateFileResult {
     let mut current = source.to_string();
     let mut cookie_set_count = 0;
     let mut global_replace_count = 0;
@@ -171,6 +192,8 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let mut post_replace_count = 0;
     let mut error_suppress_count = 0;
     let mut var_dump_count = 0;
+    let mut named_arg_count = 0;
+    let mut param_order_count = 0;
 
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
@@ -256,6 +279,16 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
     let (after_bytes, byte_param_count) = upgrade_binary_string_arguments(&current);
     current = after_bytes;
 
+    // Step 6: Convert named arguments to positional arguments in proper parameter order and strip argument names
+    let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
+    named_arg_count += n_count;
+    current = after_named;
+
+    // Step 7: Automatically fix function parameter orders in declarations (required before optional)
+    let (after_params, p_count) = fix_parameter_order_with_count(&current);
+    param_order_count += p_count;
+    current = after_params;
+
     let modified = current != source;
 
     MigrateFileResult {
@@ -279,23 +312,34 @@ pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
         error_suppress_count,
         var_dump_count,
         byte_param_count,
+        named_arg_count,
+        param_order_count,
         original_content: source.to_string(),
         migrated_content: current.clone(),
         upgraded_content: current,
     }
 }
 
-/// Migrate a single file on disk.
-pub fn migrate_file(path: &Path, options: MigrateOptions) -> io::Result<MigrateFileResult> {
+/// Migrate a single file on disk with additional known function signatures.
+pub fn migrate_file_with_signatures(
+    path: &Path,
+    options: MigrateOptions,
+    signatures: &HashMap<String, Vec<String>>,
+) -> io::Result<MigrateFileResult> {
     let source = fs::read_to_string(path)?;
     let file_path = path.display().to_string();
-    let result = migrate_source(&source, &file_path);
+    let result = migrate_source_with_context(&source, &file_path, signatures);
 
     if result.modified && options.fix {
         fs::write(path, &result.migrated_content)?;
     }
 
     Ok(result)
+}
+
+/// Migrate a single file on disk.
+pub fn migrate_file(path: &Path, options: MigrateOptions) -> io::Result<MigrateFileResult> {
+    migrate_file_with_signatures(path, options, &HashMap::new())
 }
 
 /// Migrate a path (either a single file or a directory recursively).
@@ -313,13 +357,20 @@ pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<Migrat
     }
 
     if target.is_dir() {
-        migrate_directory_recursive(target, options, &mut report)?;
+        let mut signatures = HashMap::new();
+        let _ = collect_signatures_recursive(target, &mut signatures);
+        migrate_directory_recursive(target, options, &signatures, &mut report)?;
     }
 
     Ok(report)
 }
 
-fn migrate_directory_recursive(dir: &Path, options: MigrateOptions, report: &mut MigrateReport) -> io::Result<()> {
+fn migrate_directory_recursive(
+    dir: &Path,
+    options: MigrateOptions,
+    signatures: &HashMap<String, Vec<String>>,
+    report: &mut MigrateReport,
+) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
@@ -333,9 +384,9 @@ fn migrate_directory_recursive(dir: &Path, options: MigrateOptions, report: &mut
             if name == "target" || name == ".git" || name == "vendor" || name == "node_modules" {
                 continue;
             }
-            migrate_directory_recursive(&path, options, report)?;
+            migrate_directory_recursive(&path, options, signatures, report)?;
         } else if is_php_or_rhp_file(&path) {
-            let res = migrate_file(&path, options)?;
+            let res = migrate_file_with_signatures(&path, options, signatures)?;
             report.files_scanned += 1;
             if res.modified {
                 report.files_modified += 1;
@@ -4020,13 +4071,9 @@ pub fn upgrade_binary_string_arguments(source: &str) -> (String, usize) {
     let mut binary_args: std::collections::HashSet<(String, usize)> = std::collections::HashSet::new();
     find_binary_calls(&program.statements, &binary_vars, &mut binary_args);
 
-    if binary_args.is_empty() {
-        return (source.to_string(), 0);
-    }
-
     // 3. Locate matching function and method definitions and collect edits
     let mut edits: Vec<TextEdit> = Vec::new();
-    collect_param_type_edits(&program.statements, &binary_args, &mut edits, source);
+    collect_param_type_edits(&program.statements, &binary_args, &binary_vars, &mut edits, source);
 
     if edits.is_empty() {
         return (source.to_string(), 0);
@@ -4287,6 +4334,7 @@ fn inspect_expr_for_calls(
 fn collect_param_type_edits(
     stmts: &[crate::ast::stmt::Stmt<'_>],
     binary_args: &std::collections::HashSet<(String, usize)>,
+    binary_vars: &std::collections::HashSet<String>,
     edits: &mut Vec<TextEdit>,
     source: &str,
 ) {
@@ -4295,26 +4343,99 @@ fn collect_param_type_edits(
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::FunctionDecl(func) => {
-                check_fn_params(func.name.name, &func.params, binary_args, edits, source);
+                check_fn_params(func.name.name, &func.params, binary_args, binary_vars, edits, source);
                 if let Some(ref body) = func.body {
-                    collect_param_type_edits(body, binary_args, edits, source);
+                    collect_param_type_edits(body, binary_args, binary_vars, edits, source);
                 }
             }
             StmtKind::ClassDecl(class_decl) => {
                 for member in &class_decl.members {
                     if let crate::ast::stmt::ClassMemberKind::Method(method) = &member.kind {
-                        check_fn_params(method.function.name.name, &method.function.params, binary_args, edits, source);
+                        check_fn_params(method.function.name.name, &method.function.params, binary_args, binary_vars, edits, source);
                         if let Some(ref body) = method.function.body {
-                            collect_param_type_edits(body, binary_args, edits, source);
+                            collect_param_type_edits(body, binary_args, binary_vars, edits, source);
                         }
                     }
                 }
             }
             StmtKind::Block(inner) | StmtKind::Namespace { body: Some(inner), .. } => {
-                collect_param_type_edits(inner, binary_args, edits, source);
+                collect_param_type_edits(inner, binary_args, binary_vars, edits, source);
+            }
+            StmtKind::If { then_branch, elseif_branches, else_branch, .. } => {
+                collect_param_type_edits(std::slice::from_ref(then_branch.as_ref()), binary_args, binary_vars, edits, source);
+                for elif in elseif_branches {
+                    collect_param_type_edits(std::slice::from_ref(&elif.body), binary_args, binary_vars, edits, source);
+                }
+                if let Some(eb) = else_branch {
+                    collect_param_type_edits(std::slice::from_ref(eb.as_ref()), binary_args, binary_vars, edits, source);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::ForIn { body, .. }
+            | StmtKind::Loop { body } => {
+                collect_param_type_edits(std::slice::from_ref(body.as_ref()), binary_args, binary_vars, edits, source);
+            }
+            StmtKind::Expr(expr) | StmtKind::VarDecl { init: Some(expr), .. } | StmtKind::Return(Some(expr)) => {
+                inspect_expr_for_param_edits(expr, binary_args, binary_vars, edits, source);
             }
             _ => {}
         }
+    }
+}
+
+fn inspect_expr_for_param_edits(
+    expr: &crate::ast::expr::Expr<'_>,
+    binary_args: &std::collections::HashSet<(String, usize)>,
+    binary_vars: &std::collections::HashSet<String>,
+    edits: &mut Vec<TextEdit>,
+    source: &str,
+) {
+    use crate::ast::expr::ExprKind;
+    match &expr.kind {
+        ExprKind::Closure { params, body, .. } => {
+            check_fn_params("", params, binary_args, binary_vars, edits, source);
+            collect_param_type_edits(body, binary_args, binary_vars, edits, source);
+        }
+        ExprKind::ArrowFunction { params, body, .. } => {
+            check_fn_params("", params, binary_args, binary_vars, edits, source);
+            inspect_expr_for_param_edits(body, binary_args, binary_vars, edits, source);
+        }
+        ExprKind::Call { callee, args } => {
+            inspect_expr_for_param_edits(callee, binary_args, binary_vars, edits, source);
+            for arg in args {
+                inspect_expr_for_param_edits(&arg.value, binary_args, binary_vars, edits, source);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            inspect_expr_for_param_edits(object, binary_args, binary_vars, edits, source);
+            for arg in args {
+                inspect_expr_for_param_edits(&arg.value, binary_args, binary_vars, edits, source);
+            }
+        }
+        ExprKind::StaticCall { args, .. } => {
+            for arg in args {
+                inspect_expr_for_param_edits(&arg.value, binary_args, binary_vars, edits, source);
+            }
+        }
+        ExprKind::Assign { target, value, .. } => {
+            inspect_expr_for_param_edits(target, binary_args, binary_vars, edits, source);
+            inspect_expr_for_param_edits(value, binary_args, binary_vars, edits, source);
+        }
+        ExprKind::Array(elems) => {
+            for elem in elems {
+                if let Some(ref k) = elem.key {
+                    inspect_expr_for_param_edits(k, binary_args, binary_vars, edits, source);
+                }
+                inspect_expr_for_param_edits(&elem.value, binary_args, binary_vars, edits, source);
+            }
+        }
+        ExprKind::Grouping(inner) => {
+            inspect_expr_for_param_edits(inner, binary_args, binary_vars, edits, source);
+        }
+        _ => {}
     }
 }
 
@@ -4322,11 +4443,19 @@ fn check_fn_params(
     fn_name: &str,
     params: &[crate::ast::stmt::Param<'_>],
     binary_args: &std::collections::HashSet<(String, usize)>,
+    binary_vars: &std::collections::HashSet<String>,
     edits: &mut Vec<TextEdit>,
     source: &str,
 ) {
     for (idx, param) in params.iter().enumerate() {
-        if binary_args.contains(&(fn_name.to_string(), idx)) {
+        let is_binary_call_arg = !fn_name.is_empty() && binary_args.contains(&(fn_name.to_string(), idx));
+        let is_binary_default = param.default_value.as_ref().map_or(false, |def| is_expr_binary(def, binary_vars));
+        let is_binary_type_hint = param.type_hint.as_ref().map_or(false, |hint| {
+            let raw = source[hint.span.start..hint.span.end].trim();
+            raw == "binary" || raw == "bytes"
+        });
+
+        if is_binary_call_arg || is_binary_default || is_binary_type_hint {
             // Check if parameter is already typed or untyped
             if let Some(ref hint) = param.type_hint {
                 // If it's already "byte" or "bytes", nothing to change
@@ -4362,6 +4491,729 @@ fn check_fn_params(
                 });
             }
         }
+    }
+}
+
+// =========================================================================
+// Step 6: Convert named arguments to positional arguments in proper order
+// =========================================================================
+
+/// Migrate named arguments across a PHP source string.
+/// Converts call sites with named arguments (`fn(b: 2, a: 1)`) to positional arguments
+/// in the proper parameter declaration order (`fn(1, 2)`), stripping argument names
+/// and inserting skipped argument commas (`fn($a, , $c)`) for omitted optional parameters.
+pub fn migrate_named_arguments(source: &str) -> (String, usize) {
+    migrate_named_arguments_with_context(source, &HashMap::new())
+}
+
+/// Migrate named arguments across a PHP source string with additional context signatures.
+pub fn migrate_named_arguments_with_context(
+    source: &str,
+    extra_signatures: &HashMap<String, Vec<String>>,
+) -> (String, usize) {
+    let mut current = source.to_string();
+    let mut total_count = 0;
+
+    // Build combined parameter signatures: built-ins + local source definitions + extra context
+    let mut signatures = build_builtin_parameter_map();
+    signatures.extend(extract_function_signatures(source));
+    signatures.extend(extra_signatures.clone());
+
+    let mut iteration = 0;
+    while iteration < 50 {
+        iteration += 1;
+        let mask = build_code_mask(&current);
+        let bytes = current.as_bytes();
+        let n = bytes.len();
+
+        let mut edits: Vec<TextEdit> = Vec::new();
+        let mut i = 0;
+
+        while i < n {
+            if !mask[i] || bytes[i] != b'(' {
+                i += 1;
+                continue;
+            }
+
+            let open_paren = i;
+
+            // Check if this paren is inside an attribute annotation (e.g. #[Route(path: "/api")])
+            if is_inside_attribute_at(&current, &mask, open_paren) {
+                i += 1;
+                continue;
+            }
+
+            // Extract callee name preceding open paren
+            let (full_callee, simple_callee) = match extract_callee_preceding_paren(&current, &mask, open_paren) {
+                Some(c) => c,
+                None => {
+                    i += 1;
+                    continue;
+                }
+            };
+
+            // Find matching closing paren
+            let close_paren = match find_matching_paren(&current, &mask, open_paren) {
+                Some(cp) => cp,
+                None => {
+                    i += 1;
+                    continue;
+                }
+            };
+
+            let args_str = &current[open_paren + 1..close_paren];
+            let raw_args = split_call_args(args_str);
+
+            let mut parsed_args = Vec::new();
+            let mut has_named = false;
+            for arg in &raw_args {
+                let (opt_name, val) = parse_named_arg(arg);
+                if opt_name.is_some() {
+                    has_named = true;
+                }
+                parsed_args.push((opt_name, val));
+            }
+
+            if !has_named {
+                i += 1;
+                continue;
+            }
+
+            // If this call contains nested calls that still have named arguments, skip outer in this pass
+            if has_nested_named_arg_call(args_str) {
+                i += 1;
+                continue;
+            }
+
+            // Find parameter list for this callee
+            let params_opt = signatures
+                .get(&full_callee)
+                .or_else(|| signatures.get(&simple_callee));
+
+            let multiline = args_str.contains('\n');
+            let indent = detect_indent(args_str);
+            let had_trailing_comma = args_str.trim_end().ends_with(',');
+
+            let formatted = if let Some(params) = params_opt {
+                let mut slots: Vec<Option<String>> = vec![None; params.len()];
+                let mut extra_args: Vec<String> = Vec::new();
+
+                for (opt_name, val) in parsed_args {
+                    match opt_name {
+                        Some(name) => {
+                            if let Some(idx) = params.iter().position(|p| p == &name) {
+                                if idx >= slots.len() {
+                                    slots.resize(idx + 1, None);
+                                }
+                                slots[idx] = Some(val);
+                            } else {
+                                extra_args.push(val);
+                            }
+                        }
+                        None => {
+                            let next_free = slots.iter().position(|s| s.is_none()).unwrap_or(slots.len());
+                            if next_free < slots.len() {
+                                slots[next_free] = Some(val);
+                            } else {
+                                slots.push(Some(val));
+                            }
+                        }
+                    }
+                }
+
+                let max_idx = slots.iter().rposition(|s| s.is_some());
+                let mut final_slots = Vec::new();
+                if let Some(max_i) = max_idx {
+                    for j in 0..=max_i {
+                        final_slots.push(slots[j].clone().unwrap_or_default());
+                    }
+                }
+                final_slots.extend(extra_args);
+
+                format_call_args(&final_slots, multiline, &indent, had_trailing_comma)
+            } else {
+                // Unknown function: keep arguments in original order, strip names
+                let mut final_slots = Vec::new();
+                for (_, val) in parsed_args {
+                    final_slots.push(val);
+                }
+                format_call_args(&final_slots, multiline, &indent, had_trailing_comma)
+            };
+
+            edits.push(TextEdit {
+                start: open_paren + 1,
+                end: close_paren,
+                replacement: formatted,
+            });
+
+            i = close_paren + 1;
+        }
+
+        if edits.is_empty() {
+            break;
+        }
+
+        total_count += edits.len();
+        edits.sort_by(|a, b| b.start.cmp(&a.start));
+        for edit in edits {
+            current.replace_range(edit.start..edit.end, &edit.replacement);
+        }
+    }
+
+    (current, total_count)
+}
+
+/// Recursively collect function and method parameter signatures across all PHP/RHP files in a directory.
+pub fn collect_signatures_recursive(
+    dir: &Path,
+    signatures: &mut HashMap<String, Vec<String>>,
+) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if path.is_dir() {
+            if name == "target" || name == ".git" || name == "vendor" || name == "node_modules" {
+                continue;
+            }
+            collect_signatures_recursive(&path, signatures)?;
+        } else if is_php_or_rhp_file(&path) {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let file_sigs = extract_function_signatures(&content);
+                signatures.extend(file_sigs);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract function, class method, and constructor parameter signatures from source code.
+/// Ensures parameter lists are normalized with required parameters preceding optional ones.
+pub fn extract_function_signatures(source: &str) -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+
+    let mut i = 0;
+    let mut current_class: Option<String> = None;
+    let mut brace_depth = 0;
+    let mut class_brace_depth: Option<usize> = None;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        if bytes[i] == b'{' {
+            brace_depth += 1;
+            i += 1;
+            continue;
+        } else if bytes[i] == b'}' {
+            if brace_depth > 0 {
+                brace_depth -= 1;
+            }
+            if let Some(target) = class_brace_depth {
+                if brace_depth < target {
+                    current_class = None;
+                    class_brace_depth = None;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Check for class, interface, trait, or enum declaration
+        let is_class_kw = (i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_')
+            && ((source[i..].starts_with("class") && (i + 5 == n || !bytes[i + 5].is_ascii_alphanumeric() && bytes[i + 5] != b'_'))
+                || (source[i..].starts_with("interface") && (i + 9 == n || !bytes[i + 9].is_ascii_alphanumeric() && bytes[i + 9] != b'_'))
+                || (source[i..].starts_with("trait") && (i + 5 == n || !bytes[i + 5].is_ascii_alphanumeric() && bytes[i + 5] != b'_'))
+                || (source[i..].starts_with("enum") && (i + 4 == n || !bytes[i + 4].is_ascii_alphanumeric() && bytes[i + 4] != b'_')));
+
+        if is_class_kw {
+            let kw_len = if source[i..].starts_with("interface") {
+                9
+            } else if source[i..].starts_with("enum") {
+                4
+            } else {
+                5
+            };
+            let mut p = i + kw_len;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            let name_start = p;
+            while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_') {
+                p += 1;
+            }
+            if p > name_start {
+                let name = source[name_start..p].to_string();
+                current_class = Some(name);
+                class_brace_depth = Some(brace_depth + 1);
+            }
+            i = p;
+            continue;
+        }
+
+        // Check for function declaration
+        let is_func_kw = (i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_')
+            && source[i..].starts_with("function")
+            && (i + 8 == n || !bytes[i + 8].is_ascii_alphanumeric() && bytes[i + 8] != b'_');
+
+        if is_func_kw {
+            let mut p = i + 8;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p < n && bytes[p] == b'&' {
+                p += 1;
+                while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                    p += 1;
+                }
+            }
+            let name_start = p;
+            while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_') {
+                p += 1;
+            }
+            let func_name = if p > name_start {
+                source[name_start..p].to_string()
+            } else {
+                String::new()
+            };
+
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' {
+                let open_paren = p;
+                if let Some(close_paren) = find_matching_paren(source, &mask, open_paren) {
+                    let params_str = &source[open_paren + 1..close_paren];
+                    let params = parse_param_definition_names(params_str);
+                    if !func_name.is_empty() {
+                        if let Some(ref cls) = current_class {
+                            if func_name == "__construct" {
+                                map.insert(cls.clone(), params.clone());
+                                map.insert(format!("{}::__construct", cls), params.clone());
+                            }
+                            map.insert(format!("{}::{}", cls, func_name), params.clone());
+                            map.insert(func_name.clone(), params.clone());
+                        } else {
+                            map.insert(func_name.clone(), params.clone());
+                        }
+                    }
+                    i = close_paren + 1;
+                    continue;
+                }
+            }
+            i = p;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    map
+}
+
+/// Build parameter mapping for built-in PHP functions from facade definitions and PHP 8 standard library.
+pub fn build_builtin_parameter_map() -> HashMap<String, Vec<String>> {
+    let mut map = HashMap::new();
+
+    // 1. Populate from LEGACY_PHP_FUNCTIONS
+    for mapping in LEGACY_PHP_FUNCTIONS {
+        let sig = mapping.rhp_signature;
+        if let Some(open) = sig.find('(') {
+            if let Some(close) = sig.rfind(')') {
+                let params_str = &sig[open + 1..close];
+                let params = parse_param_definition_names(params_str);
+                if !params.is_empty() {
+                    map.insert(mapping.php_name.to_string(), params.clone());
+                    map.insert(mapping.rhp_method.to_string(), params.clone());
+                    let full_facade_method = format!("{}::{}", mapping.rhp_facade, mapping.rhp_method);
+                    map.insert(full_facade_method, params);
+                }
+            }
+        }
+    }
+
+    // 2. Comprehensive standard PHP functions with their official PHP 8 parameter names
+    let standard_fns: &[(&str, &[&str])] = &[
+        ("htmlspecialchars", &["string", "flags", "encoding", "double_encode"]),
+        ("setcookie", &["name", "value", "expires_or_options", "path", "domain", "secure", "httponly"]),
+        ("setrawcookie", &["name", "value", "expires_or_options", "path", "domain", "secure", "httponly"]),
+        ("explode", &["separator", "string", "limit"]),
+        ("implode", &["separator", "array"]),
+        ("in_array", &["needle", "haystack", "strict"]),
+        ("array_search", &["needle", "haystack", "strict"]),
+        ("str_contains", &["haystack", "needle"]),
+        ("str_starts_with", &["haystack", "needle"]),
+        ("str_ends_with", &["haystack", "needle"]),
+        ("str_replace", &["search", "replace", "subject", "count"]),
+        ("substr", &["string", "offset", "length"]),
+        ("strlen", &["string"]),
+        ("number_format", &["num", "decimals", "decimal_separator", "thousands_separator"]),
+        ("date", &["format", "timestamp"]),
+        ("round", &["num", "precision", "mode"]),
+        ("preg_match", &["pattern", "subject", "matches", "flags", "offset"]),
+        ("preg_replace", &["pattern", "replacement", "subject", "limit", "count"]),
+        ("json_encode", &["value", "flags", "depth"]),
+        ("json_decode", &["json", "associative", "depth", "flags"]),
+        ("password_hash", &["password", "algo", "options"]),
+        ("password_verify", &["password", "hash"]),
+        ("range", &["start", "end", "step"]),
+        ("array_fill", &["start_index", "count", "value"]),
+        ("array_pad", &["array", "length", "value"]),
+        ("array_chunk", &["array", "length", "preserve_keys"]),
+        ("array_column", &["array", "column_key", "index_key"]),
+        ("array_key_exists", &["key", "array"]),
+        ("array_combine", &["keys", "values"]),
+        ("array_slice", &["array", "offset", "length", "preserve_keys"]),
+        ("array_splice", &["array", "offset", "length", "replacement"]),
+        ("header", &["header", "replace", "response_code"]),
+        ("http_response_code", &["response_code"]),
+        ("file_get_contents", &["filename", "use_include_path", "context", "offset", "length"]),
+        ("file_put_contents", &["filename", "data", "flags", "context"]),
+        ("fopen", &["filename", "mode", "use_include_path", "context"]),
+        ("fclose", &["stream"]),
+        ("fread", &["stream", "length"]),
+        ("fwrite", &["stream", "data", "length"]),
+        ("trim", &["string", "characters"]),
+        ("ltrim", &["string", "characters"]),
+        ("rtrim", &["string", "characters"]),
+        ("microtime", &["as_float"]),
+        ("sleep", &["seconds"]),
+        ("usleep", &["microseconds"]),
+        ("strpos", &["haystack", "needle", "offset"]),
+        ("strrpos", &["haystack", "needle", "offset"]),
+        ("stripos", &["haystack", "needle", "offset"]),
+        ("strripos", &["haystack", "needle", "offset"]),
+        ("str_pad", &["string", "length", "pad_string", "pad_type"]),
+        ("str_repeat", &["string", "times"]),
+        ("str_split", &["string", "length"]),
+        ("count", &["value", "mode"]),
+    ];
+
+    for &(fn_name, params) in standard_fns {
+        map.insert(fn_name.to_string(), params.iter().map(|s| s.to_string()).collect());
+    }
+
+    map
+}
+
+fn parse_param_definition_names(params_str: &str) -> Vec<String> {
+    let chunks = split_call_args(params_str);
+    let mut required = Vec::new();
+    let mut optional = Vec::new();
+    let mut variadic = Vec::new();
+
+    for chunk in chunks {
+        let trimmed = chunk.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Split on '=' to distinguish parameter declaration from default value
+        let decl_part = trimmed.split('=').next().unwrap_or(trimmed);
+        let is_optional = trimmed.contains('=');
+        let is_variadic = decl_part.contains("...");
+
+        // Find '$' followed by identifier
+        if let Some(pos) = decl_part.find('$') {
+            let after_dollar = &decl_part[pos + 1..];
+            let name_end = after_dollar
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(after_dollar.len());
+            let name = &after_dollar[..name_end];
+            if !name.is_empty() {
+                if is_variadic {
+                    variadic.push(name.to_string());
+                } else if is_optional {
+                    optional.push(name.to_string());
+                } else {
+                    required.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    let mut result = required;
+    result.extend(optional);
+    result.extend(variadic);
+    result
+}
+
+fn find_matching_paren(source: &str, mask: &[bool], open_paren: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    if open_paren >= n || bytes[open_paren] != b'(' {
+        return None;
+    }
+
+    let mut depth = 1;
+    let mut i = open_paren + 1;
+    while i < n {
+        if mask[i] {
+            if bytes[i] == b'(' {
+                depth += 1;
+            } else if bytes[i] == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    None
+}
+
+fn is_inside_attribute_at(source: &str, mask: &[bool], open_paren: usize) -> bool {
+    let bytes = source.as_bytes();
+    let mut p = open_paren;
+    let mut bracket_depth = 0;
+
+    while p > 0 {
+        p -= 1;
+        if !mask[p] {
+            continue;
+        }
+        if bytes[p] == b']' {
+            bracket_depth += 1;
+        } else if bytes[p] == b'[' && p > 0 && bytes[p - 1] == b'#' {
+            if bracket_depth == 0 {
+                return true;
+            }
+            bracket_depth -= 1;
+            p -= 1;
+        } else if bytes[p] == b';' || bytes[p] == b'{' || bytes[p] == b'}' {
+            break;
+        }
+    }
+
+    false
+}
+
+fn extract_callee_preceding_paren(source: &str, _mask: &[bool], open_paren: usize) -> Option<(String, String)> {
+    let bytes = source.as_bytes();
+    if open_paren == 0 {
+        return None;
+    }
+
+    let mut p = open_paren;
+    while p > 0 && (bytes[p - 1] == b' ' || bytes[p - 1] == b'\t' || bytes[p - 1] == b'\r' || bytes[p - 1] == b'\n') {
+        p -= 1;
+    }
+    if p == 0 {
+        return None;
+    }
+
+    // Must be identifier char
+    if !bytes[p - 1].is_ascii_alphanumeric() && bytes[p - 1] != b'_' {
+        return None;
+    }
+
+    let id_end = p;
+    while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_' || bytes[p - 1] == b'\\') {
+        p -= 1;
+    }
+    let id_start = p;
+    let raw_ident = &source[id_start..id_end];
+    let simple_name = raw_ident.trim_start_matches('\\').to_string();
+
+    // Check if simple_name is a non-call keyword
+    let non_call_keywords = [
+        "if", "elseif", "while", "for", "foreach", "switch", "match", "catch",
+        "declare", "function", "fn", "return", "echo", "print", "list", "array",
+        "isset", "empty", "unset", "eval", "include", "include_once", "require", "require_once",
+    ];
+    if non_call_keywords.contains(&simple_name.as_str()) {
+        return None;
+    }
+
+    // Check what precedes raw_ident
+    let mut q = id_start;
+    while q > 0 && (bytes[q - 1] == b' ' || bytes[q - 1] == b'\t' || bytes[q - 1] == b'\r' || bytes[q - 1] == b'\n') {
+        q -= 1;
+    }
+
+    // If preceded by 'function', this is a declaration, not a call
+    if q >= 8 && &source[q - 8..q] == "function" && (q == 8 || !bytes[q - 9].is_ascii_alphanumeric() && bytes[q - 9] != b'_') {
+        return None;
+    }
+
+    if q >= 2 && &source[q - 2..q] == "::" {
+        // Class::method
+        let mut c = q - 2;
+        while c > 0 && (bytes[c - 1] == b' ' || bytes[c - 1] == b'\t' || bytes[c - 1] == b'\r' || bytes[c - 1] == b'\n') {
+            c -= 1;
+        }
+        let class_end = c;
+        while c > 0 && (bytes[c - 1].is_ascii_alphanumeric() || bytes[c - 1] == b'_' || bytes[c - 1] == b'\\') {
+            c -= 1;
+        }
+        let class_name = source[c..class_end].trim_start_matches('\\');
+        let full = format!("{}::{}", class_name, simple_name);
+        return Some((full, simple_name));
+    }
+
+    Some((simple_name.clone(), simple_name))
+}
+
+fn split_call_args(args_str: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let bytes = args_str.as_bytes();
+    let n = bytes.len();
+    let mask = build_code_mask(args_str);
+
+    let mut start = 0;
+    let mut paren_depth = 0;
+    let mut bracket_depth = 0;
+    let mut brace_depth = 0;
+
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        match bytes[i] {
+            b'(' => paren_depth += 1,
+            b')' => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+            }
+            b'[' => bracket_depth += 1,
+            b']' => {
+                if bracket_depth > 0 {
+                    bracket_depth -= 1;
+                }
+            }
+            b'{' => brace_depth += 1,
+            b'}' => {
+                if brace_depth > 0 {
+                    brace_depth -= 1;
+                }
+            }
+            b',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                args.push(args_str[start..i].to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if start < n || (start == n && !args.is_empty()) {
+        let remainder = &args_str[start..];
+        if !remainder.trim().is_empty() {
+            args.push(remainder.to_string());
+        }
+    }
+
+    args
+}
+
+fn parse_named_arg(arg_str: &str) -> (Option<String>, String) {
+    let trimmed = arg_str.trim();
+    let bytes = trimmed.as_bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return (None, String::new());
+    }
+
+    if bytes[0].is_ascii_alphabetic() || bytes[0] == b'_' {
+        let mut p = 0;
+        while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_') {
+            p += 1;
+        }
+        let name = &trimmed[0..p];
+        let mut after = p;
+        while after < n && (bytes[after] == b' ' || bytes[after] == b'\t' || bytes[after] == b'\r' || bytes[after] == b'\n') {
+            after += 1;
+        }
+        if after < n && bytes[after] == b':' && (after + 1 == n || bytes[after + 1] != b':') {
+            let val = trimmed[after + 1..].trim();
+            return (Some(name.to_string()), val.to_string());
+        }
+    }
+
+    (None, trimmed.to_string())
+}
+
+fn has_nested_named_arg_call(args_str: &str) -> bool {
+    let mask = build_code_mask(args_str);
+    let bytes = args_str.as_bytes();
+    let n = bytes.len();
+
+    let mut i = 0;
+    while i < n {
+        if mask[i] && bytes[i] == b'(' {
+            if let Some(close) = find_matching_paren(args_str, &mask, i) {
+                let inner = &args_str[i + 1..close];
+                let inner_args = split_call_args(inner);
+                for arg in inner_args {
+                    let (opt_name, _) = parse_named_arg(&arg);
+                    if opt_name.is_some() {
+                        return true;
+                    }
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    false
+}
+
+fn detect_indent(args_str: &str) -> String {
+    for line in args_str.lines().skip(1) {
+        let trimmed = line.trim_start();
+        if !trimmed.is_empty() {
+            let indent_len = line.len() - trimmed.len();
+            return line[..indent_len].to_string();
+        }
+    }
+    "    ".to_string()
+}
+
+fn format_call_args(slots: &[String], multiline: bool, indent: &str, had_trailing_comma: bool) -> String {
+    if slots.is_empty() {
+        return String::new();
+    }
+    if multiline {
+        let mut out = String::new();
+        out.push('\n');
+        for (i, slot) in slots.iter().enumerate() {
+            out.push_str(indent);
+            out.push_str(slot);
+            if i + 1 < slots.len() || had_trailing_comma {
+                out.push(',');
+            }
+            out.push('\n');
+        }
+        out
+    } else {
+        let mut out = String::new();
+        for (i, slot) in slots.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(slot);
+        }
+        out
     }
 }
 
