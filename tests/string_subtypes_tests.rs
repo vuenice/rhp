@@ -218,12 +218,13 @@ fn test_type_hints_string_and_bytes() {
     let res_b = run_source(code_bytes_ok).expect("takeBytes with Bytes should succeed");
     assert_eq!(res_b, PhpValue::Int(6));
 
-    // 4. function bar(bytes $b) rejects Utf8
+    // 4. function bar(bytes $b) rejects string variable
     let code_reject_string = r#"
         function takeBytes(bytes $b): int {
             return $b->len();
         }
-        return takeBytes("foobar");
+        string $s = "foobar";
+        return takeBytes($s);
     "#;
     let err_b = run_source(code_reject_string).expect_err("takeBytes should reject string");
     let err_b_str = format!("{:?}", err_b);
@@ -521,4 +522,98 @@ fn test_file_io_strict_lossy_and_bytes() {
 
     let _ = std::fs::remove_file(file_path);
     let _ = std::fs::remove_file(out_path);
+}
+
+#[test]
+fn test_contextual_target_typing_bytes_and_string() {
+    // 1. Variable type hint `byte` allows normal double quotes without `b` prefix
+    let code_byte_var = r#"
+        byte $header = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        return $header->len();
+    "#;
+    let res = run_source(code_byte_var).expect("byte variable with double quotes should work");
+    assert_eq!(res, PhpValue::Int(37));
+
+    // 2. Binary magic bytes in `byte` variable with normal double quotes
+    let code_magic = r#"
+        byte $magic = "\x89PNG\r\n\x1a\n";
+        return $magic->len();
+    "#;
+    let res = run_source(code_magic).expect("byte variable with binary hex escapes should work");
+    assert_eq!(res, PhpValue::Int(8));
+
+    // 3. Single-quoted literal target-typed to byte
+    let code_single = r#"
+        byte $greeting = 'hello world';
+        return $greeting->len();
+    "#;
+    let res = run_source(code_single).expect("single-quoted byte should work");
+    assert_eq!(res, PhpValue::Int(11));
+
+    // 4. Function parameter target-typed to byte
+    let code_fn_param = r#"
+        function sendPayload(byte $data): int {
+            return $data->len();
+        }
+        return sendPayload("PING \x00\x01\r\n");
+    "#;
+    let res = run_source(code_fn_param).expect("function parameter target-typing should work");
+    assert_eq!(res, PhpValue::Int(9));
+
+    // 5. Explicit functional conversion byte(...)
+    let code_fn_cast = r#"
+        $payload = byte("\x89PNG\r\n");
+        return $payload->len();
+    "#;
+    let res = run_source(code_fn_cast).expect("byte(...) cast should work");
+    assert_eq!(res, PhpValue::Int(6));
+
+    // 6. Explicit functional conversion bytes(...)
+    let code_fn_cast_bytes = r#"
+        $payload = bytes("\x89PNG\r\n");
+        return $payload->len();
+    "#;
+    let res = run_source(code_fn_cast_bytes).expect("bytes(...) cast should work");
+    assert_eq!(res, PhpValue::Int(6));
+
+    // 6b. C-style cast (byte) is rejected with clear guidance
+    let code_c_cast = r#"
+        $payload = (byte) "\x89PNG\r\n";
+    "#;
+    let err = run_source(code_c_cast).expect_err("C-style (byte) cast should be rejected");
+    let err_str = format!("{:?}", err);
+    assert!(err_str.contains("functional conversion 'bytes(...)'"), "got: {}", err_str);
+
+    // 7. Untyped variable with invalid UTF-8 escape raises compile error with hint
+    let code_untyped_err = r#"
+        $s = "\xFF";
+    "#;
+    let err = run_source(code_untyped_err).expect_err("untyped invalid UTF-8 should fail");
+    let err_str = format!("{:?}", err);
+    assert!(err_str.contains("Invalid UTF-8 escape") && err_str.contains("bytes literal"), "got: {}", err_str);
+
+    // 8. Explicit string variable with invalid UTF-8 escape raises compile error
+    let code_string_err = r#"
+        string $s = "foo \x89 bar";
+    "#;
+    let err = run_source(code_string_err).expect_err("string invalid UTF-8 should fail");
+    let err_str = format!("{:?}", err);
+    assert!(err_str.contains("Invalid UTF-8 escape"), "got: {}", err_str);
+
+    // 9. Valid string variable works as expected
+    let code_string_ok = r#"
+        string $s = "Hello \u{1F600} world!";
+        return $s->length();
+    "#;
+    let res = run_source(code_string_ok).expect("valid string should succeed");
+    assert_eq!(res, PhpValue::Int(14)); // 14 characters
+
+    // 10. Slice and byte indexing on byte values
+    let code_slice = r#"
+        byte $data = "\x01\x02\x03\x04\x05";
+        byte $sub = $data->slice(1, 3);
+        return $sub->len();
+    "#;
+    let res = run_source(code_slice).expect("byte slice should succeed");
+    assert_eq!(res, PhpValue::Int(3));
 }

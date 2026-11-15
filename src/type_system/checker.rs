@@ -1990,14 +1990,18 @@ impl TypeChecker {
                 init,
             } => {
                 let current_class = ctx.and_then(|c| c.enclosing_class.as_deref());
+                let declared_ty = if let Some(hint) = type_hint {
+                    Some(self.resolve_type_hint(hint, current_class)?)
+                } else {
+                    None
+                };
                 let init_ty = if let Some(init_expr) = init {
-                    Some(self.infer_expr(init_expr, env, ctx, None)?)
+                    Some(self.infer_expr_with_expected(init_expr, env, ctx, None, declared_ty.as_ref())?)
                 } else {
                     None
                 };
 
-                if let Some(hint) = type_hint {
-                    let declared_ty = self.resolve_type_hint(hint, current_class)?;
+                if let Some(declared_ty) = declared_ty {
                     env.declare_typed(
                         var.name,
                         declared_ty,
@@ -2257,8 +2261,9 @@ impl TypeChecker {
             }
 
             StmtKind::Return(opt_expr) => {
+                let expected_ret = ctx.map(|c| &c.return_type);
                 let expr_ty = if let Some(e) = opt_expr {
-                    Some(self.infer_expr(e, env, ctx, None)?)
+                    Some(self.infer_expr_with_expected(e, env, ctx, None, expected_ret)?)
                 } else {
                     None
                 };
@@ -2423,7 +2428,7 @@ impl TypeChecker {
         for (idx, param) in func.params.iter().enumerate() {
             let param_sig = &sig.params[idx];
             if let Some(ref def_expr) = param.default_value {
-                let def_ty = self.infer_expr(def_expr, &mut body_env, None, None)?;
+                let def_ty = self.infer_expr_with_expected(def_expr, &mut body_env, None, None, Some(&param_sig.rhp_type))?;
                 if !def_ty.is_assignable_to(&param_sig.rhp_type, Some(&self.result.hierarchy)) {
                     return Err(TypeError::new(
                         TypeErrorKind::ParameterDefaultTypeMismatch {
@@ -2505,7 +2510,8 @@ impl TypeChecker {
             match &member.kind {
                 ClassMemberKind::Property(prop) => {
                     if let Some(ref def_expr) = prop.default {
-                        let def_ty = self.infer_expr(def_expr, &mut init_env, None, None)?;
+                        let expected_prop_ty = class_info.properties.get(prop.name.name).map(|p| &p.rhp_type);
+                        let def_ty = self.infer_expr_with_expected(def_expr, &mut init_env, None, None, expected_prop_ty)?;
                         if let Some(prop_info) = class_info.properties.get(prop.name.name) {
                             if !def_ty
                                 .is_assignable_to(&prop_info.rhp_type, Some(&self.result.hierarchy))
@@ -2658,11 +2664,47 @@ impl TypeChecker {
         ctx: Option<&CallableContext>,
         contextual_param_hints: Option<&[RhpType]>,
     ) -> Result<RhpType, TypeError> {
+        self.infer_expr_with_expected(expr, env, ctx, contextual_param_hints, None)
+    }
+
+    fn infer_expr_with_expected(
+        &mut self,
+        expr: &Expr<'_>,
+        env: &mut TypeEnvironment,
+        ctx: Option<&CallableContext>,
+        contextual_param_hints: Option<&[RhpType]>,
+        expected_type: Option<&RhpType>,
+    ) -> Result<RhpType, TypeError> {
         let inferred = match &expr.kind {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int { .. } => RhpType::Int,
                 Literal::Float { .. } => RhpType::Float,
-                Literal::String { .. } => RhpType::String,
+                Literal::String { raw, .. } => {
+                    let is_bytes_expected = match expected_type {
+                        Some(RhpType::Bytes) => true,
+                        Some(RhpType::Nullable(inner)) => matches!(**inner, RhpType::Bytes),
+                        Some(RhpType::Union(variants)) => {
+                            variants.contains(&RhpType::Bytes) && !variants.contains(&RhpType::String)
+                        }
+                        _ => false,
+                    };
+                    if is_bytes_expected {
+                        RhpType::Bytes
+                    } else {
+                        if let Some(hex) = crate::lexer::token::find_invalid_utf8_escape(raw) {
+                            return Err(TypeError::new(
+                                TypeErrorKind::Custom {
+                                    message: format!(
+                                        "Invalid UTF-8 escape '\\x{}' in string literal. Use a bytes literal b\"...\" instead.",
+                                        hex
+                                    ),
+                                },
+                                expr.span,
+                            ));
+                        }
+                        RhpType::String
+                    }
+                }
                 Literal::Bytes { .. } => RhpType::Bytes,
                 Literal::InterpolatedString { parts, .. } => {
                     for part in parts {
@@ -2690,7 +2732,7 @@ impl TypeChecker {
                 name => RhpType::Class(name.to_string()),
             },
 
-            ExprKind::Grouping(inner) => self.infer_expr(inner, env, ctx, contextual_param_hints)?,
+            ExprKind::Grouping(inner) => self.infer_expr_with_expected(inner, env, ctx, contextual_param_hints, expected_type)?,
 
             ExprKind::Unary { op, expr: inner, .. } => {
                 let operand_ty = self.infer_expr(inner, env, ctx, None)?;
@@ -2757,7 +2799,11 @@ impl TypeChecker {
 
             ExprKind::Assign { op, target, value } => {
                 self.check_cyclic_reference_assignment(target, value, expr.span)?;
-                let rhs_ty = self.infer_expr(value, env, ctx, None)?;
+                let expected_lhs = match &target.kind {
+                    ExprKind::Variable(var) => env.get_type(var.name),
+                    _ => None,
+                };
+                let rhs_ty = self.infer_expr_with_expected(value, env, ctx, None, expected_lhs.as_ref())?;
                 self.check_assignment(*op, target, rhs_ty, Some(value), expr.span, env, ctx)?
             }
 
@@ -2767,9 +2813,9 @@ impl TypeChecker {
                 if_false,
             } => {
                 let cond_ty = self.infer_expr(condition, env, ctx, None)?;
-                let false_ty = self.infer_expr(if_false, env, ctx, None)?;
+                let false_ty = self.infer_expr_with_expected(if_false, env, ctx, None, expected_type)?;
                 if let Some(true_expr) = if_true {
-                    let true_ty = self.infer_expr(true_expr, env, ctx, None)?;
+                    let true_ty = self.infer_expr_with_expected(true_expr, env, ctx, None, expected_type)?;
                     RhpType::unify(&true_ty, &false_ty)
                 } else {
                     // Elvis `$cond ?: $false_branch`
@@ -3116,11 +3162,17 @@ impl TypeChecker {
             }
 
             ExprKind::Cast { kind, expr: inner } => {
-                self.infer_expr(inner, env, ctx, None)?;
+                let target_expected = match kind {
+                    CastType::Bytes => Some(RhpType::Bytes),
+                    CastType::String => Some(RhpType::String),
+                    _ => None,
+                };
+                self.infer_expr_with_expected(inner, env, ctx, None, target_expected.as_ref())?;
                 match kind {
                     CastType::Int => RhpType::Int,
                     CastType::Float => RhpType::Float,
                     CastType::String => RhpType::String,
+                    CastType::Bytes => RhpType::Bytes,
                     CastType::Bool => RhpType::Bool,
                     CastType::Array => RhpType::Array(Box::new(RhpType::Mixed)),
                     CastType::Object => RhpType::Object,
@@ -3536,18 +3588,19 @@ impl TypeChecker {
     ) -> Result<Vec<RhpType>, TypeError> {
         let mut types = Vec::with_capacity(args.len());
         for (i, arg) in args.iter().enumerate() {
-            let contextual = param_hints.and_then(|hints| {
-                if let Some(RhpType::Callable {
+            let expected_type = param_hints.and_then(|hints| hints.get(i));
+            let contextual = expected_type.and_then(|hint| {
+                if let RhpType::Callable {
                     params: Some(cb_params),
                     ..
-                }) = hints.get(i)
+                } = hint
                 {
                     Some(cb_params.as_slice())
                 } else {
                     None
                 }
             });
-            types.push(self.infer_expr(&arg.value, env, ctx, contextual)?);
+            types.push(self.infer_expr_with_expected(&arg.value, env, ctx, contextual, expected_type)?);
         }
         Ok(types)
     }
@@ -3580,14 +3633,19 @@ impl TypeChecker {
                 ));
             }
 
-            let default_ty = if let Some(ref def_expr) = param.default_value {
-                Some(self.infer_expr(def_expr, fn_env, None, None)?)
+            let declared = if let Some(ref hint) = param.type_hint {
+                Some(self.resolve_type_hint(hint, current_class)?)
             } else {
                 None
             };
 
-            if let Some(ref hint) = param.type_hint {
-                let declared = self.resolve_type_hint(hint, current_class)?;
+            let default_ty = if let Some(ref def_expr) = param.default_value {
+                Some(self.infer_expr_with_expected(def_expr, fn_env, None, None, declared.as_ref())?)
+            } else {
+                None
+            };
+
+            if let Some(declared) = declared {
                 if let Some(ref def_t) = default_ty {
                     if !def_t.is_assignable_to(&declared, Some(&self.result.hierarchy)) {
                         return Err(TypeError::new(

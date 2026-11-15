@@ -90,6 +90,7 @@ pub enum CastType {
     Int,
     Float,
     String,
+    Bytes,
     Bool,
     Array,
     Object,

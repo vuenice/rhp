@@ -23,7 +23,8 @@ All primitive type keywords are strictly lowercase:
 | :--- | :--- | :--- |
 | `int` | Signed integer — **defaults to `i32`** | `i32` |
 | `float` | Floating-point number — **defaults to `i32`** (32-bit float) | `i32` |
-| `string` | Binary-safe UTF-8 byte buffer with 23-byte SSO | `RhpString` (`Vec<u8>`) |
+| `string` | UTF-8 validated text string | `Rc<str>` |
+| `byte` | Raw binary byte buffer (aliases: `bytes`) | `Rc<[u8]>` |
 | `bool` | Boolean value (`true` or `false`) | `bool` |
 | `void` | Absence of a return value | Unit `()` |
 | `mixed` | Permissive dynamic container | `PhpValue` |
@@ -34,18 +35,32 @@ Capitalized scalar variants (such as `String` or `Integer`) are strictly rejecte
 int $count = 42;
 float $pi = 3.14159;
 string $appName = "RHP Engine";
+byte $header = "GET / HTTP/1.1\r\n";
 bool $isProduction = true;
 
 // Attempting incompatible reassignment fails:
 // $count = "forty-two"; // Error: VariableTypeMismatch
 ```
 
-### Binary-Safe Strings & Multi-Byte Encodings
+### `string` vs. `byte`: Separate First-Class Types
 
-In RHP, strings are fundamentally raw byte buffers (`RhpString` storing $\le 23$ bytes inline on the stack via Small-String-Optimization and larger buffers via `Rc<Vec<u8>>`):
-* **Binary Safety:** Strings can hold arbitrary binary data, image headers, network payloads, or null bytes (`\0`) without triggering Rust UTF-8 panics.
-* **Legacy Japanese Support:** Legacy multi-byte character sets such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** are preserved as raw bytes. Developers use `Str::fromEncoding($raw, 'Shift-JIS')` or `Str::utf8($raw)` for safe conversions.
-* **Immutable Helpers:** Chained helper methods like `$text->trim()->upper()` are immutable by default, leaving the original variable untouched. Variable updates use explicit reassignment (`$text = $text->trim()->upper();`) with Copy-On-Write (COW) semantics.
+In RHP, text strings and binary byte payloads are strictly separate, first-class types:
+
+* **`string` (Text):** Enforces valid UTF-8 text. Standard string interpolation (`"Hello $name"`), templating, and text manipulation methods (`$str->trim()`, `$str->upper()`, `$str->replace()`, `$str->split()`) operate on UTF-8 strings.
+* **`byte` (Binary Buffers):** Represents raw byte sequences, network packets, image payloads, cryptographic keys, or non-UTF-8 encodings (such as Shift-JIS or raw binary).
+* **Target-Typed Literal Assignment (No `b` Prefix Needed):** When a variable, parameter, or property is typed with `byte`, standard double-quoted or single-quoted string literals are contextually recognized as byte buffers:
+  ```php
+  // ✅ Contextual typing: "..." is automatically lowered to byte buffer without b prefix:
+  byte $data = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+  byte $png = "\x89PNG\r\n\x1a\n";
+
+  // Functional conversion and explicit b prefix are also valid:
+  byte $explicit = b"binary payload";
+  byte $converted = byte("binary data");
+  ```
+* **Fluent Byte Methods:** Byte variables provide direct methods such as `$payload->len()`, `$payload->slice($start, $length)`, `$payload->decode('UTF-8')`, and `$payload->convert('Shift-JIS', 'UTF-8')`.
+* **Legacy Japanese Support:** Legacy multi-byte character sets such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** are handled via `byte` buffers. Use `Str::fromEncoding($rawBytes, 'Shift-JIS')` to convert them into valid UTF-8 strings, or `Str::toEncoding($str, 'Shift-JIS')` to produce byte buffers.
+* **Immutable Helpers:** Methods like `$text->trim()->upper()` and `$bytes->slice(0, 10)` return new values with zero in-place mutation, leaving the original variable untouched. Variable updates use explicit reassignment (`$text = $text->trim()->upper();`).
 
 ### String Quoting Strategies & Escaping
 

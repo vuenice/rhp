@@ -316,6 +316,7 @@ pub enum Token<'s> {
     TypeString,
 
     #[token("bytes")]
+    #[token("byte")]
     TypeBytes,
 
     #[token("int")]
@@ -1107,12 +1108,6 @@ impl<'s> Token<'s> {
                             }
                         }
                         if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
-                            if byte > 0x7F {
-                                return Err(format!(
-                                    "Invalid UTF-8 escape '\\x{}' in string literal. Use a bytes literal b\"...\" instead.",
-                                    hex_str
-                                ));
-                            }
                             result.push(byte as char);
                         } else {
                             result.push('\\');
@@ -1203,4 +1198,135 @@ impl<'s> fmt::Display for Token<'s> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
+}
+
+/// Finds the first `\xNN` escape sequence where the byte value exceeds 0x7F (non-ASCII byte).
+pub fn find_invalid_utf8_escape(raw: &str) -> Option<String> {
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('x') | Some('X') => {
+                    let mut hex = String::new();
+                    if let Some(&c1) = chars.peek() {
+                        if c1.is_ascii_hexdigit() {
+                            hex.push(c1);
+                            chars.next();
+                            if let Some(&c2) = chars.peek() {
+                                if c2.is_ascii_hexdigit() {
+                                    hex.push(c2);
+                                    chars.next();
+                                }
+                            }
+                        }
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        if byte > 0x7F {
+                            return Some(hex);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Unescapes raw string literal slice into raw bytes (`Vec<u8>`).
+pub fn unescape_string_to_bytes(raw: &str) -> Vec<u8> {
+    let content = if (raw.starts_with('"') && raw.ends_with('"'))
+        || (raw.starts_with('\'') && raw.ends_with('\''))
+        || (raw.starts_with('`') && raw.ends_with('`'))
+    {
+        if raw.len() >= 2 {
+            &raw[1..raw.len() - 1]
+        } else {
+            ""
+        }
+    } else if raw.starts_with("b\"") && raw.ends_with('"') && raw.len() >= 3 {
+        &raw[2..raw.len() - 1]
+    } else if raw.starts_with("b'") && raw.ends_with('\'') && raw.len() >= 3 {
+        &raw[2..raw.len() - 1]
+    } else {
+        raw
+    };
+
+    let mut result = Vec::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push(b'\n'),
+                Some('r') => result.push(b'\r'),
+                Some('t') => result.push(b'\t'),
+                Some('\\') => result.push(b'\\'),
+                Some('\'') => result.push(b'\''),
+                Some('"') => result.push(b'"'),
+                Some('`') => result.push(b'`'),
+                Some('$') => result.push(b'$'),
+                Some('0') => result.push(0),
+                Some('u') => {
+                    if chars.peek() == Some(&'{') {
+                        chars.next();
+                        let mut hex = String::new();
+                        while let Some(&hc) = chars.peek() {
+                            if hc == '}' {
+                                chars.next();
+                                break;
+                            }
+                            if hc.is_ascii_hexdigit() {
+                                hex.push(hc);
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                            if let Some(ch) = char::from_u32(cp) {
+                                let mut buf = [0u8; 4];
+                                result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                            }
+                        }
+                    } else {
+                        result.push(b'\\');
+                        result.push(b'u');
+                    }
+                }
+                Some('x') | Some('X') => {
+                    let mut hex_str = String::new();
+                    if let Some(&c1) = chars.peek() {
+                        if c1.is_ascii_hexdigit() {
+                            hex_str.push(c1);
+                            chars.next();
+                            if let Some(&c2) = chars.peek() {
+                                if c2.is_ascii_hexdigit() {
+                                    hex_str.push(c2);
+                                    chars.next();
+                                }
+                            }
+                        }
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                        result.push(byte);
+                    } else {
+                        result.push(b'\\');
+                        result.push(b'x');
+                    }
+                }
+                Some(other) => {
+                    result.push(b'\\');
+                    let mut buf = [0u8; 4];
+                    result.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                }
+                None => result.push(b'\\'),
+            }
+        } else {
+            let mut buf = [0u8; 4];
+            result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+
+    result
 }

@@ -1060,6 +1060,7 @@ pub fn resolve_builtin_fluent_method(
             "check" | "compare" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
             "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
+            "toEncoding" => Some(RhpType::Bytes),
             _ => {
                 if crate::lexer::facade::has_macro("Str", method) {
                     Some(RhpType::Dynamic)
@@ -1078,6 +1079,7 @@ pub fn resolve_builtin_fluent_method(
             | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some(RhpType::Int),
             "slice" => Some(RhpType::Bytes),
             "decode" => Some(RhpType::String),
+            "check" => Some(RhpType::Bool),
             "convert" => Some(RhpType::Bytes),
             _ => None,
         },

@@ -1370,7 +1370,7 @@ impl<'a> IrLowerer<'a> {
             ExprKind::Literal(lit) => {
                 let dst = match target_reg {
                     Some(r) => r,
-                    None => b.alloc_temp(inferred_ty, expr.span)?,
+                    None => b.alloc_temp(inferred_ty.clone(), expr.span)?,
                 };
                 match lit {
                     Literal::Null => {
@@ -1390,9 +1390,15 @@ impl<'a> IrLowerer<'a> {
                     Literal::Float { value, .. } => {
                         b.emit(OpCode::LoadFloat { dst, bits: value.to_bits() }, expr.span);
                     }
-                    Literal::String { value, .. } => {
-                        let const_id = b.intern_string(value);
-                        b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                    Literal::String { value, raw, .. } => {
+                        if inferred_ty == RhpType::Bytes {
+                            let bytes = crate::lexer::token::unescape_string_to_bytes(raw);
+                            let const_id = b.intern_bytes(&bytes);
+                            b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                        } else {
+                            let const_id = b.intern_string(value);
+                            b.emit(OpCode::LoadConst { dst, const_id }, expr.span);
+                        }
                     }
                     Literal::InterpolatedString { parts, .. } => {
                         let mut part_regs = Vec::with_capacity(parts.len());

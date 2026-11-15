@@ -69,21 +69,25 @@ The formatter operates on the AST and token stream, adhering to PER Coding Style
 
 When variables or function parameters are declared without explicit type annotations, `rhp run lint` inspects their initializer expressions and statically inserts the appropriate type annotation:
 
-### 1. Scalar Primitives
+### 1. Scalar Primitives (`string`, `byte`, `int`, `float`, `bool`)
 
 ```php
 // BEFORE LINTING:
 $message = "Hello, RHP!";
+$payload = b"raw packet";
 $count = 42;
 $ratio = 3.14159;
 $is_active = true;
 
 // AFTER 'rhp run lint':
 string $message = "Hello, RHP!";
+byte $payload = b"raw packet";
 int $count = 42;
 float $ratio = 3.14159;
 bool $is_active = true;
 ```
+
+Any initializers producing binary bytes (such as `b"..."`, byte-casting `byte(...)`, or string literals containing non-UTF-8 byte escapes `\x80..\xFF`) automatically receive the `byte` type annotation. Valid UTF-8 string initializers receive `string`.
 
 ### 2. Array Classification (`list`, `dict`, `hashMap`, `set`, `array`)
 

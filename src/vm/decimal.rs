@@ -124,7 +124,7 @@ impl Decimal {
         match val {
             crate::vm::value::PhpValue::Float(f) => Self::from_f64(*f),
             crate::vm::value::PhpValue::Int(n) => Some(Self::from_i64(*n)),
-            crate::vm::value::PhpValue::String(s) => Self::from_str_exact(s.as_str()),
+            crate::vm::value::PhpValue::String(s) => Self::from_str_exact(s.as_ref()),
             _ => None,
         }
     }
