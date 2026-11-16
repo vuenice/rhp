@@ -141,7 +141,8 @@ function keep(list $items): list {
     assert!(typed.contains("function ids(): list"), "Got: {}", typed);
     assert!(typed.contains("function person(): dict"), "Got: {}", typed);
     assert!(typed.contains("function emptyBag(): array"), "Got: {}", typed);
-    assert!(typed.contains("function ping(): void"), "Got: {}", typed);
+    assert!(typed.contains("function ping()"), "Got: {}", typed);
+    assert!(!typed.contains("function ping():"), "void stays unannotated, got: {}", typed);
     assert!(typed.contains("function keep(list $items): list"), "Got: {}", typed);
     assert!(!typed.contains("): list: list"), "Got: {}", typed);
 }
@@ -978,6 +979,70 @@ float $f = 5 / 2;
     assert!(
         res.issues.iter().all(|issue| issue.code != "variable-type-mismatch"),
         "division into int is a warning, not a type error: {:?}",
+        res.issues
+    );
+}
+
+#[test]
+fn test_explicit_void_return_and_void_assignment() {
+    let code = r#"
+function ping(): void {
+}
+
+function titled(): Void {
+}
+"#;
+
+    let res = lint_source(code, "void.rhp");
+    let redundant: Vec<_> = res
+        .issues
+        .iter()
+        .filter(|issue| issue.code == "redundant-void-return")
+        .collect();
+    assert_eq!(redundant.len(), 2, "issues: {:?}", res.issues);
+    for issue in &redundant {
+        assert_eq!(issue.message, "no need to mention return type for void");
+    }
+
+    let assigned = "function ping() {\n}\n$x = ping();\n";
+    let assigned_res = lint_source(assigned, "assign.rhp");
+    let assignments: Vec<_> = assigned_res
+        .issues
+        .iter()
+        .filter(|issue| issue.code == "void-assignment")
+        .collect();
+    assert_eq!(assignments.len(), 1, "issues: {:?}", assigned_res.issues);
+    assert_eq!(
+        assignments[0].message,
+        "Type Error: Cannot assign the result of void function 'ping'."
+    );
+
+    let declared = "function ping() {\n}\nint $y = ping();\n";
+    let declared_res = lint_source(declared, "declare.rhp");
+    let declared_assignments: Vec<_> = declared_res
+        .issues
+        .iter()
+        .filter(|issue| issue.code == "void-assignment")
+        .collect();
+    assert_eq!(declared_assignments.len(), 1, "issues: {:?}", declared_res.issues);
+    assert!(
+        declared_res.issues.iter().all(|issue| issue.code != "variable-type-mismatch"),
+        "void assignment is reported before a type mismatch: {:?}",
+        declared_res.issues
+    );
+}
+
+#[test]
+fn test_omitted_void_call_is_not_an_error() {
+    let code = "function ping() {\n}\nping();\n";
+    let res = lint_source(code, "void.rhp");
+    assert!(
+        res.issues.iter().all(|issue| {
+            issue.code != "void-assignment"
+                && issue.code != "redundant-void-return"
+                && issue.code != "missing-return-type"
+        }),
+        "issues: {:?}",
         res.issues
     );
 }

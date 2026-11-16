@@ -201,6 +201,11 @@ pub enum TypeErrorKind {
         param_name: String,
     },
 
+    #[error("Type Error: Cannot assign the result of void function '{function_name}'.")]
+    VoidAssignment {
+        function_name: String,
+    },
+
     #[error(
         "Type Error: Cannot assign value of type '{found}' to typed variable '{var_name}' of type '{expected}'."
     )]

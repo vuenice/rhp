@@ -2702,4 +2702,30 @@ fn test_migrate_php7_mode_warns_on_tricky_call_sites() {
     );
 }
 
+#[test]
+fn test_migrate_removes_explicit_void_return_types() {
+    let input = concat!(
+        "function ping(): void {\n",
+        "}\n",
+        "function titled(): Void {\n",
+        "}\n",
+        "function keep(): int {\n",
+        "    return 1;\n",
+        "}\n",
+        "function packed():void {\n",
+        "}\n",
+        "$f = function(): void {};\n",
+        "$g = fn(): Void => 1;\n",
+    );
+    let res = migrate_source(input, "void.rhp");
+    assert_eq!(res.void_return_count, 5, "content:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("function ping() {"), "{}", res.migrated_content);
+    assert!(res.migrated_content.contains("function titled() {"), "{}", res.migrated_content);
+    assert!(res.migrated_content.contains("function packed() {"), "{}", res.migrated_content);
+    assert!(res.migrated_content.contains("function keep(): int"), "{}", res.migrated_content);
+    assert!(res.migrated_content.contains("function() {}"), "{}", res.migrated_content);
+    assert!(res.migrated_content.contains("fn() => 1"), "{}", res.migrated_content);
+    assert!(!res.migrated_content.to_ascii_lowercase().contains(": void"), "{}", res.migrated_content);
+}
+
 

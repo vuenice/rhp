@@ -27,7 +27,7 @@ use crate::type_system::{
 /// - Infers types for variables defined at declaration time (`$x = '';` -> `string $x = '';`, `$y = 1;` -> `int $y = 1;`)
 /// - Infers types for function/method parameters with default values (`function foo($x = 1)` -> `function foo(int $x = 1)`)
 /// - Infers return types from returned values (`function foo() { return [1]; }` -> `function foo(): list`)
-/// - A function with no return value becomes `: void`
+/// - A function with no return value stays unannotated (implicit void)
 /// - Infers types for class properties with defaults (`public $user = ['a' => 1];` -> `public dict $user = ['a' => 1];`)
 /// - If types are already written, DOES NOT change them (type mismatches will be reported as errors in typecheck)
 /// - Leaves untyped when ambiguous, dynamic, or reassigned to conflicting types ("whenever not possible no issue")
@@ -242,7 +242,8 @@ fn collect_nested_stmt(
     }
 }
 
-/// Insert `: list` / `: dict` / `: array` / `: void` when the function has no return type.
+/// Insert `: list` / `: dict` / `: array` / `: int` when the function has no return type.
+/// A body that returns nothing stays unannotated.
 fn collect_return_type_edit(
     func: &crate::ast::stmt::FunctionDecl<'_>,
     type_info: Option<&TypeCheckResult>,
@@ -274,6 +275,9 @@ fn collect_return_type_edit(
     let Some(ty) = infer_function_return_type(body, type_info, &known) else {
         return;
     };
+    if ty.eq_ignore_ascii_case("void") {
+        return;
+    }
     edits.push((offset, format!(": {ty}")));
 }
 
@@ -353,7 +357,7 @@ fn infer_function_return_type(
     let mut returns: Vec<Option<String>> = Vec::new();
     collect_return_types(body, type_info, known, &mut returns);
     if returns.is_empty() {
-        return Some("void".to_string());
+        return None;
     }
     if !always_returns(body) {
         return None;

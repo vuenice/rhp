@@ -38,7 +38,7 @@ class TodoStore {
         $this->load();
     }
 
-    public function load(): void {
+    public function load() {
         if (File::exists($this->filePath)) {
             $content = File::read($this->filePath);
             $data = json_decode($content);
@@ -88,7 +88,7 @@ class TodoStore {
         return File::write($this->filePath, $payload->toJson()) > 0;
     }
 
-    public function seedDefaults(): void {
+    public function seedDefaults() {
         $this->addInternal("Learn RHP Language & Architecture", "Core", "Done");
         $this->addInternal("Build HTMX + Alpine.js Reactive UI", "Frontend", "Done");
         $this->addInternal("Implement Fast Register Bytecode VM", "Engine", "In Progress");

@@ -862,4 +862,56 @@ fn test_null_union_matches_postfix_nullable() {
     assert_eq!(mixed_union.to_string(), "int|string|null");
 }
 
+#[test]
+fn test_void_function_result_cannot_be_assigned() {
+    let bare = r#"
+        function ping() {}
+        ping();
+    "#;
+    parse_and_check(bare).expect("a void call used as a statement is valid");
+
+    let assigned = r#"
+        function ping() {}
+        $x = ping();
+    "#;
+    let err = parse_and_check(assigned).expect_err("assigning a void call must fail");
+    match err {
+        FrontendError::Type(te) => match te.kind {
+            TypeErrorKind::VoidAssignment { function_name } => {
+                assert_eq!(function_name, "ping");
+            }
+            other => panic!("Expected VoidAssignment, got {:?}", other),
+        },
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+
+    let declared = r#"
+        function ping() {}
+        int $y = ping();
+    "#;
+    let err = parse_and_check(declared).expect_err("declaring from a void call must fail");
+    match err {
+        FrontendError::Type(te) => match te.kind {
+            TypeErrorKind::VoidAssignment { function_name } => {
+                assert_eq!(function_name, "ping");
+            }
+            other => panic!("Expected VoidAssignment, got {:?}", other),
+        },
+        other => panic!("Expected TypeError, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_abstract_method_without_return_type_is_void() {
+    let source = r#"
+        interface Drawer {
+            public function draw();
+        }
+        class Canvas implements Drawer {
+            public function draw() {}
+        }
+    "#;
+    parse_and_check(source).expect("an omitted return type on an abstract method is void");
+}
+
 

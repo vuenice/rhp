@@ -107,7 +107,7 @@ function processUsers(list $userIds, dict $options): list {
 
 * **Compile-Time Verification:** RHP's two-pass type checker validates arguments against declared parameter signatures.
 * **Runtime Guard (`OpCode::AssertType`):** The bytecode compiler injects `OpCode::AssertType` boundary assertions into the function prologue, validating the underlying collection subtype before executing the function body.
-* **Return Types Come from the Linter:** `rhp run lint` inserts the return type. A body with no value return becomes `: void`. When every path returns the same collection or scalar, that type is written (`: list`, `: dict`, `: int`). A function that already has a return type is left unchanged. Constructors and destructors are not given one.
+* **Return Types Come from the Linter:** `rhp run lint` inserts a return type when every path returns the same collection or scalar (`: list`, `: dict`, `: int`). A body that returns nothing stays unannotated, and that omission means void. Writing `: void` or `: Void` is a lint error (`no need to mention return type for void`); `rhp migrate` removes it. Constructors and destructors are not given a return type.
 
 ---
 
@@ -163,11 +163,11 @@ RHP supports explicit pass-by-reference for function and method parameters while
 
 1. **Explicit Parameter Declaration:** Declare reference parameters using `&$name`:
    ```php
-   function addTen(int &$val): void {
+   function addTen(int &$val) {
        $val = $val + 10;
    }
    
-   function appendItem(array &$list, int $item): void {
+   function appendItem(array &$list, int $item) {
        $list[] = $item;
    }
    ```
