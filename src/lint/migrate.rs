@@ -6,18 +6,25 @@ use regex::Regex;
 use serde::Serialize;
 
 use crate::lexer::facade::LEGACY_PHP_FUNCTIONS;
-use crate::lint::param_order::fix_parameter_order_with_count;
+use crate::lint::param_order::{
+    fix_parameter_order_detailed, ReorderedFunctionInfo,
+};
 
 /// Options for the migrate command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MigrateOptions {
     /// Whether to write modifications to disk (true) or check only / dry run (false).
     pub fix: bool,
+    /// Target PHP version migrating from (e.g. 7 or 8). Default is 7.
+    pub php_version: u32,
 }
 
 impl Default for MigrateOptions {
     fn default() -> Self {
-        Self { fix: true }
+        Self {
+            fix: true,
+            php_version: 7,
+        }
     }
 }
 
@@ -46,6 +53,7 @@ pub struct MigrateFileResult {
     pub byte_param_count: usize,
     pub named_arg_count: usize,
     pub param_order_count: usize,
+    pub warnings: Vec<String>,
     #[serde(skip)]
     pub original_content: String,
     #[serde(skip)]
@@ -60,6 +68,7 @@ pub struct MigrateReport {
     pub files_scanned: usize,
     pub files_modified: usize,
     pub results: Vec<MigrateFileResult>,
+    pub warnings: Vec<String>,
 }
 
 impl MigrateReport {
@@ -125,7 +134,10 @@ impl MigrateReport {
                         out.push_str(&format!("      ~ {} named argument call(s) converted to positional in proper order\n", res.named_arg_count));
                     }
                     if res.param_order_count > 0 {
-                        out.push_str(&format!("      ~ {} function parameter order(s) fixed (required before optional)\n", res.param_order_count));
+                        out.push_str(&format!("      ~ {} function parameter order(s) fixed (required before optional with //before: comment)\n", res.param_order_count));
+                    }
+                    for w in &res.warnings {
+                        out.push_str(&format!("      ⚠ {}\n", w));
                     }
                     if res.dot_concat_count > 0 {
                         out.push_str(&format!("      ~ {} dot concatenation operator(s) replaced with '+'\n", res.dot_concat_count));
@@ -153,6 +165,14 @@ impl MigrateReport {
         } else {
             out.push_str("\nNo PHP legacy superglobals, globals, or tags required migrating.\n");
         }
+
+        if !self.warnings.is_empty() {
+            out.push_str("\nWarnings & Review Items:\n");
+            for w in &self.warnings {
+                out.push_str(&format!("  ⚠ {}\n", w));
+            }
+        }
+
         out
     }
 }
@@ -165,15 +185,34 @@ pub use migrate_source as upgrade_php_source;
 pub use migrate_file as upgrade_php_file;
 pub use migrate_path as upgrade_php_path;
 
-/// Migrate a source string in memory.
+/// Migrate a source string in memory with default options.
 pub fn migrate_source(source: &str, file_name: &str) -> MigrateFileResult {
-    migrate_source_with_context(source, file_name, &HashMap::new())
+    migrate_source_with_options_and_context(source, file_name, MigrateOptions::default(), &HashMap::new())
+}
+
+/// Migrate a source string in memory with custom options.
+pub fn migrate_source_with_options(
+    source: &str,
+    file_name: &str,
+    options: MigrateOptions,
+) -> MigrateFileResult {
+    migrate_source_with_options_and_context(source, file_name, options, &HashMap::new())
 }
 
 /// Migrate a source string in memory with additional project-wide function signatures.
 pub fn migrate_source_with_context(
     source: &str,
     file_name: &str,
+    extra_signatures: &HashMap<String, Vec<String>>,
+) -> MigrateFileResult {
+    migrate_source_with_options_and_context(source, file_name, MigrateOptions::default(), extra_signatures)
+}
+
+/// Migrate a source string in memory with options and additional project-wide function signatures.
+pub fn migrate_source_with_options_and_context(
+    source: &str,
+    file_name: &str,
+    options: MigrateOptions,
     extra_signatures: &HashMap<String, Vec<String>>,
 ) -> MigrateFileResult {
     let mut current = source.to_string();
@@ -194,6 +233,7 @@ pub fn migrate_source_with_context(
     let mut var_dump_count = 0;
     let mut named_arg_count = 0;
     let mut param_order_count = 0;
+    let mut warnings = Vec::new();
 
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
@@ -279,15 +319,31 @@ pub fn migrate_source_with_context(
     let (after_bytes, byte_param_count) = upgrade_binary_string_arguments(&current);
     current = after_bytes;
 
-    // Step 6: Convert named arguments to positional arguments in proper parameter order and strip argument names
-    let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
-    named_arg_count += n_count;
-    current = after_named;
+    if options.php_version >= 8 {
+        // Step 6: When PHP version is 8, only check for named arguments, reorder them, and remove argument names.
+        // Parameter declarations are NOT reordered.
+        let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
+        named_arg_count += n_count;
+        current = after_named;
+    } else {
+        // Step 6 & 7: When PHP version is < 8:
+        // 1. Automatically fix function parameter orders in declarations (required before optional)
+        //    and add `//before: <old_sig>` comment above each reordered declaration.
+        let (after_params, p_count, reordered_fns) = fix_parameter_order_detailed(&current, true);
+        param_order_count += p_count;
+        current = after_params;
 
-    // Step 7: Automatically fix function parameter orders in declarations (required before optional)
-    let (after_params, p_count) = fix_parameter_order_with_count(&current);
-    param_order_count += p_count;
-    current = after_params;
+        // 2. Swap arguments at normal positional call sites and warn on tricky call sites
+        let (after_pos, p_warnings, _swapped_c) =
+            swap_positional_calls_and_warn_tricky(&current, &reordered_fns);
+        current = after_pos;
+        warnings.extend(p_warnings);
+
+        // 3. Convert any named arguments to positional arguments in proper parameter order and strip argument names
+        let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
+        named_arg_count += n_count;
+        current = after_named;
+    }
 
     let modified = current != source;
 
@@ -314,6 +370,7 @@ pub fn migrate_source_with_context(
         byte_param_count,
         named_arg_count,
         param_order_count,
+        warnings,
         original_content: source.to_string(),
         migrated_content: current.clone(),
         upgraded_content: current,
@@ -328,7 +385,7 @@ pub fn migrate_file_with_signatures(
 ) -> io::Result<MigrateFileResult> {
     let source = fs::read_to_string(path)?;
     let file_path = path.display().to_string();
-    let result = migrate_source_with_context(&source, &file_path, signatures);
+    let result = migrate_source_with_options_and_context(&source, &file_path, options, signatures);
 
     if result.modified && options.fix {
         fs::write(path, &result.migrated_content)?;
@@ -351,6 +408,9 @@ pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<Migrat
         report.files_scanned += 1;
         if res.modified {
             report.files_modified += 1;
+        }
+        for w in &res.warnings {
+            report.warnings.push(w.clone());
         }
         report.results.push(res);
         return Ok(report);
@@ -390,6 +450,9 @@ fn migrate_directory_recursive(
             report.files_scanned += 1;
             if res.modified {
                 report.files_modified += 1;
+            }
+            for w in &res.warnings {
+                report.warnings.push(w.clone());
             }
             report.results.push(res);
         }
@@ -4663,6 +4726,186 @@ pub fn migrate_named_arguments_with_context(
     (current, total_count)
 }
 
+fn byte_offset_to_line(source: &str, offset: usize) -> usize {
+    let limit = offset.min(source.len());
+    source[..limit].chars().filter(|&c| c == '\n').count() + 1
+}
+
+/// Swap arguments at normal positional call sites for reordered functions,
+/// and emit detailed warnings for tricky call sites (e.g. argument unpacking `...`, callbacks, dynamic calls).
+pub fn swap_positional_calls_and_warn_tricky(
+    source: &str,
+    reordered_fns: &[ReorderedFunctionInfo],
+) -> (String, Vec<String>, usize) {
+    let mut warnings = Vec::new();
+    let mut current = source.to_string();
+    let mut swapped_count = 0;
+
+    if reordered_fns.is_empty() {
+        return (current, warnings, 0);
+    }
+
+    let mut fn_map: HashMap<String, &ReorderedFunctionInfo> = HashMap::new();
+    for f in reordered_fns {
+        fn_map.insert(f.name.clone(), f);
+        warnings.push(format!(
+            "WARNING: Parameter order changed for '{}'. Please inspect non-named call sites of '{}()' for argument alignment.",
+            f.old_signature, f.name
+        ));
+    }
+
+    let mask = build_code_mask(&current);
+    let bytes = current.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+
+    let callback_dispatchers = [
+        "call_user_func",
+        "call_user_func_array",
+        "array_map",
+        "array_filter",
+        "usort",
+        "register_shutdown_function",
+    ];
+
+    let mut i = 0;
+    while i < n {
+        if !mask[i] || bytes[i] != b'(' {
+            i += 1;
+            continue;
+        }
+
+        let open_paren = i;
+        if is_inside_attribute_at(&current, &mask, open_paren) {
+            i += 1;
+            continue;
+        }
+
+        let (full_callee, simple_callee) = match extract_callee_preceding_paren(&current, &mask, open_paren) {
+            Some(c) => c,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+
+        let close_paren = match find_matching_paren(&current, &mask, open_paren) {
+            Some(cp) => cp,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+
+        let args_str = &current[open_paren + 1..close_paren];
+        let call_line = byte_offset_to_line(&current, open_paren);
+
+        // 1. Check callback dispatchers (e.g. call_user_func('myfun', ...))
+        if callback_dispatchers.contains(&simple_callee.as_str()) {
+            for (fn_name, info) in &fn_map {
+                let needle1 = format!("'{}'", fn_name);
+                let needle2 = format!("\"{}\"", fn_name);
+                if args_str.contains(&needle1) || args_str.contains(&needle2) {
+                    warnings.push(format!(
+                        "WARNING: Parameter order changed for '{}'. Tricky call site using callback ({}) cannot be automatically reordered at line {}. Please inspect this call site for argument alignment.",
+                        info.name, simple_callee, call_line
+                    ));
+                }
+            }
+            i = close_paren + 1;
+            continue;
+        }
+
+        // 2. Check direct calls to reordered functions
+        let target_info = fn_map.get(&simple_callee).or_else(|| fn_map.get(&full_callee));
+        if let Some(info) = target_info {
+            // Check if call has tricky syntax: argument unpacking `...`
+            if args_str.contains("...") {
+                warnings.push(format!(
+                    "WARNING: Parameter order changed for '{}'. Tricky call site using argument unpacking (...) cannot be automatically reordered at line {}. Please inspect this call site for argument alignment.",
+                    info.name, call_line
+                ));
+                i = close_paren + 1;
+                continue;
+            }
+
+            let raw_args = split_call_args(args_str);
+            // Check if call has named arguments (handled by migrate_named_arguments_with_context)
+            let has_named = raw_args.iter().any(|arg| parse_named_arg(arg).0.is_some());
+            if has_named {
+                i = close_paren + 1;
+                continue;
+            }
+
+            if raw_args.is_empty() {
+                i = close_paren + 1;
+                continue;
+            }
+
+            // Normal positional call site: swap arguments to match info.new_params
+            let mut arg_by_old_name: HashMap<String, String> = HashMap::new();
+            for (arg_idx, arg_val) in raw_args.iter().enumerate() {
+                if arg_idx < info.old_params.len() {
+                    let old_param_clean = info.old_params[arg_idx].trim_start_matches('$').to_string();
+                    arg_by_old_name.insert(old_param_clean, arg_val.trim().to_string());
+                }
+            }
+
+            let mut new_slots: Vec<Option<String>> = vec![None; info.new_params.len()];
+            for (new_idx, param_name) in info.new_params.iter().enumerate() {
+                let param_clean = param_name.trim_start_matches('$');
+                if let Some(val) = arg_by_old_name.get(param_clean) {
+                    new_slots[new_idx] = Some(val.clone());
+                }
+            }
+
+            let mut extra_args = Vec::new();
+            if raw_args.len() > info.old_params.len() {
+                for extra in &raw_args[info.old_params.len()..] {
+                    extra_args.push(extra.trim().to_string());
+                }
+            }
+
+            let max_idx = new_slots.iter().rposition(|s| s.is_some());
+            let mut final_args = Vec::new();
+            if let Some(max_i) = max_idx {
+                for j in 0..=max_i {
+                    final_args.push(new_slots[j].clone().unwrap_or_default());
+                }
+            }
+            final_args.extend(extra_args);
+
+            let multiline = args_str.contains('\n');
+            let indent = detect_indent(args_str);
+            let trailing_comma = args_str.trim_end().ends_with(',');
+            let formatted = format_call_args(&final_args, multiline, &indent, trailing_comma);
+
+            if formatted != args_str {
+                edits.push(TextEdit {
+                    start: open_paren + 1,
+                    end: close_paren,
+                    replacement: formatted,
+                });
+                swapped_count += 1;
+            }
+        }
+
+        i = close_paren + 1;
+    }
+
+    if !edits.is_empty() {
+        edits.sort_by(|a, b| b.start.cmp(&a.start));
+        edits.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+        for edit in edits {
+            if edit.end <= current.len() && edit.start <= edit.end {
+                current.replace_range(edit.start..edit.end, &edit.replacement);
+            }
+        }
+    }
+
+    (current, warnings, swapped_count)
+}
+
 /// Recursively collect function and method parameter signatures across all PHP/RHP files in a directory.
 pub fn collect_signatures_recursive(
     dir: &Path,
@@ -4910,9 +5153,7 @@ pub fn build_builtin_parameter_map() -> HashMap<String, Vec<String>> {
 
 fn parse_param_definition_names(params_str: &str) -> Vec<String> {
     let chunks = split_call_args(params_str);
-    let mut required = Vec::new();
-    let mut optional = Vec::new();
-    let mut variadic = Vec::new();
+    let mut names = Vec::new();
 
     for chunk in chunks {
         let trimmed = chunk.trim();
@@ -4922,8 +5163,6 @@ fn parse_param_definition_names(params_str: &str) -> Vec<String> {
 
         // Split on '=' to distinguish parameter declaration from default value
         let decl_part = trimmed.split('=').next().unwrap_or(trimmed);
-        let is_optional = trimmed.contains('=');
-        let is_variadic = decl_part.contains("...");
 
         // Find '$' followed by identifier
         if let Some(pos) = decl_part.find('$') {
@@ -4933,21 +5172,12 @@ fn parse_param_definition_names(params_str: &str) -> Vec<String> {
                 .unwrap_or(after_dollar.len());
             let name = &after_dollar[..name_end];
             if !name.is_empty() {
-                if is_variadic {
-                    variadic.push(name.to_string());
-                } else if is_optional {
-                    optional.push(name.to_string());
-                } else {
-                    required.push(name.to_string());
-                }
+                names.push(name.to_string());
             }
         }
     }
 
-    let mut result = required;
-    result.extend(optional);
-    result.extend(variadic);
-    result
+    names
 }
 
 fn find_matching_paren(source: &str, mask: &[bool], open_paren: usize) -> Option<usize> {

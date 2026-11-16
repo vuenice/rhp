@@ -72,6 +72,7 @@ pub struct CombinatorStream<'s> {
     pub(crate) user_functions: HashSet<String>,
     pub(crate) scope: ScopeContext,
     pub(crate) delimiter_stack: Vec<(Token<'s>, Span)>,
+    pub(crate) allow_named_arguments: bool,
 }
 
 impl<'s> CombinatorStream<'s> {
@@ -127,6 +128,7 @@ impl<'s> CombinatorStream<'s> {
             user_functions,
             scope: ScopeContext::new(),
             delimiter_stack: Vec::new(),
+            allow_named_arguments: false,
         }
     }
 
@@ -576,9 +578,16 @@ impl<'s> CombinatorStream<'s> {
     pub fn parse_type_hint(&mut self) -> Result<TypeHint<'s>, ParseError> {
         let start_span = self.current_span();
 
-        // Nullable prefix `?Type`
+        // Nullable prefix `?Type` or untyped nullable `?$var`
         if self.matches(&Token::Question) {
-            let inner = self.parse_single_type_hint()?;
+            let inner = if self.check_fn(|t| matches!(t, Token::Variable(_) | Token::Ampersand)) {
+                TypeHint::new(
+                    TypeHintKind::Named(Ident::new("mixed", start_span)),
+                    start_span,
+                )
+            } else {
+                self.parse_single_type_hint()?
+            };
             let span = start_span.merge(inner.span);
             return Ok(TypeHint::new(TypeHintKind::Nullable(Box::new(inner)), span));
         }

@@ -1876,22 +1876,26 @@ impl<'s> CombinatorStream<'s> {
             let is_unpack = self.matches(&Token::Ellipsis);
             let is_reference = self.matches(&Token::Ampersand);
 
-            // Named argument check `name: $val` or `name: &$val` - reject named parameters
+            // Named argument check `name: $val` or `name: &$val`
+            let mut arg_name = None;
             if let Some(tok) = self.peek() {
                 if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
                     && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
                 {
                     let name = self.expect_ident()?;
                     let colon = self.expect(Token::Colon)?;
-                    return Err(ParseError::new(
-                        ParseErrorKind::Custom {
-                            message: format!(
-                                "Named parameters are not supported in RHP (found '{}:'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at the call site.",
-                                name.name
-                            ),
-                        },
-                        arg_start.merge(colon.span),
-                    ));
+                    if !self.allow_named_arguments {
+                        return Err(ParseError::new(
+                            ParseErrorKind::Custom {
+                                message: format!(
+                                    "Named parameters are not supported in RHP (found '{}:'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at the call site.",
+                                    name.name
+                                ),
+                            },
+                            arg_start.merge(colon.span),
+                        ));
+                    }
+                    arg_name = Some(name);
                 }
             }
 
@@ -1899,7 +1903,7 @@ impl<'s> CombinatorStream<'s> {
             let span = arg_start.merge(value.span);
             args.push(Argument {
                 span,
-                name: None,
+                name: arg_name,
                 value,
                 is_unpack,
                 is_reference,

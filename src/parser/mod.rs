@@ -96,6 +96,13 @@ pub fn parse<'s>(source: &'s str) -> Result<Program<'s>, ParseError> {
     parser.parse_program()
 }
 
+/// Parse source code string allowing named call arguments (used during migration and AST analysis).
+pub fn parse_allowing_named_args<'s>(source: &'s str) -> Result<Program<'s>, ParseError> {
+    let mut parser = Parser::from_source(source)?;
+    parser.stream.allow_named_arguments = true;
+    parser.parse_program()
+}
+
 /// Convenience function: Parse source code string directly into a typed `Program` AST with file_id.
 pub fn parse_with_file_id<'s>(source: &'s str, file_id: usize) -> Result<Program<'s>, ParseError> {
     let mut parser = Parser::from_source_with_file_id(source, file_id)?;

@@ -1,5 +1,6 @@
 use rhp::migrate::{
-    comment_ini_set_calls, migrate_source, replace_get_array_access, replace_post_array_access,
+    comment_ini_set_calls, migrate_source, migrate_source_with_options, MigrateOptions,
+    replace_get_array_access, replace_post_array_access,
     strip_error_reporting, upgrade_php_source,
 };
 use std::fs;
@@ -2509,6 +2510,125 @@ fn test_migrate_byte_parameters_automatically_added() {
         res.migrated_content.contains("function(byte $raw = \"\\xFF\\xFE\")"),
         "Expected byte $raw in closure, got:\n{}",
         res.migrated_content
+    );
+}
+
+#[test]
+fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations() {
+    let input = concat!(
+        "<?php\n",
+        "function myfun(?$x, $y = '', $z) {\n",
+        "    return $z;\n",
+        "}\n",
+        "$res = myfun(z: 'hello', x: 42, y: 'world');\n",
+        "$normal = myfun(1, 'two', 3);\n"
+    );
+    let options = MigrateOptions {
+        fix: true,
+        php_version: 8,
+    };
+    let res = migrate_source_with_options(input, "test.php", options);
+
+    assert!(res.modified);
+    // In PHP 8 mode: definition is untouched, no //before: comment added
+    assert!(
+        res.migrated_content.contains("function myfun(?$x, $y = '', $z)"),
+        "Function definition must be preserved in PHP 8 mode: got:\n{}",
+        res.migrated_content
+    );
+    assert!(
+        !res.migrated_content.contains("//before:"),
+        "No //before: comment should be added in PHP 8 mode: got:\n{}",
+        res.migrated_content
+    );
+    // Named arguments swapped to declaration order (x, y, z) and names removed
+    assert!(
+        res.migrated_content.contains("$res = myfun(42, 'world', 'hello');"),
+        "Named arguments must be swapped to declaration order and stripped: got:\n{}",
+        res.migrated_content
+    );
+    // Normal positional calls untouched
+    assert!(
+        res.migrated_content.contains("$normal = myfun(1, 'two', 3);"),
+        "Normal positional call must be untouched in PHP 8 mode: got:\n{}",
+        res.migrated_content
+    );
+    // No warnings emitted
+    assert!(res.warnings.is_empty(), "No warnings should be emitted in PHP 8 mode: got: {:?}", res.warnings);
+}
+
+#[test]
+fn test_migrate_php7_mode_reorders_definitions_adds_before_comment_and_swaps_positional_calls() {
+    let input = concat!(
+        "<?php\n",
+        "function myfun(?$x, $y = '', $z) {\n",
+        "    return [$z, $x, $y];\n",
+        "}\n",
+        "$call1 = myfun(1, 'foo', 2);\n",
+        "$call2 = myfun(10, , 20);\n"
+    );
+    let options = MigrateOptions {
+        fix: true,
+        php_version: 7,
+    };
+    let res = migrate_source_with_options(input, "test.php", options);
+
+    assert!(res.modified);
+    // Definition must be reordered with required parameters ($z) first
+    assert!(
+        res.migrated_content.contains("//before: function myfun(?$x, $y = '', $z)\nfunction myfun($z, ?$x, $y = '')"),
+        "Old signature comment and reordered definition must be present: got:\n{}",
+        res.migrated_content
+    );
+    // Normal positional call myfun(1, 'foo', 2) where original was (x, y, z) must become (z, x, y) -> (2, 1, 'foo')
+    assert!(
+        res.migrated_content.contains("$call1 = myfun(2, 1, 'foo');"),
+        "Positional call site must be reordered: got:\n{}",
+        res.migrated_content
+    );
+}
+
+#[test]
+fn test_migrate_php7_mode_warns_on_tricky_call_sites() {
+    let input = concat!(
+        "<?php\n",
+        "function myfun(?$x, $y = '', $z) {\n",
+        "    return $z;\n",
+        "}\n",
+        "$args = [1, 'val', 2];\n",
+        "$call1 = myfun(...$args);\n",
+        "$call2 = call_user_func('myfun', 1, 2, 3);\n"
+    );
+    let options = MigrateOptions {
+        fix: true,
+        php_version: 7,
+    };
+    let res = migrate_source_with_options(input, "test.php", options);
+
+    assert!(res.modified);
+    // Tricky call with ...$args is not reordered
+    assert!(
+        res.migrated_content.contains("myfun(...$args)"),
+        "Unpacked call site should not be corrupted: got:\n{}",
+        res.migrated_content
+    );
+    // Warnings must be emitted for tricky calls and parameter order
+    assert!(!res.warnings.is_empty(), "Warnings must be emitted for tricky call sites");
+    let warnings_str = res.warnings.join("\n");
+    assert!(
+        warnings_str.contains("Tricky call site using argument unpacking (...) cannot be automatically reordered at line 6"),
+        "Expected unpacking warning, got:\n{}",
+        warnings_str
+    );
+    assert!(
+        warnings_str.contains("Tricky call site using callback (call_user_func) cannot be automatically reordered at line 7"),
+        "Expected callback dispatcher warning, got:\n{}",
+        warnings_str
+    );
+    assert!(
+        warnings_str.contains("Parameter order changed for 'function myfun(?$x, $y = '', $z)'"),
+        "Expected general notice for myfun, got:\n{}",
+        warnings_str
     );
 }
 

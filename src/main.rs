@@ -475,6 +475,7 @@ fn handle_run_migrate(sub_args: &[String]) {
     let mut check_only = false;
     let mut target_path = ".".to_string();
     let mut json_format = false;
+    let mut php_version = 7;
 
     let mut iter = sub_args.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -514,12 +515,35 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "  - Reorders named function call arguments into positional order and strips argument names (using extra commas for skipped optional arguments)\n\n",
                     "OPTIONS:\n",
                     "    PATH                         Target file or directory (default: current directory '.')\n",
+                    "    --php-version <8|7>          Source PHP version: '8' (swap named args only) or '7' (reorder params, swap calls, warn tricky calls)\n",
                     "    --check, --dry-run           Check only without writing changes to disk\n",
                     "    --format <human|json>        Output format: 'human' (default) or 'json'\n",
                     "    --help, -h                   Show this help message\n"
                 )
             );
             process::exit(0);
+        } else if arg.starts_with("--php-version=") {
+            let val = arg.trim_start_matches("--php-version=");
+            if val.starts_with('8') {
+                php_version = 8;
+            } else {
+                php_version = 7;
+            }
+        } else if arg == "--php-version" || arg == "--php" {
+            if let Some(next_val) = iter.next() {
+                if next_val.starts_with('8') {
+                    php_version = 8;
+                } else {
+                    php_version = 7;
+                }
+            }
+        } else if arg.starts_with("--php=") {
+            let val = arg.trim_start_matches("--php=");
+            if val.starts_with('8') {
+                php_version = 8;
+            } else {
+                php_version = 7;
+            }
         } else if arg == "--check" || arg == "--dry-run" {
             check_only = true;
         } else if arg == "--format=json" {
@@ -541,8 +565,26 @@ fn handle_run_migrate(sub_args: &[String]) {
         process::exit(1);
     }
 
+    // Auto-detect php version from composer.json if target path or current directory has it
+    let composer_file = if path.is_dir() {
+        path.join("composer.json")
+    } else {
+        path.parent().unwrap_or(Path::new(".")).join("composer.json")
+    };
+    if composer_file.exists() {
+        if let Ok(composer_text) = std::fs::read_to_string(&composer_file) {
+            if composer_text.contains("\"php\": \"^8")
+                || composer_text.contains("\"php\": \">=8")
+                || composer_text.contains("\"php\": \"8.")
+            {
+                php_version = 8;
+            }
+        }
+    }
+
     let options = rhp::migrate::MigrateOptions {
         fix: !check_only,
+        php_version,
     };
 
     match rhp::migrate::migrate_path(path, options) {
