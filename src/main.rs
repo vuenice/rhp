@@ -497,6 +497,7 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "  - Comments out legacy ini_set(...) configuration calls (// ini_set(...);)\n",
                     "  - Replaces $_GET[...] query lookups with Request::query(...)\n",
                     "  - Replaces $_POST[...] body lookups with Request::body(...)\n",
+                    "  - Replaces strict comparison operators ('===' -> '==', '!==' -> '!=')\n",
                     "  - Replaces '.' and '.=' string concatenation operators with '+' and '+='\n",
                     "  - Adds extra initialization lines when superglobals are used:\n",
                     "      $_GET = Request::query();\n",
