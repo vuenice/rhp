@@ -3,39 +3,63 @@ use std::path::Path;
 
 use rhp::{
     clear_rust_modules, clear_tier2_plugins, is_native_or_plugin_facade, is_static_facade,
-    is_static_only, load_and_register_rust_file, run_source_with_vm, ParentProcess, PhpValue,
-    WorkerRequest,
+    is_static_only, load_and_register_package_plugin,
+    register_in_process_native_function, run_source, run_source_with_vm, FrozenValue,
+    ParentProcess, PhpValue, WorkerRequest,
 };
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
-fn test_import_rust_file_cache_facade() {
+fn test_direct_rust_file_import_is_forbidden() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    // Create a temporary Cache.rs file
-    let temp_dir = Path::new("target/tmp/test_cache_import");
-    let _ = fs::create_dir_all(temp_dir);
-    let cache_file = temp_dir.join("Cache.rs");
-    fs::write(
-        &cache_file,
-        r#"
-// High-performance Rust Cache helper for RHP
-use std::collections::HashMap;
+    // 1. import "./Cache.rs" is rejected at parse/compile time
+    let bad_code1 = r#"import "./Cache.rs";"#;
+    let err1 = run_source(bad_code1).unwrap_err();
+    assert!(
+        err1.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        err1
+    );
 
-pub fn get(key: &str) -> Option<String> { None }
-pub fn set(key: &str, val: &str) -> bool { true }
-pub fn has(key: &str) -> bool { true }
-pub fn delete(key: &str) -> bool { true }
-"#,
-    )
-    .unwrap();
+    // 2. use "./Cache.rs" as Cache is rejected at parse/compile time
+    let bad_code2 = r#"use "./Cache.rs" as Cache;"#;
+    let err2 = run_source(bad_code2).unwrap_err();
+    assert!(
+        err2.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        err2
+    );
 
-    let code = format!(
-        r#"
-        import "{path}";
+    // 3. import Cache from "./Cache.rs" is rejected at parse/compile time
+    let bad_code3 = r#"import Cache from "./Cache.rs";"#;
+    let err3 = run_source(bad_code3).unwrap_err();
+    assert!(
+        err3.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        err3
+    );
+
+    // 4. API call rejects .rs path
+    let api_err = load_and_register_package_plugin("Cache.rs", None, None).unwrap_err();
+    assert!(
+        api_err.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        api_err
+    );
+}
+
+#[test]
+fn test_import_package_cache_facade() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_rust_modules();
+    clear_tier2_plugins();
+
+    let code = r#"
+        import "cache";
 
         Cache::set("user_100", "Alice");
         $hasVal = Cache::has("user_100");
@@ -47,11 +71,9 @@ pub fn delete(key: &str) -> bool { true }
 
         Cache::delete("user_100");
         $afterDelete = Cache::has("user_100");
-        "#,
-        path = cache_file.to_string_lossy()
-    );
+    "#;
 
-    let (vm, _) = run_source_with_vm(&code).expect("Execution should succeed");
+    let (vm, _) = run_source_with_vm(code).expect("Package import execution should succeed");
 
     assert_eq!(vm.get_main_variable("$hasVal"), Some(&PhpValue::Bool(true)));
     assert_eq!(
@@ -67,72 +89,38 @@ pub fn delete(key: &str) -> bool { true }
         vm.get_main_variable("$afterDelete"),
         Some(&PhpValue::Bool(false))
     );
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
-fn test_use_rust_file_with_alias() {
+fn test_use_package_with_alias() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_alias_import");
-    let _ = fs::create_dir_all(temp_dir);
-    let cache_file = temp_dir.join("fast_cache.rs");
-    fs::write(
-        &cache_file,
-        r#"
-pub fn get(k: &str) -> Option<String> { None }
-pub fn set(k: &str, v: &str) -> bool { true }
-"#,
-    )
-    .unwrap();
-
-    let code = format!(
-        r#"
-        use "{path}" as FastStore;
+    let code = r#"
+        use "cache" as FastStore;
 
         FastStore::set("session_token", "tok_xyz_12345");
         $tok = FastStore::get("session_token");
         $hasTok = FastStore::has("session_token");
-        "#,
-        path = cache_file.to_string_lossy()
-    );
+    "#;
 
-    let (vm, _) = run_source_with_vm(&code).expect("Execution with alias should succeed");
+    let (vm, _) = run_source_with_vm(code).expect("Execution with alias should succeed");
     assert_eq!(
         vm.get_main_variable("$tok"),
         Some(&PhpValue::string("tok_xyz_12345"))
     );
     assert_eq!(vm.get_main_variable("$hasTok"), Some(&PhpValue::Bool(true)));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
-fn test_import_rust_file_log_facade() {
+fn test_import_package_log_facade() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_log_import");
-    let _ = fs::create_dir_all(temp_dir);
-    let log_file = temp_dir.join("Log.rs");
-    fs::write(
-        &log_file,
-        r#"
-// High-performance Rust structured logging helper
-pub fn info(msg: &str) {}
-pub fn error(msg: &str) {}
-pub fn warn(msg: &str) {}
-"#,
-    )
-    .unwrap();
-
-    let code = format!(
-        r#"
-        import "{path}";
+    let code = r#"
+        import "log";
 
         Log::info("Application booted successfully", ["env" => "production"]);
         Log::warn("High memory usage detected", ["usage_mb" => 450]);
@@ -142,11 +130,9 @@ pub fn warn(msg: &str) {}
         $count = Arr::list($history)->count();
         $firstLog = $history[0]["message"];
         $firstLevel = $history[0]["level"];
-        "#,
-        path = log_file.to_string_lossy()
-    );
+    "#;
 
-    let (vm, _) = run_source_with_vm(&code).expect("Log import execution should succeed");
+    let (vm, _) = run_source_with_vm(code).expect("Log package import execution should succeed");
     assert_eq!(vm.get_main_variable("$count"), Some(&PhpValue::Int(3)));
     assert_eq!(
         vm.get_main_variable("$firstLog"),
@@ -156,8 +142,6 @@ pub fn warn(msg: &str) {}
         vm.get_main_variable("$firstLevel"),
         Some(&PhpValue::string("info"))
     );
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
@@ -166,61 +150,36 @@ fn test_import_alias_from_syntax() {
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_import_from");
-    let _ = fs::create_dir_all(temp_dir);
-    let cache_file = temp_dir.join("memory.rs");
-    fs::write(
-        &cache_file,
-        r#"
-pub fn get(k: &str) -> Option<String> { None }
-pub fn set(k: &str, v: &str) -> bool { true }
-"#,
-    )
-    .unwrap();
-
-    let code = format!(
-        r#"
-        import MemoryStore from "{path}";
+    let code = r#"
+        import MemoryStore from "cache";
 
         MemoryStore::set("user_count", 42);
         $count = MemoryStore::get("user_count");
-        "#,
-        path = cache_file.to_string_lossy()
-    );
+    "#;
 
-    let (vm, _) = run_source_with_vm(&code).expect("import ... from syntax should succeed");
+    let (vm, _) = run_source_with_vm(code).expect("import ... from syntax should succeed");
     assert_eq!(vm.get_main_variable("$count"), Some(&PhpValue::Int(42)));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
-fn test_imported_rust_class_is_static_only_facade() {
+fn test_imported_package_class_is_static_only_facade() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_static_guard");
-    let _ = fs::create_dir_all(temp_dir);
-    let cache_file = temp_dir.join("Cache.rs");
-    fs::write(&cache_file, "pub fn get() {}\n").unwrap();
-
-    let _ = load_and_register_rust_file(&cache_file.to_string_lossy(), None, None);
+    let _ = load_and_register_package_plugin("cache", None, None);
 
     assert!(is_static_facade("Cache"));
     assert!(is_native_or_plugin_facade("Cache"));
     assert!(is_static_only("Cache"));
 
     // Instantiation must be rejected at compile-time/runtime
-    let bad_code = format!(
-        r#"
-        import "{path}";
+    let bad_code = r#"
+        import "cache";
         $c = new Cache();
-        "#,
-        path = cache_file.to_string_lossy()
-    );
+    "#;
 
-    let res = run_source_with_vm(&bad_code);
+    let res = run_source(bad_code);
     let err_str = match res {
         Err(e) => e.to_string(),
         Ok(_) => panic!("Expected error instantiating static facade"),
@@ -230,37 +189,73 @@ fn test_imported_rust_class_is_static_only_facade() {
         "Unexpected error: {}",
         err_str
     );
+}
+
+#[test]
+fn test_rust_package_exporting_struct_or_trait_is_rejected() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_rust_modules();
+    clear_tier2_plugins();
+
+    let temp_dir = Path::new("target/tmp/test_struct_trait_rejected");
+    let _ = fs::create_dir_all(temp_dir);
+
+    // Package with illegal struct and trait exports
+    let rhp_toml = r#"[package]
+name = "acme/illegal-rust"
+version = "0.1.0"
+type = "native-rust"
+safety = "safe"
+
+[exports]
+facades = ["AcmeHelper"]
+structs = ["AcmeClient"]
+traits = ["AcmeSerializable"]
+"#;
+    fs::write(temp_dir.join("rhp.toml"), rhp_toml).unwrap();
+
+    // 1. Audit reports violations
+    let audit_res = rhp::pkg::audit_package(temp_dir).expect("Audit should complete");
+    assert!(!audit_res.is_clean());
+    let struct_violation = audit_res.violations.iter().any(|v| {
+        v.reason.contains("Rust packages cannot export structs to RHP")
+    });
+    let trait_violation = audit_res.violations.iter().any(|v| {
+        v.reason.contains("Rust packages cannot export traits to RHP")
+    });
+    assert!(struct_violation, "Expected struct violation in audit");
+    assert!(trait_violation, "Expected trait violation in audit");
+
+    // 2. Package plugin loader rejects package exporting structs/traits
+    let load_res = load_and_register_package_plugin(
+        &temp_dir.to_string_lossy(),
+        None,
+        None,
+    );
+    assert!(load_res.is_err());
+    let err = load_res.unwrap_err();
+    assert!(
+        err.to_string().contains("cannot export structs to RHP")
+            || err.to_string().contains("cannot export traits to RHP"),
+        "Unexpected error: {}",
+        err
+    );
 
     let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
-fn test_parent_process_boot_with_rust_import() {
+fn test_parent_process_boot_with_package_import() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_parent_boot");
-    let _ = fs::create_dir_all(temp_dir);
-    let cache_file = temp_dir.join("Cache.rs");
-    fs::write(
-        &cache_file,
-        r#"
-pub fn get(k: &str) -> Option<String> { None }
-pub fn set(k: &str, v: &str) -> bool { true }
-"#,
-    )
-    .unwrap();
-
-    let framework_code = format!(
-        r#"
-        import "{path}";
+    let framework_code = r#"
+        import "cache";
         Cache::set("app_name", "RHP Web Engine");
-        "#,
-        path = cache_file.to_string_lossy()
-    );
+    "#;
 
-    let state = ParentProcess::boot(&framework_code).expect("ParentProcess::boot should succeed");
+    let state = ParentProcess::boot(framework_code).expect("ParentProcess::boot should succeed");
 
     // Worker request accessing the shared Cache facade
     let req = WorkerRequest::new(
@@ -273,68 +268,46 @@ pub fn set(k: &str, v: &str) -> bool { true }
 
     let resp = rhp::execute_isolated_request(&state, &req, 0);
     assert_eq!(resp.status, rhp::WorkerResponseStatus::Success);
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
-fn test_native_rustc_cdylib_compilation_and_execution() {
+fn test_package_plugin_helper_facade_and_functions() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_native_cdylib");
-    let _ = fs::create_dir_all(temp_dir);
-    let rust_file = temp_dir.join("NativeHasher.rs");
-    fs::write(
-        &rust_file,
-        r#"
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+    // Register a native helper facade with standalone functions via plugin system
+    register_in_process_native_function("NativeHasher", "computeHash", false, |args| {
+        let input = match args.first() {
+            Some(FrozenValue::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        Ok(FrozenValue::String(format!("hash_of_{}", input)))
+    });
 
-#[no_mangle]
-pub extern "C" fn rhp_call(
-    method: *const c_char,
-    _args_json: *const c_char,
-) -> *mut c_char {
-    let m = unsafe {
-        if method.is_null() { "" } else { CStr::from_ptr(method).to_str().unwrap_or("") }
-    };
-    let res = match m {
-        "computeHash" => "\"0xdeadbeef\"",
-        "fastSum" => "100",
-        _ => "null",
-    };
-    CString::new(res).unwrap().into_raw()
-}
+    register_in_process_native_function("NativeHasher", "fastSum", false, |args| {
+        let a = match args.first() {
+            Some(FrozenValue::Int(n)) => *n,
+            _ => 0,
+        };
+        let b = match args.get(1) {
+            Some(FrozenValue::Int(n)) => *n,
+            _ => 0,
+        };
+        Ok(FrozenValue::Int(a + b))
+    });
 
-#[no_mangle]
-pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe { drop(CString::from_raw(ptr)); }
-    }
-}
-"#,
-    )
-    .unwrap();
-
-    let code = format!(
-        r#"
-        import "{path}" as NativeHasher;
+    let code = r#"
+        use "native-hasher" as NativeHasher;
 
         $hash = NativeHasher::computeHash("hello");
         $sum = NativeHasher::fastSum(40, 60);
-        "#,
-        path = rust_file.to_string_lossy()
-    );
+    "#;
 
-    let (vm, _) = run_source_with_vm(&code).expect("Native cdylib execution should succeed");
+    let (vm, _) = run_source_with_vm(code).expect("Package plugin facade call should succeed");
     assert_eq!(
         vm.get_main_variable("$hash"),
-        Some(&PhpValue::string("0xdeadbeef"))
+        Some(&PhpValue::string("hash_of_hello"))
     );
     assert_eq!(vm.get_main_variable("$sum"), Some(&PhpValue::Int(100)));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
-

@@ -1113,15 +1113,15 @@ impl<'a> IrLowerer<'a> {
                 Ok(())
             }
 
-            StmtKind::RustImport { path, alias } => {
+            StmtKind::PackageImport { package, alias } => {
                 let alias_str = alias.as_ref().map(|a| a.name);
-                let facade_name = crate::vm::rust_loader::infer_facade_name(path, alias_str);
-                let _ = crate::vm::rust_loader::load_and_register_rust_file(path, alias_str, None);
-                let path_const = b.intern_string(path);
+                let facade_name = crate::vm::rust_loader::infer_facade_name(package, alias_str);
+                let _ = crate::vm::rust_loader::load_and_register_package_plugin(package, alias_str, None);
+                let pkg_const = b.intern_string(package);
                 let alias_const = alias.as_ref().map(|a| b.intern_string(a.name));
                 b.emit(
-                    OpCode::ImportRust {
-                        path: path_const,
+                    OpCode::ImportPackage {
+                        package: pkg_const,
                         alias: alias_const,
                     },
                     stmt.span,

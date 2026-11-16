@@ -477,7 +477,7 @@ impl<'s> CombinatorStream<'s> {
             }
         }
 
-        // 14b. Import statement (`import "./Cache.rs";`, `import "./Cache.rs" as Cache;`, `import Cache from "./Cache.rs";`)
+        // 14b. Package import statement (`import "cache";`, `import "vuenice/cache" as Cache;`, `import Cache from "cache";`)
         if self.matches(&Token::Import) {
             let (path, alias) = if let Some(spanned) = self.peek() {
                 if let Some(path_str) = spanned
@@ -507,7 +507,7 @@ impl<'s> CombinatorStream<'s> {
                     let path_spanned = self.advance().ok_or_else(|| {
                         ParseError::new(
                             ParseErrorKind::UnexpectedEof {
-                                expected: "string literal path".to_string(),
+                                expected: "string literal package name".to_string(),
                             },
                             self.current_span(),
                         )
@@ -519,7 +519,7 @@ impl<'s> CombinatorStream<'s> {
                         .ok_or_else(|| {
                             ParseError::new(
                                 ParseErrorKind::UnexpectedToken {
-                                    expected: "string literal path".to_string(),
+                                    expected: "string literal package name".to_string(),
                                     found: path_spanned.token.as_str().to_string(),
                                 },
                                 path_spanned.span,
@@ -530,7 +530,7 @@ impl<'s> CombinatorStream<'s> {
             } else {
                 return Err(ParseError::new(
                     ParseErrorKind::UnexpectedEof {
-                        expected: "import path or identifier".to_string(),
+                        expected: "import package or identifier".to_string(),
                     },
                     self.current_span(),
                 ));
@@ -538,12 +538,20 @@ impl<'s> CombinatorStream<'s> {
 
             self.expect_statement_terminator()?;
             let span = start_span.merge(self.current_span());
-            return Ok(Stmt::new(StmtKind::RustImport { path, alias }, span));
+
+            if path.ends_with(".rs") || path.ends_with(".rs\"") || path.ends_with(".rs'") {
+                return Err(ParseError::new(
+                    ParseErrorKind::DirectRustImportForbidden { path },
+                    span,
+                ));
+            }
+
+            return Ok(Stmt::new(StmtKind::PackageImport { package: path, alias }, span));
         }
 
         // 15. Use statement
         if self.matches(&Token::Use) {
-            // Check if this is a file import (`use "./Cache.rs";` or `use "./Cache.rs" as Cache;`)
+            // Check if this is a package import (`use "cache";` or `use "vuenice/cache" as Cache;`)
             if let Some(spanned) = self.peek() {
                 if let Some(path_str) = spanned
                     .token
@@ -558,7 +566,15 @@ impl<'s> CombinatorStream<'s> {
                     };
                     self.expect_statement_terminator()?;
                     let span = start_span.merge(self.current_span());
-                    return Ok(Stmt::new(StmtKind::RustImport { path: path_str, alias }, span));
+
+                    if path_str.ends_with(".rs") || path_str.ends_with(".rs\"") || path_str.ends_with(".rs'") {
+                        return Err(ParseError::new(
+                            ParseErrorKind::DirectRustImportForbidden { path: path_str },
+                            span,
+                        ));
+                    }
+
+                    return Ok(Stmt::new(StmtKind::PackageImport { package: path_str, alias }, span));
                 }
             }
 

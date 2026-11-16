@@ -180,6 +180,12 @@ impl<'a> DiagnosticBuilder<'a> {
                 Some("declare".to_string()),
                 None,
             ),
+            ParseErrorKind::DirectRustImportForbidden { path } => (
+                "RHP0122".to_string(),
+                format!("direct importing of Rust source files ('.rs') is prohibited. Native extensions must be imported as a package plugin exposing a helper facade or function: '{}'", path),
+                Some(path.clone()),
+                Some(vec!["package name or namespace".to_string()]),
+            ),
             ParseErrorKind::Lex(lex_err) => match lex_err {
                 crate::lexer::error::LexError::UnterminatedString => (
                     "RHP0002".to_string(),

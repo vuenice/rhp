@@ -88,7 +88,7 @@ pub use parent_process::{EngineState, FrozenValue, ParentProcess};
 pub use rust_loader::{
     clear_blocking_native_functions, clear_rust_modules, extract_blocking_functions,
     extract_pub_functions, extract_rust_functions, get_in_process_native_function, infer_facade_name,
-    is_native_function_blocking, load_and_register_rust_file, register_blocking_native_function,
+    is_native_function_blocking, load_and_register_package_plugin, load_and_register_rust_file, register_blocking_native_function,
     register_in_process_native_function, resolve_rust_file_path, sanitize_rust_source_for_rustc,
     to_pascal_case, LoadedRustModule, RustCacheStore, RustLogEntry, RustLogStore,
 };

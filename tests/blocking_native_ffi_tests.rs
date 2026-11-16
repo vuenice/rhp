@@ -1,5 +1,3 @@
-use std::fs;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -16,20 +14,12 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn test_attribute_parsing_and_blocking_detection() {
-    let _guard = TEST_LOCK.lock().unwrap();
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_attr_detection");
-    let _ = fs::create_dir_all(temp_dir);
-    let rust_file = temp_dir.join("MixedCrypto.rs");
-    fs::write(
-        &rust_file,
-        r#"
+    let rust_code = r#"
 // Native cryptographic helper with blocking and non-blocking exports
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-
 #[blocking]
 pub fn argon2_hash(pwd: &str, salt: &str) -> String {
     format!("argon2id:${}:${}", salt, pwd)
@@ -43,62 +33,42 @@ pub fn quick_crc32(data: &str) -> u32 {
 pub fn scrypt_hash(pwd: &str) -> String {
     format!("scrypt:{}", pwd)
 }
+"#;
 
-#[no_mangle]
-pub extern "C" fn rhp_call(
-    method: *const c_char,
-    _args: *const c_char,
-) -> *mut c_char {
-    let m = unsafe {
-        if method.is_null() { "" } else { CStr::from_ptr(method).to_str().unwrap_or("") }
-    };
-    let res = match m {
-        "argon2_hash" => "\"argon2id_result\"",
-        "quick_crc32" => "42",
-        "scrypt_hash" => "\"scrypt_result\"",
-        _ => "null",
-    };
-    CString::new(res).unwrap().into_raw()
-}
+    let (functions, blocking_fns) = rhp::extract_rust_functions(rust_code);
+    assert!(functions.contains("argon2_hash"));
+    assert!(functions.contains("quick_crc32"));
+    assert!(functions.contains("scrypt_hash"));
+    assert!(blocking_fns.contains("argon2_hash"));
+    assert!(blocking_fns.contains("scrypt_hash"));
+    assert!(!blocking_fns.contains("quick_crc32"));
 
-#[no_mangle]
-pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe { drop(CString::from_raw(ptr)); }
-    }
-}
-"#,
-    )
-    .unwrap();
+    // Verify direct importing of .rs files is prohibited
+    let err = load_and_register_rust_file("MixedCrypto.rs", None, None).unwrap_err();
+    assert!(
+        err.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        err
+    );
 
-    let facade = load_and_register_rust_file(&rust_file.to_string_lossy(), None, None)
-        .expect("MixedCrypto module should compile and load");
+    // Register blocking functions via package/plugin API
+    rhp::register_blocking_native_function("MixedCrypto", "argon2_hash");
+    rhp::register_blocking_native_function("MixedCrypto", "scrypt_hash");
 
-    assert_eq!(facade, "MixedCrypto");
     assert!(is_native_function_blocking("MixedCrypto", "argon2_hash"));
     assert!(is_native_function_blocking("MixedCrypto", "scrypt_hash"));
     assert!(!is_native_function_blocking("MixedCrypto", "quick_crc32"));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
 fn test_module_level_blocking_attribute() {
-    let _guard = TEST_LOCK.lock().unwrap();
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_module_blocking");
-    let _ = fs::create_dir_all(temp_dir);
-    let rust_file = temp_dir.join("HeavyVips.rs");
-    fs::write(
-        &rust_file,
-        r#"
+    let rust_code = r#"
 #![blocking]
 // All exports in this module are heavy image processing operations
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-
 pub fn resize(img: &str, w: i32, h: i32) -> String {
     format!("resized_{}_{}x{}", img, w, h)
 }
@@ -106,105 +76,51 @@ pub fn resize(img: &str, w: i32, h: i32) -> String {
 pub fn compress(img: &str, quality: i32) -> String {
     format!("compressed_{}_q{}", img, quality)
 }
+"#;
 
-#[no_mangle]
-pub extern "C" fn rhp_call(
-    method: *const c_char,
-    _args: *const c_char,
-) -> *mut c_char {
-    let m = unsafe {
-        if method.is_null() { "" } else { CStr::from_ptr(method).to_str().unwrap_or("") }
-    };
-    let res = match m {
-        "resize" => "\"resized_ok\"",
-        "compress" => "\"compressed_ok\"",
-        _ => "null",
-    };
-    CString::new(res).unwrap().into_raw()
-}
+    let (functions, blocking_fns) = rhp::extract_rust_functions(rust_code);
+    assert!(functions.contains("resize"));
+    assert!(functions.contains("compress"));
+    assert!(blocking_fns.contains("resize"));
+    assert!(blocking_fns.contains("compress"));
 
-#[no_mangle]
-pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe { drop(CString::from_raw(ptr)); }
-    }
-}
-"#,
-    )
-    .unwrap();
+    // Direct .rs import prohibited
+    let err = load_and_register_rust_file("HeavyVips.rs", None, None).unwrap_err();
+    assert!(err.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"));
 
-    let facade = load_and_register_rust_file(&rust_file.to_string_lossy(), None, None)
-        .expect("HeavyVips module should compile and load");
+    rhp::register_blocking_native_function("HeavyVips", "resize");
+    rhp::register_blocking_native_function("HeavyVips", "compress");
 
-    assert_eq!(facade, "HeavyVips");
     assert!(is_native_function_blocking("HeavyVips", "resize"));
     assert!(is_native_function_blocking("HeavyVips", "compress"));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]
 fn test_compiled_cdylib_blocking_execution_fiber_suspension() {
-    let _guard = TEST_LOCK.lock().unwrap();
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_rust_modules();
     clear_tier2_plugins();
 
-    let temp_dir = Path::new("target/tmp/test_cdylib_blocking_exec");
-    let _ = fs::create_dir_all(temp_dir);
-    let rust_file = temp_dir.join("HeavyHash.rs");
-    fs::write(
-        &rust_file,
-        r#"
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-use std::thread;
-use std::time::Duration;
+    // 1. Verify direct .rs import syntax is rejected by compiler
+    let bad_code = r#"import "./HeavyHash.rs" as HeavyHash;"#;
+    let err = rhp::run_source(bad_code).unwrap_err();
+    assert!(
+        err.to_string().contains("Direct importing of Rust source files ('.rs') is prohibited"),
+        "Unexpected error: {}",
+        err
+    );
 
-#[blocking]
-pub fn hash_heavy(data: &str) -> String {
-    thread::sleep(Duration::from_millis(30));
-    format!("hash_{}", data)
-}
+    // 2. Register native plugin helper facade with fast non-blocking and heavy blocking methods
+    register_in_process_native_function("HeavyHash", "hash_fast", false, |_args| {
+        Ok(FrozenValue::String("fast_done".to_string()))
+    });
 
-pub fn hash_fast(data: &str) -> String {
-    format!("fast_{}", data)
-}
+    register_in_process_native_function("HeavyHash", "hash_heavy", true, |_args| {
+        thread::sleep(Duration::from_millis(30));
+        Ok(FrozenValue::String("heavy_done".to_string()))
+    });
 
-#[no_mangle]
-pub extern "C" fn rhp_call(
-    method: *const c_char,
-    _args: *const c_char,
-) -> *mut c_char {
-    let m = unsafe {
-        if method.is_null() { "" } else { CStr::from_ptr(method).to_str().unwrap_or("") }
-    };
-    match m {
-        "hash_heavy" => {
-            // Emulate synchronous heavy processing
-            thread::sleep(Duration::from_millis(30));
-            CString::new("\"heavy_done\"").unwrap().into_raw()
-        }
-        "hash_fast" => {
-            CString::new("\"fast_done\"").unwrap().into_raw()
-        }
-        _ => CString::new("null").unwrap().into_raw(),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe { drop(CString::from_raw(ptr)); }
-    }
-}
-"#,
-    )
-    .unwrap();
-
-    let code = format!(
-        r#"
-        import "{path}" as HeavyHash;
-
+    let code = r#"
         // 1. Synchronous fast call (non-blocking)
         $fast = HeavyHash::hash_fast("quick_string");
 
@@ -212,11 +128,9 @@ pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
         $heavy = HeavyHash::hash_heavy("secret_passphrase");
 
         return Arr::list([$fast, $heavy]);
-        "#,
-        path = rust_file.to_string_lossy()
-    );
+    "#;
 
-    let (res, stats) = run_source_in_fiber(&code, "blocking_fiber_test")
+    let (res, stats) = run_source_in_fiber(code, "blocking_fiber_test")
         .expect("Execution in fiber should succeed");
 
     match res {
@@ -234,8 +148,6 @@ pub extern "C" fn rhp_free_string(ptr: *mut c_char) {
     assert_eq!(stats.io_breakdown.get("NativeBlocking"), Some(&1));
     assert!(stats.io_count >= 1);
     assert!(stats.io_wait_duration >= Duration::from_millis(20));
-
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 #[test]

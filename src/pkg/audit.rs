@@ -113,7 +113,33 @@ pub fn audit_package(root_dir: &Path) -> Result<AuditReport> {
         }
     }
 
-    // 2. Warn if native execution is selected without official verification
+    // 2. Reject Rust packages exporting structs or traits (only helper facades and functions are supported)
+    if let Some(ref exports) = manifest.exports {
+        if !exports.structs.is_empty() {
+            violations.push(SecurityViolation {
+                file: manifest_path.clone(),
+                line: 1,
+                pattern: "exports.structs".to_string(),
+                reason: format!(
+                    "Rust packages cannot export structs to RHP ({:?}). Only helper facades and functions are supported via plugins.",
+                    exports.structs
+                ),
+            });
+        }
+        if !exports.traits.is_empty() {
+            violations.push(SecurityViolation {
+                file: manifest_path.clone(),
+                line: 1,
+                pattern: "exports.traits".to_string(),
+                reason: format!(
+                    "Rust packages cannot export traits to RHP ({:?}). Only helper facades and functions are supported via plugins.",
+                    exports.traits
+                ),
+            });
+        }
+    }
+
+    // 3. Warn if native execution is selected without official verification
     if pkg_type == PackageType::NativeRust {
         if let Some(ref native) = manifest.native {
             if native.execution_target.as_deref() == Some("native") {

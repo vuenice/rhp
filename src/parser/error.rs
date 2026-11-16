@@ -110,6 +110,11 @@ pub enum ParseErrorKind {
     #[error("Compile Error: Directive statement 'declare(...)' is not supported in RHP. Strict typing is enabled project-wide by default; run 'rhp migrate' to remove declare() directives.")]
     DeclareDirectiveForbidden,
 
+    #[error("Compile Error: Direct importing of Rust source files ('.rs') is prohibited. Native extensions must be imported as a package plugin exposing a helper facade or function: '{path}'")]
+    DirectRustImportForbidden {
+        path: String,
+    },
+
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 }

@@ -482,9 +482,9 @@ pub enum OpCode {
     /// Await an asynchronous `Future` handle (`await $future`).
     Await { dst: Reg, future: Reg },
 
-    /// Import a Rust file helper (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`).
-    ImportRust {
-        path: ConstantId,
+    /// Import a package plugin helper (`import "cache";` or `use "cache" as Cache;`).
+    ImportPackage {
+        package: ConstantId,
         alias: Option<ConstantId>,
     },
 
@@ -758,8 +758,8 @@ impl fmt::Display for OpCode {
             OpCode::Echo { src } => write!(f, "ECHO            {}", src),
             OpCode::Defer { func_id } => write!(f, "DEFER           {}", func_id),
             OpCode::Await { dst, future } => write!(f, "AWAIT           {}, {}", dst, future),
-            OpCode::ImportRust { path, alias } => {
-                write!(f, "IMPORT_RUST     {}, alias={:?}", path, alias)
+            OpCode::ImportPackage { package, alias } => {
+                write!(f, "IMPORT_PACKAGE  {}, alias={:?}", package, alias)
             }
             OpCode::Yield {
                 dst,

@@ -196,7 +196,7 @@ impl SharedValue {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(f) => *f != 0.0 && !f.is_nan(),
-            Self::String(s) => !s.is_empty() && s.as_str() != "0",
+            Self::String(s) => !s.is_empty() && s.as_ref() != "0",
             Self::Bytes(b) => !b.is_empty() && &**b != b"0",
             Self::AtomicInt(a) => a.load(AtomicOrdering::SeqCst) != 0,
             Self::AtomicBool(b) => b.load(AtomicOrdering::SeqCst),

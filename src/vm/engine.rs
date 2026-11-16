@@ -3778,11 +3778,11 @@ impl VM {
                     self.registers[base_reg + dst.index()] = resolved;
                 }
 
-                OpCode::ImportRust { path, alias } => {
+                OpCode::ImportPackage { package, alias } => {
                     let chunk = self.chunk_for_func(func_id);
-                    let path_str = chunk.get_string_constant(path).unwrap_or_default().to_string();
+                    let pkg_str = chunk.get_string_constant(package).unwrap_or_default().to_string();
                     let alias_str = alias.and_then(|a| chunk.get_string_constant(a)).map(|s| s.to_string());
-                    let _ = crate::vm::rust_loader::load_and_register_rust_file(&path_str, alias_str.as_deref(), None);
+                    let _ = crate::vm::rust_loader::load_and_register_package_plugin(&pkg_str, alias_str.as_deref(), None);
                 }
 
                 OpCode::Yield { dst, value, .. } => {

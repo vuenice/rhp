@@ -101,7 +101,7 @@ pub use vm::{
     extract_map_elements, extract_pub_functions, extract_rust_functions, flatten_elements, get_fiber_local, get_recorded_logs,
     get_runtime_closure_macro, has_runtime_closure_macro, has_tier2_plugin, infer_facade_name, init_cookie_data,
     init_request_params, init_session_data, is_current_fiber, is_native_function_blocking,
-    load_and_register_rust_file, LoadedRustModule, RustCacheStore, RustLogEntry, RustLogStore, resolve_rust_file_path,
+    load_and_register_package_plugin, load_and_register_rust_file, LoadedRustModule, RustCacheStore, RustLogEntry, RustLogStore, resolve_rust_file_path,
     record_fiber_io_finish, record_fiber_io_start, record_fiber_yield, register_blocking_native_function, clear_blocking_native_functions, register_in_process_native_function, register_runtime_closure_macro,
     register_tier2_plugin, register_tier2_plugin_handler, run_expr, run_module, run_source,
     run_source_in_fiber, run_source_in_fiber_with_context, run_source_with_file_id,

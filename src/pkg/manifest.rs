@@ -125,6 +125,12 @@ pub struct ExportsConfig {
     pub facades: Vec<String>,
     #[serde(default)]
     pub namespaces: Vec<String>,
+    #[serde(default)]
+    pub functions: Vec<String>,
+    #[serde(default)]
+    pub structs: Vec<String>,
+    #[serde(default)]
+    pub traits: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

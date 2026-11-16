@@ -132,9 +132,9 @@ pub enum StmtKind<'s> {
     /// Use import statement (`use App\Models\User as UserModel;`).
     Use(Vec<UseImport<'s>>),
 
-    /// Rust file import statement (`import "./Cache.rs";` or `use "./Cache.rs" as Cache;`).
-    RustImport {
-        path: String,
+    /// Package import statement (`import "cache";` or `import "vuenice/cache" as Cache;` or `use "cache" as Cache;`).
+    PackageImport {
+        package: String,
         alias: Option<Ident<'s>>,
     },
 
