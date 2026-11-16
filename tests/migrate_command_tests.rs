@@ -7,6 +7,27 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn test_migrate_replaces_strict_equality() {
+    let input = concat!(
+        "<?php\n",
+        "if ($a === 1 && $b !== 2) {\n",
+        "    $c = $a === $b;\n",
+        "    $msg = \"=== stays in string ===\";\n",
+        "    // === stays in comment\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.strict_eq_count, 3);
+    assert!(res.migrated_content.contains("if ($a == 1 && $b != 2)"));
+    assert!(res.migrated_content.contains("$c = $a == $b;"));
+    assert!(res.migrated_content.contains("\"=== stays in string ===\""));
+    assert!(res.migrated_content.contains("// === stays in comment"));
+    assert!(!res.migrated_content.contains("$a ==="));
+    assert!(!res.migrated_content.contains("$b !=="));
+}
+
+#[test]
 fn test_migrate_get_used() {
     let input = concat!(
         "<?php\n",

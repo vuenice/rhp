@@ -52,6 +52,7 @@ pub struct MigrateFileResult {
     pub post_replace_count: usize,
     pub error_suppress_count: usize,
     pub var_dump_count: usize,
+    pub strict_eq_count: usize,
     pub byte_param_count: usize,
     pub named_arg_count: usize,
     pub param_order_count: usize,
@@ -131,6 +132,9 @@ impl MigrateReport {
                     }
                     if res.var_dump_count > 0 {
                         out.push_str(&format!("      ~ {} var_dump / var_export call(s) replaced with dd()\n", res.var_dump_count));
+                    }
+                    if res.strict_eq_count > 0 {
+                        out.push_str(&format!("      ~ {} strict comparison operator(s) replaced ('===' -> '==', '!==' -> '!=')\n", res.strict_eq_count));
                     }
                     if res.byte_param_count > 0 {
                         out.push_str(&format!("      ~ {} function parameter(s) receiving binary strings updated to 'byte'\n", res.byte_param_count));
@@ -237,6 +241,7 @@ pub fn migrate_source_with_options_and_context(
     let mut post_replace_count = 0;
     let mut error_suppress_count = 0;
     let mut var_dump_count = 0;
+    let mut strict_eq_count = 0;
     let mut named_arg_count = 0;
     let mut param_order_count = 0;
     let mut warnings = Vec::new();
@@ -244,6 +249,12 @@ pub fn migrate_source_with_options_and_context(
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
     current = after_tags;
+
+    // Step 0.001: `===` / `!==` are parse errors in RHP. Rewrite them before any
+    // later step parses the file. Strings and comments are left unchanged.
+    let after_eq = super::replace_strict_equality_operators(&current);
+    strict_eq_count += current.len() - after_eq.len();
+    current = after_eq;
 
     // Step 0.01: Strip redundant declare(...) directive statements and blocks
     let (after_declares, d_count) = strip_declare_statements(&current);
@@ -384,6 +395,7 @@ pub fn migrate_source_with_options_and_context(
         post_replace_count,
         error_suppress_count,
         var_dump_count,
+        strict_eq_count,
         byte_param_count,
         named_arg_count,
         param_order_count,
