@@ -690,6 +690,48 @@ for ($item in $items) {
 }
 
 #[test]
+fn test_formatter_braces_indented_for_in_only() {
+    let indented = "for $item in $items\n    echo $item;\n";
+    let formatted = format_source(indented);
+    assert!(
+        formatted.contains("for ($item in $items) {"),
+        "Expected parentheses and an opening brace, got:\n{}",
+        formatted
+    );
+    assert!(
+        formatted.contains("echo $item;"),
+        "Expected the indented body inside the loop, got:\n{}",
+        formatted
+    );
+    assert!(formatted.contains('}'), "Expected a closing brace, got:\n{}", formatted);
+
+    let sibling = "for $item in $items\n    echo $item;\necho $other;\n";
+    let formatted_sibling = format_source(sibling);
+    let brace_at = formatted_sibling.find('}').expect("closing brace");
+    let other_at = formatted_sibling.find("echo $other").expect("sibling statement");
+    assert!(
+        brace_at < other_at,
+        "The following statement stays outside the loop:\n{}",
+        formatted_sibling
+    );
+
+    let branched = "for $item in $items\n    if ($item) {\n        echo $item;\n    }\n";
+    let formatted_branch = format_source(branched);
+    let open = formatted_branch.find("for ($item in $items) {").expect(&formatted_branch);
+    let close = formatted_branch.rfind('}').expect(&formatted_branch);
+    let echo_at = formatted_branch.find("echo $item").expect(&formatted_branch);
+    assert!(open < echo_at && echo_at < close, "if body must stay inside for-in:\n{}", formatted_branch);
+
+    let c_style = "for ($i = 0; $i < 10; $i++) {\n    echo $i;\n}\n";
+    let formatted_c = format_source(c_style);
+    assert!(
+        formatted_c.contains("for ($i = 0; $i < 10; $i++) {"),
+        "C-style header must stay intact:\n{}",
+        formatted_c
+    );
+}
+
+#[test]
 fn test_formatter_moves_trailing_operators_to_next_line_and_indents_continuations() {
     // Exact user requirement:
     // Arr::list()->

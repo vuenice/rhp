@@ -39,6 +39,7 @@ pub struct MigrateFileResult {
     pub ini_set_count: usize,
     pub cast_count: usize,
     pub list_destructure_count: usize,
+    pub foreach_count: usize,
     pub get_replace_count: usize,
     pub post_replace_count: usize,
     pub error_suppress_count: usize,
@@ -105,6 +106,9 @@ impl MigrateReport {
                     }
                     if res.list_destructure_count > 0 {
                         out.push_str(&format!("      ~ {} list(...) destructuring construct(s) converted to [...]\n", res.list_destructure_count));
+                    }
+                    if res.foreach_count > 0 {
+                        out.push_str(&format!("      ~ {} foreach loop(s) rewritten to for-in\n", res.foreach_count));
                     }
                     if res.get_replace_count > 0 {
                         out.push_str(&format!("      ~ {} $_GET[...] access(es) replaced with Request::query(...)\n", res.get_replace_count));
@@ -188,6 +192,7 @@ pub fn migrate_source_with_context(
     let mut ini_set_count = 0;
     let mut cast_count = 0;
     let mut list_destructure_count = 0;
+    let mut foreach_count = 0;
     let mut get_replace_count = 0;
     let mut post_replace_count = 0;
     let mut error_suppress_count = 0;
@@ -224,6 +229,11 @@ pub fn migrate_source_with_context(
     let (after_lists, l_count) = replace_list_destructuring(&current);
     list_destructure_count += l_count;
     current = after_lists;
+
+    // Step 0.055: Rewrite foreach ($items as $x) to for ($x in $items)
+    let (after_foreach, fe_count) = replace_foreach_with_for_in(&current);
+    foreach_count += fe_count;
+    current = after_foreach;
 
     // Step 0.06: Remove error suppression operator '@' (@unlink() -> unlink())
     let (after_suppress, s_count) = remove_error_suppression(&current);
@@ -307,6 +317,7 @@ pub fn migrate_source_with_context(
         ini_set_count,
         cast_count,
         list_destructure_count,
+        foreach_count,
         get_replace_count,
         post_replace_count,
         error_suppress_count,
@@ -3395,6 +3406,100 @@ pub fn replace_list_destructuring(source: &str) -> (String, usize) {
     }
 
     (result, count)
+}
+
+/// Rewrites `foreach ($items as $value)` and `foreach ($items as $key => $value)`
+/// to `for ($value in $items)` and `for ($key => $value in $items)`.
+pub fn replace_foreach_with_for_in(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if i > 0 && is_migrate_word_byte(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+        if i + 7 <= n && &source[i..i + 7] == "foreach" {
+            let after_word = i + 7;
+            if after_word < n && is_migrate_word_byte(bytes[after_word]) {
+                i = after_word;
+                continue;
+            }
+            let mut p = after_word;
+            while p < n && matches!(bytes[p], b' ' | b'\t' | b'\r' | b'\n') {
+                p += 1;
+            }
+            if p >= n || bytes[p] != b'(' || !mask[p] {
+                i = after_word;
+                continue;
+            }
+            let open = p;
+            let mut depth = 0i32;
+            let mut as_at = None;
+            let mut close = None;
+            let mut cur = open;
+            while cur < n {
+                if mask[cur] {
+                    if bytes[cur] == b'(' {
+                        depth += 1;
+                    } else if bytes[cur] == b')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(cur);
+                            break;
+                        }
+                    } else if depth == 1 && as_at.is_none() && cur + 2 <= n && &bytes[cur..cur + 2] == b"as" {
+                        let before_ok = cur == 0 || !is_migrate_word_byte(bytes[cur - 1]);
+                        let after_as = cur + 2;
+                        let after_ok = after_as >= n || !is_migrate_word_byte(bytes[after_as]);
+                        if before_ok && after_ok {
+                            as_at = Some(cur);
+                        }
+                    }
+                }
+                cur += 1;
+            }
+            if let (Some(as_pos), Some(cp)) = (as_at, close) {
+                let iterable = source[open + 1..as_pos].trim();
+                let binding = source[as_pos + 2..cp].trim();
+                if !iterable.is_empty() && !binding.is_empty() {
+                    edits.push(TextEdit {
+                        start: i,
+                        end: cp + 1,
+                        replacement: format!("for ({} in {})", binding, iterable),
+                    });
+                    count += 1;
+                    i = cp + 1;
+                    continue;
+                }
+            }
+            i = after_word;
+            continue;
+        }
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    (result, count)
+}
+
+fn is_migrate_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }
 
 // =========================================================================

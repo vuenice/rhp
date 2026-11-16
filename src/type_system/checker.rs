@@ -45,9 +45,15 @@ pub struct TypeCheckResult {
 /// A compile-time warning that leaves the program runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeWarning {
+    /// Lint code, later mapped to an `RHP04xx` diagnostic.
+    pub code: &'static str,
     pub message: String,
     pub span: Span,
 }
+
+/// Emitted for every C-style `for (init; cond; step)` loop.
+pub const C_STYLE_FOR_DEPRECATION: &str =
+    "C-style for (init; cond; step) loop will be deprecated in the future. Please use range or a for-in loop.";
 
 impl TypeCheckResult {
     /// Retrieve the inferred type of a local variable inside a function or `Class::method`.
@@ -2077,6 +2083,11 @@ impl TypeChecker {
                 update,
                 body,
             } => {
+                self.result.warnings.push(TypeWarning {
+                    code: "deprecated-c-style-for",
+                    message: C_STYLE_FOR_DEPRECATION.to_string(),
+                    span: stmt.span,
+                });
                 for e in init {
                     self.infer_expr(e, env, ctx, None)?;
                 }
@@ -3403,6 +3414,7 @@ impl TypeChecker {
                     }
                     if slow_element_removal(&base_obj_ty) {
                         self.result.warnings.push(TypeWarning {
+                            code: "slow-collection-remove",
                             message: SLOW_REMOVE_WARNING.to_string(),
                             span: expr.span,
                         });

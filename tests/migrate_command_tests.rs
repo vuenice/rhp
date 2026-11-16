@@ -1378,14 +1378,39 @@ fn test_migrate_list_destructuring_foreach() {
     assert!(res.modified);
     assert_eq!(res.list_destructure_count, 2);
     let expected = concat!(
-        "foreach ($rows as [$id, $name]) {\n",
+        "for ([$id, $name] in $rows) {\n",
         "    echo $id;\n",
         "}\n",
-        "foreach ($data as $key => [$a, $b]) {\n",
+        "for ($key => [$a, $b] in $data) {\n",
         "    echo $key;\n",
         "}\n"
     );
+    assert_eq!(res.foreach_count, 2);
     assert_eq!(res.upgraded_content, expected);
+}
+
+#[test]
+fn test_migrate_foreach_to_for_in() {
+    let input = concat!(
+        "<?php\n",
+        "foreach ($users as $name) {\n",
+        "    echo $name;\n",
+        "}\n",
+        "foreach($rows as $k => $v) {\n",
+        "    echo $k;\n",
+        "}\n",
+        "$keep = \"foreach ($a as $b)\";\n",
+        "for ($i = 0; $i < 10; $i++) {\n",
+        "    echo $i;\n",
+        "}\n"
+    );
+    let res = upgrade_php_source(input, "test.php");
+    assert_eq!(res.foreach_count, 2);
+    assert!(res.upgraded_content.contains("for ($name in $users) {"));
+    assert!(res.upgraded_content.contains("for ($k => $v in $rows) {"));
+    assert!(res.upgraded_content.contains("\"foreach ($a as $b)\""));
+    assert!(res.upgraded_content.contains("for ($i = 0; $i < 10; $i++) {"));
+    assert!(!res.upgraded_content.contains("foreach ($users"));
 }
 
 #[test]

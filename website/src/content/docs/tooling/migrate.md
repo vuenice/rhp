@@ -125,6 +125,32 @@ function add(int $a, int $b): int {
 
 ---
 
+### `foreach` to `for-in`
+
+Legacy `foreach ($items as $value)` and `foreach ($items as $key => $value)` are rewritten to for-in. The iterable and the binding stay as written, including a destructuring pattern.
+
+```php
+// BEFORE:
+foreach ($users as $name) {
+    echo $name;
+}
+foreach ($users as $index => $name) {
+    echo $name;
+}
+
+// AFTER:
+for ($name in $users) {
+    echo $name;
+}
+for ($index => $name in $users) {
+    echo $name;
+}
+```
+
+`foreach` inside a string or a comment is left unchanged. A C-style `for (init; cond; step)` is not rewritten. Compiling that header reports warning RHP0403. See [Control Flow](/docs/guide/control-flow).
+
+---
+
 ### 3. Legacy `error_reporting(...)` Call Removal
 
 RHP replaces runtime error masking with static diagnostics and compile-time boundary checks. Masking errors dynamically with `error_reporting()` is rejected.

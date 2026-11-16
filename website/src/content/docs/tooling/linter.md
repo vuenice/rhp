@@ -20,7 +20,8 @@ By default, running `rhp run lint` executes in fix-and-report mode:
 4. **Parameter Order Normalization (Required Before Optional):** Automatically reorganizes parameter signatures across functions, methods, closures, and arrow functions so required parameters precede optional ones.
 5. **Automated Type Inference:** Writes `array`, `list`, `dict`, `set`, and `hashMap` on variables, class properties, parameters that have defaults, and function return types. The linter is mandatory, so the compiler uses the written type and does not choose a collection kind from the shape of an array literal.
 6. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
-7. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format.
+7. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format. A C-style `for (init; cond; step)` is reported as warning **RHP0403** (`deprecated-c-style-for`): `C-style for (init; cond; step) loop will be deprecated in the future. Please use range or a for-in loop.`
+8. **Indented for-in bracing:** `for $name in $users` followed by a more-indented next line is valid. The linter adds the parentheses and braces, producing `for ($name in $users) { ... }`. The body has to be on that next indented line. A same-line body is not accepted. C-style headers are not rewritten.
 
 ---
 

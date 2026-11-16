@@ -482,6 +482,14 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("$MyVariable = 10;"),
         fix: Some("Rename the identifier according to convention (e.g. '$my_variable')."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0403",
+        title: "Deprecated C-style for loop",
+        summary: "C-style for (init; cond; step) will be removed. Use range or for-in.",
+        explanation: "RHP still compiles `for ($i = 0; $i < $n; $i++)`, and `rhp check`, `rhp run`, and `rhp run lint` report this warning. The loop will be deprecated. Iterate with `for ($i in range($start, $end))` or `for ($value in $items)`. A header without parentheses is valid when the body is on the next indented line; the linter rewrites that form to `for ($value in $items) { ... }`. `rhp migrate` rewrites `foreach ($items as $value)` to `for ($value in $items)`.",
+        example: Some("for ($i = 0; $i < 10; $i++) {\n    $n = $i;\n}"),
+        fix: Some("for ($i in range(0, 10)) {\n    $n = $i;\n}\n\nfor ($name in $users) {\n    echo $name;\n}"),
+    },
 
     // --- 0500 - 0599: Compiler Extension & Macro Expansion errors ---
     DiagnosticCodeInfo {

@@ -13,7 +13,8 @@ pub fn format_source(source: &str) -> String {
     let with_conditions = wrap_control_conditions(&with_split_stmts);
     let with_ops_moved = move_trailing_operators(&with_conditions);
     let with_semicolons = insert_missing_semicolons(&with_ops_moved);
-    let preprocessed = split_function_braces_to_next_line(&with_semicolons);
+    let with_for_braces = brace_indented_for_in(&with_semicolons);
+    let preprocessed = split_function_braces_to_next_line(&with_for_braces);
     let lines = split_lines(&preprocessed);
     let mut formatted_lines = Vec::with_capacity(lines.len());
     let mut indent_level: usize = 0;
@@ -1017,6 +1018,291 @@ fn transform_control_line(code: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Turns an indented for-in body into a braced loop.
+///
+/// ```rhp
+/// for $item in $items
+///     echo $item;
+/// ```
+///
+/// becomes `for ($item in $items) { echo $item; }`. The body must be on the
+/// next line and indented further than `for`. A C-style header, a same-line
+/// body, and a header that already ends with `{` are left unchanged.
+fn brace_indented_for_in(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    let mut in_multiline_comment = false;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+        if in_multiline_comment {
+            out.push(line.to_string());
+            if trimmed.contains("*/") {
+                in_multiline_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with("/*") && !trimmed.contains("*/") {
+            in_multiline_comment = true;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        if let Some(body_end) = indented_for_in_body_end(&lines, i) {
+            let (code, comment) = split_line_comment(line);
+            let leading_len = code.len() - code.trim_start().len();
+            let leading = &code[..leading_len];
+            let header = parenthesize_for_header(code.trim());
+            out.push(format!("{}{} {{{}", leading, header, comment));
+            for body_line in lines.iter().take(body_end + 1).skip(i + 1) {
+                out.push((*body_line).to_string());
+            }
+            out.push(format!("{}}}", leading));
+            i = body_end + 1;
+            continue;
+        }
+
+        out.push(line.to_string());
+        i += 1;
+    }
+
+    out.join("\n")
+}
+
+fn indented_for_in_body_end(lines: &[&str], header_idx: usize) -> Option<usize> {
+    let (code, _) = split_line_comment(lines[header_idx]);
+    let trimmed = code.trim();
+    if !is_for_in_header_without_brace(trimmed) {
+        return None;
+    }
+    let header_indent = indent_units(lines[header_idx]);
+    let body_start = next_code_line(lines, header_idx + 1)?;
+    if indent_units(lines[body_start]) <= header_indent {
+        return None;
+    }
+    let body_trim = split_line_comment(lines[body_start]).0.trim();
+    if body_trim.starts_with('{') {
+        return None;
+    }
+    Some(statement_end(lines, body_start, indent_units(lines[body_start])))
+}
+
+fn is_for_in_header_without_brace(trimmed: &str) -> bool {
+    if !starts_with_keyword(trimmed, "for") {
+        return false;
+    }
+    if trimmed.ends_with('{') {
+        return false;
+    }
+    if header_has_semicolon(trimmed) {
+        return false;
+    }
+    contains_keyword(trimmed, "in")
+}
+
+fn parenthesize_for_header(trimmed: &str) -> String {
+    let rest = trimmed[3..].trim_start();
+    if rest.starts_with('(') {
+        format!("for {}", rest)
+    } else {
+        format!("for ({})", rest)
+    }
+}
+
+fn starts_with_keyword(s: &str, kw: &str) -> bool {
+    if !s.starts_with(kw) {
+        return false;
+    }
+    match s[kw.len()..].chars().next() {
+        None => true,
+        Some(c) => !c.is_ascii_alphanumeric() && c != '_',
+    }
+}
+
+fn contains_keyword(s: &str, kw: &str) -> bool {
+    let bytes = s.as_bytes();
+    let kw_bytes = kw.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut delim = b'"';
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' || c == b'`' {
+            in_str = true;
+            delim = c;
+            i += 1;
+            continue;
+        }
+        if i + kw_bytes.len() <= bytes.len() && &bytes[i..i + kw_bytes.len()] == kw_bytes {
+            let before_ok = i == 0 || !is_word_byte(bytes[i - 1]);
+            let after = i + kw_bytes.len();
+            let after_ok = after >= bytes.len() || !is_word_byte(bytes[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn header_has_semicolon(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut delim = b'"';
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' || c == b'`' {
+            in_str = true;
+            delim = c;
+            i += 1;
+            continue;
+        }
+        if c == b';' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
+}
+
+fn indent_units(line: &str) -> usize {
+    line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+}
+
+fn next_code_line(lines: &[&str], mut idx: usize) -> Option<usize> {
+    let mut in_comment = false;
+    while idx < lines.len() {
+        let trimmed = lines[idx].trim();
+        if in_comment {
+            if trimmed.contains("*/") {
+                in_comment = false;
+            }
+            idx += 1;
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+            idx += 1;
+            continue;
+        }
+        if trimmed.starts_with("/*") {
+            if !trimmed.contains("*/") {
+                in_comment = true;
+            }
+            idx += 1;
+            continue;
+        }
+        return Some(idx);
+    }
+    None
+}
+
+fn statement_end(lines: &[&str], body_start: usize, body_indent: usize) -> usize {
+    let mut brace = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut i = body_start;
+    while i < lines.len() {
+        let (code, _) = split_line_comment(lines[i]);
+        let trimmed = code.trim();
+        if !trimmed.is_empty() {
+            let (b, p, k) = delim_delta(trimmed);
+            brace += b;
+            paren += p;
+            bracket += k;
+        }
+        let balanced = brace <= 0 && paren <= 0 && bracket <= 0;
+        let terminated = trimmed.ends_with(';') || trimmed.ends_with('}');
+        if balanced && (terminated || next_code_line(lines, i + 1).is_none()) {
+            return i;
+        }
+        if balanced {
+            if let Some(next) = next_code_line(lines, i + 1) {
+                if indent_units(lines[next]) <= body_indent {
+                    return i;
+                }
+            }
+        }
+        if i + 1 >= lines.len() {
+            return i;
+        }
+        i += 1;
+    }
+    body_start
+}
+
+fn delim_delta(line: &str) -> (i32, i32, i32) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut delim = b'"';
+    let mut brace = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == delim {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' || c == b'`' {
+            in_str = true;
+            delim = c;
+            i += 1;
+            continue;
+        }
+        match c {
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
+            b'(' => paren += 1,
+            b')' => paren -= 1,
+            b'[' => bracket += 1,
+            b']' => bracket -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    (brace, paren, bracket)
 }
 
 fn is_fully_enclosed_in_parens(s: &str) -> bool {

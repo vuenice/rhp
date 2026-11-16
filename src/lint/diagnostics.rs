@@ -54,7 +54,7 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
             for warning in result.warnings {
                 issues.push(Issue::new(
                     IssueLevel::Warning,
-                    "slow-collection-remove",
+                    warning.code,
                     warning.message,
                     file_name,
                     warning.span.line,
@@ -65,6 +65,8 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
             }
         }
         Err(type_err) => {
+            // The failing check drops `TypeCheckResult`, including for-loop warnings.
+            collect_c_style_for_warnings(&program, file_name, &mut issues);
             let code = type_error_to_code(&type_err.kind);
             let err_msg = type_err.kind.to_string();
             let already_reported = issues.iter().any(|i| {
@@ -675,6 +677,38 @@ fn deprecated_superglobal_message(name: &str) -> Option<String> {
         "$_SESSION" | "_SESSION" => Some("Direct use of '$_SESSION' is discouraged in RHP. Use 'Session::get()' / 'Session::set()' instead.".to_string()),
         "$_COOKIE" | "_COOKIE" => Some("Direct use of '$_COOKIE' is discouraged in RHP. Use 'Cookie::get()' / 'Cookie::set()' instead.".to_string()),
         _ => None,
+    }
+}
+
+fn collect_c_style_for_warnings<'s>(
+    program: &Program<'s>,
+    file_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let mut visitor = CStyleForVisitor { file_name, issues };
+    visitor.visit_program(program);
+}
+
+struct CStyleForVisitor<'a> {
+    file_name: &'a str,
+    issues: &'a mut Vec<Issue>,
+}
+
+impl<'s, 'a> AstVisitor<'s> for CStyleForVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &Stmt<'s>) {
+        if matches!(stmt.kind, StmtKind::For { .. }) {
+            self.issues.push(Issue::new(
+                IssueLevel::Warning,
+                "deprecated-c-style-for",
+                crate::type_system::checker::C_STYLE_FOR_DEPRECATION,
+                self.file_name,
+                stmt.span.line,
+                stmt.span.col,
+                stmt.span.start,
+                stmt.span.end,
+            ));
+        }
+        walk_stmt(self, stmt);
     }
 }
 
