@@ -55,6 +55,7 @@ pub struct MigrateFileResult {
     pub byte_param_count: usize,
     pub named_arg_count: usize,
     pub param_order_count: usize,
+    pub void_return_count: usize,
     pub warnings: Vec<String>,
     #[serde(skip)]
     pub original_content: String,
@@ -140,6 +141,9 @@ impl MigrateReport {
                     }
                     if res.param_order_count > 0 {
                         out.push_str(&format!("      ~ {} function parameter order(s) fixed (required before optional with //before: comment)\n", res.param_order_count));
+                    }
+                    if res.void_return_count > 0 {
+                        out.push_str(&format!("      ~ {} void return type(s) removed\n", res.void_return_count));
                     }
                     for w in &res.warnings {
                         out.push_str(&format!("      ⚠ {}\n", w));
@@ -239,6 +243,7 @@ pub fn migrate_source_with_options_and_context(
     let mut var_dump_count = 0;
     let mut named_arg_count = 0;
     let mut param_order_count = 0;
+    let mut void_return_count = 0;
     let mut warnings = Vec::new();
 
     // Step 0: Remove <?php from start and ?> from end
@@ -361,6 +366,10 @@ pub fn migrate_source_with_options_and_context(
         current = after_named;
     }
 
+    let (after_void, v_count) = remove_explicit_void_returns(&current);
+    void_return_count += v_count;
+    current = after_void;
+
     let modified = current != source;
 
     MigrateFileResult {
@@ -387,6 +396,7 @@ pub fn migrate_source_with_options_and_context(
         byte_param_count,
         named_arg_count,
         param_order_count,
+        void_return_count,
         warnings,
         original_content: source.to_string(),
         migrated_content: current.clone(),
@@ -5649,6 +5659,136 @@ fn detect_indent(args_str: &str) -> String {
         }
     }
     "    ".to_string()
+}
+
+fn remove_explicit_void_returns(source: &str) -> (String, usize) {
+    use crate::ast::expr::ExprKind;
+    use crate::ast::stmt::{ClassMemberKind, StmtKind};
+    use crate::ast::types::TypeHintKind;
+    use crate::ast::visitor::{walk_expr, walk_stmt, AstVisitor};
+    use crate::ast::Program;
+
+    let program = match crate::parser::parse(source) {
+        Ok(program) => program,
+        Err(_) => return (source.to_string(), 0),
+    };
+
+    struct VoidReturnSpanVisitor<'a> {
+        ranges: &'a mut Vec<(usize, usize)>,
+    }
+
+    impl VoidReturnSpanVisitor<'_> {
+        fn note_return(&mut self, hint: Option<&crate::ast::types::TypeHint<'_>>) {
+            let Some(hint) = hint else {
+                return;
+            };
+            if matches!(&hint.kind, TypeHintKind::Named(ident) if ident.name.eq_ignore_ascii_case("void")) {
+                self.ranges.push((hint.span.start, hint.span.end));
+            }
+        }
+    }
+
+    impl<'s> AstVisitor<'s> for VoidReturnSpanVisitor<'_> {
+        fn visit_stmt(&mut self, stmt: &crate::ast::stmt::Stmt<'s>) {
+            match &stmt.kind {
+                StmtKind::FunctionDecl(func) => self.note_return(func.return_type.as_ref()),
+                StmtKind::ClassDecl(cls) => {
+                    for member in &cls.members {
+                        if let ClassMemberKind::Method(method) = &member.kind {
+                            self.note_return(method.function.return_type.as_ref());
+                        }
+                    }
+                }
+                StmtKind::InterfaceDecl(iface) => {
+                    for method in &iface.methods {
+                        self.note_return(method.function.return_type.as_ref());
+                    }
+                }
+                StmtKind::TraitDecl(tr) => {
+                    for member in &tr.members {
+                        if let ClassMemberKind::Method(method) = &member.kind {
+                            self.note_return(method.function.return_type.as_ref());
+                        }
+                    }
+                }
+                StmtKind::EnumDecl(enm) => {
+                    for method in &enm.methods {
+                        self.note_return(method.function.return_type.as_ref());
+                    }
+                }
+                _ => {}
+            }
+            walk_stmt(self, stmt);
+            if let StmtKind::InterfaceDecl(iface) = &stmt.kind {
+                for method in &iface.methods {
+                    if let Some(body) = &method.function.body {
+                        for inner in body {
+                            self.visit_stmt(inner);
+                        }
+                    }
+                }
+            }
+        }
+
+        fn visit_expr(&mut self, expr: &crate::ast::expr::Expr<'s>) {
+            match &expr.kind {
+                ExprKind::ArrowFunction { return_type, .. } | ExprKind::Closure { return_type, .. } => {
+                    self.note_return(return_type.as_ref());
+                }
+                ExprKind::AnonymousClass { class_decl, .. } => {
+                    for member in &class_decl.members {
+                        if let ClassMemberKind::Method(method) = &member.kind {
+                            self.note_return(method.function.return_type.as_ref());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let mut ranges = Vec::new();
+    {
+        let mut visitor = VoidReturnSpanVisitor { ranges: &mut ranges };
+        let program_ref: &Program<'_> = &program;
+        visitor.visit_program(program_ref);
+    }
+    if ranges.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    let mut edits = Vec::new();
+    for (start, end) in ranges {
+        if let Some(range) = void_annotation_range(source, start, end) {
+            edits.push(range);
+        }
+    }
+    edits.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    edits.dedup();
+    let count = edits.len();
+    let mut result = source.to_string();
+    for (start, end) in edits {
+        if start < end && end <= result.len() {
+            result.replace_range(start..end, "");
+        }
+    }
+    (result, count)
+}
+
+fn void_annotation_range(source: &str, hint_start: usize, hint_end: usize) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    if hint_end > bytes.len() || hint_start > hint_end {
+        return None;
+    }
+    let mut colon = hint_start;
+    while colon > 0 && bytes[colon - 1].is_ascii_whitespace() {
+        colon -= 1;
+    }
+    if colon == 0 || bytes[colon - 1] != b':' {
+        return None;
+    }
+    Some((colon - 1, hint_end))
 }
 
 fn format_call_args(slots: &[String], multiline: bool, indent: &str, had_trailing_comma: bool) -> String {

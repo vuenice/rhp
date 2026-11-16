@@ -557,6 +557,7 @@ pub fn type_error_to_code_and_message(kind: &TypeErrorKind) -> (String, String) 
         TypeErrorKind::DictPropertyAccessForbidden { .. } => "RHP0228",
         TypeErrorKind::RequiredParameterAfterOptional { .. } => "RHP0230",
         TypeErrorKind::CannotSkipRequiredParameter { .. } => "RHP0231",
+        TypeErrorKind::VoidAssignment { .. } => "RHP0232",
         TypeErrorKind::Custom { .. } => "RHP0100",
     };
 
@@ -602,6 +603,8 @@ pub fn map_lint_code_to_rhp(code: &str) -> String {
         "cannot-decide-variable-type" => "RHP0229".to_string(),
         "required-param-after-optional" => "RHP0230".to_string(),
         "cannot-skip-required-parameter" => "RHP0231".to_string(),
+        "void-assignment" => "RHP0232".to_string(),
+        "redundant-void-return" => "RHP0233".to_string(),
         c if c.starts_with("RHP") => c.to_string(),
         _ => "RHP0106".to_string(),
     }

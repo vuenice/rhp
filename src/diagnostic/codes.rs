@@ -204,7 +204,7 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         summary: "Function or method declarations across module boundaries must declare explicit return types.",
         explanation: "RHP requires explicit return type annotations on boundary functions to guarantee strict contract enforcement and enable Cranelift JIT optimizations.",
         example: Some("function add(int $a, int $b) {\n    return $a + $b;\n}"),
-        fix: Some("Add an explicit return type hint, e.g. ': int' or ': void':\nfunction add(int $a, int $b): int {\n    return $a + $b;\n}"),
+        fix: Some("Add an explicit return type hint, e.g. ': int':\nfunction add(int $a, int $b): int {\n    return $a + $b;\n}\nA function that returns nothing omits the return type."),
     },
     DiagnosticCodeInfo {
         code: "RHP0203",
@@ -421,6 +421,22 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         explanation: "Skipping parameters with extra commas is only permitted for optional parameters that declare a default value.",
         example: Some("function example(int $req, int $opt = 1): void {}\nexample(, 2); // Error: $req is required"),
         fix: Some("Provide a value for the required parameter at the call site."),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0232",
+        title: "Cannot assign void function result",
+        summary: "The result of a void function cannot be assigned.",
+        explanation: "A function that returns nothing has no value. Call it as a statement. Do not assign, declare, or store its result.",
+        example: Some("function ping() {}\n$x = ping();"),
+        fix: Some("Call the function as a statement: ping();"),
+    },
+    DiagnosticCodeInfo {
+        code: "RHP0233",
+        title: "Redundant void return type",
+        summary: "A void return type does not need to be written.",
+        explanation: "Omitting the return type means void. Writing ': void' or ': Void' is rejected by the linter. rhp migrate removes it.",
+        example: Some("function ping(): void {}"),
+        fix: Some("Delete the return type: function ping() {}"),
     },
 
     // --- 0300 - 0399: OOP & Trait errors ---

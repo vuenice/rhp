@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::ast::{
     expr::{AssignOp, BinaryOp, Expr, ExprKind, Literal, UnaryOp},
     stmt::{ClassMemberKind, FunctionDecl, MethodDecl, Param, Stmt, StmtKind},
-    types::{CastType, TypeHint},
+    types::{CastType, TypeHint, TypeHintKind},
     visitor::{walk_expr, walk_stmt, AstVisitor},
     Program,
 };
@@ -46,6 +46,7 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
 
     // 2. Static boundary signatures & typed declaration verification
     collect_declaration_diagnostics(&program.statements, file_name, &mut issues);
+    collect_redundant_void_returns(&program, file_name, &mut issues);
 
     // 3. Deprecated direct superglobals check ($_GET, $_POST, $_SESSION, $_COOKIE)
     collect_deprecated_superglobals(&program, file_name, &mut issues);
@@ -253,22 +254,6 @@ fn validate_function_boundaries(
             }
         }
     }
-
-    if func.return_type.is_none() {
-        issues.push(Issue::new(
-            IssueLevel::Error,
-            "missing-return-type",
-            format!(
-                "Type Error: {} '{}' must declare an explicit return type signature across boundaries.",
-                callable_kind, func.name.name
-            ),
-            file_name,
-            func.name.span.line,
-            func.name.span.col,
-            func.name.span.start,
-            func.name.span.end,
-        ));
-    }
 }
 
 fn validate_method_boundaries(
@@ -344,7 +329,7 @@ fn validate_method_boundaries(
 
     if is_constructor || is_destructor {
         if let Some(ref ret) = method.function.return_type {
-            if ret.simple_name() != Some("void") {
+            if !is_explicit_void_return(ret) {
                 issues.push(Issue::new(
                     IssueLevel::Error,
                     "constructor-return-type-forbidden",
@@ -360,20 +345,6 @@ fn validate_method_boundaries(
                 ));
             }
         }
-    } else if method.function.return_type.is_none() {
-        issues.push(Issue::new(
-            IssueLevel::Error,
-            "missing-return-type",
-            format!(
-                "Type Error: Method '{}' must declare an explicit return type signature across boundaries.",
-                display_name
-            ),
-            file_name,
-            method.function.name.span.line,
-            method.function.name.span.col,
-            method.function.name.span.start,
-            method.function.name.span.end,
-        ));
     }
 }
 
@@ -563,6 +534,114 @@ impl<'a, 's> AstVisitor<'s> for DivisionIntoIntVisitor<'a> {
             }
             _ => walk_expr(self, expr),
         }
+    }
+}
+
+/// A written return type is void only when it is the named type `void` / `Void`.
+fn is_explicit_void_return(hint: &TypeHint<'_>) -> bool {
+    matches!(&hint.kind, TypeHintKind::Named(ident) if ident.name.eq_ignore_ascii_case("void"))
+}
+
+fn push_redundant_void_return(hint: &TypeHint<'_>, file_name: &str, issues: &mut Vec<Issue>) {
+    issues.push(Issue::new(
+        IssueLevel::Error,
+        "redundant-void-return",
+        "no need to mention return type for void",
+        file_name,
+        hint.span.line,
+        hint.span.col,
+        hint.span.start,
+        hint.span.end,
+    ));
+}
+
+fn note_function_void_return(func: &FunctionDecl<'_>, file_name: &str, issues: &mut Vec<Issue>) {
+    if let Some(ret) = &func.return_type {
+        if is_explicit_void_return(ret) {
+            push_redundant_void_return(ret, file_name, issues);
+        }
+    }
+}
+
+fn collect_redundant_void_returns(program: &Program<'_>, file_name: &str, issues: &mut Vec<Issue>) {
+    let mut visitor = RedundantVoidReturnVisitor { file_name, issues };
+    for stmt in &program.statements {
+        visitor.visit_stmt(stmt);
+    }
+}
+
+struct RedundantVoidReturnVisitor<'a> {
+    file_name: &'a str,
+    issues: &'a mut Vec<Issue>,
+}
+
+impl<'a> RedundantVoidReturnVisitor<'a> {
+    fn note_function(&mut self, func: &FunctionDecl<'_>) {
+        note_function_void_return(func, self.file_name, self.issues);
+    }
+}
+
+impl<'s> AstVisitor<'s> for RedundantVoidReturnVisitor<'_> {
+    fn visit_stmt(&mut self, stmt: &Stmt<'s>) {
+        match &stmt.kind {
+            StmtKind::FunctionDecl(func) => self.note_function(func),
+            StmtKind::ClassDecl(cls) => {
+                for member in &cls.members {
+                    if let ClassMemberKind::Method(method) = &member.kind {
+                        self.note_function(&method.function);
+                    }
+                }
+            }
+            StmtKind::InterfaceDecl(iface) => {
+                for method in &iface.methods {
+                    self.note_function(&method.function);
+                }
+            }
+            StmtKind::TraitDecl(tr) => {
+                for member in &tr.members {
+                    if let ClassMemberKind::Method(method) = &member.kind {
+                        self.note_function(&method.function);
+                    }
+                }
+            }
+            StmtKind::EnumDecl(enm) => {
+                for method in &enm.methods {
+                    self.note_function(&method.function);
+                }
+            }
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+        if let StmtKind::InterfaceDecl(iface) = &stmt.kind {
+            for method in &iface.methods {
+                if let Some(body) = &method.function.body {
+                    for inner in body {
+                        self.visit_stmt(inner);
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        match &expr.kind {
+            ExprKind::ArrowFunction { return_type, .. } | ExprKind::Closure { return_type, .. } => {
+                if let Some(ret) = return_type {
+                    if is_explicit_void_return(ret) {
+                        push_redundant_void_return(ret, self.file_name, self.issues);
+                    }
+                }
+            }
+            ExprKind::AnonymousClass { class_decl, .. } => {
+                for member in &class_decl.members {
+                    if let ClassMemberKind::Method(method) = &member.kind {
+                        self.note_function(&method.function);
+                    }
+                }
+            }
+            _ => {}
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -792,6 +871,7 @@ pub fn type_error_to_code(kind: &TypeErrorKind) -> &'static str {
         TypeErrorKind::UnknownNamedArgument { .. } => "unknown-named-argument",
         TypeErrorKind::RequiredParameterAfterOptional { .. } => "required-param-after-optional",
         TypeErrorKind::CannotSkipRequiredParameter { .. } => "cannot-skip-required-parameter",
+        TypeErrorKind::VoidAssignment { .. } => "void-assignment",
         TypeErrorKind::VariableTypeMismatch { .. } => "variable-type-mismatch",
         TypeErrorKind::ParameterDefaultTypeMismatch { .. } => "parameter-default-type-mismatch",
         TypeErrorKind::PropertyDefaultTypeMismatch { .. } => "property-default-type-mismatch",

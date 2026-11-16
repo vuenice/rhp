@@ -673,7 +673,7 @@ impl TypeChecker {
                 .body
                 .as_ref()
                 .map(|b| Self::stmts_have_value_return(b))
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if has_value_return {
                 return Err(TypeError::new(
@@ -2002,7 +2002,15 @@ impl TypeChecker {
                     None
                 };
                 let init_ty = if let Some(init_expr) = init {
-                    Some(self.infer_expr_with_expected(init_expr, env, ctx, None, declared_ty.as_ref())?)
+                    let inferred = self.infer_expr_with_expected(
+                        init_expr,
+                        env,
+                        ctx,
+                        None,
+                        declared_ty.as_ref(),
+                    )?;
+                    self.reject_void_assignment(&inferred, init_expr, init_expr.span)?;
+                    Some(inferred)
                 } else {
                     None
                 };
@@ -3930,6 +3938,23 @@ impl TypeChecker {
         }
     }
 
+    fn reject_void_assignment(
+        &self,
+        rhs_ty: &RhpType,
+        rhs_expr: &Expr<'_>,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if !matches!(rhs_ty, RhpType::Void) {
+            return Ok(());
+        }
+        Err(TypeError::new(
+            TypeErrorKind::VoidAssignment {
+                function_name: void_function_name(rhs_expr),
+            },
+            span,
+        ))
+    }
+
     fn check_assignment(
         &mut self,
         op: AssignOp,
@@ -3940,6 +3965,17 @@ impl TypeChecker {
         env: &mut TypeEnvironment,
         ctx: Option<&CallableContext>,
     ) -> Result<RhpType, TypeError> {
+        if let Some(rhs) = rhs_expr {
+            self.reject_void_assignment(&rhs_ty, rhs, span)?;
+        } else if matches!(rhs_ty, RhpType::Void) {
+            return Err(TypeError::new(
+                TypeErrorKind::VoidAssignment {
+                    function_name: "void".to_string(),
+                },
+                span,
+            ));
+        }
+
         // Compute effective assigned type for compound assignments (`+=`, `.=`, `??=`, etc.)
         let effective_rhs_ty = match op {
             AssignOp::Assign => rhs_ty,
@@ -4506,6 +4542,24 @@ enum KeyedLiteral {
     List,
     Dict,
     HashMap,
+}
+
+fn void_function_name(expr: &Expr<'_>) -> String {
+    match &expr.kind {
+        ExprKind::Grouping(inner) => void_function_name(inner),
+        ExprKind::Call { callee, .. } => call_target_name(callee),
+        ExprKind::MethodCall { method, .. }
+        | ExprKind::StaticCall { method, .. } => method.name.to_string(),
+        _ => "void".to_string(),
+    }
+}
+
+fn call_target_name(expr: &Expr<'_>) -> String {
+    match &expr.kind {
+        ExprKind::Ident(ident) => ident.name.to_string(),
+        ExprKind::Grouping(inner) => call_target_name(inner),
+        _ => "void".to_string(),
+    }
 }
 
 fn keyed_literal_kind(elements: &[crate::ast::expr::ArrayElement<'_>]) -> KeyedLiteral {

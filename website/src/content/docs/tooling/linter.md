@@ -147,13 +147,14 @@ An empty-array default is refined from writes in the function body, using the sa
 
 ### 4. Return Types
 
-When a function or method has no return type, the linter inserts one after the parameter list:
+When a function or method has no return type, the linter inserts one after the parameter list only when the function returns a value:
 
 - Every path returns the same type: that type is written (`: list`, `: dict`, `: array`, `: int`, and so on).
-- The body returns nothing: `: void`.
+- The body returns nothing: the return type stays omitted. Omission means void.
+- Writing `: void` or `: Void` is an error: `no need to mention return type for void`. `rhp migrate` deletes that annotation.
 - Returned expressions disagree, a path does not return, or the expression type is unknown: nothing is inserted, and `missing-return-type` stays.
-- A return type that is already written is left alone.
-- `__construct` and `__destruct` get no return type.
+- A non-void return type that is already written is left alone.
+- `__construct` and `__destruct` get no return type. Writing `: void` on them is the same error.
 
 ```php
 // BEFORE LINTING:
@@ -164,13 +165,29 @@ function tags() {
 function noop() {
 }
 
+function ping(): void {
+}
+
 // AFTER 'rhp run lint':
 function tags(): list {
     return ['php', 'rust'];
 }
 
-function noop(): void {
+function noop() {
 }
+
+// ping() is unchanged, and the linter reports:
+// no need to mention return type for void
+```
+
+Assigning the result of a void function is a compile error and a lint error (`void-assignment`, `RHP0232`):
+
+```php
+function ping() {
+}
+
+ping();       // ok
+$x = ping();  // Type Error: Cannot assign the result of void function 'ping'.
 ```
 
 ### 5. Class Property Defaults

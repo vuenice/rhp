@@ -9,7 +9,7 @@ A full-stack, reactive TODO application written in **RHP** (Rust-Powered PHP-fam
 This example demonstrates the core strengths and runtime features of the RHP language:
 
 1. **Object-Oriented Programming (OOP) & Type System:**
-   - Typed classes (`Todo`, `TodoStore`, `TodoRenderer`, `TodoApp`) with typed properties, constructors, and return signatures (`: void`, `: bool`, `: string`, `: int`, `: array`).
+   - Typed classes (`Todo`, `TodoStore`, `TodoRenderer`, `TodoApp`) with typed properties, constructors, and return signatures (`: bool`, `: string`, `: int`, `: array`). A method that returns nothing omits the return type.
    - Strict compile-time type verification, boundary contracts, and method dispatch.
 
 2. **Register-Based Bytecode Virtual Machine:**
