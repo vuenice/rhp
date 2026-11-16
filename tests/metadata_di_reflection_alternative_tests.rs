@@ -169,7 +169,7 @@ fn test_method_injection_and_handler_shim_resolution() {
             public int $id;
             public string $name;
 
-            public static function resolveRouteBinding(string $value): ?User {
+            public static function resolveRouteBinding(string $value): User? {
                 if ($value == "42") {
                     $u = new User();
                     $u->id = 42;

@@ -320,7 +320,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "array_filter",
         rhp_facade: "Arr",
         rhp_method: "filter",
-        rhp_signature: "Arr::filter(array $array, ?callable $callback = null): array",
+        rhp_signature: "Arr::filter(array $array, callable? $callback = null): array",
     },
     LegacyPhpFunctionMapping {
         php_name: "array_reduce",
@@ -350,7 +350,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "array_slice",
         rhp_facade: "Arr",
         rhp_method: "slice",
-        rhp_signature: "Arr::slice(array $array, int $offset, ?int $length = null): array",
+        rhp_signature: "Arr::slice(array $array, int $offset, int? $length = null): array",
     },
     LegacyPhpFunctionMapping {
         php_name: "array_push",
@@ -524,7 +524,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "explode",
         rhp_facade: "Str",
         rhp_method: "split",
-        rhp_signature: "Str::split(string $separator, string $string, ?int $limit = null): array",
+        rhp_signature: "Str::split(string $separator, string $string, int? $limit = null): array",
     },
     // String functions -> Str::*
     LegacyPhpFunctionMapping {
@@ -645,7 +645,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "substr",
         rhp_facade: "Str",
         rhp_method: "substr",
-        rhp_signature: "Str::substr(string $string, int $offset, ?int $length = null): string",
+        rhp_signature: "Str::substr(string $string, int $offset, int? $length = null): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "strrchr",
@@ -657,7 +657,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "strpos",
         rhp_facade: "Str",
         rhp_method: "find",
-        rhp_signature: "Str::find(string $haystack, string $needle, int $offset = 0): ?int",
+        rhp_signature: "Str::find(string $haystack, string $needle, int $offset = 0): int?",
     },
     LegacyPhpFunctionMapping {
         php_name: "sprintf",
@@ -718,7 +718,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "chmod",
         rhp_facade: "File",
         rhp_method: "chmod",
-        rhp_signature: "File::chmod(string $path, ?string $mode = null): mixed",
+        rhp_signature: "File::chmod(string $path, string? $mode = null): mixed",
     },
     LegacyPhpFunctionMapping {
         php_name: "parse_mode",
@@ -736,7 +736,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "touch",
         rhp_facade: "File",
         rhp_method: "touch",
-        rhp_signature: "File::touch(string $path, ?int $time = null, ?int $atime = null): bool",
+        rhp_signature: "File::touch(string $path, int? $time = null, int? $atime = null): bool",
     },
     LegacyPhpFunctionMapping {
         php_name: "mime_content_type",
@@ -845,7 +845,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "set_error_handler",
         rhp_facade: "Sys",
         rhp_method: "setErrorHandler",
-        rhp_signature: "Sys::setErrorHandler(?callable $callback, int $error_levels = E_ALL): ?callable",
+        rhp_signature: "Sys::setErrorHandler(callable? $callback, int $error_levels = E_ALL): callable?",
     },
     LegacyPhpFunctionMapping {
         php_name: "restore_error_handler",
@@ -857,7 +857,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "set_exception_handler",
         rhp_facade: "Sys",
         rhp_method: "setExceptionHandler",
-        rhp_signature: "Sys::setExceptionHandler(?callable $callback): ?callable",
+        rhp_signature: "Sys::setExceptionHandler(callable? $callback): callable?",
     },
     LegacyPhpFunctionMapping {
         php_name: "restore_exception_handler",
@@ -1040,7 +1040,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "fgetcsv",
         rhp_facade: "Csv",
         rhp_method: "fgetcsv",
-        rhp_signature: "Csv::fgetcsv(resource $stream, ?int $length = null, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array|false",
+        rhp_signature: "Csv::fgetcsv(resource $stream, int? $length = null, string $separator = \",\", string $enclosure = \"\\\"\", string $escape = \"\\\\\"): array|false",
     },
     LegacyPhpFunctionMapping {
         php_name: "fputcsv",
@@ -1082,7 +1082,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "tempnam",
         rhp_facade: "File",
         rhp_method: "tempnam",
-        rhp_signature: "File::tempnam(?string $dir = null, ?string $prefix = null): string|false",
+        rhp_signature: "File::tempnam(string? $dir = null, string? $prefix = null): string|false",
     },
     LegacyPhpFunctionMapping {
         php_name: "tmpfile",
@@ -1118,7 +1118,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "fwrite",
         rhp_facade: "File",
         rhp_method: "writeStream",
-        rhp_signature: "File::writeStream(resource $stream, string $data, ?int $length = null): int|false",
+        rhp_signature: "File::writeStream(resource $stream, string $data, int? $length = null): int|false",
     },
     LegacyPhpFunctionMapping {
         php_name: "fread",
@@ -1187,7 +1187,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "htmlspecialchars",
         rhp_facade: "Html",
         rhp_method: "specialChars",
-        rhp_signature: "Html::specialChars(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $double_encode = true): string",
+        rhp_signature: "Html::specialChars(string $string, int $flags = 11, string? $encoding = 'UTF-8', bool $double_encode = true): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "htmlspecialchars_decode",
@@ -1205,13 +1205,13 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "htmlentities",
         rhp_facade: "Html",
         rhp_method: "entities",
-        rhp_signature: "Html::entities(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $double_encode = true): string",
+        rhp_signature: "Html::entities(string $string, int $flags = 11, string? $encoding = 'UTF-8', bool $double_encode = true): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "html_entity_decode",
         rhp_facade: "Html",
         rhp_method: "entityDecode",
-        rhp_signature: "Html::entityDecode(string $string, int $flags = 11, ?string $encoding = 'UTF-8'): string",
+        rhp_signature: "Html::entityDecode(string $string, int $flags = 11, string? $encoding = 'UTF-8'): string",
     },
     // URL functions -> Url::*
     LegacyPhpFunctionMapping {
@@ -1334,31 +1334,31 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "bcadd",
         rhp_facade: "Float",
         rhp_method: "add",
-        rhp_signature: "Float::add(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+        rhp_signature: "Float::add(string|float $num1, string|float $num2, int? $scale = null): string|float",
     },
     LegacyPhpFunctionMapping {
         php_name: "bcsub",
         rhp_facade: "Float",
         rhp_method: "sub",
-        rhp_signature: "Float::sub(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+        rhp_signature: "Float::sub(string|float $num1, string|float $num2, int? $scale = null): string|float",
     },
     LegacyPhpFunctionMapping {
         php_name: "bcmul",
         rhp_facade: "Float",
         rhp_method: "mul",
-        rhp_signature: "Float::mul(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+        rhp_signature: "Float::mul(string|float $num1, string|float $num2, int? $scale = null): string|float",
     },
     LegacyPhpFunctionMapping {
         php_name: "bcdiv",
         rhp_facade: "Float",
         rhp_method: "div",
-        rhp_signature: "Float::div(string|float $num1, string|float $num2, ?int $scale = null): string|float",
+        rhp_signature: "Float::div(string|float $num1, string|float $num2, int? $scale = null): string|float",
     },
     LegacyPhpFunctionMapping {
         php_name: "bccomp",
         rhp_facade: "Float",
         rhp_method: "bccomp",
-        rhp_signature: "Float::bccomp(string|float $num1, string|float $num2, ?int $scale = null): int",
+        rhp_signature: "Float::bccomp(string|float $num1, string|float $num2, int? $scale = null): int",
     },
     // String helpers
     LegacyPhpFunctionMapping {
@@ -1383,7 +1383,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "substr_replace",
         rhp_facade: "Str",
         rhp_method: "replaceAt",
-        rhp_signature: "Str::replaceAt(string $s, string $replacement, int $start, ?int $length = null): string",
+        rhp_signature: "Str::replaceAt(string $s, string $replacement, int $start, int? $length = null): string",
     },
     // File helpers
     LegacyPhpFunctionMapping {
@@ -1402,7 +1402,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "basename",
         rhp_facade: "Path",
         rhp_method: "basename",
-        rhp_signature: "Path::basename(string $path, ?string $ext = null): string",
+        rhp_signature: "Path::basename(string $path, string? $ext = null): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "pathinfo",
@@ -1485,13 +1485,13 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "now",
         rhp_facade: "Time",
         rhp_method: "now",
-        rhp_signature: "Time::now(?string $tz = null): Time",
+        rhp_signature: "Time::now(string? $tz = null): Time",
     },
     LegacyPhpFunctionMapping {
         php_name: "date",
         rhp_facade: "Time",
         rhp_method: "date",
-        rhp_signature: "Time::date(string $format, ?int $timestamp = null): string",
+        rhp_signature: "Time::date(string $format, int? $timestamp = null): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "usleep",
@@ -1528,7 +1528,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "header_remove",
         rhp_facade: "phpFun",
         rhp_method: "header_remove",
-        rhp_signature: "phpFun::header_remove(?string $name = null): void",
+        rhp_signature: "phpFun::header_remove(string? $name = null): void",
     },
     LegacyPhpFunctionMapping {
         php_name: "headers_sent",
@@ -1546,7 +1546,7 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         php_name: "http_response_code",
         rhp_facade: "phpFun",
         rhp_method: "http_response_code",
-        rhp_signature: "phpFun::http_response_code(?int $response_code = null): int|bool",
+        rhp_signature: "phpFun::http_response_code(int? $response_code = null): int|bool",
     },
 ];
 

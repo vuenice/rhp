@@ -126,12 +126,38 @@ pub enum RhpType {
     Future(Box<RhpType>),
     /// User-defined class, interface, trait, or enum (`User`, `OrderService`, etc.).
     Class(String),
-    /// Nullable type (`?T`).
+    /// Nullable type (`T?`).
     Nullable(Box<RhpType>),
     /// Union of multiple types (`T1 | T2`).
     Union(Vec<RhpType>),
     /// Intersection of multiple types (`T1 & T2`).
     Intersection(Vec<RhpType>),
+}
+
+/// `int|null` and `null|User` are the same type as `int?` and `User?`.
+/// A union with several non-null members (`int|string|null`) stays a union.
+/// An intersection plus null stays a union so it prints as `(A&B)|null`.
+fn normalize_single_null_union(items: &[RhpType]) -> Option<RhpType> {
+    let mut non_null = Vec::new();
+    let mut saw_null = false;
+    for item in items {
+        if matches!(item, RhpType::Null) {
+            saw_null = true;
+        } else {
+            non_null.push(item.clone());
+        }
+    }
+    if !saw_null || non_null.len() != 1 {
+        return None;
+    }
+    let inner = non_null.pop().unwrap();
+    if matches!(
+        inner,
+        RhpType::Void | RhpType::Never | RhpType::Intersection(_)
+    ) {
+        return None;
+    }
+    Some(inner.into_nullable())
 }
 
 impl RhpType {
@@ -221,7 +247,7 @@ impl RhpType {
                 if matches!(resolved, RhpType::Void | RhpType::Never | RhpType::Mixed) {
                     return Err(TypeError::new(
                         TypeErrorKind::InvalidTypeAnnotation {
-                            type_name: format!("?{}", resolved),
+                            type_name: format!("{}?", resolved),
                             reason: format!("'{}' cannot be marked nullable", resolved),
                         },
                         hint.span,
@@ -248,6 +274,8 @@ impl RhpType {
                 }
                 if resolved_items.len() == 1 {
                     Ok(resolved_items.into_iter().next().unwrap())
+                } else if let Some(normalized) = normalize_single_null_union(&resolved_items) {
+                    Ok(normalized)
                 } else {
                     Ok(RhpType::Union(resolved_items))
                 }
@@ -398,7 +426,7 @@ impl RhpType {
             return RhpType::Mixed;
         }
 
-        // T + Null -> ?T
+        // T + Null -> T?
         if matches!(a, RhpType::Null) {
             return b.clone().into_nullable();
         }
@@ -838,7 +866,7 @@ impl fmt::Display for RhpType {
             },
             RhpType::Future(inner) => write!(f, "Future<{}>", inner),
             RhpType::Class(name) => write!(f, "{}", name),
-            RhpType::Nullable(inner) => write!(f, "?{}", inner),
+            RhpType::Nullable(inner) => write!(f, "{}?", inner),
             RhpType::Union(types) => {
                 let s: Vec<String> = types
                     .iter()

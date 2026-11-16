@@ -1,7 +1,7 @@
 //! Uniq Facade - High-Performance Unique Identifier Generator
 //!
 //! Provides static utility helpers for generating unique identifiers:
-//! - `Uniq::uniqid(?string $prefix = "", bool $more_entropy = false): string`
+//! - `Uniq::uniqid(string? $prefix = "", bool $more_entropy = false): string`
 //!   PHP-compatible microsecond timestamp generator with optional LCG entropy.
 //!   Default mode returns 13-character hex string (8 chars seconds + 5 chars microseconds).
 //!   With entropy returns 23-character string (13 chars time + dot + 9 LCG pseudo-random digits).
@@ -10,13 +10,13 @@
 //! - `Uniq::uuid5(string $namespace, string $name): string` (alias `v5()`)
 //!   RFC 4122 / RFC 9562 Version 5 name-based UUID using SHA-1.
 //!   Supports standard namespaces: `"dns"`, `"url"`, `"oid"`, `"x500"`, `"nil"` or custom UUIDs.
-//! - `Uniq::uuid7(?int $timestamp_ms = null): string` (alias `v7()`)
+//! - `Uniq::uuid7(int? $timestamp_ms = null): string` (alias `v7()`)
 //!   RFC 9562 Version 7 time-ordered UUID with millisecond precision and monotonic ordering.
 //! - `Uniq::uuid3(string $namespace, string $name): string` (alias `v3()`)
 //!   RFC 4122 Version 3 name-based UUID using MD5.
 //! - Helper functions:
 //!   - `Uniq::isValid(string $uuid): bool`
-//!   - `Uniq::version(string $uuid): ?int`
+//!   - `Uniq::version(string $uuid): int?`
 //!   - `Uniq::parse(string $uuid): array`
 //!   - `Uniq::nil(): string`
 //!   - `Uniq::max(): string`

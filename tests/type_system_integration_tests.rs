@@ -1,6 +1,6 @@
 use rhp::{
     parse_and_check, parse_and_check_with_file_id, CollectionSubtype, FrontendError, RhpType,
-    SourceMap, TypeErrorKind,
+    SourceMap, StmtKind, TypeErrorKind,
 };
 
 #[test]
@@ -832,6 +832,34 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
         }
         other => panic!("Expected ParseError, got {:?}", other),
     }
+}
+
+#[test]
+fn test_null_union_matches_postfix_nullable() {
+    let source = r#"
+        function find(int? $id, int|null $other): User|null {
+            return null;
+        }
+        function both(int|string|null $value): void {}
+    "#;
+    let program = rhp::parse(source).expect("parse nullable unions");
+    let StmtKind::FunctionDecl(find) = &program.statements[0].kind else {
+        panic!("expected find");
+    };
+    let posted = RhpType::from_type_hint(find.params[0].type_hint.as_ref().unwrap(), None).unwrap();
+    let union = RhpType::from_type_hint(find.params[1].type_hint.as_ref().unwrap(), None).unwrap();
+    let ret = RhpType::from_type_hint(find.return_type.as_ref().unwrap(), None).unwrap();
+    assert_eq!(posted, union);
+    assert_eq!(posted, RhpType::Nullable(Box::new(RhpType::Int)));
+    assert!(ret.is_object_type());
+    assert_eq!(ret.to_string(), "User?");
+
+    let StmtKind::FunctionDecl(both) = &program.statements[1].kind else {
+        panic!("expected both");
+    };
+    let mixed_union = RhpType::from_type_hint(both.params[0].type_hint.as_ref().unwrap(), None).unwrap();
+    assert!(matches!(mixed_union, RhpType::Union(_)));
+    assert_eq!(mixed_union.to_string(), "int|string|null");
 }
 
 

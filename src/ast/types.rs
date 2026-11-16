@@ -109,7 +109,7 @@ impl<'s> TypeHint<'s> {
         Self { span, kind }
     }
 
-    /// Checks if this type hint is marked nullable (`?Type`).
+    /// Checks if this type hint is marked nullable (`Type?`).
     pub fn is_nullable(&self) -> bool {
         matches!(self.kind, TypeHintKind::Nullable(_))
     }
@@ -130,7 +130,7 @@ pub enum TypeHintKind<'s> {
     /// Named type: primitives (`int`, `float`, `String`, `bool`, `void`, `mixed`),
     /// native Rust numeric types (`i64`, `f64`, `u32`, etc.), or user classes/interfaces.
     Named(Ident<'s>),
-    /// Nullable type prefix (`?Type`).
+    /// Nullable type suffix (`Type?`).
     Nullable(Box<TypeHint<'s>>),
     /// Union types (`Type1 | Type2`).
     Union(Vec<TypeHint<'s>>),
@@ -148,7 +148,7 @@ impl<'s> fmt::Display for TypeHint<'s> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             TypeHintKind::Named(ident) => write!(f, "{}", ident.name),
-            TypeHintKind::Nullable(inner) => write!(f, "?{}", inner),
+            TypeHintKind::Nullable(inner) => write!(f, "{}?", inner),
             TypeHintKind::Union(types) => {
                 let s: Vec<String> = types
                     .iter()

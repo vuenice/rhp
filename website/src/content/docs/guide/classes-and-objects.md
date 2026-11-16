@@ -40,7 +40,7 @@ If a property can be empty at instantiation, declare it explicitly as nullable:
 ```php
 class User {
     public string $name;         // Must be initialized in __construct
-    public ?string $bio = null;  // Explicitly nullable, defaults to null
+    public string? $bio = null;  // Explicitly nullable, defaults to null
 }
 ```
 

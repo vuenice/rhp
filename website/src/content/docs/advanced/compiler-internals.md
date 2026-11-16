@@ -163,7 +163,7 @@ The AST is organized into modular Rust submodules:
 
 * **[src/ast/types.rs](file:///home/yogesh/code/rhp/src/ast/types.rs):**
   * `Ident<'s>` and `Variable<'s>` zero-copy slice wrappers.
-  * `TypeHint<'s>` supporting primitives (`int`, `float`, `String`, `bool`, `void`, `mixed`), Rust native numbers (`i64`, `f64`, `u32`), nullable types (`?Type`), unions (`Type1|Type2`), and intersections (`Type1&Type2`).
+  * `TypeHint<'s>` supporting primitives (`int`, `float`, `String`, `bool`, `void`, `mixed`), Rust native numbers (`i64`, `f64`, `u32`), nullable types (`Type?`), unions (`Type1|Type2`), and intersections (`Type1&Type2`).
   * `Visibility` (`Public`, `Protected`, `Private`) and `ClassModifiers` (`is_abstract`, `is_final`, `is_readonly`).
 * **[src/ast/expr.rs](file:///home/yogesh/code/rhp/src/ast/expr.rs):**
   * `Expr<'s>` carrying `span: Span` and `kind: ExprKind<'s>`.
