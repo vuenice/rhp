@@ -948,3 +948,36 @@ for ($i = 0; $i < 10; $i++) {
         res.formatted_content
     );
 }
+
+#[test]
+fn test_division_stored_in_int_warns_without_type_error() {
+    let code = r#"
+int $exact = 6 / 2;
+int $n = (5 / 2) + 1;
+int $later = 4;
+$later = $later / 2;
+$later /= 2;
+int $truncated = int(5 / 2);
+float $f = 5 / 2;
+"#;
+
+    let res = lint_source(code, "division.rhp");
+    let warnings: Vec<_> = res
+        .issues
+        .iter()
+        .filter(|issue| issue.code == "division-stored-in-int")
+        .collect();
+    assert_eq!(warnings.len(), 4, "issues: {:?}", res.issues);
+    for warning in &warnings {
+        assert_eq!(warning.level, rhp::lint::IssueLevel::Warning);
+        assert_eq!(
+            warning.message,
+            "The division operation might result into float value instead of int."
+        );
+    }
+    assert!(
+        res.issues.iter().all(|issue| issue.code != "variable-type-mismatch"),
+        "division into int is a warning, not a type error: {:?}",
+        res.issues
+    );
+}
