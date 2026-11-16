@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use crate::ast::{
-    expr::{BinaryOp, Expr, ExprKind, Literal, UnaryOp},
-    stmt::{ClassMemberKind, FunctionDecl, MethodDecl, Stmt, StmtKind},
+    expr::{AssignOp, BinaryOp, Expr, ExprKind, Literal, UnaryOp},
+    stmt::{ClassMemberKind, FunctionDecl, MethodDecl, Param, Stmt, StmtKind},
     types::{CastType, TypeHint},
     visitor::{walk_expr, walk_stmt, AstVisitor},
     Program,
@@ -47,6 +49,9 @@ pub fn run_typecheck(source: &str, file_name: &str) -> Vec<Issue> {
 
     // 3. Deprecated direct superglobals check ($_GET, $_POST, $_SESSION, $_COOKIE)
     collect_deprecated_superglobals(&program, file_name, &mut issues);
+
+    // 3b. Division stored in an int may be a float at runtime.
+    collect_division_stored_in_int(&program, file_name, &mut issues);
 
     // 4. Medium/Gradual Type Checker pass
     match check_program(&program) {
@@ -106,19 +111,21 @@ fn collect_declaration_diagnostics(stmts: &[Stmt<'_>], file_name: &str, issues: 
             } => {
                 // Check if the typed variable declaration has a mismatched initial value
                 if let Err((expected, found)) = check_expr_assignable_to_hint(init_expr, hint, None) {
-                    issues.push(Issue::new(
-                        IssueLevel::Error,
-                        "variable-type-mismatch",
-                        format!(
-                            "Type Error: Cannot assign value of type '{}' to typed variable '{}' of type '{}'.",
-                            found, var.name, expected
-                        ),
-                        file_name,
-                        init_expr.span.line,
-                        init_expr.span.col,
-                        init_expr.span.start,
-                        init_expr.span.end,
-                    ));
+                    if !float_division_into_int(hint, init_expr, &found) {
+                        issues.push(Issue::new(
+                            IssueLevel::Error,
+                            "variable-type-mismatch",
+                            format!(
+                                "Type Error: Cannot assign value of type '{}' to typed variable '{}' of type '{}'.",
+                                found, var.name, expected
+                            ),
+                            file_name,
+                            init_expr.span.line,
+                            init_expr.span.col,
+                            init_expr.span.start,
+                            init_expr.span.end,
+                        ));
+                    }
                 }
             }
             StmtKind::FunctionDecl(func) => {
@@ -135,19 +142,21 @@ fn collect_declaration_diagnostics(stmts: &[Stmt<'_>], file_name: &str, issues: 
                                 if let Err((expected, found)) =
                                     check_expr_assignable_to_hint(default_val, hint, Some(&cls.name.name))
                                 {
-                                    issues.push(Issue::new(
-                                        IssueLevel::Error,
-                                        "property-default-type-mismatch",
-                                        format!(
-                                            "Type Error: Default value for property '{}' in class '{}' has incompatible type: expected '{}', found '{}'.",
-                                            prop.name.name, cls.name.name, expected, found
-                                        ),
-                                        file_name,
-                                        default_val.span.line,
-                                        default_val.span.col,
-                                        default_val.span.start,
-                                        default_val.span.end,
-                                    ));
+                                    if !float_division_into_int(hint, default_val, &found) {
+                                        issues.push(Issue::new(
+                                            IssueLevel::Error,
+                                            "property-default-type-mismatch",
+                                            format!(
+                                                "Type Error: Default value for property '{}' in class '{}' has incompatible type: expected '{}', found '{}'.",
+                                                prop.name.name, cls.name.name, expected, found
+                                            ),
+                                            file_name,
+                                            default_val.span.line,
+                                            default_val.span.col,
+                                            default_val.span.start,
+                                            default_val.span.end,
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -226,19 +235,21 @@ fn validate_function_boundaries(
         } else if let (Some(hint), Some(default_val)) = (&param.type_hint, &param.default_value) {
             // Check if existing written type is wrong against the default parameter
             if let Err((expected, found)) = check_expr_assignable_to_hint(default_val, hint, None) {
-                issues.push(Issue::new(
-                    IssueLevel::Error,
-                    "parameter-default-type-mismatch",
-                    format!(
-                        "Type Error: Default value for parameter '{}' in {} '{}' has incompatible type: expected '{}', found '{}'.",
-                        param.name.name, callable_kind, func.name.name, expected, found
-                    ),
-                    file_name,
-                    default_val.span.line,
-                    default_val.span.col,
-                    default_val.span.start,
-                    default_val.span.end,
-                ));
+                if !float_division_into_int(hint, default_val, &found) {
+                    issues.push(Issue::new(
+                        IssueLevel::Error,
+                        "parameter-default-type-mismatch",
+                        format!(
+                            "Type Error: Default value for parameter '{}' in {} '{}' has incompatible type: expected '{}', found '{}'.",
+                            param.name.name, callable_kind, func.name.name, expected, found
+                        ),
+                        file_name,
+                        default_val.span.line,
+                        default_val.span.col,
+                        default_val.span.start,
+                        default_val.span.end,
+                    ));
+                }
             }
         }
     }
@@ -312,19 +323,21 @@ fn validate_method_boundaries(
         } else if let (Some(hint), Some(default_val)) = (&param.type_hint, &param.default_value) {
             // Check if existing written type is wrong against the default parameter
             if let Err((expected, found)) = check_expr_assignable_to_hint(default_val, hint, Some(class_name)) {
-                issues.push(Issue::new(
-                    IssueLevel::Error,
-                    "parameter-default-type-mismatch",
-                    format!(
-                        "Type Error: Default value for parameter '{}' in method '{}' has incompatible type: expected '{}', found '{}'.",
-                        param.name.name, display_name, expected, found
-                    ),
-                    file_name,
-                    default_val.span.line,
-                    default_val.span.col,
-                    default_val.span.start,
-                    default_val.span.end,
-                ));
+                if !float_division_into_int(hint, default_val, &found) {
+                    issues.push(Issue::new(
+                        IssueLevel::Error,
+                        "parameter-default-type-mismatch",
+                        format!(
+                            "Type Error: Default value for parameter '{}' in method '{}' has incompatible type: expected '{}', found '{}'.",
+                            param.name.name, display_name, expected, found
+                        ),
+                        file_name,
+                        default_val.span.line,
+                        default_val.span.col,
+                        default_val.span.start,
+                        default_val.span.end,
+                    ));
+                }
             }
         }
     }
@@ -361,6 +374,195 @@ fn validate_method_boundaries(
             method.function.name.span.start,
             method.function.name.span.end,
         ));
+    }
+}
+
+const DIVISION_STORED_IN_INT: &str =
+    "The division operation might result into float value instead of int.";
+
+fn hint_is_int(hint: &TypeHint<'_>) -> bool {
+    hint.simple_name() == Some("int")
+}
+
+/// True when `/` or `/=` feeds this expression and is not already wrapped in `int(...)`.
+fn expr_stores_division(expr: &Expr<'_>) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl<'s> AstVisitor<'s> for Finder {
+        fn visit_expr(&mut self, expr: &Expr<'s>) {
+            if self.found {
+                return;
+            }
+            match &expr.kind {
+                ExprKind::Cast { kind: CastType::Int, .. }
+                | ExprKind::Closure { .. }
+                | ExprKind::ArrowFunction { .. }
+                | ExprKind::AnonymousClass { .. } => {}
+                ExprKind::Binary { op: BinaryOp::Div, .. }
+                | ExprKind::Assign { op: AssignOp::DivAssign, .. } => {
+                    self.found = true;
+                }
+                _ => walk_expr(self, expr),
+            }
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+/// The linter types `/` as float. That mismatch is reported as a warning, not a type error.
+fn float_division_into_int(hint: &TypeHint<'_>, expr: &Expr<'_>, found: &str) -> bool {
+    found == "float" && hint_is_int(hint) && expr_stores_division(expr)
+}
+
+fn collect_division_stored_in_int(program: &Program<'_>, file_name: &str, issues: &mut Vec<Issue>) {
+    let mut visitor = DivisionIntoIntVisitor {
+        file_name,
+        issues,
+        scopes: vec![HashSet::new()],
+    };
+    visitor.visit_program(program);
+}
+
+struct DivisionIntoIntVisitor<'a> {
+    file_name: &'a str,
+    issues: &'a mut Vec<Issue>,
+    scopes: Vec<HashSet<String>>,
+}
+
+impl<'a> DivisionIntoIntVisitor<'a> {
+    fn declare_int(&mut self, name: &str) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name.to_string());
+        }
+    }
+
+    fn is_int_var(&self, name: &str) -> bool {
+        self.scopes.iter().rev().any(|scope| scope.contains(name))
+    }
+
+    fn warn(&mut self, span: crate::lexer::span::Span) {
+        self.issues.push(Issue::new(
+            IssueLevel::Warning,
+            "division-stored-in-int",
+            DIVISION_STORED_IN_INT,
+            self.file_name,
+            span.line,
+            span.col,
+            span.start,
+            span.end,
+        ));
+    }
+
+    fn enter_function<'b>(&mut self, params: &[Param<'b>], body: Option<&[Stmt<'b>]>) {
+        self.scopes.push(HashSet::new());
+        for param in params {
+            if param.type_hint.as_ref().is_some_and(hint_is_int) {
+                self.declare_int(param.name.name);
+            }
+        }
+        for param in params {
+            if let Some(default_val) = &param.default_value {
+                if param.type_hint.as_ref().is_some_and(hint_is_int) && expr_stores_division(default_val) {
+                    self.warn(default_val.span);
+                }
+                self.visit_expr(default_val);
+            }
+        }
+        if let Some(body) = body {
+            for stmt in body {
+                self.visit_stmt(stmt);
+            }
+        }
+        self.scopes.pop();
+    }
+
+    fn warn_int_assignment(&mut self, op: &AssignOp, target: &Expr<'_>, value: &Expr<'_>, span: crate::lexer::span::Span) {
+        let ExprKind::Variable(var) = &target.kind else {
+            return;
+        };
+        if !self.is_int_var(var.name) {
+            return;
+        }
+        if *op == AssignOp::DivAssign || expr_stores_division(value) {
+            self.warn(span);
+        }
+    }
+}
+
+impl<'a, 's> AstVisitor<'s> for DivisionIntoIntVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &Stmt<'s>) {
+        match &stmt.kind {
+            StmtKind::VarDecl { var, type_hint, init } => {
+                if let Some(hint) = type_hint {
+                    if hint_is_int(hint) {
+                        if let Some(init_expr) = init {
+                            if expr_stores_division(init_expr) {
+                                self.warn(init_expr.span);
+                            }
+                        }
+                        self.declare_int(var.name);
+                    }
+                }
+                walk_stmt(self, stmt);
+            }
+            StmtKind::FunctionDecl(func) => {
+                self.enter_function(&func.params, func.body.as_deref());
+            }
+            StmtKind::ClassDecl(cls) => {
+                for member in &cls.members {
+                    match &member.kind {
+                        ClassMemberKind::Property(prop) => {
+                            if let (Some(hint), Some(default_val)) = (&prop.type_hint, &prop.default) {
+                                if hint_is_int(hint) && expr_stores_division(default_val) {
+                                    self.warn(default_val.span);
+                                }
+                            }
+                            if let Some(default_val) = &prop.default {
+                                self.visit_expr(default_val);
+                            }
+                        }
+                        ClassMemberKind::Method(method) => {
+                            self.enter_function(&method.function.params, method.function.body.as_deref());
+                        }
+                        ClassMemberKind::Constant(co) => {
+                            self.visit_expr(&co.value);
+                        }
+                        ClassMemberKind::TraitUse(_) => {}
+                    }
+                }
+            }
+            StmtKind::TraitDecl(trait_decl) => {
+                for member in &trait_decl.members {
+                    if let ClassMemberKind::Method(method) = &member.kind {
+                        self.enter_function(&method.function.params, method.function.body.as_deref());
+                    }
+                }
+            }
+            StmtKind::EnumDecl(enum_decl) => {
+                for method in &enum_decl.methods {
+                    self.enter_function(&method.function.params, method.function.body.as_deref());
+                }
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr<'s>) {
+        match &expr.kind {
+            ExprKind::Closure { params, body, .. } => {
+                self.enter_function(params, Some(body.as_slice()));
+            }
+            ExprKind::Assign { op, target, value } => {
+                self.warn_int_assignment(op, target, value, expr.span);
+                walk_expr(self, expr);
+            }
+            _ => walk_expr(self, expr),
+        }
     }
 }
 
