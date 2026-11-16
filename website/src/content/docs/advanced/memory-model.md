@@ -38,7 +38,7 @@ RHP prevents cycles statically at compile time:
 
 ```php
 class Node {
-    public ?WeakReference $parent = null;
+    public WeakReference? $parent = null;
     public list $children;
 
     public function setParent(Node $parent): void {

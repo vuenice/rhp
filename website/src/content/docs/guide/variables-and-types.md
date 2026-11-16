@@ -566,7 +566,7 @@ RHP uses **`null`** as a first-class scalar value and type keyword (unlike Rust,
 
   $u = new User(); // Compile Error: field $name of class User must be initialized at creation
   ```
-  If a property is allowed to be empty, declare it as explicitly nullable: `public ?string $name = null;`.
+  If a property is allowed to be empty, declare it as explicitly nullable: `public string? $name = null;`.
 
 ### 3. Telling Missing Keys Apart from `null`
 

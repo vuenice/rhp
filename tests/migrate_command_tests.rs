@@ -2557,7 +2557,7 @@ fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations(
     assert!(res.modified);
     // In PHP 8 mode: definition is untouched, no //before: comment added
     assert!(
-        res.migrated_content.contains("function myfun(?$x, $y = '', $z)"),
+        res.migrated_content.contains("function myfun(mixed? $x, $y = '', $z)"),
         "Function definition must be preserved in PHP 8 mode: got:\n{}",
         res.migrated_content
     );
@@ -2583,6 +2583,30 @@ fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations(
 }
 
 #[test]
+fn test_migrate_rewrites_prefix_nullable_everywhere_except_ternary_and_strings() {
+    let input = concat!(
+        "function find(?int $id, ?int &$score, ?\\App\\User $user): ?User {\n",
+        "    $flag ? int($id) : 0;\n",
+        "    $url = \"https://example.test/posts?user=1\";\n",
+        "    return null;\n",
+        "}\n",
+        "class Box { public ?string $name = null; }\n",
+        "function bare(?$x) { return $x; }\n",
+    );
+    let res = migrate_source(input, "nullable.php");
+    let migrated = &res.migrated_content;
+    assert!(migrated.contains("function find(int? $id, int? &$score, \\App\\User? $user): User?"));
+    assert!(migrated.contains("$flag ? int($id) : 0;"));
+    assert!(migrated.contains("posts?user=1"));
+    assert!(migrated.contains("public string? $name = null;"));
+    assert!(migrated.contains("function bare(mixed? $x)"));
+    assert!(!migrated.contains("?int"));
+    assert!(!migrated.contains("?string"));
+    assert!(!migrated.contains("?User"));
+    assert!(!migrated.contains("?$x"));
+}
+
+#[test]
 fn test_migrate_php7_mode_reorders_definitions_adds_before_comment_and_swaps_positional_calls() {
     let input = concat!(
         "<?php\n",
@@ -2601,7 +2625,7 @@ fn test_migrate_php7_mode_reorders_definitions_adds_before_comment_and_swaps_pos
     assert!(res.modified);
     // Definition must be reordered with required parameters ($z) first
     assert!(
-        res.migrated_content.contains("//before: function myfun(?$x, $y = '', $z)\nfunction myfun($z, ?$x, $y = '')"),
+        res.migrated_content.contains("//before: function myfun(mixed? $x, $y = '', $z)\nfunction myfun($z, mixed? $x, $y = '')"),
         "Old signature comment and reordered definition must be present: got:\n{}",
         res.migrated_content
     );
@@ -2651,7 +2675,7 @@ fn test_migrate_php7_mode_warns_on_tricky_call_sites() {
         warnings_str
     );
     assert!(
-        warnings_str.contains("Parameter order changed for 'function myfun(?$x, $y = '', $z)'"),
+        warnings_str.contains("Parameter order changed for 'function myfun(mixed? $x, $y = '', $z)'"),
         "Expected general notice for myfun, got:\n{}",
         warnings_str
     );

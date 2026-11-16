@@ -691,6 +691,7 @@ When run with `--format=json`, `rhp migrate` outputs structured migration teleme
 | `$GLOBALS['key']` | `$key` | Direct variable access |
 | `curl_init(...)` procedural | `Http::get(...)` / `Http::post(...)` | Fluent `Http` facade |
 | `$data` receiving binary / `$data = "\x80"` | `byte $data` | Auto-inferred `byte` parameter type |
+| `?int $id`, `?$x` | `int? $id`, `mixed? $x` | Postfix nullable |
 | `fn($opt = 1, $req)` | `fn($req, $opt = 1)` | Required before optional |
 | `fn(b: 2, a: 1)` | `fn(1, 2)` | Positional reordering & name stripping |
 | `fn(c: 3, a: 1)` (omitting `$b`) | `fn(1, , 3)` | Skipped comma syntax |

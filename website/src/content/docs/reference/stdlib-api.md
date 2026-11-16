@@ -37,7 +37,7 @@ Arr::undot(dict|array $dotted): dict;
 // Structural Partitioning & Transformation
 Arr::divide(dict|array $target): list;                         // Returns [keys, values]
 Arr::keyBy(array|list $items, string $key): dict;              // Re-indexes items by field key
-Arr::pluck(array|list $items, string $key, ?string $keyBy = null): list|dict;
+Arr::pluck(array|list $items, string $key, string? $keyBy = null): list|dict;
 Arr::collapse(array|list $array): list;                        // Collapses list of arrays into flat list
 Arr::flatten(mixed $array): list;                              // Recursively flattens nested arrays
 Arr::chunk(mixed $array, int $size): list;                     // Chunks array into list of lists
@@ -53,7 +53,7 @@ Arr::product(mixed $array): int|float;                         // Computes produ
 Arr::fill(int $start, int $count, mixed $value): array;        // Fills array with count entries of value
 Arr::fillKeys(array $keys, mixed $value): dict;                // Fills array using keys with value
 Arr::pad(array $array, int $size, mixed $value): array;        // Pads array to size with value
-Arr::column(mixed $array, ?string $columnKey, ?string $indexKey = null): list|dict; // array_column()
+Arr::column(mixed $array, string? $columnKey, string? $indexKey = null): list|dict; // array_column()
 Arr::flip(mixed $array): dict;                                 // array_flip(): swaps keys and values
 Arr::combine(mixed $keys, mixed $values): dict;                // array_combine(): creates dict from keys and values
 Arr::countValues(mixed $array): dict;                          // array_count_values(): counts frequency of each value
@@ -83,7 +83,7 @@ Arr::intersectKeys(mixed $collection, mixed ...$others): list|dict; // Alias for
 // Randomization & Shuffling
 Arr::shuffle(mixed $collection): list|dict|set;                // Returns randomly shuffled collection of same subtype
 Arr::randomKey(mixed $collection, int $num = 1): mixed;        // array_rand(): picks 1 or $num random keys/indices
-Arr::random(mixed $collection, ?int $num = null): mixed;       // Picks 1 random value or collection of $num random values
+Arr::random(mixed $collection, int? $num = null): mixed;       // Picks 1 random value or collection of $num random values
 
 // Generators & Utilities
 Arr::range(int $start, int $end, int $step = 1): list;
@@ -137,14 +137,14 @@ $list->pop(): mixed;
 $list->shift(): mixed;
 $list->unshift(mixed ...$values): list;
 $list->all(): list;                     // Also: toArray()
-$list->slice(int $offset, ?int $length = null): list;
+$list->slice(int $offset, int? $length = null): list;
 $list->take(int $count): list;
 $list->skip(int $count): list;
 $list->chunk(int $size): list;
 $list->flatten(): list;
 $list->unique(): list;
 $list->reverse(): list;
-$list->sort(?callable $comparator = null): list; // Also: asort(), usort(), uasort()
+$list->sort(callable? $comparator = null): list; // Also: asort(), usort(), uasort()
 $list->sortBy(string|callable $key): list;
 $list->natsort(): list;                 // Natural order sorting ('img1.png', 'img2.png', 'img10.png')
 $list->sortNatural(): list;             // Alias for natsort()
@@ -154,13 +154,13 @@ $list->diff(mixed ...$others): list;    // array_diff()
 $list->diffKey(mixed ...$others): list; // array_diff_key()
 $list->intersect(mixed ...$others): list; // array_intersect()
 $list->intersectKey(mixed ...$others): list; // array_intersect_key()
-$list->column(?string $col, ?string $indexKey = null): list|dict; // array_column()
+$list->column(string? $col, string? $indexKey = null): list|dict; // array_column()
 $list->flip(): dict;                    // array_flip(): values become keys, indices become values
 $list->combine(mixed $values): dict;    // array_combine(): $list items become keys
 $list->countValues(): dict;             // array_count_values()
 $list->shuffle(): list;                 // Returns randomly shuffled list
 $list->randomKey(int $num = 1): int|list; // array_rand(): returns 1 index or list of indices
-$list->random(?int $num = null): mixed|list; // Returns 1 random item or list of $num random items
+$list->random(int? $num = null): mixed|list; // Returns 1 random item or list of $num random items
 $list->concat(mixed $other): list;      // Also: merge()
 $list->pluck(string $key): list;
 $list->partition(callable $fn): list;
@@ -168,7 +168,7 @@ $list->zip(mixed $other): list;
 
 // Higher-Order Transforms & Reductions
 $list->map(callable $fn): list;         // fn($item, $index)
-$list->filter(?callable $fn = null): list;
+$list->filter(callable? $fn = null): list;
 $list->reject(callable $fn): list;
 $list->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $item)
 $list->each(callable $fn): list;        // Also: forEach()
@@ -178,8 +178,8 @@ $list->sum(): int|float;
 $list->avg(): float;                    // Also: average()
 $list->min(): mixed;
 $list->max(): mixed;
-$list->join(?string $separator = ','): string; // Joins elements into string (implode() sugar)
-$list->implode(?string $separator = ','): string; // Alias for join()
+$list->join(string? $separator = ','): string; // Joins elements into string (implode() sugar)
+$list->implode(string? $separator = ','): string; // Alias for join()
 $list->toJson(): string;
 
 // Operators & Iteration (Zero-Allocation ActiveIterator::List)
@@ -219,14 +219,14 @@ $dict->isNotEmpty(): bool;
 $dict->contains(mixed|callable $needleOrClosure): bool;
 $dict->first(): mixed;                                          // First element in insertion order
 $dict->last(): mixed;                                           // Last element in insertion order
-$dict->firstKey(): ?string;                                     // First key in insertion order
-$dict->lastKey(): ?string;                                      // Last key in insertion order
+$dict->firstKey(): string?;                                     // First key in insertion order
+$dict->lastKey(): string?;                                      // Last key in insertion order
 
 // Ordering, Slicing & Chunking
 $dict->sortKeys(): dict;                                        // Sorts keys ascending (also: ksort())
 $dict->sortKeysDesc(): dict;                                    // Sorts keys descending
 $dict->sortKeysBy(callable $fn): dict;                          // Custom comparator key sort (also: uksort())
-$dict->sort(?callable $comparator = null): dict;                // Sorts by values ascending (also: asort(), uasort(), usort())
+$dict->sort(callable? $comparator = null): dict;                // Sorts by values ascending (also: asort(), uasort(), usort())
 $dict->sortBy(string|callable $key): dict;                      // Sorts by custom closure or subkey
 $dict->natsort(): dict;                                         // Natural order sorting by values (preserves keys)
 $dict->sortNatural(): dict;                                     // Alias for natsort()
@@ -236,22 +236,22 @@ $dict->reverse(): dict;                                         // Reverses key-
 $dict->chunk(int $size): list;                                  // Chunks dictionary into list of dictionaries
 $dict->take(int $limit): dict;                                  // Takes first (or last if negative) N entries
 $dict->skip(int $count): dict;                                  // Skips first N entries
-$dict->slice(int $offset, ?int $length = null): dict;           // Slices dictionary entries
+$dict->slice(int $offset, int? $length = null): dict;           // Slices dictionary entries
 
 // Functional Higher-Order Transforms & Pipelines
 $dict->map(callable $fn): dict;                                 // fn($val, $key) => $newVal
 $dict->mapWithKeys(callable $fn): dict;                         // fn($val, $key) => [$newKey => $newVal]
-$dict->filter(?callable $fn = null): dict;                      // Keeps entries where fn($val, $key) is truthy
+$dict->filter(callable? $fn = null): dict;                      // Keeps entries where fn($val, $key) is truthy
 $dict->reject(callable $fn): dict;                              // Drops entries where fn($val, $key) is truthy
 $dict->reduce(callable $fn, mixed $initial = null): mixed;      // fn($carry, $val) => $newCarry
 $dict->each(callable $fn): dict;                                // fn($val, $key) (short-circuit on false)
-$dict->pluck(string $valueKey, ?string $keyBy = null): dict|list;
-$dict->column(?string $columnKey, ?string $indexKey = null): dict; // array_column()
+$dict->pluck(string $valueKey, string? $keyBy = null): dict|list;
+$dict->column(string? $columnKey, string? $indexKey = null): dict; // array_column()
 $dict->combine(mixed $values): dict;                            // array_combine(): dict values become keys
 $dict->countValues(): dict;                                     // array_count_values()
 $dict->shuffle(): dict;                                         // Returns dictionary with shuffled entries
 $dict->randomKey(int $num = 1): string|list;                    // array_rand(): returns 1 key or list of keys
-$dict->random(?int $num = null): mixed|dict;                    // Returns 1 random value or dict of $num random entries
+$dict->random(int? $num = null): mixed|dict;                    // Returns 1 random value or dict of $num random entries
 
 // Set-Like Differences & Intersections
 $dict->diff(dict|array ...$others): dict;                       // array_diff(): entries whose values are not in $others
@@ -310,11 +310,11 @@ $set->natcasesort(): set;               // Returns new Set (immutable copy)
 $set->countValues(): dict;              // array_count_values()
 $set->shuffle(): set;                   // Returns new Set with shuffled elements
 $set->randomKey(int $num = 1): mixed|set; // array_rand(): picks 1 or $num random values
-$set->random(?int $num = null): mixed|set; // Picks 1 random value or Set of $num random values
+$set->random(int? $num = null): mixed|set; // Picks 1 random value or Set of $num random values
 
 // Higher-Order Transforms & Side Effects
 $set->map(callable $fn): set;           // fn($item) => mapped item (deduplicated)
-$set->filter(?callable $fn = null): set;// fn($item) => bool (keeps matching items)
+$set->filter(callable? $fn = null): set;// fn($item) => bool (keeps matching items)
 $set->reject(callable $fn): set;        // fn($item) => bool (drops matching items)
 $set->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $item)
 $set->each(callable $fn): set;          // fn($item) (side effects)
@@ -369,7 +369,7 @@ $map->toJson(): string;                                   // JSON object represe
 // Higher-Order Transforms & Combinators
 $map->map(callable $fn): hashmap;                         // fn($value, $key) => transformed value
 $map->mapWithKeys(callable $fn): hashmap;                 // fn($value, $key) => [$newK, $newV]
-$map->filter(?callable $fn = null): hashmap;              // fn($value, $key) => bool
+$map->filter(callable? $fn = null): hashmap;              // fn($value, $key) => bool
 $map->reject(callable $fn): hashmap;                      // fn($value, $key) => bool
 $map->reduce(callable $fn, mixed $initial = null): mixed; // fn($acc, $value, $key)
 $map->diff(hashmap|dict|set|array $other): hashmap;       // Key-based diff
@@ -435,9 +435,9 @@ Str::snakeCase(string $text): string;                                   // Conve
 Str::macro(string $name, callable $closure): void;                 // Registers dynamic macro bound to string instances
 
 // Fluent Immutable Instance Methods ($str->trim()->upperCase())
-$str->trim(?string $chars = null): string;
-$str->ltrim(?string $chars = null): string;
-$str->rtrim(?string $chars = null): string;
+$str->trim(string? $chars = null): string;
+$str->ltrim(string? $chars = null): string;
+$str->rtrim(string? $chars = null): string;
 $str->lowerCase(): string;
 $str->upperCase(): string;
 $str->camelCase(): string;
@@ -447,16 +447,16 @@ $str->slug(string $separator = '-'): string;
 $str->contains(string $needle): bool;
 $str->startsWith(string $prefix): bool;
 $str->endsWith(string $suffix): bool;
-$str->find(string $needle, int $offset = 0): ?int;
+$str->find(string $needle, int $offset = 0): int?;
 $str->length(): int;
 $str->byteLength(): int;
-$str->split(?string $delimiter = null): list;                   // Splits string into list of substrings or chars (explode() sugar)
-$str->explode(?string $delimiter = null): list;                 // Alias for split()
+$str->split(string? $delimiter = null): list;                   // Splits string into list of substrings or chars (explode() sugar)
+$str->explode(string? $delimiter = null): list;                 // Alias for split()
 $str->replace(string $search, string $replace): string;
-$str->replaceAt(string $replacement, int $start, ?int $length = null): string;
+$str->replaceAt(string $replacement, int $start, int? $length = null): string;
 $str->pad(int $length, string $pad = " ", string|int $side = "right"): string;
 $str->countOccurrences(string $needle): int;
-$str->substr(int $start, ?int $length = null): string;
+$str->substr(int $start, int? $length = null): string;
 $str->reverse(): string;
 $str->repeat(int $times): string;
 $str->toEncoding(string $encoding): string;
@@ -511,7 +511,7 @@ $n->toString();  // "-10"
 $n->toFloat();   // -10.0
 
 // Float numeric utility & precision comparison
-Float::compare(mixed $a, mixed $b, ?float $epsilon = null): bool;
+Float::compare(mixed $a, mixed $b, float? $epsilon = null): bool;
 // If $epsilon is omitted or null, dynamically checks maximum decimal places between both operands
 // and compares formatted representations. If $epsilon is supplied, checks abs($a - $b) <= $epsilon:
 Float::compare("3.14", 3.14);             // true
@@ -586,11 +586,11 @@ File::rename(string $from, string $to): bool;       // Rename or move file (alia
 File::mkdir(string $path, string $mode = "0755", bool $recursive = false): bool; // Create directory (accepts "0755" or "rwxr-xr-x")
 File::makeDirectory(string $path, string $mode = "0755", bool $recursive = false, bool $force = false): bool; // Create directory (Laravel alias)
 File::parseMode(string $mode): int|false;           // Parse octal string ("0755") or symbolic string ("rwxr-xr-x") to integer mode
-File::chmod(string $path, ?string $mode = null): mixed;// Set or inspect file permission mode (accepts "0755" or "rwxr-xr-x")
+File::chmod(string $path, string? $mode = null): mixed;// Set or inspect file permission mode (accepts "0755" or "rwxr-xr-x")
 File::chown(string $path, string|int $user, string|int $group = null): bool; // Change file owner
-File::touch(string $path, ?int $time = null, ?int $atime = null): bool;      // Create file or update timestamp
+File::touch(string $path, int? $time = null, int? $atime = null): bool;      // Create file or update timestamp
 File::mimeType(string $path): string|false;         // Sniff magic bytes & detect MIME type (like Laravel)
-File::guessExtension(string $pathOrMime): ?string;  // Guess extension from MIME type or file content
+File::guessExtension(string $pathOrMime): string?;  // Guess extension from MIME type or file content
 File::extension(string $path): string;              // Extract file extension from path
 File::type(string $path): string;                   // Get file type: "file", "dir", or "link"
 File::size(string $path): int;                      // Get file size in bytes
@@ -605,12 +605,12 @@ File::isWritable(string $path): bool;               // Check if file is writable
 File::isFile(string $path): bool;                   // Check if path is a regular file
 File::isDirectory(string $path): bool;              // Check if path is a directory
 File::sysGetTempDir(): string;                       // Get system temporary directory (alias: sys_get_temp_dir)
-File::tempnam(?string $dir = null, ?string $prefix = null): string|false; // Create unique temporary file (alias: createTempFile, tempFile)
-File::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): string|false; // Create temporary directory (alias: tempDirectory, createTempDir)
+File::tempnam(string? $dir = null, string? $prefix = null): string|false; // Create unique temporary file (alias: createTempFile, tempFile)
+File::createTempDirectory(string? $dir = null, string? $prefix = null, string $mode = "0700"): string|false; // Create temporary directory (alias: tempDirectory, createTempDir)
 File::tmpfile(): resource|false;                     // Create temporary file opened in w+b mode (auto-deleted on close)
-File::writeStream(resource $stream, string $data, ?int $length = null): int|false; // Write data to stream resource (alias: fwrite)
+File::writeStream(resource $stream, string $data, int? $length = null): int|false; // Write data to stream resource (alias: fwrite)
 File::readStream(resource $stream, int $length): string|false; // Read bytes from stream resource (alias: fread)
-File::fromRequest(?string $key = null): mixed;      // Retrieve uploaded file from request (UploadedFile)
+File::fromRequest(string? $key = null): mixed;      // Retrieve uploaded file from request (UploadedFile)
 
 // UploadedFile instance methods ($file = File::fromRequest('avatar')):
 $file->path(): string;                              // Temporary uploaded file path
@@ -619,9 +619,9 @@ $file->size(): int;                                 // File size in bytes
 $file->mimeType(): string;                          // Detected MIME type via content sniffing
 $file->clientMimeType(): string;                    // Client-provided MIME type
 $file->extension(): string;                         // Client file extension
-$file->guessExtension(): ?string;                   // Guessed extension from detected MIME type
+$file->guessExtension(): string?;                   // Guessed extension from detected MIME type
 $file->isValid(): bool;                             // Check if uploaded file is valid
-$file->move(string $dir, ?string $name = null): string; // Move/persist uploaded file to destination
+$file->move(string $dir, string? $name = null): string; // Move/persist uploaded file to destination
 ```
 
 > **Note on `$_FILES`:**
@@ -684,7 +684,7 @@ File::mkdir("/tmp/bad", "invalid");  // false
 #### `File::chmod` & Procedural `chmod`
 
 ```php
-File::chmod(string $path, ?string $mode = null): mixed
+File::chmod(string $path, string? $mode = null): mixed
 ```
 
 - When `$mode` is supplied: sets the permission bitmask for `$path` using string format (`"0755"` or `"rwxr-xr-x"`). Returns `true` on success, or `false` if `parseMode` fails or permissions cannot be set.
@@ -703,7 +703,7 @@ string $tmpDir = File::sysGetTempDir(); // "/tmp"
 string $dir = sys_get_temp_dir();       // Identical procedural helper
 ```
 
-#### `File::tempnam(?string $dir = null, ?string $prefix = null): string|false` (or procedural `tempnam()`)
+#### `File::tempnam(string? $dir = null, string? $prefix = null): string|false` (or procedural `tempnam()`)
 
 Creates a unique temporary file with restricted permissions (`0600` on Unix) and returns its absolute path.
 - If `$dir` is omitted, empty, or does not exist, it automatically falls back to `sys_get_temp_dir()`.
@@ -742,7 +742,7 @@ $content = fread($stream, 1024); // "temporary buffered data"
 fclose($stream);
 ```
 
-#### `File::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): string|false`
+#### `File::createTempDirectory(string? $dir = null, string? $prefix = null, string $mode = "0700"): string|false`
 
 Creates a unique temporary directory with secure permissions.
 - Accepts standard string permissions (e.g. `"0700"`, `"0755"` or `"rwxr-xr-x"`). Integer modes return `false`.
@@ -783,15 +783,15 @@ AFile::rename(string $from, string $to): Future;      // Resolves to bool
 AFile::append(string $path, string $content): Future;// Resolves to bool
 AFile::size(string $path): Future;                   // Resolves to int (byte size)
 AFile::mimeType(string $path): Future;               // Resolves to string|false (detected MIME type)
-AFile::guessExtension(string $path): Future;         // Resolves to ?string (guessed extension)
+AFile::guessExtension(string $path): Future;         // Resolves to string? (guessed extension)
 AFile::extension(string $path): Future;              // Resolves to string (file extension)
 AFile::type(string $path): Future;                   // Resolves to string ("file" | "dir")
 AFile::realpath(string $path): Future;               // Resolves to string|false (canonicalized path)
 AFile::mkdir(string $path, string $mode = "0755", bool $recursive = false): Future; // Resolves to bool
-AFile::chmod(string $path, ?string $mode = null): Future; // Resolves to bool|string
+AFile::chmod(string $path, string? $mode = null): Future; // Resolves to bool|string
 AFile::sysGetTempDir(): Future;                      // Resolves to string (system temp directory)
-AFile::tempnam(?string $dir = null, ?string $prefix = null): Future; // Resolves to string|false
-AFile::createTempDirectory(?string $dir = null, ?string $prefix = null, string $mode = "0700"): Future; // Resolves to string|false
+AFile::tempnam(string? $dir = null, string? $prefix = null): Future; // Resolves to string|false
+AFile::createTempDirectory(string? $dir = null, string? $prefix = null, string $mode = "0700"): Future; // Resolves to string|false
 ```
 
 ---
@@ -858,7 +858,7 @@ Memory::resetArena(): dict;
 
 ```php
 // Parameter Inspection
-Request::get(?string $key = null, mixed $default = null): mixed;
+Request::get(string? $key = null, mixed $default = null): mixed;
 Request::all(): dict;
 Request::only(array|string ...$keys): dict;
 Request::has(string $key): bool;
@@ -875,7 +875,7 @@ Request::format(array|dict $typeMap): dict;
 ## `Session` Facade API
 
 ```php
-Session::get(?string $key = null, mixed $default = null): mixed;
+Session::get(string? $key = null, mixed $default = null): mixed;
 Session::set(string $key, mixed $value): mixed;
 Session::put(string $key, mixed $value): mixed;
 Session::has(string $key): bool;
@@ -892,7 +892,7 @@ Session::clear(): void;
 ## `Cookie` Facade API
 
 ```php
-Cookie::get(?string $key = null, mixed $default = null): mixed;
+Cookie::get(string? $key = null, mixed $default = null): mixed;
 Cookie::set(string $key, mixed $value, ...$options): string;
 Cookie::put(string $key, mixed $value, ...$options): string;
 Cookie::has(string $key): bool;
@@ -1031,7 +1031,7 @@ The `Csv` facade provides high-performance, stream-oriented reading, writing, an
 
 ```php
 // Stream processing methods (fgetcsv & fputcsv)
-Csv::fgetcsv(resource $stream, ?int $length = null, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array|false;
+Csv::fgetcsv(resource $stream, int? $length = null, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array|false;
 Csv::fputcsv(resource $stream, array $fields, string $separator = ",", string $enclosure = "\"", string $escape = "\\", string $eol = "\n"): int|false;
 
 // Stream lifecycle & control
@@ -1039,7 +1039,7 @@ Csv::open(string $path, string $mode = "r"): resource|false;
 Csv::close(resource $stream): bool;
 Csv::feof(resource $stream): bool;
 Csv::rewind(resource $stream): bool;
-Csv::memory(?string $initialData = ""): resource;
+Csv::memory(string? $initialData = ""): resource;
 
 // Batch string & file helpers
 Csv::parse(string $content, string $separator = ",", string $enclosure = "\"", string $escape = "\\"): array;
@@ -1067,24 +1067,24 @@ Glob::customHelper(string $helperName, mixed ...$args): mixed; // Dynamic fallba
 
 ```php
 // Span Lifecycle
-Trace::startSpan(string $name, ?array $options = null): dict;
-Trace::endSpan(?array $status = null): ?dict;
-Trace::span(string $name, callable $closure, ?array $attributes = null): mixed;
+Trace::startSpan(string $name, array? $options = null): dict;
+Trace::endSpan(array? $status = null): dict?;
+Trace::span(string $name, callable $closure, array? $attributes = null): mixed;
 Trace::setAttribute(string $key, mixed $value): void;
-Trace::addEvent(string $name, ?array $attributes = null): void;
-Trace::recordException(string $type, string $message, ?string $stackTrace = null): void;
+Trace::addEvent(string $name, array? $attributes = null): void;
+Trace::recordException(string $type, string $message, string? $stackTrace = null): void;
 
 // Context & Identifier Inspection
-Trace::traceId(): ?string;          // Active 32-hex character TraceId
-Trace::spanId(): ?string;           // Active 16-hex character SpanId
-Trace::parentSpanId(): ?string;     // Active 16-hex parent SpanId (if any)
+Trace::traceId(): string?;          // Active 32-hex character TraceId
+Trace::spanId(): string?;           // Active 16-hex character SpanId
+Trace::parentSpanId(): string?;     // Active 16-hex parent SpanId (if any)
 Trace::isRecording(): bool;         // true if active span is recording
 
 // Metrics & Histograms
-Trace::counter(string $name, float $delta = 1.0, ?array $attributes = null): void;
-Trace::gauge(string $name, float $value, ?array $attributes = null): void;
-Trace::histogram(string $name, float $value, ?array $attributes = null): void;
-Trace::metricSummary(string $name): ?dict; // Returns [count, sum, min, max, avg, p50, p90, p95, p99]
+Trace::counter(string $name, float $delta = 1.0, array? $attributes = null): void;
+Trace::gauge(string $name, float $value, array? $attributes = null): void;
+Trace::histogram(string $name, float $value, array? $attributes = null): void;
+Trace::metricSummary(string $name): dict?; // Returns [count, sum, min, max, avg, p50, p90, p95, p99]
 
 // OTLP & APM Exporters
 Trace::exportOtlp(): string;        // Canonical OTLP/HTTP JSON (/v1/traces)
@@ -1128,7 +1128,7 @@ Crypt::macro(string $name, callable $closure): bool;
 
 ```php
 // Escaping & Decoding
-Html::specialChars(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $doubleEncode = true): string;
+Html::specialChars(string $string, int $flags = 11, string? $encoding = 'UTF-8', bool $doubleEncode = true): string;
 Html::specialCharsDecode(string $string, int $flags = 11): string;
 Html::escape(string $string): string; // Alias for specialChars()
 
@@ -1137,8 +1137,8 @@ Html::stripTags(string $string, array|list|string|null $allowedTags = null): str
 Html::clean(string $string): string; // Strips tags and escapes special characters
 
 // Entity Transformation
-Html::entities(string $string, int $flags = 11, ?string $encoding = 'UTF-8', bool $doubleEncode = true): string;
-Html::entityDecode(string $string, int $flags = 11, ?string $encoding = 'UTF-8'): string;
+Html::entities(string $string, int $flags = 11, string? $encoding = 'UTF-8', bool $doubleEncode = true): string;
+Html::entityDecode(string $string, int $flags = 11, string? $encoding = 'UTF-8'): string;
 
 // Markup Generation
 Html::tag(string $name, array|dict $attributes = [], string $content = ''): string;
@@ -1206,17 +1206,17 @@ Compress::gunzip(string $data): string;                  // GZIP decompression (
 
 ```php
 // Factory Constructors
-Time::now(?string $tz = null): Time;
-Time::today(?string $tz = null): Time;
-Time::yesterday(?string $tz = null): Time;
-Time::tomorrow(?string $tz = null): Time;
-Time::parse(string $time, ?string $tz = null): Time;
-Time::create(int $year = 0, int $month = 1, int $day = 1, int $hour = 0, int $minute = 0, int $second = 0, ?string $tz = null): Time;
-Time::createFromDate(int $year, int $month, int $day, ?string $tz = null): Time;
-Time::createFromTime(int $hour, int $minute, int $second, ?string $tz = null): Time;
-Time::createFromTimestamp(int $timestamp, ?string $tz = null): Time;
-Time::createFromTimestampMs(int $timestampMs, ?string $tz = null): Time;
-Time::createFromFormat(string $format, string $time, ?string $tz = null): Time;
+Time::now(string? $tz = null): Time;
+Time::today(string? $tz = null): Time;
+Time::yesterday(string? $tz = null): Time;
+Time::tomorrow(string? $tz = null): Time;
+Time::parse(string $time, string? $tz = null): Time;
+Time::create(int $year = 0, int $month = 1, int $day = 1, int $hour = 0, int $minute = 0, int $second = 0, string? $tz = null): Time;
+Time::createFromDate(int $year, int $month, int $day, string? $tz = null): Time;
+Time::createFromTime(int $hour, int $minute, int $second, string? $tz = null): Time;
+Time::createFromTimestamp(int $timestamp, string? $tz = null): Time;
+Time::createFromTimestampMs(int $timestampMs, string? $tz = null): Time;
+Time::createFromFormat(string $format, string $time, string? $tz = null): Time;
 Time::maxValue(): Time;
 Time::minValue(): Time;
 
@@ -1347,8 +1347,8 @@ $date->setSecond(int $second): Time;
 $date->setTime(int $hour, int $minute, int $second = 0, int $micro = 0): Time;
 $date->setDate(int $year, int $month, int $day): Time;
 $date->setTimezone(string $tz): Time;
-$date->next(?int $dayOfWeek = null): Time;
-$date->previous(?int $dayOfWeek = null): Time;
+$date->next(int? $dayOfWeek = null): Time;
+$date->previous(int? $dayOfWeek = null): Time;
 $date->copy(): Time;
 $date->clone(): Time;
 
@@ -1451,8 +1451,8 @@ The `Uniq` static facade provides high-performance unique identifier generation,
 
 ```php
 // PHP-compatible microsecond unique ID (Default: 13-char hex; With entropy: 23-char string)
-Uniq::uniqid(?string $prefix = "", bool $more_entropy = false): string;
-Uniq::id(?string $prefix = "", bool $more_entropy = false): string; // Alias
+Uniq::uniqid(string? $prefix = "", bool $more_entropy = false): string;
+Uniq::id(string? $prefix = "", bool $more_entropy = false): string; // Alias
 
 // Modern RFC 4122 / RFC 9562 UUID Generators
 Uniq::uuid4(): string;                                             // Version 4 random UUID
@@ -1462,15 +1462,15 @@ Uniq::uuid(): string;                                              // Alias for 
 Uniq::uuid5(string $namespace, string $name): string;              // Version 5 SHA-1 name-based UUID ('dns', 'url', 'oid', 'x500', 'nil', or custom UUID)
 Uniq::v5(string $namespace, string $name): string;                 // Alias for uuid5
 
-Uniq::uuid7(?int $timestamp_ms = null): string;                    // Version 7 Unix Epoch millisecond time-ordered UUID
-Uniq::v7(?int $timestamp_ms = null): string;                       // Alias for uuid7
+Uniq::uuid7(int? $timestamp_ms = null): string;                    // Version 7 Unix Epoch millisecond time-ordered UUID
+Uniq::v7(int? $timestamp_ms = null): string;                       // Alias for uuid7
 
 Uniq::uuid3(string $namespace, string $name): string;              // Version 3 MD5 name-based UUID
 Uniq::v3(string $namespace, string $name): string;                 // Alias for uuid3
 
 // Inspection, validation, and parsing helpers
 Uniq::isValid(string $uuid): bool;                                 // Returns true if valid 36-char hyphenated or 32-char hex UUID
-Uniq::version(string $uuid): ?int;                                 // Returns UUID version integer (1..8) or null
+Uniq::version(string $uuid): int?;                                 // Returns UUID version integer (1..8) or null
 Uniq::parse(string $uuid): dict;                                   // Parses UUID into dict ['hex', 'version', 'variant', 'timestamp_ms']
 Uniq::nil(): string;                                               // Returns "00000000-0000-0000-0000-000000000000"
 Uniq::max(): string;                                               // Returns "ffffffff-ffff-ffff-ffff-ffffffffffff"

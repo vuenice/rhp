@@ -6,6 +6,7 @@ use regex::Regex;
 use serde::Serialize;
 
 use crate::lexer::facade::LEGACY_PHP_FUNCTIONS;
+use crate::lexer::{Lexer, Token};
 use crate::lint::param_order::{
     fix_parameter_order_detailed, ReorderedFunctionInfo,
 };
@@ -328,6 +329,11 @@ pub fn migrate_source_with_options_and_context(
     // Step 5: Detect non-UTF-8 strings and update function parameters receiving them to 'byte'
     let (after_bytes, byte_param_count) = upgrade_binary_string_arguments(&current);
     current = after_bytes;
+
+    // Step 5.5: `?int` / `?$var` become `int?` / `mixed? $var` before any step that
+    // parses the file. Prefix `?` is no longer a type, so parameter reordering
+    // would skip the whole file if it still saw `?$x`.
+    current = rewrite_postfix_nullable(&current);
 
     if options.php_version >= 8 {
         // Step 6: When PHP version is 8, only check for named arguments, reorder them, and remove argument names.
@@ -4670,6 +4676,127 @@ fn check_fn_params(
 /// Converts call sites with named arguments (`fn(b: 2, a: 1)`) to positional arguments
 /// in the proper parameter declaration order (`fn(1, 2)`), stripping argument names
 /// and inserting skipped argument commas (`fn($a, , $c)`) for omitted optional parameters.
+/// Rewrite prefix nullable types to postfix form.
+///
+/// `?int` becomes `int?`, `\App\User` prefixed with `?` becomes `\App\User?`,
+/// and untyped `?$var` becomes `mixed? $var`. Strings, comments, `?->`, `??`,
+/// `?:`, and ternary branches such as `$flag ? int($x) : 0` are left alone.
+/// A `?` beside `|` or `&` is left alone so the result is not `int?|string`.
+pub fn rewrite_postfix_nullable(source: &str) -> String {
+    let tokens = match Lexer::tokenize(source) {
+        Ok(tokens) => tokens,
+        Err(_) => return source.to_string(),
+    };
+    if tokens.is_empty() {
+        return source.to_string();
+    }
+
+    let mut out = String::with_capacity(source.len());
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if !matches!(tokens[i].token, Token::Question) {
+            i += 1;
+            continue;
+        }
+        if let Some((end_idx, replacement)) = match_prefix_nullable(source, &tokens, i) {
+            let q_start = tokens[i].span.start;
+            let type_end = tokens[end_idx].span.end;
+            out.push_str(&source[cursor..q_start]);
+            out.push_str(&replacement);
+            cursor = type_end;
+            i = end_idx + 1;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&source[cursor..]);
+    out
+}
+
+fn match_prefix_nullable(
+    source: &str,
+    tokens: &[crate::lexer::SpannedToken<'_>],
+    q_idx: usize,
+) -> Option<(usize, String)> {
+    let next = q_idx + 1;
+    if next >= tokens.len() {
+        return None;
+    }
+
+    // Untyped `?$var` in a type position becomes `mixed? $var`.
+    if matches!(tokens[next].token, Token::Variable(_)) {
+        if is_nullable_follower(tokens, next + 1) {
+            let var = &source[tokens[next].span.start..tokens[next].span.end];
+            return Some((next, format!("mixed? {var}")));
+        }
+        return None;
+    }
+
+    let type_end = type_name_end(tokens, next)?;
+    if !is_nullable_follower(tokens, type_end + 1) {
+        return None;
+    }
+    let type_slice = &source[tokens[next].span.start..tokens[type_end].span.end];
+    Some((type_end, format!("{type_slice}?")))
+}
+
+fn is_type_name_token(token: &Token<'_>) -> bool {
+    token.is_type()
+        || matches!(
+            token,
+            Token::Ident(_) | Token::Static | Token::Null | Token::True | Token::False
+        )
+}
+
+/// Last token index of a base type or qualified name starting at `start`.
+fn type_name_end(tokens: &[crate::lexer::SpannedToken<'_>], start: usize) -> Option<usize> {
+    if start >= tokens.len() {
+        return None;
+    }
+    let mut i = start;
+    if matches!(tokens[i].token, Token::Backslash) {
+        i += 1;
+        if i >= tokens.len() || !matches!(tokens[i].token, Token::Ident(_)) {
+            return None;
+        }
+    } else if !is_type_name_token(&tokens[i].token) {
+        return None;
+    }
+
+    if matches!(tokens[i].token, Token::Ident(_)) {
+        i += 1;
+        while i + 1 < tokens.len()
+            && matches!(tokens[i].token, Token::Backslash)
+            && matches!(tokens[i + 1].token, Token::Ident(_))
+        {
+            i += 2;
+        }
+        return Some(i - 1);
+    }
+    Some(i)
+}
+
+fn is_nullable_follower(tokens: &[crate::lexer::SpannedToken<'_>], idx: usize) -> bool {
+    let Some(tok) = tokens.get(idx) else {
+        return true;
+    };
+    match &tok.token {
+        Token::Variable(_)
+        | Token::Ellipsis
+        | Token::Assign
+        | Token::Comma
+        | Token::CloseParen
+        | Token::OpenBrace
+        | Token::SemiColon => true,
+        Token::Ampersand => matches!(
+            tokens.get(idx + 1).map(|t| &t.token),
+            Some(Token::Variable(_) | Token::Ellipsis)
+        ),
+        _ => false,
+    }
+}
+
 pub fn migrate_named_arguments(source: &str) -> (String, usize) {
     migrate_named_arguments_with_context(source, &HashMap::new())
 }

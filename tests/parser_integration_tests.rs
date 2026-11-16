@@ -438,17 +438,20 @@ fn test_rejection_of_colon_typed_variable_declarations() {
 #[test]
 fn test_advanced_type_hints_nullable_union_intersection() {
     let source = r#"
-        function find(?int $id): ?User {}
+        function find(int? $id): User? {}
         function process(int|float $val): string|bool {}
         function handle(Countable&ArrayAccess $items): void {}
+        function refParam(int? &$id): void {}
+        int? $local = null;
     "#;
     let program = parse(source).expect("Failed to parse advanced type hints");
-    assert_eq!(program.statements.len(), 3);
+    assert_eq!(program.statements.len(), 5);
 
-    // Nullable ?int and ?User
+    // Nullable int? and User?
     if let StmtKind::FunctionDecl(ref f) = program.statements[0].kind {
         assert!(f.params[0].type_hint.as_ref().unwrap().is_nullable());
         assert!(f.return_type.as_ref().unwrap().is_nullable());
+        assert!(!f.params[0].is_reference);
     } else {
         panic!("Expected FunctionDecl");
     }
@@ -476,6 +479,34 @@ fn test_advanced_type_hints_nullable_union_intersection() {
     } else {
         panic!("Expected FunctionDecl");
     }
+
+    if let StmtKind::FunctionDecl(ref f) = program.statements[3].kind {
+        assert!(f.params[0].type_hint.as_ref().unwrap().is_nullable());
+        assert!(f.params[0].is_reference);
+    } else {
+        panic!("Expected FunctionDecl");
+    }
+
+    if let StmtKind::VarDecl { type_hint, .. } = &program.statements[4].kind {
+        assert!(type_hint.as_ref().unwrap().is_nullable());
+    } else {
+        panic!("Expected VarDecl");
+    }
+}
+
+#[test]
+fn test_prefix_nullable_and_nullable_union_are_rejected() {
+    let prefix = parse("function find(?int $id): void {}").expect_err("prefix ?int");
+    assert!(prefix.to_string().contains("postfix"));
+
+    let union_suffix = parse("function find(int?|string $id): void {}").expect_err("int?|string");
+    assert!(union_suffix.to_string().contains("cannot be combined with '|'"));
+
+    let union_member = parse("function find(string|int? $id): void {}").expect_err("string|int?");
+    assert!(union_member.to_string().contains("cannot be combined with '|'"));
+
+    let intersection = parse("function find(Countable&Iterator? $id): void {}").expect_err("Iterator?");
+    assert!(intersection.to_string().contains("cannot be combined with '&'"));
 }
 
 #[test]

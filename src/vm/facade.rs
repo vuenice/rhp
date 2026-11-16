@@ -9108,7 +9108,7 @@ pub fn dispatch_websocket(method: &str, args: &[PhpValue]) -> FacadeResult {
             Ok(PhpValue::string(accept))
         }
 
-        // Ws::broadcast(string $channel_or_msg, ?string $message = null) -> int
+        // Ws::broadcast(string $channel_or_msg, string? $message = null) -> int
         "broadcast" => {
             let count = if args.len() >= 2 {
                 let channel = get_arg_str(args, 0, "Ws::broadcast")?;

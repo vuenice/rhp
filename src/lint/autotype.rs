@@ -889,7 +889,7 @@ pub fn infer_expression_type_name(
                         | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
                         | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
                         | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some("int".to_string()),
-                        "find" | "indexOf" => Some("?int".to_string()),
+                        "find" | "indexOf" => Some("int?".to_string()),
                         "bytes" | "toEncoding" | "convertEncoding" | "fromBytes" => Some("byte".to_string()),
                         _ => Some("string".to_string()),
                     },

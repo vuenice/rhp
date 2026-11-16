@@ -214,7 +214,7 @@ BlockStmt       ::= "{" Statement* "}"
 Type hints support primitives, native Rust numeric types, nullable types, unions, and intersections:
 
 ```text
-TypeHint        ::= "?" BaseTypeHint
+TypeHint        ::= BaseTypeHint "?"
                   | BaseTypeHint ("|" BaseTypeHint)+
                   | BaseTypeHint ("&" BaseTypeHint)+
                   | BaseTypeHint
@@ -234,8 +234,9 @@ function calculateTotal(int $quantity, float $unitPrice, string $currency): floa
     return $subtotal;
 }
 
-// Nullable type hint
-function findUser(?int $id): ?User { ... }
+// Nullable type hint. The '?' suffixes one type. `int?|string` is invalid;
+// a union that includes null is `int|string|null`.
+function findUser(int? $id): User? { ... }
 
 // Union type hint
 function processPayload(int|float $val): string|bool { ... }

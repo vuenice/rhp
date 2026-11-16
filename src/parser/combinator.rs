@@ -574,29 +574,25 @@ impl<'s> CombinatorStream<'s> {
         Ok(attributes)
     }
 
-    /// Combinator: Parse a strongly-typed type hint (including nullable `?`, union `|`, intersection `&`, and DNF `(A&B)|C`).
+    /// Combinator: Parse a strongly-typed type hint (including postfix nullable `Type?`, union `|`, intersection `&`, and DNF `(A&B)|C`).
     pub fn parse_type_hint(&mut self) -> Result<TypeHint<'s>, ParseError> {
         let start_span = self.current_span();
 
-        // Nullable prefix `?Type` or untyped nullable `?$var`
-        if self.matches(&Token::Question) {
-            let inner = if self.check_fn(|t| matches!(t, Token::Variable(_) | Token::Ampersand)) {
-                TypeHint::new(
-                    TypeHintKind::Named(Ident::new("mixed", start_span)),
-                    start_span,
-                )
-            } else {
-                self.parse_single_type_hint()?
-            };
-            let span = start_span.merge(inner.span);
-            return Ok(TypeHint::new(TypeHintKind::Nullable(Box::new(inner)), span));
+        // Prefix `?Type` and untyped `?$var` are rejected. Nullability is `Type?`.
+        if self.check(&Token::Question) {
+            return Err(ParseError::new(
+                ParseErrorKind::Custom {
+                    message: "Nullable types use a postfix '?'. Write 'int?' instead of '?int', and 'mixed? $var' instead of '?$var'.".to_string(),
+                },
+                start_span,
+            ));
         }
 
         let first = self.parse_type_segment()?;
 
-        // Union types `Type1 | Type2`
+        // Union types `Type1 | Type2`. A `?` on any member is `string|int?` or `int?|string`.
         if self.check(&Token::Pipe) {
-            let mut types = vec![first];
+            let mut types = vec![self.reject_nullable_on_compound(first, "|")?];
             while self.matches(&Token::Pipe) {
                 let next_seg = self.parse_type_segment()?;
                 if self.check(&Token::Ampersand) {
@@ -607,7 +603,7 @@ impl<'s> CombinatorStream<'s> {
                         self.current_span(),
                     ));
                 }
-                types.push(next_seg);
+                types.push(self.reject_nullable_on_compound(next_seg, "|")?);
             }
             let end_span = types.last().unwrap().span;
             let span = start_span.merge(end_span);
@@ -629,7 +625,7 @@ impl<'s> CombinatorStream<'s> {
                     self.current_span(),
                 ));
             }
-            let mut types = vec![first];
+            let mut types = vec![self.reject_nullable_on_compound(first, "&")?];
             while self.check(&Token::Ampersand)
                 && !matches!(
                     self.peek_nth(1).map(|t| &t.token),
@@ -637,7 +633,8 @@ impl<'s> CombinatorStream<'s> {
                 )
             {
                 self.advance();
-                types.push(self.parse_single_type_hint()?);
+                let member = self.parse_single_type_hint()?;
+                types.push(self.reject_nullable_on_compound(member, "&")?);
             }
             if self.check(&Token::Pipe) {
                 return Err(ParseError::new(
@@ -649,10 +646,84 @@ impl<'s> CombinatorStream<'s> {
             }
             let end_span = types.last().unwrap().span;
             let span = start_span.merge(end_span);
-            return Ok(TypeHint::new(TypeHintKind::Intersection(types), span));
+            return self.apply_postfix_nullable(TypeHint::new(
+                TypeHintKind::Intersection(types),
+                span,
+            ));
         }
 
-        Ok(first)
+        self.apply_postfix_nullable(first)
+    }
+
+    /// `?` suffixes a single base type only. `int?|string` and `Countable?&Iterator` are errors.
+    fn apply_postfix_nullable(&mut self, inner: TypeHint<'s>) -> Result<TypeHint<'s>, ParseError> {
+        if !self.check(&Token::Question) {
+            return Ok(inner);
+        }
+        let q_span = self.current_span();
+        if matches!(inner.kind, TypeHintKind::Intersection(_)) {
+            return Err(ParseError::new(
+                ParseErrorKind::Custom {
+                    message: "Postfix '?' applies to a single type. Write '(A&B)|null' for a nullable intersection.".to_string(),
+                },
+                q_span,
+            ));
+        }
+        match self.peek_nth(1).map(|t| &t.token) {
+            Some(Token::Pipe) => {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Nullable postfix '?' cannot be combined with '|'. Write 'int|string|null' instead of 'int?|string'.".to_string(),
+                    },
+                    q_span,
+                ));
+            }
+            Some(Token::Ampersand)
+                if !matches!(
+                    self.peek_nth(2).map(|t| &t.token),
+                    Some(Token::Variable(_) | Token::Ellipsis)
+                ) =>
+            {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Nullable postfix '?' cannot be combined with '&'. Write '(A&B)|null' instead.".to_string(),
+                    },
+                    q_span,
+                ));
+            }
+            _ => {}
+        }
+        self.advance();
+        if self.check(&Token::Question) {
+            return Err(ParseError::new(
+                ParseErrorKind::Custom {
+                    message: "Nullable postfix '?' cannot be repeated.".to_string(),
+                },
+                self.current_span(),
+            ));
+        }
+        let span = inner.span.merge(q_span);
+        Ok(TypeHint::new(TypeHintKind::Nullable(Box::new(inner)), span))
+    }
+
+    /// A union or intersection member cannot carry a postfix `?`.
+    fn reject_nullable_on_compound(
+        &self,
+        hint: TypeHint<'s>,
+        op: &str,
+    ) -> Result<TypeHint<'s>, ParseError> {
+        if self.check(&Token::Question) {
+            let message = if op == "|" {
+                "Nullable postfix '?' cannot be combined with '|'. Write 'int|string|null' instead of 'int?|string'.".to_string()
+            } else {
+                "Nullable postfix '?' cannot be combined with '&'. Write '(A&B)|null' instead.".to_string()
+            };
+            return Err(ParseError::new(
+                ParseErrorKind::Custom { message },
+                self.current_span(),
+            ));
+        }
+        Ok(hint)
     }
 
     /// Parse a type segment: either a parenthesized intersection `(A & B)` or a single base type.
@@ -757,14 +828,13 @@ impl<'s> CombinatorStream<'s> {
         }
     }
 
-    /// Check if the upcoming token stream matches a prefix-typed variable declaration (`Type $var = ...` or `Type $var;`).
+    /// Check if the upcoming token stream matches a prefix-typed variable declaration (`Type $var = ...`, `Type? $var`, or `Type $var;`).
     pub fn is_prefix_typed_var_decl(&self) -> bool {
         let mut idx = 0;
-        // Optional leading '?' for nullable types
-        if let Some(t) = self.peek_nth(idx) {
-            if matches!(t.token, Token::Question) {
-                idx += 1;
-            }
+        // A leading `?` is the old nullable prefix. Treat it as a type position so
+        // `parse_type_hint` can reject it.
+        if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Question)) {
+            return true;
         }
 
         let mut found_type = false;
@@ -836,6 +906,11 @@ impl<'s> CombinatorStream<'s> {
         }
 
         if found_type {
+            // `int? $x` — one postfix `?` sits between the type and `$var`.
+            // Also `int?|string`, so the parser reports that `?` cannot sit beside `|`.
+            if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Question)) {
+                return true;
+            }
             if let Some(t) = self.peek_nth(idx) {
                 return matches!(t.token, Token::Variable(_));
             }

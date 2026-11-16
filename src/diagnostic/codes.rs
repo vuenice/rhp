@@ -388,7 +388,7 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         summary: "isset() on non-nullable operand is always true.",
         explanation: "The operand of isset() can never be null or missing because its declared/inferred type is non-nullable. Checking isset() on it is redundant and likely indicates a bug.",
         example: Some("class User { public string $name; }\nisset($user->name);"),
-        fix: Some("Remove the redundant isset() check or mark the property/variable as nullable (e.g. '?string')."),
+        fix: Some("Remove the redundant isset() check or mark the property/variable as nullable (e.g. 'string?')."),
     },
     DiagnosticCodeInfo {
         code: "RHP0228",

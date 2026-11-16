@@ -172,7 +172,7 @@ When an application requires true bidirectional links, shared graphs, or parent-
 ```php
 class TreeNode {
     public int $id;
-    public ?WeakReference $parent = null;
+    public WeakReference? $parent = null;
     public list $children = [];
 
     public function __construct(int $id) {
