@@ -115,6 +115,12 @@ pub enum ParseErrorKind {
         path: String,
     },
 
+    #[error("Compile Error: Cannot use '->' on {receiver}. {hint}")]
+    LiteralMethodCallForbidden {
+        receiver: String,
+        hint: String,
+    },
+
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 }

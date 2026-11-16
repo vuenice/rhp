@@ -1373,6 +1373,128 @@ fn test_dynamic_include_and_require_forbidden() {
     }
 }
 
+#[test]
+fn test_typed_constructors_chain_and_literals_do_not() {
+    let slug = parse_expr(r#"string(" Hello world  ")->trim()->slug()"#).expect("string() chain");
+    match &slug.kind {
+        ExprKind::MethodCall { method, object, .. } => {
+            assert_eq!(method.name, "slug");
+            match &object.kind {
+                ExprKind::MethodCall { method, object, .. } => {
+                    assert_eq!(method.name, "trim");
+                    assert!(matches!(
+                        object.kind,
+                        ExprKind::Cast { kind: CastType::String, .. }
+                    ));
+                }
+                _ => panic!("expected trim() on string()"),
+            }
+        }
+        _ => panic!("expected slug()"),
+    }
+
+    let bytes = parse_expr(r#"byte(" Hello world  ")->len()"#).expect("byte() chain");
+    match &bytes.kind {
+        ExprKind::MethodCall { object, .. } => {
+            assert!(matches!(object.kind, ExprKind::Cast { kind: CastType::Bytes, .. }));
+        }
+        _ => panic!("expected method on byte()"),
+    }
+
+    let abs = parse_expr("int(42)->abs()").expect("int() chain");
+    match &abs.kind {
+        ExprKind::MethodCall { method, object, .. } => {
+            assert_eq!(method.name, "abs");
+            assert!(matches!(object.kind, ExprKind::Cast { kind: CastType::Int, .. }));
+        }
+        _ => panic!("expected method on int()"),
+    }
+
+    for (source, method_name) in [
+        ("list([1, 2, 3])->map(fn($n) => $n * 2)", "list"),
+        ("set([1, 2, 3])->map(fn($n) => $n)", "set"),
+        ("dict([])->add(\"name\", \"yogesh\")", "dict"),
+        ("hashMap([])->set($key, $value)", "hashMap"),
+        ("hashmap([])->set($key, $value)", "hashMap"),
+    ] {
+        let expr = parse_expr(source).unwrap_or_else(|e| panic!("{source} failed: {e}"));
+        match &expr.kind {
+            ExprKind::MethodCall { object, .. } => match &object.kind {
+                ExprKind::StaticCall { target, method, .. } => {
+                    assert!(matches!(target.kind, ExprKind::Ident(ref id) if id.name == "Arr"));
+                    assert_eq!(method.name, method_name, "{source}");
+                }
+                _ => panic!("{source} should call Arr::{method_name}"),
+            },
+            _ => panic!("{source} should be a method call"),
+        }
+    }
+
+    let variable = parse_expr(r#"$title->trim()->slug()"#).expect("variable chain");
+    match &variable.kind {
+        ExprKind::MethodCall { object, .. } => match &object.kind {
+            ExprKind::MethodCall { object, .. } => {
+                assert!(matches!(object.kind, ExprKind::Variable(_)));
+            }
+            _ => panic!("expected trim() on $title"),
+        },
+        _ => panic!("expected slug()"),
+    }
+
+    let facade = parse_expr("Arr::list([1, 2, 3])->map(fn($n) => $n)").expect("Arr::list chain");
+    match &facade.kind {
+        ExprKind::MethodCall { object, .. } => match &object.kind {
+            ExprKind::StaticCall { method, .. } => assert_eq!(method.name, "list"),
+            _ => panic!("expected Arr::list"),
+        },
+        _ => panic!("expected method on Arr::list"),
+    }
+
+    let user = parse(
+        "function list($x) { return $x; }\n$y = list([1]);",
+    )
+    .expect("user function named list");
+    match &user.statements[1].kind {
+        StmtKind::Expr(expr) => match &expr.kind {
+            ExprKind::Assign { value, .. } => {
+                assert!(
+                    matches!(value.kind, ExprKind::Call { .. }),
+                    "a user function named list() must not become Arr::list"
+                );
+            }
+            _ => panic!("expected assignment"),
+        },
+        _ => panic!("expected expression statement"),
+    }
+
+    let rejected = [
+        r#"" Hello world "->trim()"#,
+        r#"b" Hello world "->trim()"#,
+        r#"("hello")->trim()"#,
+        r#""hello"?->trim()"#,
+        "42->abs()",
+        "[1, 2, 3]->map(fn($n) => $n)",
+        r#"["name" => "yogesh"]->add("name", "yogesh")"#,
+        "array([1, 2, 3])->add(4)",
+        "true->ok()",
+        "(42)->abs()",
+    ];
+    for source in rejected {
+        let err = parse_expr(source).expect_err(source);
+        assert!(
+            matches!(err.kind, ParseErrorKind::LiteralMethodCallForbidden { .. }),
+            "{source} should reject literal ->, got {err}"
+        );
+        assert!(err.to_string().contains("Cannot use '->'"), "{err}");
+    }
+
+    let bare_array = parse_expr("array([1, 2, 3])").expect_err("unchained array()");
+    assert!(
+        matches!(bare_array.kind, ParseErrorKind::UnexpectedToken { .. }),
+        "unchained array() stays an unexpected token, got {bare_array}"
+    );
+}
+
 
 
 

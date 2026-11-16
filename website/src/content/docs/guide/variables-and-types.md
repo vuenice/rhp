@@ -288,7 +288,7 @@ int    $intVal  = $price->toInt();      // 1234
 ```
 
 > [!NOTE]
-> Member function chaining is restricted on direct numeric literals (`0->abs()`, `42->toString()`). Always invoke methods on variables or parenthesized expressions.
+> Member function chaining is rejected on direct numeric literals (`0->abs()`, `42->toString()`) and on a parenthesized literal (`(42)->abs()`). Use a variable or `int()` / `float()`, for example `int(42)->abs()`.
 
 ---
 

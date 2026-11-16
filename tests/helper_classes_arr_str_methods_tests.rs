@@ -237,8 +237,8 @@ fn test_str_check_and_helpers_static_and_unstatic() {
         $u_trim = $s1->trim();
         $u_ltrim = $s1->ltrim();
         $u_rtrim = $s1->rtrim();
-        $u_lower = "RHP"->lowerCase();
-        $u_upper = "rhp"->upperCase();
+        $u_lower = string("RHP")->lowerCase();
+        $u_upper = string("rhp")->upperCase();
         $u_replace = $s1->trim()->replace("World", "Galaxy");
 
         return [
@@ -445,8 +445,8 @@ fn test_string_non_static_helpers_and_regex_class() {
         $rx_match1 = $text->testRegex("/^The quick/i");
         $rx_match2 = $text->testRegex("/^fox/");
         $rx_match3 = $text->testRegex('/\\blazy\\b/');
-        $rx_match4 = "user@example.com"->testRegex('/^[\\w\\.\\-]+@[\\w\\-]+\\.[a-zA-Z]{2,}$/');
-        $rx_match5 = "invalid-email"->testRegex('/^[\\w\\.\\-]+@[\\w\\-]+\\.[a-zA-Z]{2,}$/');
+        $rx_match4 = string("user@example.com")->testRegex('/^[\\w\\.\\-]+@[\\w\\-]+\\.[a-zA-Z]{2,}$/');
+        $rx_match5 = string("invalid-email")->testRegex('/^[\\w\\.\\-]+@[\\w\\-]+\\.[a-zA-Z]{2,}$/');
 
         // 6. Regex::isValid($pattern)
         $v1 = Regex::isValid('/^[0-9]+$/');
@@ -552,11 +552,11 @@ fn test_float_round_floor_ceil_ciel_helpers() {
         $g_ceil = ceil(3.1);
         $g_ciel = ciel(3.1);
 
-        // 4. The same helpers on a float value
+        // 4. The same helpers on a float() constructor
         $w_round = $pi->round(2);
-        $w_floor = (3.9)->floor();
-        $w_ceil = (3.1)->ceil();
-        $w_ciel = (3.1)->ciel();
+        $w_floor = float(3.9)->floor();
+        $w_ceil = float(3.1)->ceil();
+        $w_ciel = float(3.1)->ciel();
 
         return [
             $r1, $r2, $f1, $f2, $c1, $c2,
@@ -629,20 +629,20 @@ fn test_str_digit_alpha_alnum_helpers() {
         $an8 = Str::alnum([1, 2]);
 
         // 4. Instance fluent methods
-        $u_d1 = "98765"->digit();
-        $u_d2 = "987a"->digit();
-        $u_a1 = "QuickBrownFox"->alpha();
-        $u_a2 = "Quick 123"->alpha();
-        $u_an1 = "AlphaNum99"->alnum();
-        $u_an2 = "Not_Alnum!"->alnum();
+        $u_d1 = string("98765")->digit();
+        $u_d2 = string("987a")->digit();
+        $u_a1 = string("QuickBrownFox")->alpha();
+        $u_a2 = string("Quick 123")->alpha();
+        $u_an1 = string("AlphaNum99")->alnum();
+        $u_an2 = string("Not_Alnum!")->alnum();
 
         // 5. Aliases
         $alias_d = Str::isDigit("123");
         $alias_a = Str::isAlpha("abc");
         $alias_an = Str::isAlnum("abc123");
-        $u_alias_d = "123"->isDigit();
-        $u_alias_a = "abc"->isAlpha();
-        $u_alias_an = "abc123"->isAlnum();
+        $u_alias_d = string("123")->isDigit();
+        $u_alias_a = string("abc")->isAlpha();
+        $u_alias_an = string("abc123")->isAlnum();
 
         // 6. Legacy PHP function mappings
         $legacy_d = ctype_digit("999");
@@ -751,11 +751,11 @@ fn test_str_binary_and_case_comparison_helpers() {
         $nci4 = Str::strncasecmp("ABC\0ONE", "abc\0two", 5);
 
         // 5. Fluent instance method calls
-        $u_c1 = "hello"->strcmp("hello");
-        $u_c2 = "hello"->strcmp("HELLO");
-        $u_ci1 = "hello"->strcasecmp("HELLO");
-        $u_nc1 = "prefix_A"->strncmp("prefix_B", 6);
-        $u_nci1 = "PREFIX_A"->strncasecmp("prefix_B", 6);
+        $u_c1 = string("hello")->strcmp("hello");
+        $u_c2 = string("hello")->strcmp("HELLO");
+        $u_ci1 = string("hello")->strcasecmp("HELLO");
+        $u_nc1 = string("prefix_A")->strncmp("prefix_B", 6);
+        $u_nci1 = string("PREFIX_A")->strncasecmp("prefix_B", 6);
 
         // 6. Aliases
         $alias_cmp = Str::cmp("abc", "abc");
@@ -915,11 +915,11 @@ fn test_str_casing_helpers_lowercase_uppercase_camelcase_pascalcase_snakecase() 
         $s_snake = Str::snakeCase("helloWorldPhp");
 
         // 2. Fluent instance method calls
-        $u_lower = "HELLO WORLD"->lowerCase();
-        $u_upper = "hello world"->upperCase();
+        $u_lower = string("HELLO WORLD")->lowerCase();
+        $u_upper = string("hello world")->upperCase();
         $u_camel = $text->camelCase();
         $u_pascal = $text->pascalCase();
-        $u_snake = "HelloWorldPhp"->snakeCase();
+        $u_snake = string("HelloWorldPhp")->snakeCase();
 
         // 3. Standalone global function calls
         $g_lower = lowerCase("HELLO WORLD");
