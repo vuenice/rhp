@@ -130,17 +130,21 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 Collections, strings, and numeric variables support chained fluent instance methods with high operator precedence:
 
 ```php
-$numbers = [1, 2, 3, 4, 5]
+$numbers = list([1, 2, 3, 4, 5])
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 4);
 
 $title = "  Hello World  ";
 $slug = $title->trim()->lowerCase()->slug();
+$also = string("  Hello World  ")->trim()->slug();
 
 float $price = 99.99;
 $formatted = $price->toDecimal(2);
+int $abs = int(-42)->abs();
 int $dice = Int::random(1, 6);
 ```
+
+`->` is rejected on a direct literal and on `array()`. A string, number, or array literal must be wrapped in `string()`, `byte()`, `int()`, `float()`, `list()`, `dict()`, `set()`, or `hashMap()` before a method call. Parentheses do not lift the restriction: `("hello")->trim()` is still a string literal.
 
 ### Static Facade Instantiation Defense
 Instantiation of static facades (`new Arr()`, `new Str()`, `new Int()`, `new Float()`, `new HTTP()`, `new Future()`, `new DB()`, `new Log()`, `new Sys()`) is strictly prohibited at the parser level:

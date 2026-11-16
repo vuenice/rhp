@@ -1353,6 +1353,29 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
+            // `array(...)` is not a constructor. A following `->` is the literal-chain error.
+            // Without `->`, `array(...)` stays an unexpected token. A bare `array` token
+            // still falls through to the type-name string below.
+            Token::TypeArray if self.check(&Token::OpenParen) => {
+                self.advance();
+                let _args = self.parse_call_arguments()?;
+                let close_tok = self.expect(Token::CloseParen)?;
+                if matches!(
+                    self.peek().map(|t| &t.token),
+                    Some(Token::Arrow | Token::NullsafeArrow)
+                ) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::LiteralMethodCallForbidden {
+                            receiver: "array()".to_string(),
+                            hint: "array() is not chainable. Use list(), dict(), set(), or hashMap()."
+                                .to_string(),
+                        },
+                        spanned.span.merge(close_tok.span),
+                    ));
+                }
+                Err(self.unexpected_expression(spanned))
+            }
+
             token if token.is_type() => {
                 let type_name = token.as_str();
                 Ok(Expr::new(
@@ -1380,32 +1403,7 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
 
-            _ => {
-                let mut err = ParseError::new(
-                    ParseErrorKind::UnexpectedToken {
-                        expected: "expression".to_string(),
-                        found: spanned.token.as_str().to_string(),
-                    },
-                    spanned.span,
-                );
-                err.found_token = Some(spanned.token.as_str().to_string());
-                err.expected_tokens = Some(vec![
-                    "identifier".to_string(),
-                    "number".to_string(),
-                    "string".to_string(),
-                    "`(`".to_string(),
-                ]);
-                if let Some((delim, delim_span)) = self.innermost_open_delimiter() {
-                    let delim_char = match delim {
-                        Token::OpenParen => "(",
-                        Token::OpenBrace => "{",
-                        Token::OpenBracket => "[",
-                        _ => "(",
-                    };
-                    err = err.with_secondary_label(*delim_span, format!("this `{}` is still open", delim_char));
-                }
-                Err(err)
-            }
+            _ => Err(self.unexpected_expression(spanned)),
         }
     }
 
@@ -1488,6 +1486,17 @@ impl<'s> CombinatorStream<'s> {
                         return Ok(Expr::static_call("Str", target_method, args, callee_span, span));
                     }
 
+                    if matches!(callee_name, "list" | "dict" | "set" | "hashMap" | "hashmap")
+                        && !self.is_user_defined_function(callee_name)
+                    {
+                        let method = if callee_name.eq_ignore_ascii_case("hashmap") {
+                            "hashMap"
+                        } else {
+                            callee_name
+                        };
+                        return Ok(Expr::static_call("Arr", method, args, callee_span, span));
+                    }
+
                     let call_node = if is_reserved_intrinsic(callee_name) {
                         // Rewrites to Sys::* (e.g. Sys::env(), Sys::print(), Sys::echo(), Sys::dd())
                         let method = match callee_name {
@@ -1565,6 +1574,7 @@ impl<'s> CombinatorStream<'s> {
 
             // Member access `left->member`, dynamic `left->{expr}`, or nullsafe `left?->...`
             Token::Arrow | Token::NullsafeArrow => {
+                reject_literal_method_receiver(&left)?;
                 let is_nullsafe = matches!(op_tok.token, Token::NullsafeArrow);
 
                 if self.check(&Token::OpenBrace) {
@@ -2032,6 +2042,86 @@ impl<'s> CombinatorStream<'s> {
         }
         self.expect(Token::CloseBrace)?;
         Ok(stmts)
+    }
+
+    /// Unexpected token where an expression was required.
+    fn unexpected_expression(&self, spanned: SpannedToken<'s>) -> ParseError {
+        let mut err = ParseError::new(
+            ParseErrorKind::UnexpectedToken {
+                expected: "expression".to_string(),
+                found: spanned.token.as_str().to_string(),
+            },
+            spanned.span,
+        );
+        err.found_token = Some(spanned.token.as_str().to_string());
+        err.expected_tokens = Some(vec![
+            "identifier".to_string(),
+            "number".to_string(),
+            "string".to_string(),
+            "`(`".to_string(),
+        ]);
+        if let Some((delim, delim_span)) = self.innermost_open_delimiter() {
+            let delim_char = match delim {
+                Token::OpenParen => "(",
+                Token::OpenBrace => "{",
+                Token::OpenBracket => "[",
+                _ => "(",
+            };
+            err = err.with_secondary_label(*delim_span, format!("this `{}` is still open", delim_char));
+        }
+        err
+    }
+}
+
+/// `->` and `?->` are not allowed on a direct literal, a grouped literal, or `array()`.
+fn reject_literal_method_receiver(expr: &Expr<'_>) -> Result<(), ParseError> {
+    let mut current = expr;
+    while let ExprKind::Grouping(inner) = &current.kind {
+        current = inner.as_ref();
+    }
+
+    let (receiver, hint): (&str, &str) = match &current.kind {
+        ExprKind::Literal(Literal::String { .. } | Literal::InterpolatedString { .. }) => (
+            "a string literal",
+            "Use string() or byte(), for example string(\"hello\")->trim().",
+        ),
+        ExprKind::Literal(Literal::Bytes { .. }) => (
+            "a bytes literal",
+            "Use byte(), for example byte(\"hello\")->len().",
+        ),
+        ExprKind::Literal(Literal::Int { .. } | Literal::Float { .. }) => (
+            "a numeric literal",
+            "Use int() or float(), for example int(42)->abs().",
+        ),
+        ExprKind::Literal(_) => (
+            "a literal",
+            "Use a variable or a typed constructor.",
+        ),
+        ExprKind::Array(_) => (
+            "an array literal",
+            "Use list(), dict(), set(), or hashMap(), for example list([1, 2, 3])->map(...).",
+        ),
+        ExprKind::Call { callee, .. } if is_array_constructor(callee) => (
+            "array()",
+            "array() is not chainable. Use list(), dict(), set(), or hashMap().",
+        ),
+        _ => return Ok(()),
+    };
+
+    Err(ParseError::new(
+        ParseErrorKind::LiteralMethodCallForbidden {
+            receiver: receiver.to_string(),
+            hint: hint.to_string(),
+        },
+        expr.span,
+    ))
+}
+
+fn is_array_constructor(callee: &Expr<'_>) -> bool {
+    match &callee.kind {
+        ExprKind::Ident(id) => id.name == "array",
+        ExprKind::Literal(Literal::String { value, .. }) => value == "array",
+        _ => false,
     }
 }
 
