@@ -737,6 +737,18 @@ fn print_run_script_help(mode: &RunMode) {
 }
 
 /// Handle `rhp run dev [PATH]` or `rhp run build [PATH]`
+fn emit_c_style_for_warnings(source: &str, path: &str) {
+    for issue in rhp::run_typecheck(source, path) {
+        if issue.code != "deprecated-c-style-for" {
+            continue;
+        }
+        eprintln!(
+            "warning[RHP0403]: {}\n  --> {}:{}:{}",
+            issue.message, path, issue.line, issue.column
+        );
+    }
+}
+
 fn handle_run_script(sub_args: &[String], mode: RunMode) {
     let opts = match parse_script_run_options(sub_args) {
         Ok(opts) => opts,
@@ -790,6 +802,7 @@ fn handle_run_script(sub_args: &[String], mode: RunMode) {
         }
     };
     let source = resolve_autoloaded_source(&resolved_path, &raw_source);
+    emit_c_style_for_warnings(&source, &resolved_path.to_string_lossy());
 
     // Auto-detect if this is a web application or explicitly requested as server
     let is_web_app = opts.force_server

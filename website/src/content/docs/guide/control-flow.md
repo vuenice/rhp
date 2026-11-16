@@ -71,9 +71,74 @@ print("User Role: " + $roleTitle);
 
 ---
 
+## Iteration: `for-in` and C-style `for`
+
+RHP keeps both loop headers:
+
+```php
+for ($i = 0; $i < 10; $i++) {
+    $n = $i;
+}
+
+for ($name in $users) {
+    echo $name;
+}
+
+for ($index => $name in $users) {
+    echo $index;
+}
+```
+
+`for ($i = 0; $i < 10; $i++)` still compiles. `rhp check`, `rhp run`, and `rhp run lint` emit warning **RHP0403**:
+
+```text
+C-style for (init; cond; step) loop will be deprecated in the future. Please use range or a for-in loop.
+```
+
+Replace a counted loop with `range`, and a collection loop with `for-in`:
+
+```php
+for ($i in range(0, 10)) {
+    $n = $i;
+}
+
+for ($name in $users) {
+    echo $name;
+}
+```
+
+A for-in header may omit parentheses when the body is on the next line and indented further than `for`. The same line, or a following line at the same indent, is a parse error. `rhp run lint` inserts the parentheses and braces:
+
+```php
+// accepted, then rewritten by the linter
+for $name in $users
+    echo $name;
+
+// linter output
+for ($name in $users) {
+    echo $name;
+}
+```
+
+`rhp migrate` rewrites a legacy `foreach` into the same for-in form:
+
+```php
+// before
+foreach ($users as $index => $name) {
+    echo $name;
+}
+
+// after
+for ($index => $name in $users) {
+    echo $name;
+}
+```
+
+Explain the warning with `rhp explain RHP0403`.
+
 ## Iteration: `foreach` Over Collections and Objects
 
-The `foreach` construct iterates smoothly over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`), plain objects, and objects implementing PHP's `Traversable` interface (`IteratorAggregate` and `Iterator`).
+`foreach ($items as $value)` still parses. Prefer `for ($value in $items)`. `rhp migrate` performs that rewrite. The `foreach` construct iterates over all RHP collection subtypes (`list`, `dict`, `set`, `hashMap`), plain objects, and objects implementing PHP's `Traversable` interface (`IteratorAggregate` and `Iterator`).
 
 ### 1. Subtyped Collections (`list`, `dict`, `set`, `hashMap`)
 

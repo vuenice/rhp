@@ -567,6 +567,39 @@ fn test_control_flow_structures() {
 }
 
 #[test]
+fn test_for_in_accepts_parens_and_indented_body() {
+    let parenthesized = r#"
+        for ($name in $users) {
+            echo $name;
+        }
+        for ($index => $name in $users) {
+            echo $index;
+        }
+        for ($i = 0; $i < 10; $i++) {
+            echo $i;
+        }
+    "#;
+    let program = parse(parenthesized).expect("parenthesized for headers");
+    assert!(matches!(program.statements[0].kind, StmtKind::ForIn { .. }));
+    assert!(matches!(program.statements[1].kind, StmtKind::ForIn { key_var: Some(_), .. }));
+    assert!(matches!(program.statements[2].kind, StmtKind::For { .. }));
+
+    let indented = "for $name in $users\n    echo $name;\n";
+    let program = parse(indented).expect("indented for-in");
+    assert!(matches!(program.statements[0].kind, StmtKind::ForIn { .. }));
+
+    let braced = "for $name in $users { echo $name; }";
+    let program = parse(braced).expect("paren-less for-in with braces");
+    assert!(matches!(program.statements[0].kind, StmtKind::ForIn { .. }));
+
+    let same_line = parse("for $name in $users echo $name;");
+    assert!(same_line.is_err(), "same-line body must not parse");
+
+    let flat = parse("for $name in $users\necho $name;\n");
+    assert!(flat.is_err(), "body at the same indent must not parse");
+}
+
+#[test]
 fn test_object_oriented_classes_attributes_and_interfaces() {
     let source = r#"
         #[Route('/api/orders')]

@@ -53,6 +53,7 @@ Common causes include:
 
 Compiler warnings inform developers about potential issues that do not prevent bytecode generation or execution:
 - Deprecated legacy functions or methods.
+- **RHP0403** — C-style `for (init; cond; step)`. The loop still runs. `rhp check`, `rhp run`, and `rhp run lint` print: `C-style for (init; cond; step) loop will be deprecated in the future. Please use range or a for-in loop.` Use `for ($i in range($start, $end))` or `for ($value in $items)`. See [Control Flow](/docs/guide/control-flow).
 - Naming convention warnings (e.g. non-camelCase local variables, when enabled).
 - Unused local variables or redundant imports.
 

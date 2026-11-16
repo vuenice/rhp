@@ -445,6 +445,13 @@ impl<'a> DiagnosticBuilder<'a> {
                 edits: vec![],
             });
         }
+        if issue.code == "deprecated-c-style-for" || code == "RHP0403" {
+            suggestions.push(DiagnosticSuggestion {
+                message: "use `for ($x in $items)` or `for ($i in range($start, $end))`".to_string(),
+                applicability: Applicability::MaybeIncorrect,
+                edits: vec![],
+            });
+        }
 
         let explain = format!("rhp explain {}", code);
 
@@ -587,6 +594,7 @@ pub fn map_lint_code_to_rhp(code: &str) -> String {
         "static-facade-inheritance-forbidden" => "RHP0111".to_string(),
         "deprecated-superglobal" => "RHP0401".to_string(),
         "naming-casing" => "RHP0402".to_string(),
+        "deprecated-c-style-for" => "RHP0403".to_string(),
         "redundant-isset-check" => "RHP0227".to_string(),
         "cannot-unset-object" => "RHP0118".to_string(),
         "bare-variable-isset-forbidden" => "RHP0117".to_string(),

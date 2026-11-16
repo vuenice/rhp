@@ -4,6 +4,7 @@ use std::process::Command;
 use rhp::diagnostic::{
     check_source, Applicability, DiagnosticLevel,
 };
+use rhp::type_system::checker::C_STYLE_FOR_DEPRECATION;
 
 #[test]
 fn test_diagnostic_source_of_truth_ndjson_and_schema() {
@@ -289,4 +290,22 @@ fn test_utf16_column_units_and_byte_offsets() {
     assert_eq!(line, 1);
     assert_eq!(start_offset, Some(0));
     assert!(col_utf16 >= col_char);
+}
+
+#[test]
+fn test_c_style_for_emits_rhp0403() {
+    let c_style = "int $n = 0;\nfor ($i = 0; $i < 3; $i++) {\n    $n = $i;\n}\n";
+    let diags = check_source(c_style, "loop.rhp", 10);
+    let warning = diags.iter().find(|d| d.code == "RHP0403");
+    let warning = warning.expect("C-style for must warn");
+    assert_eq!(warning.level, DiagnosticLevel::Warning);
+    assert_eq!(warning.message, C_STYLE_FOR_DEPRECATION);
+
+    let for_in = "for ($name in $users) {\n    echo $name;\n}\n";
+    let for_in_diags = check_source(for_in, "loop.rhp", 10);
+    assert!(
+        for_in_diags.iter().all(|d| d.code != "RHP0403"),
+        "for-in must not emit RHP0403: {:?}",
+        for_in_diags
+    );
 }

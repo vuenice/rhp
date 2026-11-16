@@ -201,6 +201,11 @@ impl<'s> CombinatorStream<'s> {
 
         // 8. Control Flow: For loop / For-in loop
         if self.matches(&Token::For) {
+            // `for $x in $items` with the body on the next indented line.
+            // Parentheses and braces are optional here; the linter inserts them.
+            if !self.check(&Token::OpenParen) {
+                return self.parse_parenless_for_in(start_span);
+            }
             self.expect(Token::OpenParen)?;
 
             let is_for_in = if self.check(&Token::SemiColon) {
@@ -222,20 +227,7 @@ impl<'s> CombinatorStream<'s> {
             };
 
             if is_for_in {
-                let first_expr = self.parse_expr_lowest()?;
-                let (key_var, value_var) = if self.matches(&Token::DoubleArrow) {
-                    let second_expr = self.parse_expr_lowest()?;
-                    let k_var = match &first_expr.kind {
-                        crate::ast::expr::ExprKind::Variable(v) => Some(v.clone()),
-                        _ => None,
-                    };
-                    (k_var, Box::new(second_expr))
-                } else {
-                    (None, Box::new(first_expr))
-                };
-
-                self.expect(Token::In)?;
-                let expr = self.parse_expr_lowest()?;
+                let (key_var, value_var, expr) = self.parse_for_in_header()?;
                 self.expect(Token::CloseParen)?;
                 let body = self.parse_stmt()?;
                 let span = start_span.merge(body.span);
@@ -1276,6 +1268,89 @@ impl<'s> CombinatorStream<'s> {
                 default,
             }),
         })
+    }
+
+    /// `for $x in $items` or `for $k => $v in $items`, without parentheses.
+    ///
+    /// A brace block is always accepted. A bare body is accepted only when it
+    /// starts on a later line and is indented further than `for`.
+    fn parse_parenless_for_in(&mut self, start_span: Span) -> Result<Stmt<'s>, ParseError> {
+        let header_line = start_span.line;
+        let header_col = start_span.col;
+        let (key_var, value_var, expr) = self.parse_for_in_header()?;
+        self.skip_ignored_comments();
+        self.expect_parenless_for_in_body(header_line, header_col)?;
+        let body = self.parse_stmt()?;
+        let span = start_span.merge(body.span);
+        Ok(Stmt::new(
+            StmtKind::ForIn {
+                expr,
+                key_var,
+                value_var,
+                body: Box::new(body),
+            },
+            span,
+        ))
+    }
+
+    /// Binding and iterable of a for-in header: `$v in $items` or `$k => $v in $items`.
+    fn parse_for_in_header(
+        &mut self,
+    ) -> Result<
+        (
+            Option<crate::ast::types::Variable<'s>>,
+            Box<Expr<'s>>,
+            Expr<'s>,
+        ),
+        ParseError,
+    > {
+        let first_expr = self.parse_expr_lowest()?;
+        let (key_var, value_var) = if self.matches(&Token::DoubleArrow) {
+            let second_expr = self.parse_expr_lowest()?;
+            let k_var = match &first_expr.kind {
+                crate::ast::expr::ExprKind::Variable(v) => Some(v.clone()),
+                _ => None,
+            };
+            (k_var, Box::new(second_expr))
+        } else {
+            (None, Box::new(first_expr))
+        };
+        self.expect(Token::In)?;
+        let expr = self.parse_expr_lowest()?;
+        Ok((key_var, value_var, expr))
+    }
+
+    fn skip_ignored_comments(&mut self) {
+        while let Some(tok) = self.peek() {
+            if matches!(tok.token, Token::BlockComment | Token::DocComment(_)) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn expect_parenless_for_in_body(&self, header_line: usize, header_col: usize) -> Result<(), ParseError> {
+        let Some(tok) = self.peek() else {
+            return Err(ParseError::new(
+                ParseErrorKind::UnexpectedEof {
+                    expected: "an indented for-in body".to_string(),
+                },
+                self.current_span(),
+            ));
+        };
+        if matches!(tok.token, Token::OpenBrace) {
+            return Ok(());
+        }
+        if tok.span.line > header_line && tok.span.col > header_col {
+            return Ok(());
+        }
+        Err(ParseError::new(
+            ParseErrorKind::Custom {
+                message: "A for-in loop without parentheses is valid only when the body is on the next line and indented further than `for`. Use `for ($x in $items) { ... }` or indent the body.".to_string(),
+            },
+            tok.span,
+        ))
     }
 
     /// Parse an if statement with optional elseif and else branches.
