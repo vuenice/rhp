@@ -1846,8 +1846,11 @@ impl VM {
                     let val = self.registers[base_reg + value.index()].clone();
                     let target_idx = base_reg + array.index();
                     match &self.registers[target_idx] {
-                        PhpValue::List(arr) => {
-                            arr.borrow_mut().push(val);
+                        PhpValue::List(_) => {
+                            self.registers[target_idx].ensure_list_mut();
+                            if let PhpValue::List(arr) = &self.registers[target_idx] {
+                                arr.borrow_mut().push(val);
+                            }
                         }
                         PhpValue::EmptyArray => {
                             self.registers[target_idx] = PhpValue::promote_empty_append(val);

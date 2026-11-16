@@ -76,6 +76,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Compiler & VM Internals", "advanced/compiler-internals"),
       item("Pure Closure Optimization", "advanced/pure-closure-optimization"),
       item("Collection Compiler Optimizations", "advanced/collection-compiler-optimizations"),
+      item("Collection Value Semantics & Copy-on-Write", "advanced/collection-value-semantics-and-cow"),
       item("Safe Addition & Arithmetic Semantics", "advanced/safe-addition-semantics"),
       item("CPU Preemption & Instruction Budget", "advanced/cpu-preemption"),
     ]

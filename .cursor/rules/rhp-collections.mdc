@@ -1,14 +1,19 @@
 ---
-description: Lists and dicts are shared objects. Element unset is only for dict and hashmap.
+description: Collections follow PHP-style value semantics with Copy-On-Write (COW). Element unset is only for dict and hashmap.
 globs: src/vm/**/*.rs,src/type_system/**/*.rs,src/ir/**/*.rs
 alwaysApply: false
 ---
 
-# Shared lists and dicts
+# Collections: Value Semantics & Copy-On-Write (COW)
 
-Lists and dicts are `Rc<RefCell<_>>`. Assignment and `$a[] = $b` store that same buffer. `$b = $a; $b[] = 1` changes `$a`. `$a[] = $a` is a cycle. `strict_eq` returns true when both sides are the same buffer before it walks children. Two different cyclic values may overflow comparison.
+Collections (`list`, `dict`, `set`, `hashMap`) are pure value containers backed by `Rc<RefCell<_>>` with **Copy-On-Write (COW)** detachment:
+1. **Value Semantics on Assignment:** `$b = $a` creates an $O(1)$ COW reference. Mutating `$b` detaches its buffer if shared (`strong_count > 1`); `$a` remains unchanged.
+2. **Snapshot Push (No Cycles):** `$a[] = $b` always pushes by value. Self-assignment `$a[] = $a` pushes a value snapshot (`[1, [1]]`), never creating a recursive reference cycle.
+3. **No References in Collections:** Collections cannot store references (`$arr[] = &$b` is forbidden). Explicit pass-by-reference (`&$param`) is strictly an argument-passing mechanism (`inout`) for functions/methods.
+4. **Equality Without Overflow:** Because collections are acyclic trees, `$a == $b` compares recursively without infinite recursion or stack overflows. (A recursion depth guard of 256 is enforced).
+5. **Shared Objects / Graphs:** When bidirectional links or shared state are needed, use classes/objects (`class Node`) with `Weak::to($parent)` weak references.
 
-A list may hold scalars, lists, and dicts together. A list or dict used as a set element or hashmap key is a type error. `clone $a` is the deep copy.
+A list may hold scalars, lists, and dicts together. A list or dict used as a set element or hashmap key is a type error.
 
 List indexes are dense `0..=len`. `$a[] =` appends. An index past `len` is a type error. Dict keys are strings. Any other key on an empty array becomes a hashmap. Untyped `[]` stays `EmptyArray` until the first write.
 
@@ -20,20 +25,25 @@ List indexes are dense `0..=len`. `$a[] =` appends. An index past `len` is a typ
 list $a = [1];
 list $b = $a;
 $b[] = 2;
-print($a[1]); // 2
+print($a[0]); // 1 ($a is untouched!)
+print($b[1]); // 2 ($b detached via COW)
 
-$a[] = $a;
-print($a == $a); // true
+list $x = [1];
+$x[] = $x;    // [1, [1]] (snapshot value, not a cycle)
+list $y = [1];
+$y[] = $y;
+print($x == $y); // true (finite comparison, zero crash)
 
-dict $node = ['name' => 'Ada'];
-$node['parent'] = $node;
-$node->remove('name'); // warning: dict removal shifts
+// In-place mutation across function boundaries via explicit &
+function addElement(list &$items): void {
+    $items[] = 99;
+}
+$list = [10];
+addElement(&$list); // $list is now [10, 99]
 
-list $items = [1, 2];
-$items->remove(0); // warning: list removal shifts
-
-$set = Arr::set([1]);
-$set->remove(1); // no warning
-
-unset($items[0]); // error: use ->remove()
+// Bidirectional graph nodes use Objects and Weak::to()
+class TreeNode {
+    public ?WeakReference $parent = null;
+    public list $children = [];
+}
 ```

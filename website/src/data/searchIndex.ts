@@ -257,6 +257,13 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["collection", "compiler optimization", "fbip", "in-place sort", "refcount", "stream fusion", "loop deforestation", "pipeline", "map", "filter", "take", "skip", "reject", "zero allocation", "short-circuit", "memory efficiency"]
   },
   {
+    title: "Collection Value Semantics & Copy-on-Write",
+    section: "Advanced",
+    description: "PHP-style value semantics, Copy-On-Write (COW) buffer detachment, acyclic snapshot push, zero-GC memory safety, and inout parameter conventions.",
+    url: "/docs/advanced/collection-value-semantics-and-cow",
+    keywords: ["collection", "value semantics", "copy-on-write", "cow", "list", "dict", "set", "hashmap", "acyclic", "cycle elimination", "snapshot", "equality comparison", "inout", "by-ref", "weak reference", "tree", "zero-gc", "refcount"]
+  },
+  {
     title: "Safe Addition & Arithmetic Semantics",
     section: "Advanced",
     description: "Checked addition (+), wrapping (+%), saturating (+|), constant folding, LLVM overflow intrinsics, and eliminating PHP coercion pitfalls.",

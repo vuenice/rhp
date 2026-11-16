@@ -31,17 +31,19 @@ fn test_list_direct_vec_memory_layout_and_cow_detachment() {
     assert!(list.is_shared());
     assert!(list_alias.is_shared());
 
-    // Lists are shared objects. A write through an alias changes the original.
+    // Copy-On-Write (COW): ensure_list_mut detaches the underlying vector
     assert!(list_alias.ensure_list_mut());
-    assert_eq!(list.ref_count(), 2);
-    assert!(list.is_shared());
+    assert_eq!(list.ref_count(), 1);
+    assert_eq!(list_alias.ref_count(), 1);
+    assert!(!list.is_shared());
+    assert!(!list_alias.is_shared());
 
     if let PhpValue::List(ref rc) = list_alias {
         rc.borrow_mut().push(PhpValue::Int(999));
     }
-    assert_eq!(list.list_len(), Some(4));
+    assert_eq!(list.list_len(), Some(3));
     assert_eq!(list_alias.list_len(), Some(4));
-    assert_eq!(list.list_get(3), Some(PhpValue::Int(999)));
+    assert_eq!(list_alias.list_get(3), Some(PhpValue::Int(999)));
 }
 
 #[test]

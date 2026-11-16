@@ -551,7 +551,7 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
     assert!(!arr_mut.is_shared());
     assert!(!arr.is_shared());
 
-    // 3. VM runtime: Lists are shared mutable objects across variable assignment
+    // 3. VM runtime: Array Copy-on-Write on assignment and mutation
     let source_arr_cow = r#"
         $orig = [10, 20, 30];
         $copied = $orig;
@@ -562,16 +562,21 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
     let orig = vm.get_main_variable("$orig").unwrap();
     let copied = vm.get_main_variable("$copied").unwrap();
 
-    let expected_shared = PhpValue::list(vec![
+    let expected_orig = PhpValue::list(vec![
+        PhpValue::Int(10),
+        PhpValue::Int(20),
+        PhpValue::Int(30),
+    ]);
+    let expected_copied = PhpValue::list(vec![
         PhpValue::Int(99),
         PhpValue::Int(20),
         PhpValue::Int(30),
         PhpValue::Int(100),
     ]);
-    assert_eq!(orig, &expected_shared);
-    assert_eq!(copied, &expected_shared);
+    assert_eq!(orig, &expected_orig);
+    assert_eq!(copied, &expected_copied);
 
-    // 4. VM runtime: Lists are shared mutable objects across function calls
+    // 4. VM runtime: Array Copy-on-Write across function calls
     let source_func_cow = r#"
         function mutateList(array $items): array {
             $items[0] = 777;
@@ -586,14 +591,52 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
     let my_list = vm.get_main_variable("$myList").unwrap();
     let ret_list = vm.get_main_variable("$returnedList").unwrap();
 
+    let expected_orig_func = PhpValue::list(vec![
+        PhpValue::Int(1),
+        PhpValue::Int(2),
+        PhpValue::Int(3),
+    ]);
     let expected_func = PhpValue::list(vec![
         PhpValue::Int(777),
         PhpValue::Int(2),
         PhpValue::Int(3),
         PhpValue::Int(888),
     ]);
-    assert_eq!(my_list, &expected_func);
+    assert_eq!(my_list, &expected_orig_func);
     assert_eq!(ret_list, &expected_func);
+
+    // 4b. VM runtime: Self-push creates an acyclic snapshot and equality succeeds
+    let source_acyclic = r#"
+        list $a = [1];
+        $a[] = $a;
+
+        list $b = [1];
+        $b[] = $b;
+
+        $are_equal = ($a == $b);
+    "#;
+    let (vm_acyclic, _) = run_source_with_vm(source_acyclic).expect("Acyclic execution should pass");
+    let are_equal = vm_acyclic.get_main_variable("$are_equal").unwrap();
+    assert_eq!(are_equal, &PhpValue::Bool(true));
+
+    // 4c. VM runtime: Explicit pass-by-reference mutates caller variable in-place
+    let source_by_ref = r#"
+        function mutateByRef(array &$items): void {
+            $items[0] = 555;
+            $items[] = 666;
+        }
+
+        $target = [1, 2];
+        mutateByRef(&$target);
+    "#;
+    let (vm_ref, _) = run_source_with_vm(source_by_ref).expect("By-ref execution should pass");
+    let target = vm_ref.get_main_variable("$target").unwrap();
+    let expected_by_ref = PhpValue::list(vec![
+        PhpValue::Int(555),
+        PhpValue::Int(2),
+        PhpValue::Int(666),
+    ]);
+    assert_eq!(target, &expected_by_ref);
 
     // 5. VM runtime: Object Reference Semantics (objects share reference handle)
     let source_obj_ref = r#"

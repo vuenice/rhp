@@ -85,7 +85,7 @@ fn first_write_promotes_empty_array() {
 }
 
 #[test]
-fn shared_list_and_cycle_keep_one_buffer() {
+fn cow_list_and_acyclic_snapshot_value_semantics() {
     let code = r#"
         $a = [1];
         $b = $a;
@@ -95,17 +95,18 @@ fn shared_list_and_cycle_keep_one_buffer() {
         $cycle[] = $cycle;
         $same = $cycle == $cycle;
         $cycle[0] = 9;
-        return [$a[1], $same, $cycle[0], $cycle[1][0]];
+        return [$a[0], $b[1], $same, $cycle[0], $cycle[1][0]];
     "#;
-    let res = run_source(code).expect("shared list");
+    let res = run_source(code).expect("cow list");
     let PhpValue::List(items) = res else {
         panic!("expected a list, got {res:?}");
     };
     let items = items.borrow();
-    assert_eq!(items[0], PhpValue::Int(2));
-    assert_eq!(items[1], PhpValue::Bool(true));
-    assert_eq!(items[2], PhpValue::Int(9));
+    assert_eq!(items[0], PhpValue::Int(1));
+    assert_eq!(items[1], PhpValue::Int(2));
+    assert_eq!(items[2], PhpValue::Bool(true));
     assert_eq!(items[3], PhpValue::Int(9));
+    assert_eq!(items[4], PhpValue::Int(1));
 }
 
 #[test]

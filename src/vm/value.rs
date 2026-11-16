@@ -1329,6 +1329,13 @@ impl PhpValue {
     /// When comparing floats, checks the maximum decimal point on both sides and compares
     /// both sides to that maximum decimal point for accurate representation.
     pub fn strict_eq(&self, other: &Self) -> bool {
+        self.strict_eq_depth(other, 0)
+    }
+
+    pub fn strict_eq_depth(&self, other: &Self, depth: usize) -> bool {
+        if depth > 256 {
+            return false;
+        }
         match (self, other) {
             (Self::Null, Self::Null) => true,
             (Self::Bool(x), Self::Bool(y)) => x == y,
@@ -1351,7 +1358,7 @@ impl PhpValue {
                 }
                 let a = x.borrow().clone();
                 let b = y.borrow().clone();
-                a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.strict_eq(v2))
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(v1, v2)| v1.strict_eq_depth(v2, depth + 1))
             }
             (Self::Dict(x), Self::Dict(y)) => {
                 if Rc::ptr_eq(x, y) {
@@ -1361,7 +1368,7 @@ impl PhpValue {
                 let b = y.borrow().clone();
                 a.len() == b.len()
                     && a.iter()
-                        .all(|(k, v1)| b.get(k).map_or(false, |v2| v1.strict_eq(v2)))
+                        .all(|(k, v1)| b.get(k).map_or(false, |v2| v1.strict_eq_depth(v2, depth + 1)))
             }
             (Self::Set(x), Self::Set(y)) => {
                 if Rc::ptr_eq(x, y) {
@@ -1616,15 +1623,31 @@ impl PhpValue {
                 }
                 true
             }
-            Self::List(_) => true,
+            Self::List(rc) => {
+                if Rc::strong_count(rc) > 1 {
+                    let cloned = rc.borrow().clone();
+                    *rc = Rc::new(RefCell::new(cloned));
+                    crate::vm::memory::record_cow_detachment();
+                }
+                true
+            }
             _ => false,
         }
     }
 
-    /// Lists are shared mutable objects. A write through any alias changes the same buffer.
+    /// Detaches the sequential list buffer if shared (`strong_count > 1`) (Copy-On-Write).
     /// Returns `true` if this value is a List, `false` otherwise.
     pub fn ensure_list_mut(&mut self) -> bool {
-        matches!(self, Self::List(_))
+        if let Self::List(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Returns `true` if this value is an array or collection variant (`Array`, `List`, `Dict`, `Set`, or `HashMap`).
@@ -1678,10 +1701,19 @@ impl PhpValue {
         }
     }
 
-    /// Dicts are shared mutable objects. A write through any alias changes the same buffer.
+    /// Detaches the dictionary buffer if shared (`strong_count > 1`) (Copy-On-Write).
     /// Returns `true` if this value is a Dict, `false` otherwise.
     pub fn ensure_dict_mut(&mut self) -> bool {
-        matches!(self, Self::Dict(_))
+        if let Self::Dict(rc) = self {
+            if Rc::strong_count(rc) > 1 {
+                let cloned = rc.borrow().clone();
+                *rc = Rc::new(RefCell::new(cloned));
+                crate::vm::memory::record_cow_detachment();
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Lists, dicts, and untyped arrays cannot be set elements or hashmap keys.
