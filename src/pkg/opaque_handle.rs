@@ -7,11 +7,15 @@
 //! memory cloning, and cross-boundary pointer risks.
 //!
 //! ## Lifecycle & Request-Scope Isolation:
-//! - Native handles created within a request scope are deterministically freed when the request ends
-//!   via `clear_request_handles()`, guaranteeing zero handle leakage across requests.
-//! - Long-lived persistent drivers belong on `shared class` instances (via `VmSharedObject::set_native_resource`).
+//! - Request cursors and leased connections live on the active fiber's registry.
+//!   `FiberScopeGuard` binds that registry for the fiber and releases it on finish, fail, or drop.
+//! - `clear_request_handles()` drops only the active fiber registry (or the thread fallback when
+//!   no fiber is running). It does not touch the process-lifetime registry.
+//! - Long-lived pools stay on `shared class` instances (`VmSharedObject::set_native_resource`)
+//!   or in [`get_handle_registry`], which survives request teardown.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -38,29 +42,80 @@ pub struct OpaqueHandleRegistry {
 }
 
 thread_local! {
-    static REQUEST_REGISTRY: OpaqueHandleRegistry = OpaqueHandleRegistry::new();
+    /// Registry bound to the fiber currently running on this OS thread.
+    static ACTIVE_REGISTRY: RefCell<Option<Arc<OpaqueHandleRegistry>>> = const { RefCell::new(None) };
+    /// Used only when no fiber is active (unit tests and non-fiber callers).
+    static FALLBACK_REGISTRY: RefCell<Option<Arc<OpaqueHandleRegistry>>> = const { RefCell::new(None) };
 }
 
 static GLOBAL_REGISTRY: OnceLock<OpaqueHandleRegistry> = OnceLock::new();
 
-/// Access the request-scoped handle registry for the active request thread.
-pub fn with_request_handle_registry<R>(f: impl FnOnce(&OpaqueHandleRegistry) -> R) -> R {
-    REQUEST_REGISTRY.with(|reg| f(reg))
+fn fallback_registry() -> Arc<OpaqueHandleRegistry> {
+    FALLBACK_REGISTRY.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(Arc::new(OpaqueHandleRegistry::new()));
+        }
+        Arc::clone(slot.as_ref().expect("fallback registry is installed"))
+    })
 }
 
-/// Clear all request-scoped handles (deterministically invoked at request completion).
+/// Swap the registry bound to this thread. Returns the previous binding.
+///
+/// `FiberScopeGuard` installs the running fiber's registry and restores the parent on exit.
+pub(crate) fn swap_active_registry(
+    next: Option<Arc<OpaqueHandleRegistry>>,
+) -> Option<Arc<OpaqueHandleRegistry>> {
+    ACTIVE_REGISTRY.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), next))
+}
+
+/// Access the request-scoped handle registry for the active fiber.
+///
+/// When no fiber is bound, this uses a thread-local fallback that
+/// [`clear_request_handles`] can drop. It never reads the process-lifetime registry.
+pub fn with_request_handle_registry<R>(f: impl FnOnce(&OpaqueHandleRegistry) -> R) -> R {
+    let active = ACTIVE_REGISTRY.with(|cell| cell.borrow().clone());
+    if let Some(reg) = active {
+        f(&reg)
+    } else {
+        f(&fallback_registry())
+    }
+}
+
+/// Drop handles owned by the active fiber.
+///
+/// With no fiber bound, this clears only the thread fallback. The process-lifetime
+/// registry from [`get_handle_registry`] is left intact.
 pub fn clear_request_handles() {
-    REQUEST_REGISTRY.with(|reg| {
+    let active = ACTIVE_REGISTRY.with(|cell| cell.borrow().clone());
+    if let Some(reg) = active {
         reg.clear();
+        return;
+    }
+    FALLBACK_REGISTRY.with(|cell| {
+        if let Some(reg) = cell.borrow().as_ref() {
+            reg.clear();
+        }
     });
 }
 
-/// Access the handle registry (cleared on request termination to guarantee worker isolation).
+/// Process-lifetime handle registry.
+///
+/// Pools and clients stored here outlive a single request. Request teardown must not clear it.
+/// Request cursors belong on the fiber registry via [`with_request_handle_registry`].
 pub fn get_handle_registry() -> &'static OpaqueHandleRegistry {
     GLOBAL_REGISTRY.get_or_init(|| OpaqueHandleRegistry {
         next_id: AtomicU64::new(1),
         handles: RwLock::new(HashMap::new()),
     })
+}
+
+impl std::fmt::Debug for OpaqueHandleRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpaqueHandleRegistry")
+            .field("count", &self.count())
+            .finish()
+    }
 }
 
 impl OpaqueHandleRegistry {
@@ -157,8 +212,7 @@ mod tests {
 
     #[test]
     fn test_opaque_handle_lifecycle() {
-        let registry = get_handle_registry();
-        registry.clear();
+        let registry = OpaqueHandleRegistry::new();
 
         let client = MockMongoClient {
             uri: "mongodb://cluster0.local".to_string(),
@@ -190,6 +244,21 @@ mod tests {
         // Verify insert always stores before returning
         let handle2 = registry.insert("TestType", 100u64);
         assert_eq!(registry.get::<u64>(handle2), Some(Arc::new(100u64)));
+    }
+
+    #[test]
+    fn test_try_insert_lock_poison_does_not_mint_id() {
+        let registry = OpaqueHandleRegistry::new();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = registry.handles.write().expect("lock");
+            panic!("poison registry lock");
+        }));
+
+        let before = registry.next_id.load(Ordering::Relaxed);
+        let err = registry.try_insert("TestType", 7u64);
+        assert!(matches!(err, Err(HandleError::LockPoisoned)));
+        assert_eq!(registry.count(), 0);
+        assert_eq!(registry.next_id.load(Ordering::Relaxed), before);
     }
 
     #[test]
