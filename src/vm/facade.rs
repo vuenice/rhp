@@ -357,7 +357,6 @@ pub fn clear_request_context() {
     REQUEST_HEADERS.with(|cell| cell.borrow_mut().clear());
     REQUEST_SERVER.with(|cell| cell.borrow_mut().clear());
     crate::pkg::opaque_handle::clear_request_handles();
-    crate::pkg::opaque_handle::get_handle_registry().clear();
     clear_response_context();
 }
 
