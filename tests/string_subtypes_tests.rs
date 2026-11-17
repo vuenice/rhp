@@ -237,11 +237,11 @@ fn test_type_hints_string_and_bytes() {
 
 #[test]
 fn test_bytes_minimal_api_and_unsupported_method_rejection() {
-    // 1. $b->len() and $b->slice()
+    // 1. $b->len() and $b->slice() (JS String.slice: end is exclusive)
     let code_api = r#"
         $b = b"abcdefghij";
         $len = $b->len();
-        $slice1 = $b->slice(2, 4);
+        $slice1 = $b->slice(2, 6);
         $slice2 = $b->slice(-4);
         return [$len, $slice1->decode(), $slice2->decode()];
     "#;
@@ -281,24 +281,24 @@ fn test_bytes_minimal_api_and_unsupported_method_rejection() {
     // 4. Calling unsupported string method on Bytes throws TypeError with exact message
     let code_unsupported = r#"
         $b = b"hello";
-        return $b->toUpper();
+        return $b->trim();
     "#;
-    let err_unsupported = run_source(code_unsupported).expect_err("toUpper on bytes should fail");
+    let err_unsupported = run_source(code_unsupported).expect_err("trim on bytes should fail");
     let err_msg = format!("{:?}", err_unsupported);
     assert!(
-        err_msg.contains("Method toUpper() is not supported on bytes. Call ->decode() first to get a string."),
+        err_msg.contains("Method trim() is not supported on bytes. Call ->decode() first to get a string."),
         "expected exact error message, got: {}",
         err_msg
     );
 
     let code_unsupported2 = r#"
         $b = b"hello";
-        return $b->contains("ll");
+        return $b->slug();
     "#;
-    let err_unsupported2 = run_source(code_unsupported2).expect_err("contains on bytes should fail");
+    let err_unsupported2 = run_source(code_unsupported2).expect_err("slug on bytes should fail");
     let err_msg2 = format!("{:?}", err_unsupported2);
     assert!(
-        err_msg2.contains("Method contains() is not supported on bytes. Call ->decode() first to get a string."),
+        err_msg2.contains("Method slug() is not supported on bytes. Call ->decode() first to get a string."),
         "expected exact error message, got: {}",
         err_msg2
     );
@@ -310,22 +310,22 @@ fn test_multibyte_functions_and_ascii_fast_path() {
         // 1. ASCII string: O(1) fast paths
         $ascii = "abcdef";
         $len1 = $ascii->len();
-        $mblen1 = $ascii->mbStrlen();
+        $mblen1 = $ascii->length();
         $grap1 = $ascii->graphemeLen();
-        $sub1 = $ascii->mbSubstr(1, 3);
-        $sub_neg = $ascii->mbSubstr(-4, 2);
+        $sub1 = $ascii->substr(1, 3);
+        $sub_neg = $ascii->substr(-4, 2);
 
         // 2. Multibyte string: UTF-8 characters
         $mb = "héllo 世界 😀";
         $len2 = $mb->len();              // byte count: 1 + 2 + 3 + 1 + 3 + 3 + 1 + 4 = 18
-        $mblen2 = $mb->mbStrlen();       // char count: 10
+        $mblen2 = $mb->length();         // char count: 10
         $grap2 = $mb->graphemeLen();     // grapheme count: 10
-        $sub2 = $mb->mbSubstr(6, 2);     // "世界"
-        $sub3 = $mb->mbSubstr(-1);       // "😀"
+        $sub2 = $mb->substr(6, 2);       // "世界"
+        $sub3 = $mb->substr(-1);         // "😀"
 
         // 3. Combining character grapheme
         $combining = "e\u{0301}";         // 'é' as combining character
-        $comb_mb = $combining->mbStrlen();    // 2 code points
+        $comb_mb = $combining->length();  // 2 code points
         $comb_grap = $combining->graphemeLen(); // 1 grapheme cluster
 
         return [
@@ -615,5 +615,197 @@ fn test_contextual_target_typing_bytes_and_string() {
         return $sub->len();
     "#;
     let res = run_source(code_slice).expect("byte slice should succeed");
-    assert_eq!(res, PhpValue::Int(3));
+    assert_eq!(res, PhpValue::Int(2));
+}
+
+#[test]
+fn test_byte_fluent_helpers_and_shared_text_api() {
+    // 1. Shared slice and substr on "The quick brown fox" for both string and byte
+    let code_shared = r#"
+        string $s = "The quick brown fox";
+        byte $b = byte("The quick brown fox");
+
+        $s_slice1 = $s->slice(4, 9);
+        $s_slice2 = $s->slice(10);
+        $s_slice3 = $s->slice(-3);
+
+        $b_slice1 = $b->slice(4, 9)->decode();
+        $b_slice2 = $b->slice(10)->decode();
+        $b_slice3 = $b->slice(-3)->decode();
+
+        $s_sub1 = $s->substr(4, 5);
+        $s_sub2 = $s->substr(10);
+        $s_sub3 = $s->substr(-3);
+
+        $b_sub1 = $b->substr(4, 5)->decode();
+        $b_sub2 = $b->substr(10)->decode();
+        $b_sub3 = $b->substr(-3)->decode();
+
+        $static_sub1 = Str::substr("The quick brown fox", 4, 5);
+        $static_sub2 = Str::substr("The quick brown fox", 10);
+        $static_sub3 = Str::substr("The quick brown fox", -3);
+
+        return [
+            $s_slice1, $s_slice2, $s_slice3,
+            $b_slice1, $b_slice2, $b_slice3,
+            $s_sub1, $s_sub2, $s_sub3,
+            $b_sub1, $b_sub2, $b_sub3,
+            $static_sub1, $static_sub2, $static_sub3,
+        ];
+    "#;
+    let res = run_source(code_shared).expect("shared slicing should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res {
+        let items = arr.borrow();
+        assert_eq!(items[0].to_php_string(), "quick");
+        assert_eq!(items[1].to_php_string(), "brown fox");
+        assert_eq!(items[2].to_php_string(), "fox");
+
+        assert_eq!(items[3].to_php_string(), "quick");
+        assert_eq!(items[4].to_php_string(), "brown fox");
+        assert_eq!(items[5].to_php_string(), "fox");
+
+        assert_eq!(items[6].to_php_string(), "quick");
+        assert_eq!(items[7].to_php_string(), "brown fox");
+        assert_eq!(items[8].to_php_string(), "fox");
+
+        assert_eq!(items[9].to_php_string(), "quick");
+        assert_eq!(items[10].to_php_string(), "brown fox");
+        assert_eq!(items[11].to_php_string(), "fox");
+
+        assert_eq!(items[12].to_php_string(), "quick");
+        assert_eq!(items[13].to_php_string(), "brown fox");
+        assert_eq!(items[14].to_php_string(), "fox");
+    } else {
+        panic!("expected list");
+    }
+
+    // 2. take and takeLast
+    let code_take = r#"
+        $s = "The quick brown fox";
+        $b = byte("The quick brown fox");
+        return [
+            $s->take(3), $s->takeLast(3), $s->take(-1),
+            $b->take(3)->decode(), $b->takeLast(3)->decode(), $b->take(0)->len()
+        ];
+    "#;
+    let res_take = run_source(code_take).expect("take should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_take {
+        let items = arr.borrow();
+        assert_eq!(items[0].to_php_string(), "The");
+        assert_eq!(items[1].to_php_string(), "fox");
+        assert_eq!(items[2].to_php_string(), "");
+        assert_eq!(items[3].to_php_string(), "The");
+        assert_eq!(items[4].to_php_string(), "fox");
+        assert_eq!(items[5], PhpValue::Int(0));
+    }
+
+    // 3. indexOf and lastIndexOf (including null on missing)
+    let code_index = r#"
+        $s = "hello world hello";
+        $b = byte("hello world hello");
+        return [
+            $s->indexOf("hello"),
+            $s->indexOf("hello", 1),
+            $s->indexOf("missing"),
+            $s->lastIndexOf("hello"),
+            $s->lastIndexOf("hello", 11),
+            $s->lastIndexOf("missing"),
+            $b->indexOf("hello"),
+            $b->lastIndexOf("hello"),
+            $b->indexOf("missing"),
+        ];
+    "#;
+    let res_index = run_source(code_index).expect("index search should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_index {
+        let items = arr.borrow();
+        assert_eq!(items[0], PhpValue::Int(0));
+        assert_eq!(items[1], PhpValue::Int(12));
+        assert_eq!(items[2], PhpValue::Null);
+        assert_eq!(items[3], PhpValue::Int(12));
+        assert_eq!(items[4], PhpValue::Int(0));
+        assert_eq!(items[5], PhpValue::Null);
+        assert_eq!(items[6], PhpValue::Int(0));
+        assert_eq!(items[7], PhpValue::Int(12));
+        assert_eq!(items[8], PhpValue::Null);
+    }
+
+    // 4. toHex and toBase64 on \xFF\xFE (comparing fluent and Binary facade)
+    let code_hex_b64 = r#"
+        $b = b"\xFF\xFE";
+        $h1 = $b->toHex();
+        $h2 = Binary::toHex($b);
+        $b64 = $b->toBase64();
+        return [$h1, $h2, $b64];
+    "#;
+    let res_hex = run_source(code_hex_b64).expect("toHex and toBase64 should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_hex {
+        let items = arr.borrow();
+        assert_eq!(items[0].to_php_string(), "fffe");
+        assert_eq!(items[1].to_php_string(), "fffe");
+        assert_eq!(items[2].to_php_string(), "//4=");
+    }
+
+    // 5. toString() fallibility, toStringLossy(), and isValidUtf8() on \xFF\xFE
+    let code_tostring_fail = r#"
+        $b = b"\xFF\xFE";
+        return $b->toString();
+    "#;
+    let err_ts = run_source(code_tostring_fail).expect_err("toString on invalid UTF-8 should fail");
+    assert!(format!("{:?}", err_ts).contains("InvalidEncodingException"));
+
+    let code_tostring_lossy = r#"
+        $b = b"\xFF\xFE";
+        $lossy = $b->toStringLossy();
+        $valid = $b->isValidUtf8();
+        $valid_str = "hello"->isValidUtf8();
+        return [$lossy, $valid, $valid_str];
+    "#;
+    let res_lossy = run_source(code_tostring_lossy).expect("lossy conversion should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_lossy {
+        let items = arr.borrow();
+        assert!(items[0].to_php_string().contains('\u{FFFD}'));
+        assert_eq!(items[1], PhpValue::Bool(false));
+        assert_eq!(items[2], PhpValue::Bool(true));
+    }
+
+    // 6. metaData() dict
+    let code_meta = r#"
+        $b = b"hello";
+        $m = $b->metaData();
+        return [$m['length'], $m['byteLength'], $m['encoding'], $m['validUtf8'], $m['bom']];
+    "#;
+    let res_meta = run_source(code_meta).expect("metaData should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_meta {
+        let items = arr.borrow();
+        assert_eq!(items[0], PhpValue::Int(5));
+        assert_eq!(items[1], PhpValue::Int(5));
+        assert_eq!(items[2].to_php_string(), "ASCII");
+        assert_eq!(items[3], PhpValue::Bool(true));
+        assert_eq!(items[4], PhpValue::Null);
+    }
+
+    // 7. upperCase on a Shift-JIS buffer
+    // Shift-JIS bytes for "hello 世界"
+    // "hello" is ASCII 0x68, 0x65, 0x6c, 0x6c, 0x6f
+    // "世界" in Shift-JIS is 0x90, 0xA2, 0x8A, 0x45
+    let code_sjis = r#"
+        $sjis = b"hello \x90\xA2\x8A\x45";
+        $upper = $sjis->upperCase();
+        return [$sjis->metaData()['encoding'], $upper->toHex()];
+    "#;
+    let res_sjis = run_source(code_sjis).expect("Shift-JIS upperCase should work");
+    if let PhpValue::Array(arr) | PhpValue::List(arr) = res_sjis {
+        let items = arr.borrow();
+        assert_eq!(items[0].to_php_string(), "Shift-JIS");
+        // "HELLO " is 0x48, 0x45, 0x4c, 0x4c, 0x4f, 0x20, then 世界 in Shift-JIS 90a28a45
+        assert_eq!(items[1].to_php_string(), "48454c4c4f2090a28a45");
+    }
+
+    // 8. trim still rejected on byte
+    let code_trim_byte = r#"
+        $b = byte("  hello  ");
+        return $b->trim();
+    "#;
+    let err_trim = run_source(code_trim_byte).expect_err("trim on byte must fail");
+    assert!(format!("{:?}", err_trim).contains("Method trim() is not supported on bytes. Call ->decode() first to get a string."));
 }

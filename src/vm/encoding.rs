@@ -1068,4 +1068,118 @@ pub fn grapheme_len(s: &str) -> usize {
     unicode_segmentation::UnicodeSegmentation::graphemes(s, true).count()
 }
 
+/// Calculate JavaScript String.slice(start, end) index bounds.
+/// $end is exclusive. Missing $end runs through the end. Negative indices count from back.
+pub fn calc_js_slice(n: usize, start: i64, end: Option<i64>) -> (usize, usize) {
+    let total = n as i64;
+    let actual_start = if start < 0 {
+        (total + start).max(0) as usize
+    } else {
+        (start as usize).min(n)
+    };
+    let actual_end = match end {
+        None => n,
+        Some(e) if e < 0 => (total + e).max(0) as usize,
+        Some(e) => (e as usize).min(n),
+    };
+    if actual_start >= actual_end {
+        (actual_start, actual_start)
+    } else {
+        (actual_start, actual_end)
+    }
+}
+
+/// Resolves PHP-style substr(start, len) arguments into slice(start, end) parameters.
+/// Omitted $len -> slice($start)
+/// $len >= 0    -> slice($start, $start + $len)
+/// $len < 0     -> slice($start, $len)
+pub fn resolve_substr_to_slice(total_len: usize, start: i64, len: Option<i64>) -> (i64, Option<i64>) {
+    let resolved_start = if start < 0 {
+        (total_len as i64 + start).max(0)
+    } else {
+        (start as usize).min(total_len) as i64
+    };
+    let slice_end = match len {
+        None => None,
+        Some(l) if l >= 0 => Some(resolved_start + l),
+        Some(l) => Some(l),
+    };
+    (resolved_start, slice_end)
+}
+
+/// Backward search for needle in UTF-8 string.
+/// $offset is where the backward scan starts; 0 means the end of the text.
+pub fn char_last_index_of(str_val: &str, needle: &str, offset: i64) -> Option<i64> {
+    let char_indices: Vec<(usize, char)> = str_val.char_indices().collect();
+    let total_chars = char_indices.len();
+    let scan_start = if offset == 0 {
+        total_chars
+    } else if offset > 0 {
+        (offset as usize).min(total_chars)
+    } else {
+        (total_chars as i64 + offset).max(0) as usize
+    };
+
+    if needle.is_empty() {
+        return Some(scan_start as i64);
+    }
+
+    let mut last_found = None;
+    for (byte_pos, _) in str_val.match_indices(needle) {
+        let char_idx = str_val[..byte_pos].chars().count();
+        if char_idx <= scan_start {
+            last_found = Some(char_idx as i64);
+        } else {
+            break;
+        }
+    }
+    last_found
+}
+
+/// Forward search for needle in raw byte slice.
+pub fn byte_index_of(bytes: &[u8], needle: &[u8], offset: i64) -> Option<i64> {
+    let total = bytes.len();
+    let start_pos = if offset < 0 {
+        (total as i64 + offset).max(0) as usize
+    } else {
+        (offset as usize).min(total)
+    };
+    if needle.is_empty() {
+        return Some(start_pos as i64);
+    }
+    if start_pos >= total || needle.len() > total - start_pos {
+        return None;
+    }
+    bytes[start_pos..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|pos| (start_pos + pos) as i64)
+}
+
+/// Backward search for needle in raw byte slice.
+/// $offset is where the backward scan starts; 0 means the end of the text.
+pub fn byte_last_index_of(bytes: &[u8], needle: &[u8], offset: i64) -> Option<i64> {
+    let total = bytes.len();
+    let scan_start = if offset == 0 {
+        total
+    } else if offset > 0 {
+        (offset as usize).min(total)
+    } else {
+        (total as i64 + offset).max(0) as usize
+    };
+    if needle.is_empty() {
+        return Some(scan_start as i64);
+    }
+    if needle.len() > total {
+        return None;
+    }
+    let max_start = (total - needle.len()).min(scan_start);
+    for i in (0..=max_start).rev() {
+        if &bytes[i..i + needle.len()] == needle {
+            return Some(i as i64);
+        }
+    }
+    None
+}
+
 

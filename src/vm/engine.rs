@@ -8295,12 +8295,316 @@ impl VM {
             // 6. Binary-Safe String fluent methods ($text->trim()->upper(), etc.)
             // String helper methods are immutable by default, returning a new instance.
             PhpValue::Bytes(b) => match method {
-                "len" | "length" => Ok(PhpValue::Int(b.len() as i64)),
+                "len" | "size" => Ok(PhpValue::Int(b.len() as i64)),
+                "length" => {
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        Ok(PhpValue::Int(b.len() as i64))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        Ok(PhpValue::Int(s.chars().count() as i64))
+                    }
+                }
+                "toString" => {
+                    match std::str::from_utf8(b.as_ref()) {
+                        Ok(valid) => Ok(PhpValue::string(valid)),
+                        Err(e) => Err(self.make_error(RuntimeErrorKind::UncaughtException {
+                            class: "InvalidEncodingException".to_string(),
+                            message: format!("Bytes contains invalid UTF-8 sequence at byte offset {}", e.valid_up_to()),
+                        }, span)),
+                    }
+                }
+                "toStringLossy" => {
+                    Ok(PhpValue::string(String::from_utf8_lossy(b.as_ref()).into_owned()))
+                }
+                "isValidUtf8" => {
+                    Ok(PhpValue::Bool(std::str::from_utf8(b.as_ref()).is_ok()))
+                }
+                "toHex" => {
+                    Ok(PhpValue::string(hex::encode(b.as_ref())))
+                }
+                "toBase64" => {
+                    Ok(PhpValue::string(crate::vm::url_helper::base64_encode(b.as_ref())))
+                }
+                "metaData" => {
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    let char_count = if enc == "Binary" {
+                        b.len() as i64
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        s.chars().count() as i64
+                    };
+                    let bom_val = match crate::vm::encoding::detect_bom(b.as_ref()) {
+                        Some((bom_name, _)) => PhpValue::string(bom_name),
+                        None => PhpValue::Null,
+                    };
+                    let is_valid_utf8 = std::str::from_utf8(b.as_ref()).is_ok();
+                    let entries = vec![
+                        ("length".to_string(), PhpValue::Int(char_count)),
+                        ("byteLength".to_string(), PhpValue::Int(b.len() as i64)),
+                        ("encoding".to_string(), PhpValue::string(enc)),
+                        ("bom".to_string(), bom_val),
+                        ("validUtf8".to_string(), PhpValue::Bool(is_valid_utf8)),
+                    ];
+                    Ok(PhpValue::dict(entries))
+                }
                 "slice" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let end = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        let (st, en) = crate::vm::encoding::calc_js_slice(b.len(), start, end);
+                        Ok(PhpValue::bytes(&b[st..en]))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let chars: Vec<char> = s.chars().collect();
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), start, end);
+                        let sliced: String = chars[st..en].iter().collect();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&sliced, enc)
+                            .unwrap_or_else(|_| sliced.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "substr" => {
+                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
                     let length = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
-                    let (st, en) = crate::vm::encoding::calc_mb_slice(b.len() as i64, start, length);
-                    Ok(PhpValue::bytes(&b[st..en]))
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        let (slice_start, slice_end) = crate::vm::encoding::resolve_substr_to_slice(b.len(), start, length);
+                        let (st, en) = crate::vm::encoding::calc_js_slice(b.len(), slice_start, slice_end);
+                        Ok(PhpValue::bytes(&b[st..en]))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let chars: Vec<char> = s.chars().collect();
+                        let (slice_start, slice_end) = crate::vm::encoding::resolve_substr_to_slice(chars.len(), start, length);
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), slice_start, slice_end);
+                        let sliced: String = chars[st..en].iter().collect();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&sliced, enc)
+                            .unwrap_or_else(|_| sliced.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "take" => {
+                    let n = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if n <= 0 {
+                        Ok(PhpValue::bytes(Vec::new()))
+                    } else if enc == "Binary" {
+                        let (st, en) = crate::vm::encoding::calc_js_slice(b.len(), 0, Some(n));
+                        Ok(PhpValue::bytes(&b[st..en]))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let chars: Vec<char> = s.chars().collect();
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), 0, Some(n));
+                        let sliced: String = chars[st..en].iter().collect();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&sliced, enc)
+                            .unwrap_or_else(|_| sliced.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "takeLast" => {
+                    let n = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if n <= 0 {
+                        Ok(PhpValue::bytes(Vec::new()))
+                    } else if enc == "Binary" {
+                        let (st, en) = crate::vm::encoding::calc_js_slice(b.len(), -n, None);
+                        Ok(PhpValue::bytes(&b[st..en]))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let chars: Vec<char> = s.chars().collect();
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), -n, None);
+                        let sliced: String = chars[st..en].iter().collect();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&sliced, enc)
+                            .unwrap_or_else(|_| sliced.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "indexOf" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        match crate::vm::encoding::byte_index_of(b.as_ref(), needle.as_bytes(), offset) {
+                            Some(pos) => Ok(PhpValue::Int(pos)),
+                            None => Ok(PhpValue::Null),
+                        }
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let char_indices: Vec<(usize, char)> = s.char_indices().collect();
+                        let total_chars = char_indices.len();
+                        let start_char_idx = if offset < 0 {
+                            (total_chars as i64 + offset).max(0) as usize
+                        } else {
+                            (offset as usize).min(total_chars)
+                        };
+                        if needle.is_empty() {
+                            return Ok(PhpValue::Int(start_char_idx as i64));
+                        }
+                        let byte_offset = if start_char_idx < total_chars {
+                            char_indices[start_char_idx].0
+                        } else {
+                            s.len()
+                        };
+                        if let Some(pos) = s[byte_offset..].find(&needle) {
+                            let actual_byte_pos = byte_offset + pos;
+                            let char_idx = s[..actual_byte_pos].chars().count();
+                            Ok(PhpValue::Int(char_idx as i64))
+                        } else {
+                            Ok(PhpValue::Null)
+                        }
+                    }
+                }
+                "lastIndexOf" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        match crate::vm::encoding::byte_last_index_of(b.as_ref(), needle.as_bytes(), offset) {
+                            Some(pos) => Ok(PhpValue::Int(pos)),
+                            None => Ok(PhpValue::Null),
+                        }
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        match crate::vm::encoding::char_last_index_of(&s, &needle, offset) {
+                            Some(pos) => Ok(PhpValue::Int(pos)),
+                            None => Ok(PhpValue::Null),
+                        }
+                    }
+                }
+                "contains" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        let nb = needle.as_bytes();
+                        let ok = if nb.is_empty() {
+                            true
+                        } else {
+                            b.windows(nb.len()).any(|w| w == nb)
+                        };
+                        Ok(PhpValue::Bool(ok))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        Ok(PhpValue::Bool(s.contains(&needle)))
+                    }
+                }
+                "startsWith" => {
+                    let prefix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        Ok(PhpValue::Bool(b.starts_with(prefix.as_bytes())))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        Ok(PhpValue::Bool(s.starts_with(&prefix)))
+                    }
+                }
+                "endsWith" => {
+                    let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        Ok(PhpValue::Bool(b.ends_with(suffix.as_bytes())))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        Ok(PhpValue::Bool(s.ends_with(&suffix)))
+                    }
+                }
+                "upperCase" => {
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        Ok(PhpValue::bytes(b.to_ascii_uppercase()))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let upper = s.to_uppercase();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&upper, enc)
+                            .unwrap_or_else(|_| upper.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "lowerCase" => {
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        Ok(PhpValue::bytes(b.to_ascii_lowercase()))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let lower = s.to_lowercase();
+                        let encoded = crate::vm::encoding::encode_from_utf8(&lower, enc)
+                            .unwrap_or_else(|_| lower.into_bytes());
+                        Ok(PhpValue::bytes(encoded))
+                    }
+                }
+                "countOccurrences" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if needle.is_empty() {
+                        Ok(PhpValue::Int(0))
+                    } else if enc == "Binary" {
+                        let nb = needle.as_bytes();
+                        let mut count = 0;
+                        let mut cur = &b[..];
+                        while let Some(pos) = cur.windows(nb.len()).position(|w| w == nb) {
+                            count += 1;
+                            cur = &cur[pos + nb.len()..];
+                        }
+                        Ok(PhpValue::Int(count))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let count = s.match_indices(&needle).count();
+                        Ok(PhpValue::Int(count as i64))
+                    }
+                }
+                "split" => {
+                    let sep = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let enc = crate::vm::encoding::detect_encoding_heuristic(b.as_ref());
+                    if enc == "Binary" {
+                        let sep_b = sep.as_bytes();
+                        let parts: Vec<PhpValue> = if sep_b.is_empty() {
+                            b.iter().map(|&byte| PhpValue::bytes(&[byte])).collect()
+                        } else {
+                            let mut res = Vec::new();
+                            let mut cur = &b[..];
+                            while let Some(pos) = cur.windows(sep_b.len()).position(|w| w == sep_b) {
+                                res.push(PhpValue::bytes(&cur[..pos]));
+                                cur = &cur[pos + sep_b.len()..];
+                            }
+                            res.push(PhpValue::bytes(cur));
+                            res
+                        };
+                        Ok(PhpValue::list(parts))
+                    } else {
+                        let s = crate::vm::encoding::decode_to_utf8(b.as_ref(), enc)
+                            .unwrap_or_else(|_| String::from_utf8_lossy(b.as_ref()).into_owned());
+                        let parts: Vec<PhpValue> = if sep.is_empty() {
+                            s.chars().map(|c| {
+                                let encoded = crate::vm::encoding::encode_from_utf8(&c.to_string(), enc)
+                                    .unwrap_or_else(|_| c.to_string().into_bytes());
+                                PhpValue::bytes(encoded)
+                            }).collect()
+                        } else {
+                            s.split(&sep).map(|part| {
+                                let encoded = crate::vm::encoding::encode_from_utf8(part, enc)
+                                    .unwrap_or_else(|_| part.as_bytes().to_vec());
+                                PhpValue::bytes(encoded)
+                            }).collect()
+                        };
+                        Ok(PhpValue::list(parts))
+                    }
+                }
+                "isEmpty" => {
+                    Ok(PhpValue::Bool(b.is_empty()))
                 }
                 "decode" => {
                     let encoding = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) }).unwrap_or_else(|| "UTF-8".to_string());
@@ -8345,33 +8649,11 @@ impl VM {
             },
 
             PhpValue::String(s) => match method {
-                "mbStrlen" | "mb_strlen" => {
-                    let enc = args.first().and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
-                    if enc.as_deref().map(|e| e.eq_ignore_ascii_case("UTF-8") || e.eq_ignore_ascii_case("UTF8")).unwrap_or(true) {
-                        if s.is_ascii() {
-                            Ok(PhpValue::Int(s.len() as i64))
-                        } else {
-                            Ok(PhpValue::Int(s.chars().count() as i64))
-                        }
-                    } else {
-                        let count = crate::vm::encoding::mb_strlen_encoding(s.as_bytes(), &enc.unwrap())
-                            .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
-                        Ok(PhpValue::Int(count as i64))
-                    }
-                }
                 "graphemeLen" | "grapheme_len" => {
                     let count = crate::vm::encoding::grapheme_len(s.as_ref());
                     Ok(PhpValue::Int(count as i64))
                 }
-                "mbSubstr" | "mb_substr" => {
-                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-                    let len = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
-                    let enc = args.get(2).and_then(|v| if v.is_null() { None } else { Some(v.to_php_string()) });
-                    let sub = crate::vm::encoding::mb_substr(s.as_ref(), s.is_ascii(), start, len, enc.as_deref())
-                        .map_err(|(cls, msg)| self.make_error(RuntimeErrorKind::UncaughtException { class: cls, message: msg }, span))?;
-                    Ok(PhpValue::string(sub))
-                }
-                "len" | "byteLength" | "bytesCount" => {
+                "len" | "size" => {
                     Ok(PhpValue::Int(s.len() as i64))
                 }
                 "check" => {
@@ -8515,11 +8797,11 @@ impl VM {
                     let trimmed = str_val.trim_end_matches(|c| chars.contains(c));
                     Ok(PhpValue::string(trimmed))
                 }
-                "upperCase" | "upper" | "toUpper" | "uppercase" => {
+                "upperCase" => {
                     let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.to_uppercase()))
                 }
-                "lowerCase" | "lower" | "toLower" | "lowercase" => {
+                "lowerCase" => {
                     let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.to_lowercase()))
                 }
@@ -8553,19 +8835,19 @@ impl VM {
                     }
                     Ok(PhpValue::string(slug))
                 }
-                "contains" | "includes" => {
+                "contains" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.contains(&needle)))
                 }
-                "startsWith" | "starts_with" => {
+                "startsWith" => {
                     let prefix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.starts_with(&prefix)))
                 }
-                "endsWith" | "ends_with" => {
+                "endsWith" => {
                     let suffix = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     Ok(PhpValue::Bool(s.ends_with(&suffix)))
                 }
-                "find" | "indexOf" | "index_of" => {
+                "indexOf" => {
                     let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
                     let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
                     let str_val = s.as_ref();
@@ -8590,6 +8872,14 @@ impl VM {
                         Ok(PhpValue::Int(char_idx as i64))
                     } else {
                         Ok(PhpValue::Null)
+                    }
+                }
+                "lastIndexOf" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    let offset = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+                    match crate::vm::encoding::char_last_index_of(s.as_ref(), &needle, offset) {
+                        Some(pos) => Ok(PhpValue::Int(pos)),
+                        None => Ok(PhpValue::Null),
                     }
                 }
                 "testRegex" | "regex" | "matchesPattern" => {
@@ -8630,28 +8920,53 @@ impl VM {
                     let str_val = s.as_ref();
                     Ok(PhpValue::string(str_val.replace(&search, &replace)))
                 }
+                "slice" => {
+                    let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let end = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                    let chars: Vec<char> = s.chars().collect();
+                    let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), start, end);
+                    let sub: String = chars[st..en].iter().collect();
+                    Ok(PhpValue::string(sub))
+                }
                 "substr" => {
                     let start = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
-                    let length = args.get(1).and_then(|v| v.to_i64());
-                    let str_val = s.as_ref();
-                    let chars: Vec<char> = str_val.chars().collect();
-                    let total_len = chars.len() as i64;
-                    let actual_start = if start < 0 {
-                        (total_len + start).max(0) as usize
-                    } else {
-                        start.min(total_len) as usize
-                    };
-                    let sub: String = if let Some(len) = length {
-                        let actual_len = if len < 0 {
-                            (total_len - actual_start as i64 + len).max(0) as usize
-                        } else {
-                            len as usize
-                        };
-                        chars.iter().skip(actual_start).take(actual_len).collect()
-                    } else {
-                        chars.iter().skip(actual_start).collect()
-                    };
+                    let length = args.get(1).and_then(|v| if v.is_null() { None } else { v.to_i64() });
+                    let chars: Vec<char> = s.chars().collect();
+                    let (slice_start, slice_end) = crate::vm::encoding::resolve_substr_to_slice(chars.len(), start, length);
+                    let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), slice_start, slice_end);
+                    let sub: String = chars[st..en].iter().collect();
                     Ok(PhpValue::string(sub))
+                }
+                "take" => {
+                    let n = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    if n <= 0 {
+                        Ok(PhpValue::string(String::new()))
+                    } else {
+                        let chars: Vec<char> = s.chars().collect();
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), 0, Some(n));
+                        let sub: String = chars[st..en].iter().collect();
+                        Ok(PhpValue::string(sub))
+                    }
+                }
+                "takeLast" => {
+                    let n = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    if n <= 0 {
+                        Ok(PhpValue::string(String::new()))
+                    } else {
+                        let chars: Vec<char> = s.chars().collect();
+                        let (st, en) = crate::vm::encoding::calc_js_slice(chars.len(), -n, None);
+                        let sub: String = chars[st..en].iter().collect();
+                        Ok(PhpValue::string(sub))
+                    }
+                }
+                "countOccurrences" => {
+                    let needle = args.first().map(|v| v.to_php_string()).unwrap_or_default();
+                    if needle.is_empty() {
+                        Ok(PhpValue::Int(0))
+                    } else {
+                        let count = s.match_indices(&needle).count();
+                        Ok(PhpValue::Int(count as i64))
+                    }
                 }
                 "reverse" => {
                     let str_val = s.as_ref();
@@ -8681,6 +8996,18 @@ impl VM {
                 }
                 "isEmpty" => {
                     Ok(PhpValue::Bool(s.is_empty()))
+                }
+                "toString" | "toStringLossy" => {
+                    Ok(PhpValue::String(s.clone()))
+                }
+                "isValidUtf8" => {
+                    Ok(PhpValue::Bool(true))
+                }
+                "toHex" => {
+                    Ok(PhpValue::string(hex::encode(s.as_bytes())))
+                }
+                "toBase64" => {
+                    Ok(PhpValue::string(crate::vm::url_helper::base64_encode(s.as_bytes())))
                 }
                 other => {
                     if let Some(macro_closure) = get_runtime_closure_macro("Str", other) {

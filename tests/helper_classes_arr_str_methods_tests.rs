@@ -137,7 +137,7 @@ fn test_unstatic_subsets_map_filter_haskey_hasvalue_keys_values() {
 
         // 3. Set
         $set = Arr::set(['apple', 'banana', 'cherry']);
-        $s_mapped = $set->map(fn($s) => Str::upper($s));
+        $s_mapped = $set->map(fn($s) => Str::upperCase($s));
         $s_filtered = $set->filter(fn($s) => $s != 'banana');
         $s_hasKeyApple = $set->hasKey('apple');
         $s_hasKeyOrange = $set->hasKey('orange');
@@ -226,8 +226,8 @@ fn test_str_check_and_helpers_static_and_unstatic() {
         $t_rtrim = Str::rtrim($s1);
 
         // Str lower, upper static
-        $t_lower = Str::lower("RHP LANGUAGE");
-        $t_upper = Str::upper("rhp language");
+        $t_lower = Str::lowerCase("RHP LANGUAGE");
+        $t_upper = Str::upperCase("rhp language");
 
         // Str replace static (both argument conventions)
         $t_rep1 = Str::replace("World", "Universe", $s1);
@@ -237,8 +237,8 @@ fn test_str_check_and_helpers_static_and_unstatic() {
         $u_trim = $s1->trim();
         $u_ltrim = $s1->ltrim();
         $u_rtrim = $s1->rtrim();
-        $u_lower = "RHP"->toLower();
-        $u_upper = "rhp"->toUpper();
+        $u_lower = "RHP"->lowerCase();
+        $u_upper = "rhp"->upperCase();
         $u_replace = $s1->trim()->replace("World", "Galaxy");
 
         return [
@@ -411,9 +411,9 @@ fn test_string_non_static_helpers_and_regex_class() {
     let code = r#"
         $text = "The quick brown fox jumps over the lazy dog";
 
-        // 1. ->includes(substring)
-        $inc_fox = $text->includes("fox");
-        $inc_cat = $text->includes("cat");
+        // 1. ->contains(substring)
+        $inc_fox = $text->contains("fox");
+        $inc_cat = $text->contains("cat");
 
         // 2. ->startsWith(substring)
         $sw_the = $text->startsWith("The");
@@ -423,18 +423,18 @@ fn test_string_non_static_helpers_and_regex_class() {
         $ew_dog = $text->endsWith("dog");
         $ew_cat = $text->endsWith("cat");
 
-        // 4. ->find(substring)
-        $idx_quick = $text->find("quick"); // pos 4
-        $idx_fox = $text->find("fox");     // pos 16
-        $idx_none = $text->find("unicorn"); // null
+        // 4. ->indexOf(substring)
+        $idx_quick = $text->indexOf("quick"); // pos 4
+        $idx_fox = $text->indexOf("fox");     // pos 16
+        $idx_none = $text->indexOf("unicorn"); // null
 
         // Multi-byte character find test
         $utf8_text = "Hello 🌍 World!";
-        $idx_world = $utf8_text->find("World"); // char position 8
+        $idx_world = $utf8_text->indexOf("World"); // char position 8
 
-        // Static Str::find
-        $s_find_fox = Str::find($text, "fox"); // pos 16
-        $s_find_none = Str::find($text, "unicorn"); // null
+        // Static Str::indexOf
+        $s_find_fox = Str::indexOf($text, "fox"); // pos 16
+        $s_find_none = Str::indexOf($text, "unicorn"); // null
 
         // Helper function strpos
         $sp_quick = strpos($text, "quick"); // pos 4

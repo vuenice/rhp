@@ -447,19 +447,28 @@ $str->slug(string $separator = '-'): string;
 $str->contains(string $needle): bool;
 $str->startsWith(string $prefix): bool;
 $str->endsWith(string $suffix): bool;
-$str->find(string $needle, int $offset = 0): int?;
+$str->indexOf(string $needle, int $offset = 0): int?;
+$str->lastIndexOf(string $needle, int $offset = 0): int?;
+$str->slice(int $start, int? $end = null): string;
+$str->substr(int $start, int? $length = null): string;
+$str->take(int $count): string;
+$str->takeLast(int $count): string;
 $str->length(): int;
-$str->byteLength(): int;
-$str->split(string? $delimiter = null): list;                   // Splits string into list of substrings or chars (explode() sugar)
-$str->explode(string? $delimiter = null): list;                 // Alias for split()
+$str->len(): int;
+$str->size(): int;
+$str->split(string? $delimiter = null): list;                   // Splits string into list of substrings or chars
 $str->replace(string $search, string $replace): string;
 $str->replaceAt(string $replacement, int $start, int? $length = null): string;
 $str->pad(int $length, string $pad = " ", string|int $side = "right"): string;
 $str->countOccurrences(string $needle): int;
-$str->substr(int $start, int? $length = null): string;
 $str->reverse(): string;
 $str->repeat(int $times): string;
 $str->toEncoding(string $encoding): string;
+$str->toHex(): string;
+$str->toBase64(): string;
+$str->toString(): string;
+$str->toStringLossy(): string;
+$str->isValidUtf8(): bool;
 $str->utf8(): string;
 $str->bytes(): list;
 $str->isUtf8(): bool;
@@ -472,9 +481,39 @@ $str->strcmp(string $other): int;
 $str->strcasecmp(string $other): int;
 $str->strncmp(string $other, int $length): int;
 $str->strncasecmp(string $other, int $length): int;
-$str->digit(): bool;
-$str->alpha(): bool;
-$str->alnum(): bool;
+```
+
+---
+
+## `byte` Instance API (Binary Byte Buffer)
+
+```php
+// Byte Fluent Instance Methods
+$byte->len(): int;                                 // Byte count
+$byte->size(): int;                                // Byte count
+$byte->length(): int;                              // Byte count
+$byte->slice(int $start, int? $end = null): byte;  // JS slice semantics (exclusive $end, negative index from back)
+$byte->substr(int $start, int? $length = null): byte; // PHP sugar over slice()
+$byte->take(int $count): byte;                     // Takes first $count bytes
+$byte->takeLast(int $count): byte;                 // Takes last $count bytes
+$byte->contains(string|byte $needle): bool;
+$byte->startsWith(string|byte $prefix): bool;
+$byte->endsWith(string|byte $suffix): bool;
+$byte->indexOf(string|byte $needle, int $offset = 0): int?;
+$byte->lastIndexOf(string|byte $needle, int $offset = 0): int?;
+$byte->upperCase(): byte;                          // ASCII uppercase
+$byte->lowerCase(): byte;                          // ASCII lowercase
+$byte->countOccurrences(string|byte $needle): int;
+$byte->split(string|byte $delimiter = ""): list;
+$byte->isEmpty(): bool;
+$byte->toHex(): string;                            // Hexadecimal string representation
+$byte->toBase64(): string;                         // Base64 string representation
+$byte->metaData(): dict;                           // Returns metadata ["size" => int, "is_utf8" => bool]
+$byte->isValidUtf8(): bool;                        // Checks if raw bytes form valid UTF-8
+$byte->toString(): string;                         // Fallible UTF-8 conversion (throws InvalidEncodingException on invalid UTF-8)
+$byte->toStringLossy(): string;                    // Lossy conversion (replaces invalid bytes with U+FFFD)
+$byte->decode(string $encoding): string;           // Decodes from legacy encoding (Shift-JIS, EUC-JP, etc.)
+$byte->convert(string $from, string $to): byte;    // Transcodes between character encodings
 ```
 
 ---

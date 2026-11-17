@@ -46,8 +46,8 @@ bool $isProduction = true;
 
 In RHP, text strings and binary byte payloads are strictly separate, first-class types:
 
-* **`string` (Text):** Enforces valid UTF-8 text. Standard string interpolation (`"Hello $name"`), templating, and text manipulation methods (`$str->trim()`, `$str->upper()`, `$str->replace()`, `$str->split()`) operate on UTF-8 strings.
-* **`byte` (Binary Buffers):** Represents raw byte sequences, network packets, image payloads, cryptographic keys, or non-UTF-8 encodings (such as Shift-JIS or raw binary).
+* **`string` (Text):** Guaranteed valid UTF-8 text invariant (Rust's model). Standard string interpolation (`"Hello $name"`), templating, and text manipulation methods operate on UTF-8 strings.
+* **`byte` (Binary Buffers):** Represents raw byte sequences, network packets, image payloads, cryptographic keys, or non-UTF-8 encodings (such as Shift-JIS or raw binary). No implicit encoding assumptions.
 * **Target-Typed Literal Assignment (No `b` Prefix Needed):** When a variable, parameter, or property is typed with `byte`, standard double-quoted or single-quoted string literals are contextually recognized as byte buffers:
   ```php
   // ✅ Contextual typing: "..." is automatically lowered to byte buffer without b prefix:
@@ -58,9 +58,74 @@ In RHP, text strings and binary byte payloads are strictly separate, first-class
   byte $explicit = b"binary payload";
   byte $converted = byte("binary data");
   ```
-* **Fluent Byte Methods:** Byte variables provide direct methods such as `$payload->len()`, `$payload->slice($start, $length)`, `$payload->decode('UTF-8')`, and `$payload->convert('Shift-JIS', 'UTF-8')`.
-* **Legacy Japanese Support:** Legacy multi-byte character sets such as **Shift-JIS (SJIS / CP932)**, **EUC-JP**, and **ISO-2022-JP (JIS)** are handled via `byte` buffers. Use `Str::fromEncoding($rawBytes, 'Shift-JIS')` to convert them into valid UTF-8 strings, or `Str::toEncoding($str, 'Shift-JIS')` to produce byte buffers.
-* **Immutable Helpers:** Methods like `$text->trim()->upper()` and `$bytes->slice(0, 10)` return new values with zero in-place mutation, leaving the original variable untouched. Variable updates use explicit reassignment (`$text = $text->trim()->upper();`).
+
+#### Shared Fluent Text API
+
+Both `string` and `byte` share a unified text API for common slicing, inspection, and transformation operations without needing wrapper classes:
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `length(): int` | `int` | Character count for `string`, byte length for `byte` |
+| `size(): int`, `len(): int` | `int` | Length of the string or byte buffer |
+| `slice(int $start, ?int $end = null)` | `string` / `byte` | JavaScript `slice` semantics (exclusive `$end`, negative index from back) |
+| `substr(int $start, ?int $length = null)` | `string` / `byte` | PHP sugar mapping `$length` over `slice()` |
+| `take(int $count)` | `string` / `byte` | Takes first `$count` characters or bytes |
+| `takeLast(int $count)` | `string` / `byte` | Takes last `$count` characters or bytes |
+| `contains(string $needle)` | `bool` | Checks if sequence contains needle |
+| `startsWith(string $prefix)` | `bool` | Checks if sequence starts with prefix |
+| `endsWith(string $suffix)` | `bool` | Checks if sequence ends with suffix |
+| `indexOf(string $needle, int $offset = 0)` | `?int` | Returns 0-based first index, or `null` if not found |
+| `lastIndexOf(string $needle, int $offset = 0)` | `?int` | Returns 0-based last index, or `null` if not found |
+| `upperCase()` | `string` / `byte` | Full Unicode uppercase for `string`; ASCII uppercase for `byte` |
+| `lowerCase()` | `string` / `byte` | Full Unicode lowercase for `string`; ASCII lowercase for `byte` |
+| `countOccurrences(string $needle)` | `int` | Counts non-overlapping occurrences of needle |
+| `split(string $delimiter = "")` | `list` | Splits by delimiter into a list of strings or bytes |
+| `isEmpty(): bool` | `bool` | Checks if length is zero |
+
+#### Slicing: `slice()` vs `substr()`
+
+`slice($start, $end)` uses standard zero-based indexing with exclusive `$end`, identical to JavaScript `String.prototype.slice`:
+```php
+string $s = "Hello, world!";
+$s->slice(0, 5);   // "Hello"
+$s->slice(7);      // "world!"
+$s->slice(-6, -1); // "world"
+
+byte $b = "Hello, world!";
+$b->slice(0, 5);   // byte("Hello")
+$b->slice(-6, -1); // byte("world")
+```
+
+`substr($start, $length)` is sugar that delegates to `slice()`:
+- `$length === null`: delegates to `slice($start)`
+- `$length >= 0`: delegates to `slice($start, $start + $length)`
+- `$length < 0`: delegates to `slice($start, $length)`
+
+#### Byte-Specific Helpers & UTF-8 Conversions
+
+Byte buffers provide direct conversion and inspection helpers:
+
+```php
+byte $b = "\x48\x65\x6c\x6c\x6f";
+
+$b->toHex();          // "48656c6c6f"
+$b->toBase64();       // "SGVsbG8="
+$b->isValidUtf8();    // true
+$b->metaData();       // ["size" => 5, "is_utf8" => true]
+
+// Fallible UTF-8 conversion: throws InvalidEncodingException on invalid UTF-8
+string $str = $b->toString();
+
+// Explicit opt-in lossy conversion: replaces malformed bytes with U+FFFD ()
+string $lossy = $b->toStringLossy();
+
+// Legacy encoding transcoding (e.g. Shift-JIS to UTF-8 string)
+string $decoded = $b->decode("Shift-JIS");
+```
+
+> [!NOTE]
+> Text formatting methods like `trim()`, `slug()`, `camelCase()`, `pascalCase()`, `snakeCase()`, `replace()`, and `reverse()` require guaranteed UTF-8 and remain `string`-only. Calling them on a `byte` buffer throws a `TypeError`. Convert the byte buffer via `$b->toString()` first.
+> Legacy aliases (`find`, `includes`, `starts_with`, `ends_with`, `upper`, `toUpper`, `lower`, `toLower`, `mbStrlen`, `mbSubstr`, `byteLength`) have been removed in favor of the canonical names above.
 
 ### String Quoting Strategies & Escaping
 

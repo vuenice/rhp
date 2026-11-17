@@ -708,13 +708,13 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
                         _ => RhpType::Array(Box::new(RhpType::Mixed)),
                     },
                     "Str" => match method.name {
-                        "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
-                        "length" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" | "countOccurrences"
+                        "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" | "contains" | "startsWith" | "endsWith" | "testRegex" | "regex" | "is" | "isUuid" | "isUlid" => RhpType::Bool,
+                        "length" | "len" | "size" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len" | "countOccurrences"
                         | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
                         | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
                         | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
                         | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => RhpType::Int,
-                        "find" | "indexOf" => RhpType::Nullable(Box::new(RhpType::Int)),
+                        "indexOf" | "lastIndexOf" => RhpType::Nullable(Box::new(RhpType::Int)),
                         _ => RhpType::String,
                     },
                     "Regex" => match method.name {

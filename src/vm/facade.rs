@@ -8406,6 +8406,7 @@ fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let data_bytes: std::borrow::Cow<[u8]> = match data_val {
                 PhpValue::String(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
+                PhpValue::Bytes(b) => std::borrow::Cow::Borrowed(b.as_ref()),
                 other => std::borrow::Cow::Owned(other.to_php_string().into_bytes()),
             };
             let level = args.get(1).and_then(|v| v.to_i64()).unwrap_or(-1);
@@ -8435,6 +8436,7 @@ fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let data_bytes = match data_val {
                 PhpValue::String(s) => s.as_bytes(),
+                PhpValue::Bytes(b) => b.as_ref(),
                 _ => return Err(RuntimeErrorKind::TypeError {
                     message: format!("Compress::unzlib() expects string, got {}", data_val.type_name()),
                 }),
@@ -8460,6 +8462,7 @@ fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let data_bytes: std::borrow::Cow<[u8]> = match data_val {
                 PhpValue::String(s) => std::borrow::Cow::Borrowed(s.as_bytes()),
+                PhpValue::Bytes(b) => std::borrow::Cow::Borrowed(b.as_ref()),
                 other => std::borrow::Cow::Owned(other.to_php_string().into_bytes()),
             };
             let level = args.get(1).and_then(|v| v.to_i64()).unwrap_or(-1);
@@ -8489,6 +8492,7 @@ fn dispatch_compress(method: &str, args: &[PhpValue]) -> FacadeResult {
             })?;
             let data_bytes = match data_val {
                 PhpValue::String(s) => s.as_bytes(),
+                PhpValue::Bytes(b) => b.as_ref(),
                 _ => return Err(RuntimeErrorKind::TypeError {
                     message: format!("Compress::gunzip() expects string, got {}", data_val.type_name()),
                 }),
@@ -9038,6 +9042,7 @@ pub fn dispatch_binary(method: &str, args: &[PhpValue]) -> FacadeResult {
                 expected: 1,
             })?;
             let bytes = match val {
+                PhpValue::Bytes(b) => b.as_ref().to_vec(),
                 PhpValue::String(s) => s.as_bytes().to_vec(),
                 other => other.to_php_string().into_bytes(),
             };

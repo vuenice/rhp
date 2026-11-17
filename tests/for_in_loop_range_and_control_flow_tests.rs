@@ -196,13 +196,16 @@ fn test_if_without_parentheses_is_rejected() {
 }
 
 #[test]
-fn test_for_without_parentheses_is_rejected() {
+fn test_for_without_parentheses_is_accepted() {
     let source = r#"
+        $out = [];
         for $i in [0..5] {
-            print($i);
+            $out[] = $i;
         }
+        return $out;
     "#;
-    assert!(run_source(source).is_err(), "for without parentheses should be rejected");
+    let res = run_source(source).expect("for without parentheses should be accepted");
+    assert_eq!(res, PhpValue::array((0..5).map(PhpValue::Int).collect()));
 }
 
 #[test]

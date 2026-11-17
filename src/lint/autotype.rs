@@ -980,9 +980,18 @@ pub fn infer_expression_type_name(
             }
         }
 
-        ExprKind::MethodCall { method, .. } => match method.name {
-            "toEncoding" | "slice" | "convert" => Some("byte".to_string()),
-            "decode" => Some("string".to_string()),
+        ExprKind::MethodCall { object, method, .. } => match method.name {
+            "toBase64" | "toHex" | "decode" | "toString" | "toStringLossy" => Some("string".to_string()),
+            "metaData" => Some("dict".to_string()),
+            "toEncoding" | "convert" => Some("byte".to_string()),
+            "substr" | "slice" | "take" | "takeLast" | "upperCase" | "lowerCase" => {
+                let receiver_ty = infer_expression_type_name(object, type_info, known_vars);
+                if receiver_ty.as_deref() == Some("byte") {
+                    Some("byte".to_string())
+                } else {
+                    Some("string".to_string())
+                }
+            }
             _ => None,
         },
 

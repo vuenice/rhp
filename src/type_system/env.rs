@@ -341,7 +341,7 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::String)
             }
-            "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" => {
+            "contains" | "startsWith" | "endsWith" | "testRegex" | "regex" => {
                 check_arg_type(
                     &format!("Str::{}", method),
                     "$haystack",
@@ -363,8 +363,8 @@ pub fn resolve_facade_static_call(
                 Ok(RhpType::Bool)
             }
             "from" => Ok(RhpType::String),
-            "upper" | "upperCase" | "lower" | "lowerCase" | "camelCase" | "pascalCase" | "snakeCase"
-            | "trim" | "ltrim" | "rtrim" | "substr" | "replace" | "join"
+            "upperCase" | "lowerCase" | "camelCase" | "pascalCase" | "snakeCase"
+            | "trim" | "ltrim" | "rtrim" | "slice" | "substr" | "take" | "takeLast" | "replace" | "join"
             | "format" => {
                 check_arg_type(
                     &format!("Str::{}", method),
@@ -380,9 +380,9 @@ pub fn resolve_facade_static_call(
                 )?;
                 Ok(RhpType::String)
             }
-            "length" => {
+            "length" | "size" => {
                 check_arg_type(
-                    "Str::length",
+                    &format!("Str::{}", method),
                     "$string",
                     1,
                     arg_types.first(),
@@ -395,7 +395,7 @@ pub fn resolve_facade_static_call(
             "split" => Ok(RhpType::Array(Box::new(RhpType::String))),
             "countOccurrences" => Ok(RhpType::Int),
             "fromLast" | "substringFromLast" | "lastFrom" | "strrchr" | "afterLast" => Ok(RhpType::String),
-            "find" | "pos" | "indexOf" => Ok(RhpType::Nullable(Box::new(RhpType::Int))),
+            "indexOf" | "lastIndexOf" => Ok(RhpType::Nullable(Box::new(RhpType::Int))),
             _ => Ok(RhpType::String),
         },
 
@@ -1046,18 +1046,19 @@ pub fn resolve_builtin_fluent_method(
             }
         },
 
-        // Fluent string helper methods (`$str->trim()`, `$str->lower()`, `$str->upper()`, etc.)
+        // Fluent string helper methods (`$str->trim()`, `$str->lowerCase()`, `$str->upperCase()`, etc.)
         RhpType::String => match method {
-            "trim" | "ltrim" | "rtrim" | "upper" | "upperCase" | "toUpper" | "lower" | "lowerCase" | "toLower"
+            "trim" | "ltrim" | "rtrim" | "upperCase" | "lowerCase"
             | "camelCase" | "pascalCase" | "snakeCase" | "slug"
-            | "replace" | "substr" | "reverse" | "repeat" | "utf8" | "mbSubstr" | "mb_substr" => Some(RhpType::String),
-            "length" | "byteLength" | "bytesCount" | "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len"
+            | "replace" | "slice" | "substr" | "take" | "takeLast" | "reverse" | "repeat"
+            | "utf8" | "toString" | "toStringLossy" | "toHex" | "toBase64" => Some(RhpType::String),
+            "length" | "len" | "size" | "countOccurrences" | "graphemeLen" | "grapheme_len"
             | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
             | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
             | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
             | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some(RhpType::Int),
-            "find" | "indexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
-            "check" | "compare" | "contains" | "includes" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
+            "indexOf" | "lastIndexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
+            "check" | "compare" | "contains" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isValidUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
             "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
             "toEncoding" => Some(RhpType::Bytes),
@@ -1070,17 +1071,19 @@ pub fn resolve_builtin_fluent_method(
             }
         },
 
-        // Fluent bytes helper methods (`$bytes->len()`, `$bytes->slice()`, `$bytes->decode()`, `$bytes->convert()`)
+        // Fluent bytes helper methods (`$bytes->len()`, `$bytes->slice()`, `$bytes->decode()`, `$bytes->convert()`, `$bytes->toHex()`)
         RhpType::Bytes => match method {
-            "len" | "length"
+            "len" | "length" | "size" | "countOccurrences"
             | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
             | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
             | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
             | "strncasecmp" | "ncasecmp" | "nCaseCmp" | "caseNCmp" | "caseCompareN" => Some(RhpType::Int),
-            "slice" => Some(RhpType::Bytes),
-            "decode" => Some(RhpType::String),
-            "check" => Some(RhpType::Bool),
-            "convert" => Some(RhpType::Bytes),
+            "slice" | "substr" | "take" | "takeLast" | "upperCase" | "lowerCase" | "convert" => Some(RhpType::Bytes),
+            "decode" | "toString" | "toStringLossy" | "toHex" | "toBase64" => Some(RhpType::String),
+            "metaData" => Some(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
+            "indexOf" | "lastIndexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
+            "check" | "contains" | "startsWith" | "endsWith" | "isEmpty" | "isValidUtf8" => Some(RhpType::Bool),
+            "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Bytes)))),
             _ => None,
         },
 

@@ -133,13 +133,13 @@ fn test_immutable_string_helpers_and_explicit_reassignment() {
         $text = "  hello world  ";
 
         // Method chaining returns a new instance; original $text is untouched
-        $trimmed = $text->trim()->upper();
+        $trimmed = $text->trim()->upperCase();
 
         // Check original was untouched
         $origUntouched = $text;
 
         // Explicit reassignment to update the variable in place cleanly
-        $text = $text->trim()->upper();
+        $text = $text->trim()->upperCase();
 
         return [$origUntouched, $trimmed, $text];
     "#;
@@ -166,7 +166,7 @@ fn test_string_fluent_chaining_and_transformations() {
         $starts = $slug->startsWith("laravel");
         $ends = $slug->endsWith("facade");
         $len = $slug->length();
-        $replaced = $slug->replace("-", "_")->upper();
+        $replaced = $slug->replace("-", "_")->upperCase();
         $parts = $slug->split("-");
         $h = "hello";
         $reversed = $h->reverse();
@@ -235,7 +235,7 @@ fn test_str_macro_registration_and_fluent_execution() {
     clear_runtime_closure_macros();
 
     let code = r#"
-        Str::macro('shout', fn() => $this->trim()->upper() + '!!!');
+        Str::macro('shout', fn() => $this->trim()->upperCase() + '!!!');
         $greeting = "  welcome to rhp  ";
         $shouted = $greeting->shout();
         return $shouted;

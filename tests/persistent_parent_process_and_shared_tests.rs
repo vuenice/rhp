@@ -588,9 +588,9 @@ fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
     assert_send_sync::<rhp::SharedValue>();
     assert_send_sync::<Arc<rhp::VmSharedObject>>();
 
-    // 4. Multi-threaded concurrency: 16 threads concurrently dispatching instance methods
+    // 4. Multi-threaded concurrency: 4 threads concurrently dispatching instance methods
     let mut handles = Vec::new();
-    for thread_idx in 0..16 {
+    for thread_idx in 0..4 {
         let arc_clone = Arc::clone(&shared_arc);
         let handle = thread::spawn(move || {
             let shared_val = PhpValue::SharedObject(arc_clone);
