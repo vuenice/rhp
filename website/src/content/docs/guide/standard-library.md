@@ -119,7 +119,7 @@ int $last = $doubled->last();                   // 80
 int $found = $doubled->find(fn($n) => $n > 50); // 60
 bool $hasForty = $doubled->contains(40);        // true
 bool $isEmpty = $doubled->isEmpty();            // false
-list $unique = [1, 2, 2, 3]->unique();          // [1, 2, 3]
+list $unique = list([1, 2, 2, 3])->unique();   // [1, 2, 3]
 
 // 7. Partitioning & Zipping
 list $parts = $numbers->partition(fn($n) => $n <= 20); // [[10, 20], [30, 40]]
@@ -890,14 +890,15 @@ string $sub     = $title->trim()->substr(0, 5); // "Hello"
 
 > [!NOTE]
 > **No Method Calls on Direct String Literals:**
-> The compiler restricts invoking member functions directly on bare string literals (e.g. `""->trim()` or `"test"->upperCase()`). Always invoke methods on string variables or parenthesized expressions:
+> The compiler rejects member calls on bare string literals (`""->trim()`, `"test"->upperCase()`) and on a parenthesized literal (`("test")->upperCase()`). Use a variable or `string()` / `byte()`:
 > ```php
-> // ❌ Restricted:
+> // ❌ Rejected:
 > // "hello"->upperCase();
 > 
 > // ✅ Idiomatic:
 > $greeting = "hello";
 > $loud = $greeting->upperCase();
+> $also = string("hello")->upperCase();
 > ```
 
 ### 2. Static Factory & Encoding Methods (`Str::`)

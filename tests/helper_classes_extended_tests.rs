@@ -474,7 +474,7 @@ fn test_float_binary_and_decimal_operations() {
         $d_add = $x->add(0.2); // float(0.3)
         $d_sub = $x->sub(0.05);
         $d_mul = $x->mul(0.2);
-        $d_div = 0.3->div(0.1);
+        $d_div = float(0.3)->div(0.1);
 
         $b_add_str = string($b_add);
         $d_add_str = string($d_add);

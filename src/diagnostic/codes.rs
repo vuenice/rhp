@@ -188,6 +188,14 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
         example: Some("declare(strict_types=1);\ndeclare(ticks=1);"),
         fix: Some("Remove declare(...) statements or run 'rhp migrate' to strip them automatically."),
     },
+    DiagnosticCodeInfo {
+        code: "RHP0123",
+        title: "Method call on a direct literal",
+        summary: "The arrow operator cannot be used on a string, number, bytes, or array literal, or on array().",
+        explanation: "Fluent methods chain from a variable or a typed constructor. Bare literals and array() are not receivers. Use string(), byte(), int(), float(), list(), dict(), set(), or hashMap().",
+        example: Some("\"hello\"->trim();\n[1, 2, 3]->map(fn($n) => $n);"),
+        fix: Some("Wrap the value in a typed constructor:\nstring(\"hello\")->trim();\nlist([1, 2, 3])->map(fn($n) => $n);"),
+    },
 
     // --- 0200 - 0299: Type system & boundary errors ---
     DiagnosticCodeInfo {

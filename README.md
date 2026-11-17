@@ -78,9 +78,9 @@ $lower = $text->trim()->lowerCase(); // "hello world"
 $slug = $text->trim()->slug();       // "hello-world"
 
 // Casing transformations
-$camel  = "hello_world"->camelCase();  // "helloWorld"
-$pascal = "hello_world"->pascalCase(); // "HelloWorld"
-$snake  = "helloWorld"->snakeCase();   // "hello_world"
+$camel  = string("hello_world")->camelCase();  // "helloWorld"
+$pascal = string("hello_world")->pascalCase(); // "HelloWorld"
+$snake  = string("helloWorld")->snakeCase();   // "hello_world"
 
 // Chaining directly on collections
 $numbers = [1, 2, 3, 4, 5];

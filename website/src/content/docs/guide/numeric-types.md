@@ -70,7 +70,7 @@ int $fromFloat = int(3.99);         // 3 (truncates)
 
 > [!NOTE]
 > **No Method Calls on Bare Literals:**
-> The compiler restricts calling member methods directly on raw numeric literals (e.g. `0->abs()` or `10->toString()`). Always invoke methods on variables or parenthesized expressions:
+> The compiler rejects member methods on raw numeric literals (`0->abs()`, `10->toString()`) and on a parenthesized literal (`(42)->abs()`). Use a variable or `int()` / `float()`:
 > ```php
 > // ❌ Syntax error:
 > // 42->abs();
@@ -78,6 +78,7 @@ int $fromFloat = int(3.99);         // 3 (truncates)
 > // ✅ Valid:
 > int $n = 42;
 > $n->abs();
+> int $abs = int(42)->abs();
 > ```
 
 ---

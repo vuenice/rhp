@@ -186,6 +186,12 @@ impl<'a> DiagnosticBuilder<'a> {
                 Some(path.clone()),
                 Some(vec!["package name or namespace".to_string()]),
             ),
+            ParseErrorKind::LiteralMethodCallForbidden { receiver, hint } => (
+                "RHP0123".to_string(),
+                format!("cannot use '->' on {}. {}", receiver, hint),
+                None,
+                None,
+            ),
             ParseErrorKind::Lex(lex_err) => match lex_err {
                 crate::lexer::error::LexError::UnterminatedString => (
                     "RHP0002".to_string(),
