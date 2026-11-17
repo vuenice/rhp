@@ -728,6 +728,8 @@ fn test_shared_class_native_driver_pool_attachment() {
     let frozen = FrozenValue::from_php_value(&php_val);
     let thawed = frozen.to_php_value();
 
+    rhp::clear_request_context();
+
     if let PhpValue::SharedObject(so) = thawed {
         let fetched_pool = so
             .get_native_resource::<MockDbPool>("pool")
@@ -742,26 +744,82 @@ fn test_shared_class_native_driver_pool_attachment() {
 #[test]
 fn test_request_opaque_handle_isolation_across_requests() {
     use rhp::pkg::{get_handle_registry, with_request_handle_registry};
+    use rhp::{enter_fiber, Fiber, VmSharedObject};
 
-    // Request 1: inserts an opaque handle into the request registry
-    let h1 = with_request_handle_registry(|reg| {
-        reg.insert("SessionCursor", "cursor_req_1".to_string())
+    let pool = Arc::new(MockDbPool {
+        connection_string: "postgres://cluster.local:5432/rhp_prod".to_string(),
+        max_connections: 50,
     });
-    assert!(with_request_handle_registry(|reg| reg.has(h1, "SessionCursor")));
+    let shared = VmSharedObject::new("DatabasePoolService");
+    let resource: Arc<dyn std::any::Any + Send + Sync> = pool;
+    shared.set_native_resource("pool", resource);
 
-    // Global registry handle for Request 1
-    let g1 = get_handle_registry().insert("GlobalCursor", "cursor_req_1".to_string());
-    assert!(get_handle_registry().has(g1, "GlobalCursor"));
+    let process_id = get_handle_registry().insert("ProcessPool", "postgres-pool".to_string());
 
-    // Simulate Request 1 completion / tear-down
+    let fiber_a = Fiber::new("request-a");
+    let guard_a = enter_fiber(fiber_a);
+    let id_a = with_request_handle_registry(|reg| reg.insert("Cursor", "cursor-a".to_string()));
+    let mut fiber_a = guard_a.extract();
+    assert_eq!(
+        fiber_a.handles.get::<String>(id_a).as_deref().map(String::as_str),
+        Some("cursor-a")
+    );
+
+    let fiber_b = Fiber::new("request-b");
+    let guard_b = enter_fiber(fiber_b);
+    let id_b = with_request_handle_registry(|reg| reg.insert("Cursor", "cursor-b".to_string()));
+    assert_eq!(
+        with_request_handle_registry(|reg| reg.get::<String>(id_b))
+            .as_deref()
+            .map(String::as_str),
+        Some("cursor-b")
+    );
+    assert_eq!(with_request_handle_registry(|reg| reg.count()), 1);
+
+    fiber_a.complete(PhpValue::Null);
+    assert!(fiber_a.handles.get::<String>(id_a).is_none());
+    assert_eq!(
+        with_request_handle_registry(|reg| reg.get::<String>(id_b))
+            .as_deref()
+            .map(String::as_str),
+        Some("cursor-b"),
+        "ending fiber A must not wipe fiber B"
+    );
+    assert_eq!(with_request_handle_registry(|reg| reg.count()), 1);
+    assert!(get_handle_registry().has(process_id, "ProcessPool"));
+
+    let _ = guard_b.finish(PhpValue::Null);
+    assert!(get_handle_registry().has(process_id, "ProcessPool"));
+
+    let loose = with_request_handle_registry(|reg| reg.insert("SessionCursor", "loose".to_string()));
     rhp::clear_request_context();
-
-    // Request 2 runs: must NOT see handles from Request 1
-    assert!(!with_request_handle_registry(|reg| reg.has(h1, "SessionCursor")));
+    assert!(!with_request_handle_registry(|reg| reg.has(loose, "SessionCursor")));
     assert_eq!(with_request_handle_registry(|reg| reg.count()), 0);
+    assert!(get_handle_registry().has(process_id, "ProcessPool"));
+    let still = shared
+        .get_native_resource::<MockDbPool>("pool")
+        .expect("shared pool survives request clear");
+    assert_eq!(still.max_connections, 50);
+    assert!(get_handle_registry().remove(process_id));
+}
 
-    assert!(!get_handle_registry().has(g1, "GlobalCursor"));
-    assert_eq!(get_handle_registry().count(), 0);
+#[test]
+fn test_fiber_drop_releases_handles_without_touching_process_pool() {
+    use rhp::pkg::{get_handle_registry, with_request_handle_registry};
+    use rhp::{enter_fiber, Fiber};
+
+    let process_id = get_handle_registry().insert("ProcessPool", "redis-pool".to_string());
+    let fiber = Fiber::new("drop-request");
+    let handles = Arc::clone(&fiber.handles);
+    {
+        let _guard = enter_fiber(fiber);
+        let id = with_request_handle_registry(|reg| reg.insert("Cursor", "temp".to_string()));
+        assert!(handles.has(id, "Cursor"));
+        assert_eq!(handles.count(), 1);
+    }
+    assert_eq!(handles.count(), 0);
+    assert!(get_handle_registry().has(process_id, "ProcessPool"));
+    assert!(get_handle_registry().remove(process_id));
 }
 
 

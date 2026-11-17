@@ -17,10 +17,12 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
+use crate::pkg::opaque_handle::{swap_active_registry, OpaqueHandleRegistry};
 use crate::vm::error::RuntimeError;
 use crate::vm::value::PhpValue;
 
@@ -341,6 +343,11 @@ pub struct Fiber {
     pub current_io: Option<(IoKind, Instant)>,
     /// Final result if completed.
     pub result: Option<PhpValue>,
+    /// Request cursors and leased connections owned by this fiber.
+    ///
+    /// Clones share the same map. [`Fiber::complete`] and [`Fiber::fail`] clear it
+    /// so resources drop even if another clone of the fiber is still alive.
+    pub handles: Arc<OpaqueHandleRegistry>,
 }
 
 impl Fiber {
@@ -359,7 +366,13 @@ impl Fiber {
             last_state_change: now,
             current_io: None,
             result: None,
+            handles: Arc::new(OpaqueHandleRegistry::new()),
         }
+    }
+
+    /// Drop every cursor and leased handle stored on this fiber.
+    pub fn release_handles(&self) {
+        self.handles.clear();
     }
 
     /// Set an explicit [`FiberId`].
@@ -485,6 +498,7 @@ impl Fiber {
         self.result = Some(value.clone());
         self.state = FiberState::Completed(value);
         self.last_state_change = now;
+        self.release_handles();
     }
 
     /// Mark the fiber as failed with an error message.
@@ -497,6 +511,7 @@ impl Fiber {
         let msg = error_msg.into();
         self.state = FiberState::Failed(msg);
         self.last_state_change = now;
+        self.release_handles();
     }
 
     /// Suspend this fiber waiting for an I/O or blocking native operation.
@@ -696,15 +711,21 @@ pub fn set_fiber_local(key: impl Into<String>, value: PhpValue) {
 
 /// RAII scope guard that activates a fiber in thread-local storage and restores
 /// any previously active fiber when dropped.
+///
+/// Enter binds the fiber's handle registry. Finish, fail, and drop release that
+/// fiber's handles. Extract only restores the parent binding so a yielded fiber
+/// keeps its cursors.
 #[derive(Debug)]
 pub struct FiberScopeGuard {
     active: bool,
+    previous_registry: Option<Arc<OpaqueHandleRegistry>>,
 }
 
 impl FiberScopeGuard {
     /// Enter the scope of the given fiber.
     pub fn enter(mut fiber: Fiber) -> Self {
         fiber.set_running();
+        let handles = Arc::clone(&fiber.handles);
         CURRENT_FIBER.with(|cell| {
             let previous = cell.borrow_mut().take();
             if let Some(prev) = previous {
@@ -712,66 +733,54 @@ impl FiberScopeGuard {
             }
             *cell.borrow_mut() = Some(fiber);
         });
-        Self { active: true }
+        let previous_registry = swap_active_registry(Some(handles));
+        Self {
+            active: true,
+            previous_registry,
+        }
     }
 
-    /// Mark the fiber as completed with the given value and extract it.
-    pub fn finish(mut self, value: PhpValue) -> Fiber {
+    /// Pop this fiber and restore the parent fiber plus its handle registry.
+    fn pop_scope(&mut self) -> Fiber {
         self.active = false;
-        let mut fiber = CURRENT_FIBER.with(|cell| cell.borrow_mut().take())
+        let fiber = CURRENT_FIBER
+            .with(|cell| cell.borrow_mut().take())
             .expect("Fiber must be active in scope");
-        fiber.complete(value);
-
-        // Restore parent fiber if any
         CURRENT_FIBER.with(|cell| {
             let parent = FIBER_STACK.with(|stack| stack.borrow_mut().pop());
             *cell.borrow_mut() = parent;
         });
+        swap_active_registry(self.previous_registry.take());
+        fiber
+    }
 
+    /// Mark the fiber as completed with the given value and extract it.
+    pub fn finish(mut self, value: PhpValue) -> Fiber {
+        let mut fiber = self.pop_scope();
+        fiber.complete(value);
         fiber
     }
 
     /// Mark the fiber as failed with the given error message and extract it.
     pub fn fail(mut self, error: impl Into<String>) -> Fiber {
-        self.active = false;
-        let mut fiber = CURRENT_FIBER.with(|cell| cell.borrow_mut().take())
-            .expect("Fiber must be active in scope");
+        let mut fiber = self.pop_scope();
         fiber.fail(error);
-
-        // Restore parent fiber if any
-        CURRENT_FIBER.with(|cell| {
-            let parent = FIBER_STACK.with(|stack| stack.borrow_mut().pop());
-            *cell.borrow_mut() = parent;
-        });
-
         fiber
     }
 
     /// Extract the active fiber without modifying its terminal status.
+    ///
+    /// Handle leases stay on the fiber so a later resume can see them.
     pub fn extract(mut self) -> Fiber {
-        self.active = false;
-        let fiber = CURRENT_FIBER.with(|cell| cell.borrow_mut().take())
-            .expect("Fiber must be active in scope");
-
-        // Restore parent fiber if any
-        CURRENT_FIBER.with(|cell| {
-            let parent = FIBER_STACK.with(|stack| stack.borrow_mut().pop());
-            *cell.borrow_mut() = parent;
-        });
-
-        fiber
+        self.pop_scope()
     }
 }
 
 impl Drop for FiberScopeGuard {
     fn drop(&mut self) {
         if self.active {
-            // Fiber exited without explicit finish/fail: pop and restore
-            let _ = CURRENT_FIBER.with(|cell| cell.borrow_mut().take());
-            CURRENT_FIBER.with(|cell| {
-                let parent = FIBER_STACK.with(|stack| stack.borrow_mut().pop());
-                *cell.borrow_mut() = parent;
-            });
+            let fiber = self.pop_scope();
+            fiber.release_handles();
         }
     }
 }
