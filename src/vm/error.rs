@@ -250,3 +250,10 @@ impl RuntimeError {
         out
     }
 }
+
+impl From<RuntimeErrorKind> for RuntimeError {
+    fn from(kind: RuntimeErrorKind) -> Self {
+        Self::new(kind, Span::default())
+    }
+}
+

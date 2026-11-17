@@ -94,6 +94,7 @@ pub use jit::{
 };
 pub use vm::{
     append_log, clear_exit_hook, clear_log_history, clear_request_context, clear_response_context, create_response_object, get_active_response, clear_rust_modules, clear_runtime_closure_macros, clear_tier2_plugins,
+    get_active_request_id, set_active_request_id,
     set_exit_hook,
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats,
     deserialize_response, dispatch_blocking_native, dispatch_facade_call, enter_fiber, eval_expr, execute,
@@ -109,7 +110,7 @@ pub use vm::{
     run_source_with_vm, run_source_with_vm_and_jit, serialize_response, set_fiber_local, suspend_for_io, with_current_fiber, CallFrame,
     EngineState, Environment, ExecutionError, FacadeResult, Fiber, FiberContext, FiberId,
     FiberScheduler, FiberScopeGuard, FiberState, FiberStats, FiberStepResult, FrozenValue, IndexMap,
-    IoKind, IoWaitInfo, LogRecord, ParentProcess, PhpValue, StrictEq, PluginFacade, parse_json_value, RunMode, RuntimeError,
+    IoKind, IoWaitInfo, LogRecord, LogHandler, LogLevel, LogRegistry, StdoutLogHandler, TestLogHandler, ParentProcess, PhpValue, StrictEq, PluginFacade, parse_json_value, RunMode, RuntimeError,
     RuntimeErrorKind, SchedulerStats, StackTraceEntry, Tier2PluginHandler, Value, VmClosure,
     VmFuture, FutureState, VmObject, VmSharedObject, SharedValue, WorkerError, WorkerHandle, WorkerModel, WorkerPayload, WorkerPool,
     WorkerPoolBuilder, WorkerPoolConfig, WorkerPoolStats, WorkerRequest, WorkerResponse,

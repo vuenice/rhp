@@ -1512,17 +1512,57 @@ Cache::count(): int;
 Cache::clear();
 ```
 
-### `Log` Helper Class API
+### `Log` Facade API & Structured Logging Subsystem
+
+RHP provides a standardized core logging subsystem adhering to modern system-level logging patterns (comparable to Rust `log`, Go `slog`, and SLF4J). Libraries and frameworks log through a standardized call-site API without knowing the underlying backend, while applications can swap handlers or configure dedicated channel routes:
 
 ```php
-// Structured High-Speed In-Memory & File Logging
-Log::info(string $message, array|dict $context = []);
-Log::warn(string $message, array|dict $context = []);
-Log::error(string $message, array|dict $context = []);
-Log::debug(string $message, array|dict $context = []);
-Log::history(): list; // Returns list of log entries with timestamps, levels, and messages
-Log::clear();
+// 1. Standard Call-Site API (RFC 5424 Log Levels)
+Log::debug(string $message, dict|array $context = []): void;
+Log::info(string $message, dict|array $context = []): void;
+Log::notice(string $message, dict|array $context = []): void;
+Log::warn(string $message, dict|array $context = []): void;
+Log::warning(string $message, dict|array $context = []): void;
+Log::error(string $message, dict|array $context = []): void;
+Log::critical(string $message, dict|array $context = []): void;
+Log::alert(string $message, dict|array $context = []): void;
+Log::emergency(string $message, dict|array $context = []): void;
+Log::log(string $level, string $message, dict|array $context = []): void;
+
+// 2. Swappable Channels & Custom Handlers
+$security = Log::channel(string $name): LoggerChannel;
+$security->info("User authenticated", ["user_id" => 42]);
+
+Log::setHandler(object|callable $handler): void;                // Registers global custom handler
+Log::registerChannel(string $channel, object|callable $handler): void; // Routes specific channel
+Log::restore(): void;                                           // Restores default handler and settings
+
+// 3. Lazy Evaluation & Level Filtering
+Log::setLevel(string $level): void;                            // Sets minimum active log level
+Log::getLevel(): string;                                        // Retrieves current minimum level
+Log::isEnabled(string $level): bool;                            // Level check before heavy context computation
+
+// 4. Test Isolation & Assertions (Zero Memory Leak)
+$fake = Log::fake(): TestLogHandler;                            // Swaps active handler with recording fake
+$fake->assertLogged(string $level, string $messageSubstring);
+$fake->assertCount(int $expectedCount);
+$fake->has(string $level, string $messageSubstring): bool;
+$fake->records(): list;
+$fake->count(): int;
+$fake->clear(): void;
 ```
+
+#### Key Architecture Principles
+
+1. **Standardized Call-Site API:** Libraries emit structured events (`Log::info(...)`) without coupling to Monolog or specific collectors.
+2. **Zero-Config Default Backend:** Emits human-readable ANSI-colored output in development, and high-throughput newline-delimited structured JSON lines in production (`APP_ENV=production` or `LOG_FORMAT=json`).
+3. **Automatic Runtime Context Injection:** Every log record is automatically enriched at the engine level with:
+   - `fiber_id`: Current active Fiber identifier
+   - `request_id`: Active HTTP request correlation identifier (`x-request-id`)
+   - `trace_id` & `span_id`: Distributed OpenTelemetry trace and span context
+4. **Lazy Evaluation Elimination of Overhead:** Log level thresholds are evaluated before string formatting or dictionary allocation. If `Log::debug` is invoked below `min_level`, execution returns in sub-nanosecond time with zero allocations.
+5. **Clean Test Isolation:** `Log::fake()` intercepts records into a thread-safe test buffer for exact assertions. The production facade maintains zero unbounded in-memory history.
+
 
 ---
 
