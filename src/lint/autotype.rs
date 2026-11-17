@@ -1049,6 +1049,7 @@ pub fn infer_expression_type_name(
             CastType::Float => Some("float".to_string()),
             CastType::String => Some("string".to_string()),
             CastType::Bytes => Some("byte".to_string()),
+            CastType::Rune => Some("rune".to_string()),
             CastType::Bool => Some("bool".to_string()),
             CastType::Array => Some("array".to_string()),
             CastType::Object => Some("object".to_string()),

@@ -831,6 +831,7 @@ pub fn infer_expr_rhp_type(expr: &Expr<'_>) -> RhpType {
             CastType::Float => RhpType::Float,
             CastType::String => RhpType::String,
             CastType::Bytes => RhpType::Bytes,
+            CastType::Rune => RhpType::Rune,
             CastType::Bool => RhpType::Bool,
             CastType::Array => RhpType::Array(Box::new(RhpType::Mixed)),
             CastType::Object => RhpType::Object,

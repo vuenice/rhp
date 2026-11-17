@@ -34,6 +34,7 @@ pub enum FrozenValue {
     Bool(bool),
     Int(i64),
     Float(f64),
+    Rune(char),
     String(String),
     Bytes(Vec<u8>),
     List(Vec<FrozenValue>),
@@ -64,6 +65,7 @@ impl PartialEq for FrozenValue {
                     a == b
                 }
             }
+            (Self::Rune(a), Self::Rune(b)) => a == b,
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Bytes(a), Self::Bytes(b)) => a == b,
             (Self::List(a), Self::List(b)) => a == b,
@@ -103,6 +105,7 @@ impl FrozenValue {
             PhpValue::Bool(b) => FrozenValue::Bool(*b),
             PhpValue::Int(n) => FrozenValue::Int(*n),
             PhpValue::Float(f) => FrozenValue::Float(*f),
+            PhpValue::Rune(c) => FrozenValue::Rune(*c),
             PhpValue::String(s) => FrozenValue::String(s.to_string()),
             PhpValue::Bytes(b) => FrozenValue::Bytes(b.to_vec()),
             PhpValue::EmptyArray => FrozenValue::EmptyArray,
@@ -175,6 +178,7 @@ impl FrozenValue {
             FrozenValue::Bool(b) => PhpValue::Bool(*b),
             FrozenValue::Int(n) => PhpValue::Int(*n),
             FrozenValue::Float(f) => PhpValue::float(*f),
+            FrozenValue::Rune(c) => PhpValue::Rune(*c),
             FrozenValue::String(s) => PhpValue::string(s.clone()),
             FrozenValue::Bytes(b) => PhpValue::bytes(b.clone()),
             FrozenValue::EmptyArray => PhpValue::EmptyArray,

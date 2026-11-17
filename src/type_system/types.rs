@@ -95,6 +95,8 @@ pub enum RhpType {
     String,
     /// Raw binary data subtype (`bytes`).
     Bytes,
+    /// A single Unicode scalar value (`rune`).
+    Rune,
     /// Boolean primitive (`bool`).
     Bool,
     /// Null value (`null`).
@@ -197,6 +199,7 @@ impl RhpType {
                     "float" | "Float" | "f32" | "f64" => Ok(RhpType::Float),
                     "string" => Ok(RhpType::String),
                     "bytes" | "Bytes" | "byte" | "Byte" => Ok(RhpType::Bytes),
+                    "rune" | "Rune" => Ok(RhpType::Rune),
                     "bool" | "Bool" | "true" | "false" => Ok(RhpType::Bool),
                     "void" => Ok(RhpType::Void),
                     "never" => Ok(RhpType::Never),
@@ -337,13 +340,14 @@ impl RhpType {
             RhpType::Int => "i64",
             RhpType::Float => "f64",
             RhpType::Bool => "bool",
+            RhpType::Rune => "char",
             RhpType::Null => "None",
             RhpType::Void => "()",
             _ => "PhpValue",
         }
     }
 
-    /// Returns true if this type is a zero-cost primitive scalar (`int`, `float`, `bool`, `null`)
+    /// Returns true if this type is a zero-cost primitive scalar (`int`, `float`, `bool`, `rune`, `null`)
     /// that never requires `Rc<>`.
     pub fn is_scalar_primitive(&self) -> bool {
         matches!(
@@ -351,6 +355,7 @@ impl RhpType {
             RhpType::Int
                 | RhpType::Float
                 | RhpType::Bool
+                | RhpType::Rune
                 | RhpType::Null
         )
     }
@@ -828,6 +833,7 @@ impl fmt::Display for RhpType {
             RhpType::Float => write!(f, "float"),
             RhpType::String => write!(f, "string"),
             RhpType::Bytes => write!(f, "bytes"),
+            RhpType::Rune => write!(f, "rune"),
             RhpType::Bool => write!(f, "bool"),
             RhpType::Null => write!(f, "null"),
             RhpType::Void => write!(f, "void"),

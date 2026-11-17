@@ -381,6 +381,8 @@ pub fn migrate_source_with_options_and_context(
     void_return_count += v_count;
     current = after_void;
 
+    warnings.extend(check_rune_and_ctype_usage(&current));
+
     let modified = current != source;
 
     MigrateFileResult {
@@ -3026,6 +3028,7 @@ pub fn replace_type_casts(source: &str) -> (String, usize) {
                         "string" | "binary" => "string",
                         "float" | "double" | "real" => "float",
                         "bool" | "boolean" => "bool",
+                        "rune" => "rune",
                         _ => {
                             i += 1;
                             continue;
@@ -5829,6 +5832,46 @@ fn format_call_args(slots: &[String], multiline: bool, indent: &str, had_trailin
         }
         out
     }
+}
+
+pub fn check_rune_and_ctype_usage(source: &str) -> Vec<String> {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut warnings = Vec::new();
+    let ctype_funcs = [
+        "ctype_digit",
+        "ctype_alpha",
+        "ctype_alnum",
+        "ctype_space",
+        "ctype_upper",
+        "ctype_lower",
+        "ctype_punct",
+        "ctype_cntrl",
+    ];
+
+    let mut i = 0;
+    while i < n {
+        if !mask[i] || !bytes[i].is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        let ident = &source[start..i];
+
+        if ctype_funcs.contains(&ident) {
+            let line = byte_offset_to_line(source, start);
+            warnings.push(format!(
+                "NOTICE: '{}()' only checks ASCII characters at line {}. For full Unicode character inspection, consider using 'Rune::is*()' or 'Str::*()'.",
+                ident, line
+            ));
+        }
+    }
+    warnings
 }
 
 

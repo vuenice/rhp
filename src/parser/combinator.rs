@@ -777,6 +777,7 @@ impl<'s> CombinatorStream<'s> {
                 | Token::TypeFloat
                 | Token::TypeString
                 | Token::TypeBytes
+                | Token::TypeRune
                 | Token::TypeBool
                 | Token::TypeVoid
                 | Token::TypeMixed

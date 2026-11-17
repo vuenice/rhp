@@ -1581,6 +1581,11 @@ fn write_frozen(buf: &mut Vec<u8>, val: &FrozenValue) {
             // Native trait objects cannot cross external byte streams; serialize as null marker
             buf.push(16);
         }
+        FrozenValue::Rune(c) => {
+            buf.push(17);
+            let u = *c as u32;
+            buf.extend_from_slice(&u.to_le_bytes());
+        }
     }
 }
 
@@ -1684,6 +1689,13 @@ fn read_frozen(data: &[u8], cursor: &mut usize) -> Result<FrozenValue, WorkerErr
             Ok(FrozenValue::SharedAtomic(Arc::new(std::sync::atomic::AtomicI64::new(n))))
         }
         16 => Ok(FrozenValue::Null),
+        17 => {
+            let mut b = [0u8; 4];
+            copy_slice(data, cursor, &mut b)?;
+            let u = u32::from_le_bytes(b);
+            let ch = char::from_u32(u).unwrap_or('\0');
+            Ok(FrozenValue::Rune(ch))
+        }
         other => Err(WorkerError::SerializationError(format!(
             "Unknown FrozenValue tag: {}",
             other

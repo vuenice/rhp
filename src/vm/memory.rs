@@ -308,6 +308,7 @@ pub fn estimate_value_size(val: &PhpValue) -> usize {
         PhpValue::Null
         | PhpValue::Bool(_)
         | PhpValue::Int(_)
+        | PhpValue::Rune(_)
         | PhpValue::Float(_) => std::mem::size_of::<PhpValue>(),
         PhpValue::String(s) => std::mem::size_of::<PhpValue>() + s.len() + 16,
         PhpValue::Bytes(b) => std::mem::size_of::<PhpValue>() + b.len() + 16,

@@ -1593,6 +1593,22 @@ impl VM {
                             PhpValue::String(s) => PhpValue::bytes(s.as_bytes()),
                             other => PhpValue::bytes(other.to_php_string().into_bytes()),
                         },
+                        CastType::Rune => match val {
+                            PhpValue::Rune(c) => PhpValue::Rune(c),
+                            PhpValue::Int(n) => {
+                                let ch = u32::try_from(n).ok().and_then(char::from_u32).unwrap_or('\0');
+                                PhpValue::Rune(ch)
+                            }
+                            PhpValue::String(s) => {
+                                let ch = s.chars().next().unwrap_or('\0');
+                                PhpValue::Rune(ch)
+                            }
+                            other => {
+                                let s = other.to_php_string();
+                                let ch = s.chars().next().unwrap_or('\0');
+                                PhpValue::Rune(ch)
+                            }
+                        },
                         CastType::Bool => PhpValue::Bool(val.is_truthy()),
                         CastType::Array => match val {
                             PhpValue::EmptyArray | PhpValue::Array(_) | PhpValue::List(_) => val,
@@ -8991,6 +9007,29 @@ impl VM {
                     let byte_list: Vec<PhpValue> = s.as_bytes().iter().map(|&b| PhpValue::Int(b as i64)).collect();
                     Ok(PhpValue::list(byte_list))
                 }
+                "runes" => {
+                    let rune_list: Vec<PhpValue> = s.chars().map(PhpValue::Rune).collect();
+                    Ok(PhpValue::list(rune_list))
+                }
+                "runeLen" => {
+                    Ok(PhpValue::Int(s.chars().count() as i64))
+                }
+                "byteLen" => {
+                    Ok(PhpValue::Int(s.len() as i64))
+                }
+                "byteAt" => {
+                    let idx = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
+                    let bytes = s.as_bytes();
+                    if idx < 0 || (idx as usize) >= bytes.len() {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::UndefinedIndex {
+                                key: idx.to_string(),
+                            },
+                            span,
+                        ));
+                    }
+                    Ok(PhpValue::Int(bytes[idx as usize] as i64))
+                }
                 "isUtf8" => {
                     Ok(PhpValue::Bool(true))
                 }
@@ -9027,6 +9066,31 @@ impl VM {
                         ))
                     }
                 }
+            },
+
+            PhpValue::Rune(c) => match method {
+                "toInt" => Ok(PhpValue::Int(*c as u32 as i64)),
+                "toString" => Ok(PhpValue::string(c.to_string())),
+                "utf8Len" => Ok(PhpValue::Int(c.len_utf8() as i64)),
+                "isAlpha" => Ok(PhpValue::Bool(c.is_alphabetic())),
+                "isDigit" => Ok(PhpValue::Bool(c.is_numeric())),
+                "isAlnum" => Ok(PhpValue::Bool(c.is_alphanumeric())),
+                "isWhitespace" => Ok(PhpValue::Bool(c.is_whitespace())),
+                "isAscii" => Ok(PhpValue::Bool(c.is_ascii())),
+                "isUpper" => Ok(PhpValue::Bool(c.is_uppercase())),
+                "isLower" => Ok(PhpValue::Bool(c.is_lowercase())),
+                "isPunct" => Ok(PhpValue::Bool(c.is_ascii_punctuation())),
+                "isControl" => Ok(PhpValue::Bool(c.is_control())),
+                "toUpper" => Ok(PhpValue::string(c.to_uppercase().to_string())),
+                "toLower" => Ok(PhpValue::string(c.to_lowercase().to_string())),
+                "width" => Ok(PhpValue::Int(crate::vm::encoding::rune_width(*c) as i64)),
+                other => Err(self.make_error(
+                    RuntimeErrorKind::UndefinedMethod {
+                        class: "rune".to_string(),
+                        method: other.to_string(),
+                    },
+                    span,
+                )),
             },
 
             other => {

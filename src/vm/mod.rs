@@ -355,6 +355,22 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                     PhpValue::String(s) => Ok(PhpValue::bytes(s.as_bytes())),
                     other => Ok(PhpValue::bytes(other.to_php_string().into_bytes())),
                 },
+                CastType::Rune => match v {
+                    PhpValue::Rune(c) => Ok(PhpValue::Rune(c)),
+                    PhpValue::Int(n) => {
+                        let ch = u32::try_from(n).ok().and_then(char::from_u32).unwrap_or('\0');
+                        Ok(PhpValue::Rune(ch))
+                    }
+                    PhpValue::String(s) => {
+                        let ch = s.chars().next().unwrap_or('\0');
+                        Ok(PhpValue::Rune(ch))
+                    }
+                    other => {
+                        let s = other.to_php_string();
+                        let ch = s.chars().next().unwrap_or('\0');
+                        Ok(PhpValue::Rune(ch))
+                    }
+                },
                 CastType::Bool => Ok(PhpValue::Bool(v.is_truthy())),
                 _ => Ok(v),
             }
@@ -400,6 +416,28 @@ pub fn eval_expr(node: &ASTNode<'_>, env: &mut Environment) -> Result<Value, Run
                             };
                         }
                         return Ok(PhpValue::bytes(Vec::new()));
+                    }
+                    "rune" | "Rune" => {
+                        if let Some(first) = args.first() {
+                            let v = eval_expr(&first.value, env)?;
+                            return match v {
+                                PhpValue::Rune(c) => Ok(PhpValue::Rune(c)),
+                                PhpValue::Int(n) => {
+                                    let ch = u32::try_from(n).ok().and_then(char::from_u32).unwrap_or('\0');
+                                    Ok(PhpValue::Rune(ch))
+                                }
+                                PhpValue::String(s) => {
+                                    let ch = s.chars().next().unwrap_or('\0');
+                                    Ok(PhpValue::Rune(ch))
+                                }
+                                other => {
+                                    let s = other.to_php_string();
+                                    let ch = s.chars().next().unwrap_or('\0');
+                                    Ok(PhpValue::Rune(ch))
+                                }
+                            };
+                        }
+                        return Ok(PhpValue::Rune('\0'));
                     }
                     _ => {}
                 }

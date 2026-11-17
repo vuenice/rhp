@@ -91,6 +91,7 @@ pub enum CastType {
     Float,
     String,
     Bytes,
+    Rune,
     Bool,
     Array,
     Object,

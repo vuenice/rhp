@@ -319,6 +319,9 @@ pub enum Token<'s> {
     #[token("byte")]
     TypeBytes,
 
+    #[token("rune")]
+    TypeRune,
+
     #[token("int")]
     TypeInt,
 
@@ -736,6 +739,7 @@ impl<'s> Token<'s> {
             Token::Null => "null",
             Token::TypeString => "string",
             Token::TypeBytes => "bytes",
+            Token::TypeRune => "rune",
             Token::TypeInt => "int",
             Token::TypeFloat => "float",
             Token::TypeBool => "bool",
@@ -911,6 +915,7 @@ impl<'s> Token<'s> {
             self,
             Token::TypeString
                 | Token::TypeBytes
+                | Token::TypeRune
                 | Token::TypeInt
                 | Token::TypeFloat
                 | Token::TypeBool

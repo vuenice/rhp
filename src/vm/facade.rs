@@ -563,6 +563,7 @@ pub fn dispatch_facade_call(
         "Debug" => dispatch_debug(method, args),
         "Csv" => crate::vm::csv::dispatch_csv(method, args),
         "Str" => dispatch_str(method, args),
+        "Rune" => dispatch_rune(method, args),
         "Arr" | "Array" => dispatch_arr(method, args),
         "Future" => dispatch_future(method, args),
         "Sys" => dispatch_sys(method, args),
@@ -669,11 +670,266 @@ fn dispatch_bool(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 // =========================================================================
+// Rune Facade
+// =========================================================================
+
+fn dispatch_rune(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "from" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::from".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let codepoint = val.to_i64().ok_or_else(|| RuntimeErrorKind::TypeError {
+                message: format!("Rune::from() expects int, got {}", val.type_name()),
+            })?;
+            if codepoint < 0 || codepoint > 0x10FFFF || (0xD800..=0xDFFF).contains(&codepoint) {
+                return Err(RuntimeErrorKind::UncaughtException {
+                    class: "InvalidScalarValueException".to_string(),
+                    message: format!("Invalid Unicode scalar value: {}", codepoint),
+                });
+            }
+            let ch = char::from_u32(codepoint as u32).ok_or_else(|| RuntimeErrorKind::UncaughtException {
+                class: "InvalidScalarValueException".to_string(),
+                message: format!("Invalid Unicode scalar value: {}", codepoint),
+            })?;
+            Ok(PhpValue::Rune(ch))
+        }
+        "tryFrom" => {
+            let val = match args.first() {
+                Some(v) => v,
+                None => return Ok(PhpValue::Null),
+            };
+            let codepoint = match val.to_i64() {
+                Some(cp) => cp,
+                None => return Ok(PhpValue::Null),
+            };
+            if codepoint < 0 || codepoint > 0x10FFFF || (0xD800..=0xDFFF).contains(&codepoint) {
+                return Ok(PhpValue::Null);
+            }
+            match char::from_u32(codepoint as u32) {
+                Some(ch) => Ok(PhpValue::Rune(ch)),
+                None => Ok(PhpValue::Null),
+            }
+        }
+        "ofFirst" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::ofFirst".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let s = val.to_php_string();
+            let ch = s.chars().next().ok_or_else(|| RuntimeErrorKind::UncaughtException {
+                class: "InvalidArgumentException".to_string(),
+                message: "String cannot be empty in Rune::ofFirst()".to_string(),
+            })?;
+            Ok(PhpValue::Rune(ch))
+        }
+        "toInt" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::toInt".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::Rune(c) => Ok(PhpValue::Int(*c as u32 as i64)),
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Rune::toInt() expects rune, got {}", other.type_name()),
+                }),
+            }
+        }
+        "toString" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::toString".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::Rune(c) => Ok(PhpValue::string(c.to_string())),
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Rune::toString() expects rune, got {}", other.type_name()),
+                }),
+            }
+        }
+        "utf8Len" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::utf8Len".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::Rune(c) => Ok(PhpValue::Int(c.len_utf8() as i64)),
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Rune::utf8Len() expects rune, got {}", other.type_name()),
+                }),
+            }
+        }
+        "isAlpha" => {
+            let val = get_arg_rune(args, 0, "Rune::isAlpha")?;
+            Ok(PhpValue::Bool(val.is_alphabetic()))
+        }
+        "isDigit" => {
+            let val = get_arg_rune(args, 0, "Rune::isDigit")?;
+            Ok(PhpValue::Bool(val.is_numeric()))
+        }
+        "isAlnum" => {
+            let val = get_arg_rune(args, 0, "Rune::isAlnum")?;
+            Ok(PhpValue::Bool(val.is_alphanumeric()))
+        }
+        "isWhitespace" => {
+            let val = get_arg_rune(args, 0, "Rune::isWhitespace")?;
+            Ok(PhpValue::Bool(val.is_whitespace()))
+        }
+        "isAscii" => {
+            let val = get_arg_rune(args, 0, "Rune::isAscii")?;
+            Ok(PhpValue::Bool(val.is_ascii()))
+        }
+        "isUpper" => {
+            let val = get_arg_rune(args, 0, "Rune::isUpper")?;
+            Ok(PhpValue::Bool(val.is_uppercase()))
+        }
+        "isLower" => {
+            let val = get_arg_rune(args, 0, "Rune::isLower")?;
+            Ok(PhpValue::Bool(val.is_lowercase()))
+        }
+        "isPunct" => {
+            let val = get_arg_rune(args, 0, "Rune::isPunct")?;
+            Ok(PhpValue::Bool(val.is_ascii_punctuation()))
+        }
+        "isControl" => {
+            let val = get_arg_rune(args, 0, "Rune::isControl")?;
+            Ok(PhpValue::Bool(val.is_control()))
+        }
+        "toUpper" => {
+            let val = get_arg_rune(args, 0, "Rune::toUpper")?;
+            Ok(PhpValue::string(val.to_uppercase().to_string()))
+        }
+        "toLower" => {
+            let val = get_arg_rune(args, 0, "Rune::toLower")?;
+            Ok(PhpValue::string(val.to_lowercase().to_string()))
+        }
+        "width" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Rune::width".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let ch = match val {
+                PhpValue::Rune(c) => *c,
+                PhpValue::String(s) => s.chars().next().unwrap_or('\0'),
+                other => other.to_php_string().chars().next().unwrap_or('\0'),
+            };
+            Ok(PhpValue::Int(crate::vm::encoding::rune_width(ch) as i64))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Rune".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+// =========================================================================
 // Str Facade
 // =========================================================================
 
 fn dispatch_str(method: &str, args: &[PhpValue]) -> FacadeResult {
     match method {
+        "runes" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::runes".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let s = val.to_php_string();
+            let rune_list: Vec<PhpValue> = s.chars().map(PhpValue::Rune).collect();
+            Ok(PhpValue::list(rune_list))
+        }
+        "fromRunes" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::fromRunes".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::Array(items) | PhpValue::List(items) => {
+                    let mut s = String::new();
+                    for item in items.borrow().iter() {
+                        match item {
+                            PhpValue::Rune(c) => s.push(*c),
+                            other => {
+                                return Err(RuntimeErrorKind::TypeError {
+                                    message: format!("Str::fromRunes() expects list of rune, found element of type {}", other.type_name()),
+                                });
+                            }
+                        }
+                    }
+                    Ok(PhpValue::string(s))
+                }
+                other => Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::fromRunes() expects list of rune, got {}", other.type_name()),
+                }),
+            }
+        }
+        "runeLen" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::runeLen".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let s = val.to_php_string();
+            Ok(PhpValue::Int(s.chars().count() as i64))
+        }
+        "byteLen" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::byteLen".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            match val {
+                PhpValue::String(s) => Ok(PhpValue::Int(s.len() as i64)),
+                PhpValue::Bytes(b) => Ok(PhpValue::Int(b.len() as i64)),
+                other => Ok(PhpValue::Int(other.to_php_string().len() as i64)),
+            }
+        }
+        "byteAt" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::byteAt".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let idx = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0);
+            let bytes = match val {
+                PhpValue::String(s) => s.as_bytes(),
+                PhpValue::Bytes(b) => b.as_ref(),
+                other => return Err(RuntimeErrorKind::TypeError {
+                    message: format!("Str::byteAt() expects string or bytes, got {}", other.type_name()),
+                }),
+            };
+            if idx < 0 || (idx as usize) >= bytes.len() {
+                return Err(RuntimeErrorKind::UndefinedIndex {
+                    key: idx.to_string(),
+                });
+            }
+            Ok(PhpValue::Int(bytes[idx as usize] as i64))
+        }
+        "fromByte" => {
+            let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+                callable: "Str::fromByte".to_string(),
+                passed: args.len(),
+                expected: 1,
+            })?;
+            let b = val.to_i64().ok_or_else(|| RuntimeErrorKind::TypeError {
+                message: format!("Str::fromByte() expects int, got {}", val.type_name()),
+            })?;
+            if !(0..=255).contains(&b) {
+                return Err(RuntimeErrorKind::UncaughtException {
+                    class: "InvalidArgumentException".to_string(),
+                    message: format!("Byte value out of range (0..255): {}", b),
+                });
+            }
+            Ok(PhpValue::bytes(vec![b as u8]))
+        }
         "utf8" => {
             let val = args.first().ok_or_else(|| RuntimeErrorKind::TooFewArguments {
                 callable: "Str::utf8".to_string(),
@@ -6950,6 +7206,11 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         }
         "strlen" => dispatch_str("length", args),
+        "mb_ord" => dispatch_rune("ofFirst", args),
+        "mb_chr" => dispatch_rune("from", args),
+        "mb_strwidth" => dispatch_rune("width", args),
+        "ord" => dispatch_str("byteAt", args),
+        "chr" => dispatch_str("fromByte", args),
         "strcmp" => dispatch_str("strcmp", args),
         "strcasecmp" => dispatch_str("strcasecmp", args),
         "strncmp" => dispatch_str("strncmp", args),
@@ -7434,6 +7695,20 @@ pub(crate) fn get_arg_bytes<'a>(
     match val {
         PhpValue::String(s) => Ok(std::borrow::Cow::Borrowed(s.as_bytes())),
         other => Ok(std::borrow::Cow::Owned(other.to_php_string().into_bytes())),
+    }
+}
+
+pub(crate) fn get_arg_rune(args: &[PhpValue], index: usize, callable: &str) -> Result<char, RuntimeErrorKind> {
+    let val = args.get(index).ok_or_else(|| RuntimeErrorKind::TooFewArguments {
+        callable: callable.to_string(),
+        passed: args.len(),
+        expected: index + 1,
+    })?;
+    match val {
+        PhpValue::Rune(c) => Ok(*c),
+        other => Err(RuntimeErrorKind::TypeError {
+            message: format!("{}() expects rune at argument {}, got {}", callable, index + 1, other.type_name()),
+        }),
     }
 }
 
@@ -7980,6 +8255,11 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
         }
+        PhpValue::Rune(c) => {
+            let s = c.to_string();
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{}\"", escaped)
+        }
         PhpValue::EmptyArray => "[]".to_string(),
         PhpValue::Array(a) | PhpValue::List(a) => {
             let items: Vec<String> = a.borrow().iter().map(php_value_to_json).collect();
@@ -8119,6 +8399,11 @@ pub fn php_value_to_json_canonical(val: &PhpValue) -> String {
         PhpValue::Int(n) => n.to_string(),
         PhpValue::Float(fl) => fl.to_string(),
         PhpValue::String(s) => {
+            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{}\"", escaped)
+        }
+        PhpValue::Rune(c) => {
+            let s = c.to_string();
             let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
             format!("\"{}\"", escaped)
         }
@@ -8686,6 +8971,7 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                 PhpValue::Float(_) => "float".to_string(),
                 PhpValue::String(_) => "string".to_string(),
                 PhpValue::Bytes(_) => "bytes".to_string(),
+                PhpValue::Rune(_) => "rune".to_string(),
                 PhpValue::EmptyArray | PhpValue::Array(_) => "array".to_string(),
                 PhpValue::List(_) => "Arr::list".to_string(),
                 PhpValue::Dict(_) => "Arr::dict".to_string(),
@@ -8719,6 +9005,7 @@ pub fn dispatch_debug(method: &str, args: &[PhpValue]) -> FacadeResult {
                     crate::vm::value::SharedValue::Float(_) => "float".to_string(),
                     crate::vm::value::SharedValue::String(_) => "string".to_string(),
                     crate::vm::value::SharedValue::Bytes(_) => "bytes".to_string(),
+                    crate::vm::value::SharedValue::Rune(_) => "rune".to_string(),
                     crate::vm::value::SharedValue::AtomicBool(_) => "bool".to_string(),
                     crate::vm::value::SharedValue::SharedObject(o) => o.class_name.clone(),
                     crate::vm::value::SharedValue::SharedArray(_) => "array".to_string(),

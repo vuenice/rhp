@@ -305,10 +305,24 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Mixed),
         },
 
+        "Rune" => match method {
+            "from" | "ofFirst" => Ok(RhpType::Rune),
+            "tryFrom" => Ok(RhpType::Nullable(Box::new(RhpType::Rune))),
+            "toInt" | "utf8Len" | "width" => Ok(RhpType::Int),
+            "toString" | "toUpper" | "toLower" => Ok(RhpType::String),
+            "isAlpha" | "isDigit" | "isAlnum" | "isWhitespace" | "isUpper" | "isLower"
+            | "isPunct" | "isControl" | "isAscii" => Ok(RhpType::Bool),
+            _ => Ok(RhpType::Rune),
+        },
+
         "Str" => match method {
             "check" | "compare" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Ok(RhpType::Bool),
             "utf8" => Ok(RhpType::String),
             "bytes" => Ok(RhpType::Bytes),
+            "runes" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Rune)))),
+            "fromRunes" => Ok(RhpType::String),
+            "runeLen" | "byteLen" | "byteAt" => Ok(RhpType::Int),
+            "fromByte" => Ok(RhpType::Bytes),
             "len" | "mbStrlen" | "mb_strlen" | "graphemeLen" | "grapheme_len"
             | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
             | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
@@ -931,6 +945,13 @@ pub fn resolve_builtin_fluent_method(
             "toString" => Some(RhpType::String),
             _ => None,
         },
+        RhpType::Rune => match method {
+            "toInt" | "utf8Len" | "width" => Some(RhpType::Int),
+            "toString" | "toUpper" | "toLower" => Some(RhpType::String),
+            "isAlpha" | "isDigit" | "isAlnum" | "isWhitespace" | "isAscii" | "isUpper" | "isLower"
+            | "isPunct" | "isControl" => Some(RhpType::Bool),
+            _ => None,
+        },
 
         // Fluent Collection subtype chaining (`Arr::list([1, 2, 3])->map(...)->filter(...)`)
         RhpType::Collection(sub) => match method {
@@ -1053,6 +1074,7 @@ pub fn resolve_builtin_fluent_method(
             | "replace" | "slice" | "substr" | "take" | "takeLast" | "reverse" | "repeat"
             | "utf8" | "toString" | "toStringLossy" | "toHex" | "toBase64" => Some(RhpType::String),
             "length" | "len" | "size" | "countOccurrences" | "graphemeLen" | "grapheme_len"
+            | "runeLen" | "byteLen" | "byteAt"
             | "strcmp" | "cmp" | "compareBinary" | "binaryCompare"
             | "strcasecmp" | "casecmp" | "caseCmp" | "caseCompare" | "compareCase"
             | "strncmp" | "ncmp" | "nCmp" | "compareN" | "compareBinaryN"
@@ -1060,6 +1082,7 @@ pub fn resolve_builtin_fluent_method(
             "indexOf" | "lastIndexOf" => Some(RhpType::Nullable(Box::new(RhpType::Int))),
             "check" | "compare" | "contains" | "startsWith" | "endsWith" | "testRegex" | "regex" | "isUtf8" | "isValidUtf8" | "isEmpty" | "digit" | "isDigit" | "alpha" | "isAlpha" | "alnum" | "isAlnum" => Some(RhpType::Bool),
             "split" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::String)))),
+            "runes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Rune)))),
             "bytes" => Some(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Int)))),
             "toEncoding" => Some(RhpType::Bytes),
             _ => {

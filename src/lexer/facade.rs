@@ -100,6 +100,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Static UTF-8 string transformation and inspection utilities (slug, contains, random) with runtime macro support",
     ),
     FacadeInfo::native(
+        "Rune",
+        "Static Unicode scalar value and character inspection facade (from, tryFrom, ofFirst, toInt, toString, utf8Len, isAlpha, width)",
+    ),
+    FacadeInfo::native(
         "Regex",
         "Static regular expression facade (isValid, testString, match, replace, quote)",
     ),
@@ -527,6 +531,36 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "Str::split(string $separator, string $string, int? $limit = null): array",
     },
     // String functions -> Str::*
+    LegacyPhpFunctionMapping {
+        php_name: "mb_ord",
+        rhp_facade: "Rune",
+        rhp_method: "ofFirst",
+        rhp_signature: "Rune::ofFirst(string $string): rune",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "mb_chr",
+        rhp_facade: "Rune",
+        rhp_method: "from",
+        rhp_signature: "Rune::from(int $codepoint): rune",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "mb_strwidth",
+        rhp_facade: "Rune",
+        rhp_method: "width",
+        rhp_signature: "Rune::width(rune|string $char): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "ord",
+        rhp_facade: "Str",
+        rhp_method: "byteAt",
+        rhp_signature: "Str::byteAt(string $string, int $index = 0): int",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "chr",
+        rhp_facade: "Str",
+        rhp_method: "fromByte",
+        rhp_signature: "Str::fromByte(int $byte): bytes",
+    },
     LegacyPhpFunctionMapping {
         php_name: "ctype_digit",
         rhp_facade: "Str",

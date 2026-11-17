@@ -176,6 +176,7 @@ pub enum SharedValue {
     Bool(bool),
     Int(i64),
     Float(f64),
+    Rune(char),
     String(RhpString),
     Bytes(Arc<[u8]>),
     AtomicInt(Arc<AtomicI64>),
@@ -196,6 +197,7 @@ impl SharedValue {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(f) => *f != 0.0 && !f.is_nan(),
+            Self::Rune(c) => *c != '\0',
             Self::String(s) => !s.is_empty() && s.as_ref() != "0",
             Self::Bytes(b) => !b.is_empty() && &**b != b"0",
             Self::AtomicInt(a) => a.load(AtomicOrdering::SeqCst) != 0,
@@ -221,6 +223,7 @@ impl PartialEq for SharedValue {
                     a == b
                 }
             }
+            (Self::Rune(a), Self::Rune(b)) => a == b,
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Bytes(a), Self::Bytes(b)) => a == b,
             (Self::AtomicInt(a), Self::AtomicInt(b)) => {
@@ -351,6 +354,8 @@ pub enum PhpValue {
     Int(i64),
     /// The only float. Stored as `f64`.
     Float(f64),
+    /// A single Unicode scalar value (0..=0x10FFFF, excluding surrogates).
+    Rune(char),
     String(Rc<str>),
     Bytes(Rc<[u8]>),
     /// Untyped `[]` before the first write. No heap buffer.
@@ -381,6 +386,7 @@ impl From<SharedValue> for PhpValue {
             SharedValue::Bool(b) => PhpValue::Bool(b),
             SharedValue::Int(n) => PhpValue::Int(n),
             SharedValue::Float(f) => PhpValue::float(f),
+            SharedValue::Rune(c) => PhpValue::Rune(c),
             SharedValue::String(s) => PhpValue::String(s),
             SharedValue::Bytes(b) => PhpValue::bytes(b),
             SharedValue::AtomicInt(a) => PhpValue::SharedAtomic(a),
@@ -402,6 +408,7 @@ impl TryFrom<PhpValue> for SharedValue {
             PhpValue::Bool(b) => Ok(SharedValue::Bool(b)),
             PhpValue::Int(n) => Ok(SharedValue::Int(n)),
             PhpValue::Float(f) => Ok(SharedValue::Float(f)),
+            PhpValue::Rune(c) => Ok(SharedValue::Rune(c)),
             PhpValue::String(s) => Ok(SharedValue::String(s)),
             PhpValue::SharedObject(o) => Ok(SharedValue::SharedObject(o)),
             PhpValue::SharedAtomic(a) => Ok(SharedValue::AtomicInt(a)),
@@ -772,6 +779,11 @@ impl PhpValue {
     }
 
     #[inline]
+    pub fn rune(c: char) -> Self {
+        Self::Rune(c)
+    }
+
+    #[inline]
     pub fn string(s: impl AsRef<str>) -> Self {
         Self::String(Rc::from(s.as_ref()))
     }
@@ -921,6 +933,7 @@ impl PhpValue {
             Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
+            Self::Rune(_) => "rune",
             Self::String(_) => "string",
             Self::Bytes(_) => "bytes",
             Self::EmptyArray => "array",
@@ -940,6 +953,7 @@ impl PhpValue {
                 SharedValue::Bool(_) => "bool",
                 SharedValue::Int(_) | SharedValue::AtomicInt(_) => "int",
                 SharedValue::Float(_) => "float",
+                SharedValue::Rune(_) => "rune",
                 SharedValue::String(_) => "string",
                 SharedValue::Bytes(_) => "bytes",
                 SharedValue::AtomicBool(_) => "bool",
@@ -963,6 +977,10 @@ impl PhpValue {
         matches!(self, Self::Bytes(_))
     }
 
+    pub fn is_rune(&self) -> bool {
+        matches!(self, Self::Rune(_))
+    }
+
     pub fn is_null(&self) -> bool {
         matches!(self, Self::Null)
     }
@@ -973,6 +991,7 @@ impl PhpValue {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Float(fl) => *fl != 0.0 && !fl.is_nan(),
+            Self::Rune(c) => *c != '\0',
             Self::String(s) => !s.is_empty() && &**s != "0",
             Self::Bytes(b) => !b.is_empty() && &**b != b"0",
             Self::EmptyArray => false,
@@ -992,6 +1011,15 @@ impl PhpValue {
     pub fn to_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Extract char value natively if this value is a rune scalar.
+    #[inline]
+    pub fn to_rune(&self) -> Option<char> {
+        match self {
+            Self::Rune(c) => Some(*c),
             _ => None,
         }
     }
@@ -1016,13 +1044,13 @@ impl PhpValue {
         }
     }
 
-    /// Check if this value is a zero-cost primitive scalar (`int`, `float`, `bool`, `null`)
+    /// Check if this value is a zero-cost primitive scalar (`int`, `float`, `bool`, `rune`, `null`)
     /// that is stored unboxed without any `Rc<>` reference counting overhead.
     #[inline]
     pub fn is_scalar_primitive(&self) -> bool {
         matches!(
             self,
-            Self::Null | Self::Bool(_) | Self::Int(_) | Self::Float(_)
+            Self::Null | Self::Bool(_) | Self::Int(_) | Self::Float(_) | Self::Rune(_)
         )
     }
 
@@ -1103,6 +1131,7 @@ impl PhpValue {
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
+            Self::Rune(c) => c.to_string(),
             Self::String(s) => s.to_string(),
             Self::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
             Self::EmptyArray => "Array".to_string(),
@@ -1136,6 +1165,7 @@ impl PhpValue {
                 SharedValue::Bool(b) => (if *b { "1" } else { "" }).to_string(),
                 SharedValue::Int(n) => n.to_string(),
                 SharedValue::Float(f) => f.to_string(),
+                SharedValue::Rune(c) => c.to_string(),
                 SharedValue::String(s) => s.to_string(),
                 SharedValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
                 SharedValue::AtomicInt(a) => a.load(AtomicOrdering::SeqCst).to_string(),
@@ -1167,6 +1197,7 @@ impl PhpValue {
             Self::Bool(b) => (if *b { "1" } else { "" }).to_string(),
             Self::Int(n) => n.to_string(),
             Self::Float(fl) => fl.to_string(),
+            Self::Rune(c) => c.to_string(),
             Self::String(s) => s.to_string(),
             Self::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
             Self::EmptyArray => "Array\n(\n)".to_string(),
@@ -1275,6 +1306,7 @@ impl PhpValue {
                 SharedValue::Float(f) => f.to_string(),
                 SharedValue::String(s) => s.to_string(),
                 SharedValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                SharedValue::Rune(c) => c.to_string(),
                 SharedValue::AtomicInt(a) => a.load(AtomicOrdering::SeqCst).to_string(),
                 SharedValue::AtomicBool(b) => (if b.load(AtomicOrdering::SeqCst) { "1" } else { "" }).to_string(),
                 SharedValue::SharedObject(o) => PhpValue::SharedObject(o.clone()).format_print_r(indent),
@@ -1351,6 +1383,7 @@ impl PhpValue {
             }
             (Self::String(x), Self::String(y)) => x == y,
             (Self::Bytes(x), Self::Bytes(y)) => x == y,
+            (Self::Rune(x), Self::Rune(y)) => x == y,
             (Self::EmptyArray, Self::EmptyArray) => true,
             (Self::Array(x) | Self::List(x), Self::Array(y) | Self::List(y)) => {
                 if Rc::ptr_eq(x, y) {
@@ -1415,6 +1448,7 @@ impl PhpValue {
             RhpType::Float => matches!(self, Self::Float(_) | Self::Int(_)),
             RhpType::String => matches!(self, Self::String(_)),
             RhpType::Bytes => matches!(self, Self::Bytes(_)),
+            RhpType::Rune => matches!(self, Self::Rune(_)),
             RhpType::Array(inner) => {
                 if **inner == RhpType::Mixed || **inner == RhpType::Dynamic {
                     matches!(
@@ -1992,6 +2026,7 @@ impl PartialOrd for PhpValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.partial_cmp(b),
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
+            (Self::Rune(a), Self::Rune(b)) => a.partial_cmp(b),
             (Self::String(a), Self::String(b)) => a.partial_cmp(b),
             (Self::Bytes(a), Self::Bytes(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
@@ -2024,6 +2059,10 @@ impl Hash for PhpValue {
                     *fl
                 };
                 normalized.to_bits().hash(state);
+            }
+            Self::Rune(c) => {
+                17u8.hash(state);
+                (*c as u32).hash(state);
             }
             Self::String(s) => {
                 6u8.hash(state);
@@ -2125,6 +2164,7 @@ impl fmt::Debug for PhpValue {
             Self::Bool(b) => write!(f, "{}", b),
             Self::Int(n) => write!(f, "{}", n),
             Self::Float(fl) => write!(f, "{:?}", fl),
+            Self::Rune(c) => write!(f, "Rune({:?})", c),
             Self::String(s) => write!(f, "\"{}\"", s),
             Self::Bytes(b) => write!(f, "b\"{}\"", String::from_utf8_lossy(b)),
             Self::EmptyArray => write!(f, "EmptyArray"),
@@ -2155,6 +2195,13 @@ impl From<bool> for PhpValue {
     #[inline]
     fn from(b: bool) -> Self {
         PhpValue::Bool(b)
+    }
+}
+
+impl From<char> for PhpValue {
+    #[inline]
+    fn from(c: char) -> Self {
+        PhpValue::Rune(c)
     }
 }
 

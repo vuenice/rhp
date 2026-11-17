@@ -1182,4 +1182,42 @@ pub fn byte_last_index_of(bytes: &[u8], needle: &[u8], offset: i64) -> Option<i6
     None
 }
 
+/// Calculates the display width of a single Unicode character/rune
+/// following Unicode Standard Annex #11 (East Asian Width).
+/// Returns 0 for control/zero-width characters, 2 for wide/fullwidth/CJK, and 1 for others.
+pub fn rune_width(c: char) -> usize {
+    let cp = c as u32;
+
+    // Control characters & zero-width marks
+    if (cp <= 0x001F)
+        || (0x007F..=0x009F).contains(&cp)
+        || (0x200B..=0x200F).contains(&cp) // Zero-width spaces, LTR/RTL marks
+        || (0x202A..=0x202E).contains(&cp) // BiDi controls
+        || (0x2060..=0x206F).contains(&cp) // Invisible formatting
+        || cp == 0xFEFF // BOM / ZWNBSP
+        || (0xE0001..=0xE007F).contains(&cp) // Language tags
+    {
+        return 0;
+    }
+
+    // East Asian Wide (W) and Fullwidth (F) ranges
+    if (0x1100..=0x115F).contains(&cp) // Hangul Jamo
+        || (0x2E80..=0xA4CF).contains(&cp) // CJK Radicals, Kangxi, Ideographs, Hangul Syllables
+        || (0xAC00..=0xD7A3).contains(&cp) // Hangul Syllables
+        || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility Ideographs
+        || (0xFE10..=0xFE19).contains(&cp) // Vertical forms
+        || (0xFE30..=0xFE6F).contains(&cp) // CJK Compatibility Forms
+        || (0xFF01..=0xFF60).contains(&cp) // Fullwidth ASCII variants
+        || (0xFFE0..=0xFFE6).contains(&cp) // Fullwidth symbol variants
+        || (0x1F300..=0x1F6FF).contains(&cp) // Misc Symbols, Pictographs, Emoticons, Transport & Map (🚀)
+        || (0x1F900..=0x1FAFF).contains(&cp) // Supplemental & Extended Symbols and Pictographs
+        || (0x20000..=0x2FFFD).contains(&cp) // SIP (CJK Extension B, C, D, E, F)
+        || (0x30000..=0x3FFFD).contains(&cp) // TIP (CJK Extension G, H, I)
+    {
+        return 2;
+    }
+
+    1
+}
+
 

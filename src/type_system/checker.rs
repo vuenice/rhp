@@ -3192,6 +3192,7 @@ impl TypeChecker {
                     CastType::Float => RhpType::Float,
                     CastType::String => RhpType::String,
                     CastType::Bytes => RhpType::Bytes,
+                    CastType::Rune => RhpType::Rune,
                     CastType::Bool => RhpType::Bool,
                     CastType::Array => RhpType::Array(Box::new(RhpType::Mixed)),
                     CastType::Object => RhpType::Object,
@@ -3755,6 +3756,14 @@ impl TypeChecker {
                         span,
                     ));
                 }
+                if left_ty == &RhpType::Rune || right_ty == &RhpType::Rune {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate or add rune using '+' operator. Call ->toString() or ->toInt() explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
 
                 let left_is_string = left_ty == &RhpType::String
                     || matches!(left_ty, RhpType::Union(u) if u.iter().all(|m| m == &RhpType::String));
@@ -3860,6 +3869,14 @@ impl TypeChecker {
                     return Err(TypeError::new(
                         TypeErrorKind::Custom {
                             message: "Cannot concatenate string and bytes. Decode the bytes or convert the string explicitly.".to_string(),
+                        },
+                        span,
+                    ));
+                }
+                if left_ty == &RhpType::Rune || right_ty == &RhpType::Rune {
+                    return Err(TypeError::new(
+                        TypeErrorKind::Custom {
+                            message: "Cannot concatenate rune using '.' operator. Call ->toString() explicitly.".to_string(),
                         },
                         span,
                     ));
