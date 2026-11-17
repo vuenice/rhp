@@ -88,7 +88,7 @@ For workflows where overflow is an expected possibility rather than a critical f
 // Returns Option<int> (nullable / Some($v) | null)
 $maybeSum = $a->checked_add($b);
 
-if ($maybeSum !== null) {
+if ($maybeSum != null) {
     print("Sum: {$maybeSum}\n");
 } else {
     print("Overflow avoided!\n");

@@ -22,6 +22,8 @@ By default, running `rhp run lint` executes in fix-and-report mode:
 6. **Casing Normalization:** Enforces uniform identifier naming conventions across variables, classes, and functions with built-in exceptions for PHP superglobals, magic methods, and test functions.
 7. **Static Type Checking & Diagnostics:** Runs full static analysis and emits structured diagnostics in Carthage Mago-compatible JSON format. A C-style `for (init; cond; step)` is reported as warning **RHP0403** (`deprecated-c-style-for`): `C-style for (init; cond; step) loop will be deprecated in the future. Please use range or a for-in loop.`
 8. **Indented for-in bracing:** `for $name in $users` followed by a more-indented next line is valid. The linter adds the parentheses and braces, producing `for ($name in $users) { ... }`. The body has to be on that next indented line. A same-line body is not accepted. C-style headers are not rewritten.
+9. **Division Stored in Int Warning:** Emits a warning (`division-stored-in-int`): `"The division operation might result into float value instead of int."` whenever `/` or `/=` assigns into an `int`-typed variable. In RHP, division always produces a 64-bit float (`f64`). Use `int($a / $b)` to explicitly truncate the quotient to an integer without triggering the warning.
+10. **Void Return Type Hint Omission:** Enforces that functions, closures, and methods that do not return a value must omit the return type hint entirely. Writing `: void` produces a linter diagnostic and `rhp migrate` automatically strips it.
 
 ---
 
@@ -60,7 +62,7 @@ rhp run lint src/ --no-case-change
 The formatter operates on the AST and token stream, adhering to PER Coding Style (PER-CS 2.0) guidelines:
 
 1. **4-Space Indentation:** All block levels, class definitions, function bodies, and array expressions are normalized to 4 spaces per nesting level. Tab characters (`\t`) are converted to spaces.
-2. **Operator Spacing:** Binary operators (`+`, `-`, `*`, `/`, `===`, `!==`, `&&`, `||`, `=>`, `=`) receive single surrounding whitespace.
+2. **Operator Spacing:** Binary operators (`+`, `-`, `*`, `/`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `=>`, `=`) receive single surrounding whitespace.
 3. **Brace Normalization:** Opening braces for control structures and functions follow K&R / 1TBS convention, while class definitions adhere to PSR-12 styling.
 4. **Verbatim Content Preservation:** String literals (single-quoted, double-quoted, heredoc/nowdoc) and comments (line comments `//`, block comments `/* ... */`, and docblocks `/** ... */`) are preserved verbatim with byte-exact precision.
 

@@ -7,8 +7,36 @@ order: 2
 
 ## Unreleased
 
-- **Empty arrays:** An untyped `[]` stays `PhpValue::EmptyArray` until the first write, which promotes it to `list`, `dict`, or `hashMap`. An unread empty array reads as both an empty list and an empty dict.
-- **Linter collection types:** `rhp run lint` writes `array`, `list`, `dict`, `set`, and `hashMap` on variables, defaulted parameters, and return types. The compiler uses that written type and does not classify a bare array literal from its keys.
+- Continuous optimizations and performance benchmarks.
+
+## v0.2.0 (November 2026)
+
+The v0.2.0 release delivers major performance, runtime, and ecosystem additions:
+
+### Highlights:
+- **Rune Type & Text/Byte Separation:**
+  - First-class `rune` scalar type representing a 32-bit Unicode code point with `r'...'` literal syntax.
+  - Native `Rune` facade with static methods (`Rune::from()`, `Rune::isAlpha()`, `Rune::isDigit()`, `Rune::toLower()`, `Rune::toUpper()`, `Rune::width()`).
+  - Strict text vs byte separation with fluent `byte` string helpers and encoding conversions (UTF-8, Shift-JIS, EUC-JP, ISO-2022-JP).
+- **Process Supervision & RHPM (PM2-Style):**
+  - Enterprise-grade 3-tier runtime supervisor with worker process pooling, hot reloading, and cluster management.
+  - CLI management commands: `rhp start`, `rhp stop`, `rhp restart`, `rhp status` (`rhp ps`), and `rhp logs`.
+  - Corosensei stackful fibers and Tokio multi-worker thread coordination.
+- **Package Manager & Scaffolding:**
+  - Integrated package manager powered by `rhp.toml` manifests and lockfile verification.
+  - Commands for `rhp add`, `rhp remove`, `rhp install`, `rhp update`, `rhp audit`, and `rhp init`.
+  - Built-in security audits for external egress and safe/unsafe capability tracking.
+- **Automated PHP Migration Toolchain:**
+  - `rhp migrate` command to convert legacy PHP 8.x codebases to idiomatic RHP.
+  - Rewrites strict equality (`===`, `!==` to `==`, `!=`), strips PHP opening tags and `declare` statements, reorders parameters (required before optional), and converts cURL to async HTTP calls.
+- **Extended Standard Library & Facades:**
+  - `Carbon`: Laravel-compatible date and time handling facade.
+  - `Crypt`, `Html`, and `Url`: Cryptographic hashing (AES-256, HMAC, MD5, SHA), HTML sanitization, and URL parsing helpers.
+  - `Duration`: Ergonomic time unit math and conversions.
+  - `Uniq`: UUID v4, UUID v7, and NanoID generation.
+- **Observability & OpenTelemetry:**
+  - Distributed tracing and metrics with standard OTLP JSON export over HTTP/gRPC.
+  - Native span creation, baggages, and automatic HTTP request context propagation.
 
 ## v0.1.0-alpha (October 2026) - Initial Release
 

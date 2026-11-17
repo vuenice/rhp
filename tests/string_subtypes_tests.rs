@@ -757,7 +757,7 @@ fn test_byte_fluent_helpers_and_shared_text_api() {
         $b = b"\xFF\xFE";
         $lossy = $b->toStringLossy();
         $valid = $b->isValidUtf8();
-        $valid_str = "hello"->isValidUtf8();
+        $valid_str = string("hello")->isValidUtf8();
         return [$lossy, $valid, $valid_str];
     "#;
     let res_lossy = run_source(code_tostring_lossy).expect("lossy conversion should work");

@@ -187,8 +187,8 @@ $val = $list[0];                        // 0-indexed integer lookup
 $list[1] = 999;                         // In-place numeric update
 $list[] = 42;                           // Appends value
 // $list['str_key'] = 1;                // Throws UndefinedIndex error (strict sequential indexing)
-foreach ($list as $item) {}             // Contiguous sequential traversal with CPU cache locality
-foreach ($list as $idx => $item) {}     // Yields 0-based integer index without key allocations
+for ($item in $list) {}             // Contiguous sequential traversal with CPU cache locality
+for ($idx, $item in $list) {}     // Yields 0-based integer index without key allocations
 ```
 
 ---
@@ -271,7 +271,7 @@ $dict->toJson(): string;                                        // Encodes to JS
 // Operators & Zero-Allocation Streaming Iteration
 $val = $dict['key'];                                            // O(1) string key lookup
 $dict['key'] = $value;                                          // Inserts or updates key in-place
-foreach ($dict as $key => $val) {}                              // Zero-allocation streaming via ActiveIterator::Dict
+for ($key, $val in $dict) {}                              // Zero-allocation streaming via ActiveIterator::Dict
 ```
 
 ---
@@ -327,10 +327,10 @@ $set['apple'] = false;                  // Removes element from set
 $set[] = 'banana';                      // Push syntax: inserts unique element
 
 // Native foreach Iteration
-foreach ($set as $item) {               // Iterates through each unique element
+for ($item in $set) {               // Iterates through each unique element
     // $item
 }
-foreach ($set as $idx => $item) {       // Iterates with 0-based sequence counter
+for ($idx, $item in $set) {       // Iterates with 0-based sequence counter
     // $idx, $item
 }
 ```
@@ -399,10 +399,10 @@ $map['slug'] = 'string';
 $map[true] = 'bool';
 
 // Native foreach Iteration with Complex Keys
-foreach ($map as $key => $val) {                          // $key yields complex key directly!
+for ($key, $val in $map) {                          // $key yields complex key directly!
     // $key can be an array [x, y], object, set, or scalar
 }
-foreach ($map as $val) {                                  // Iterates values only
+for ($val in $map) {                                  // Iterates values only
     // $val
 }
 ```
@@ -432,7 +432,7 @@ Str::upperCase(string $text): string;                                   // Conve
 Str::camelCase(string $text): string;                                   // Converts identifier/string to camelCase
 Str::pascalCase(string $text): string;                                  // Converts identifier/string to PascalCase
 Str::snakeCase(string $text): string;                                   // Converts identifier/string to snake_case
-Str::macro(string $name, callable $closure): void;                 // Registers dynamic macro bound to string instances
+Str::macro(string $name, callable $closure);                 // Registers dynamic macro bound to string instances
 
 // Fluent Immutable Instance Methods ($str->trim()->upperCase())
 $str->trim(string? $chars = null): string;
@@ -596,7 +596,7 @@ Future::run(callable $fn): Future;
 Future::wait(array $tasks): array;
 Future::any(array $tasks): mixed;
 Future::delayed(int $milliseconds, callable $fn = null): mixed;
-Future::defer(callable $fn): void;
+Future::defer(callable $fn);
 Future::value(mixed $value): Future;
 Future::error(mixed $error): Future;
 
@@ -903,7 +903,7 @@ Request::only(array|string ...$keys): dict;
 Request::has(string $key): bool;
 Request::set(string $key, mixed $value): string;
 Request::merge(array|dict $data): dict;
-Request::clear(): void;
+Request::clear();
 
 // In-Place Type Formatting (supports both quoted types and bare type keywords)
 Request::format(array|dict $typeMap): dict;
@@ -919,8 +919,8 @@ Session::set(string $key, mixed $value): mixed;
 Session::put(string $key, mixed $value): mixed;
 Session::has(string $key): bool;
 Session::all(): dict;
-Session::forget(string $key): void;
-Session::clear(): void;
+Session::forget(string $key);
+Session::clear();
 ```
 
 > **Note on `$_SESSION`:**
@@ -936,8 +936,8 @@ Cookie::set(string $key, mixed $value, ...$options): string;
 Cookie::put(string $key, mixed $value, ...$options): string;
 Cookie::has(string $key): bool;
 Cookie::all(): dict;
-Cookie::forget(string $key): void;
-Cookie::clear(): void;
+Cookie::forget(string $key);
+Cookie::clear();
 ```
 
 > **Note on `$_COOKIE`:**
@@ -948,16 +948,16 @@ Cookie::clear(): void;
 ## `Sys` Facade API
 
 ```php
-Sys::echo(string $format, mixed ...$args): void;  // Directly compiles to Rust print!() (no trailing newline)
-Sys::print(string $format, mixed ...$args): void; // Directly compiles to Rust println!() (adds trailing \n)
+Sys::echo(string $format, mixed ...$args);  // Directly compiles to Rust print!() (no trailing newline)
+Sys::print(string $format, mixed ...$args); // Directly compiles to Rust println!() (adds trailing \n)
 Sys::env(string $key, mixed $default = null): mixed;
 Sys::os(): string;                               // Host OS name (e.g. "linux")
 Sys::version(): string;                          // RHP engine version
 Sys::timestamp(): int;                           // Current Unix epoch in seconds
-Sys::clearstatcache(bool $clear_realpath_cache = false, string $filename = ""): void; // Clear stat and realpath cache
+Sys::clearstatcache(bool $clear_realpath_cache = false, string $filename = ""); // Clear stat and realpath cache
 Sys::disk_free_space(string $directory): float|bool; // Free disk space in bytes (or false on failure)
 Sys::disk_total_space(string $directory): float|bool; // Total disk space in bytes (or false on failure)
-Sys::dd(mixed ...$vars): void;                   // Dump variables and terminate
+Sys::dd(mixed ...$vars);                   // Dump variables and terminate
 
 // NOTE: There is NO Sys::println function. Only echo and print exist in RHP.
 ```
@@ -997,10 +997,10 @@ The `Debug` facade provides zero-overhead diagnostic inspection for human consum
 
 ```php
 // Pretty-prints values to stdout/stderr with syntax highlights and structure indentation
-Debug::dump(mixed ...$vars): void;
+Debug::dump(mixed ...$vars);
 
 // Dumps values and halts execution immediately (standard Laravel dd idiom)
-Debug::dd(mixed ...$vars): void;
+Debug::dd(mixed ...$vars);
 
 // Returns the formatted diagnostic inspection as a string (replaces var_export($x, true) and print_r($x, true))
 Debug::format(mixed $value): string;
@@ -1109,9 +1109,9 @@ Glob::customHelper(string $helperName, mixed ...$args): mixed; // Dynamic fallba
 Trace::startSpan(string $name, array? $options = null): dict;
 Trace::endSpan(array? $status = null): dict?;
 Trace::span(string $name, callable $closure, array? $attributes = null): mixed;
-Trace::setAttribute(string $key, mixed $value): void;
-Trace::addEvent(string $name, array? $attributes = null): void;
-Trace::recordException(string $type, string $message, string? $stackTrace = null): void;
+Trace::setAttribute(string $key, mixed $value);
+Trace::addEvent(string $name, array? $attributes = null);
+Trace::recordException(string $type, string $message, string? $stackTrace = null);
 
 // Context & Identifier Inspection
 Trace::traceId(): string?;          // Active 32-hex character TraceId
@@ -1120,9 +1120,9 @@ Trace::parentSpanId(): string?;     // Active 16-hex parent SpanId (if any)
 Trace::isRecording(): bool;         // true if active span is recording
 
 // Metrics & Histograms
-Trace::counter(string $name, float $delta = 1.0, array? $attributes = null): void;
-Trace::gauge(string $name, float $value, array? $attributes = null): void;
-Trace::histogram(string $name, float $value, array? $attributes = null): void;
+Trace::counter(string $name, float $delta = 1.0, array? $attributes = null);
+Trace::gauge(string $name, float $value, array? $attributes = null);
+Trace::histogram(string $name, float $value, array? $attributes = null);
 Trace::metricSummary(string $name): dict?; // Returns [count, sum, min, max, avg, p50, p90, p95, p99]
 
 // OTLP & APM Exporters
@@ -1260,8 +1260,8 @@ Time::maxValue(): Time;
 Time::minValue(): Time;
 
 // Mock Test Time
-Time::setTestNow(mixed $testNow = null): void;
-Time::getTestNow(): ?Time;
+Time::setTestNow(mixed $testNow = null);
+Time::getTestNow(): Time?;
 Time::hasTestNow(): bool;
 
 // Class Constants
@@ -1450,6 +1450,48 @@ Time::macro(string $name, callable $closure): bool;
 
 ---
 
+
+---
+
+## `Duration` Facade API (Intervals & CarbonInterval)
+
+```php
+// Factory Constructors
+Duration::hours(int $h = 1): Duration;
+Duration::minutes(int $m = 1): Duration;
+Duration::seconds(int $s = 1): Duration;
+Duration::days(int $d = 1): Duration;
+Duration::weeks(int $w = 1): Duration;
+Duration::months(int $m = 1): Duration;
+Duration::years(int $y = 1): Duration;
+Duration::create(int $years = 0, int $months = 0, int $weeks = 0, int $days = 0, int $hours = 0, int $minutes = 0, int $seconds = 0): Duration;
+Duration::fromString(string $str): Duration; // ISO-8601 (e.g. "PT2H30M") or phrases ("2 hours 30 minutes")
+
+// Output & Representation
+$duration->spec(): string;                          // Returns ISO-8601 duration string (e.g. "PT2H30M")
+$duration->forHumans(dict $options = []): string;   // e.g. "2 hours 30 minutes", options: ["short" => bool, "parts" => int]
+$duration->format(string $format): string;          // Formatted duration string
+
+// Arithmetic & Cascade
+$duration->add(Duration $other): Duration;
+$duration->sub(Duration $other): Duration;
+$duration->times(int|float $factor): Duration;
+$duration->divide(int|float $divisor): Duration;
+$duration->cascade(): Duration;                     // Normalizes overflow units (e.g. 90m -> 1h 30m)
+$duration->invert(): Duration;
+
+// Totals & Comparisons
+$duration->total(string $unit): float;              // Total duration in "seconds", "minutes", "hours", etc.
+$duration->totalDays(): float;
+$duration->eq(Duration $other): bool;
+$duration->gt(Duration $other): bool;
+$duration->gte(Duration $other): bool;
+$duration->lt(Duration $other): bool;
+$duration->lte(Duration $other): bool;
+$duration->between(Duration $min, Duration $max): bool;
+$duration->isEmpty(): bool;
+```
+
 ## Tier 2 Native Helper Classes API (`Cache`, `Log`)
 
 Imported via `import "./Cache.rs";` or `import "./Log.rs";`. These helper classes are not built into the core language syntax to avoid language bloat, but provide framework-level performance using thread-safe Rust stores with zero garbage collection overhead.
@@ -1467,19 +1509,19 @@ Cache::decrement(string $key, int $step = 1): int;
 Cache::all(): dict;
 Cache::keys(): list;
 Cache::count(): int;
-Cache::clear(): void;
+Cache::clear();
 ```
 
 ### `Log` Helper Class API
 
 ```php
 // Structured High-Speed In-Memory & File Logging
-Log::info(string $message, array|dict $context = []): void;
-Log::warn(string $message, array|dict $context = []): void;
-Log::error(string $message, array|dict $context = []): void;
-Log::debug(string $message, array|dict $context = []): void;
+Log::info(string $message, array|dict $context = []);
+Log::warn(string $message, array|dict $context = []);
+Log::error(string $message, array|dict $context = []);
+Log::debug(string $message, array|dict $context = []);
 Log::history(): list; // Returns list of log entries with timestamps, levels, and messages
-Log::clear(): void;
+Log::clear();
 ```
 
 ---

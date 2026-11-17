@@ -19,15 +19,19 @@ RHP implements a **medium-strategy gradual type system**:
 
 All primitive type keywords are strictly lowercase:
 
-| Type Keyword | Description | Default Rust Storage |
+| Type Keyword | Description | Native Rust Storage |
 | :--- | :--- | :--- |
-| `int` | Signed integer — **defaults to `i32`** | `i32` |
-| `float` | Floating-point number — **defaults to `i32`** (32-bit float) | `i32` |
+| `int` | Signed 64-bit integer | `i64` |
+| `float` | IEEE-754 64-bit double precision float | `f64` |
 | `string` | UTF-8 validated text string | `Rc<str>` |
 | `byte` | Raw binary byte buffer (aliases: `bytes`) | `Rc<[u8]>` |
 | `bool` | Boolean value (`true` or `false`) | `bool` |
-| `void` | Absence of a return value | Unit `()` |
+| `void` | Absence of a return value (omitted from signatures) | Unit `()` |
 | `mixed` | Permissive dynamic container | `PhpValue` |
+
+> [!NOTE]
+> **Void Return Type Omission:** Functions and methods that return nothing omit the return type annotation entirely (writing `: void` is a lint diagnostic and disallowed).
+
 
 Capitalized scalar variants (such as `String` or `Integer`) are strictly rejected by the parser.
 
@@ -59,6 +63,33 @@ In RHP, text strings and binary byte payloads are strictly separate, first-class
   byte $converted = byte("binary data");
   ```
 
+### Multiline Heredoc with Markdown Triple Backticks
+
+RHP modernizes PHP's `<<<EOD` heredoc and nowdoc syntax into **markdown triple-backtick blocks** (```` ``` ````). You can optionally append an alphabetical syntax highlighting tag (such as `html`, `sql`, `json`, `graphql`, or `xml`):
+
+```php
+$user = "Alice";
+$role = "Administrator";
+
+string $query = ```sql
+    SELECT id, username, email
+    FROM users
+    WHERE role = '{$role}' AND status = 'active'
+    ORDER BY created_at DESC
+```;
+
+string $template = ```html
+    <div class="user-card">
+        <h2>Welcome, {$user}!</h2>
+        <p>Current role: { $role }</p>
+        <p>Annual Subscription: $150</p>
+    </div>
+```;
+```
+
+* **Curly Variable Interpolation:** Variables inside `{ $var }` or `{$var}` are evaluated and interpolated at runtime.
+* **Literal Dollar Preservation:** Bare dollar symbols (such as `$150` or `$$` in CSS/currencies) are safely preserved as literal text without triggering parse errors or variable resolution. Escape curlies with `\{$var\}` if literal curly interpolation syntax is needed.
+
 #### Shared Fluent Text API
 
 Both `string` and `byte` share a unified text API for common slicing, inspection, and transformation operations without needing wrapper classes:
@@ -67,15 +98,15 @@ Both `string` and `byte` share a unified text API for common slicing, inspection
 | :--- | :--- | :--- |
 | `length(): int` | `int` | Character count for `string`, byte length for `byte` |
 | `size(): int`, `len(): int` | `int` | Length of the string or byte buffer |
-| `slice(int $start, ?int $end = null)` | `string` / `byte` | JavaScript `slice` semantics (exclusive `$end`, negative index from back) |
-| `substr(int $start, ?int $length = null)` | `string` / `byte` | PHP sugar mapping `$length` over `slice()` |
+| `slice(int $start, int? $end = null)` | `string` / `byte` | JavaScript `slice` semantics (exclusive `$end`, negative index from back) |
+| `substr(int $start, int? $length = null)` | `string` / `byte` | PHP sugar mapping `$length` over `slice()` |
 | `take(int $count)` | `string` / `byte` | Takes first `$count` characters or bytes |
 | `takeLast(int $count)` | `string` / `byte` | Takes last `$count` characters or bytes |
 | `contains(string $needle)` | `bool` | Checks if sequence contains needle |
 | `startsWith(string $prefix)` | `bool` | Checks if sequence starts with prefix |
 | `endsWith(string $suffix)` | `bool` | Checks if sequence ends with suffix |
-| `indexOf(string $needle, int $offset = 0)` | `?int` | Returns 0-based first index, or `null` if not found |
-| `lastIndexOf(string $needle, int $offset = 0)` | `?int` | Returns 0-based last index, or `null` if not found |
+| `indexOf(string $needle, int $offset = 0)` | `int?` | Returns 0-based first index, or `null` if not found |
+| `lastIndexOf(string $needle, int $offset = 0)` | `int?` | Returns 0-based last index, or `null` if not found |
 | `upperCase()` | `string` / `byte` | Full Unicode uppercase for `string`; ASCII uppercase for `byte` |
 | `lowerCase()` | `string` / `byte` | Full Unicode lowercase for `string`; ASCII lowercase for `byte` |
 | `countOccurrences(string $needle)` | `int` | Counts non-overlapping occurrences of needle |
@@ -97,7 +128,7 @@ $b->slice(-6, -1); // byte("world")
 ```
 
 `substr($start, $length)` is sugar that delegates to `slice()`:
-- `$length === null`: delegates to `slice($start)`
+- `$length == null`: delegates to `slice($start)`
 - `$length >= 0`: delegates to `slice($start, $start + $length)`
 - `$length < 0`: delegates to `slice($start, $length)`
 
@@ -299,7 +330,7 @@ Instead of standard, ambiguous hash tables for every list or map, RHP provides s
 ### 1. `list` (Sequential Lists)
 Optimized for strictly sequential numerical indices and maximum CPU cache locality. Backed by contiguous Rust `Rc<RefCell<Vec<PhpValue>>>` with Copy-On-Write (COW) semantics.
 
-* **CPU Cache Locality & Zero-Allocation Iteration:** During `foreach ($list as $key => $val)` iteration, the runtime uses a dedicated `ActiveIterator::List` stream that points directly to the underlying `Vec<PhpValue>` contiguous memory buffer with an internal cursor index. It streams elements without allocating intermediate key-value pair vectors or cloning keys.
+* **CPU Cache Locality & Zero-Allocation Iteration:** During `for ($key, $val in $list)` iteration, the runtime uses a dedicated `ActiveIterator::List` stream that points directly to the underlying `Vec<PhpValue>` contiguous memory buffer with an internal cursor index. It streams elements without allocating intermediate key-value pair vectors or cloning keys.
 * **Strict Sequential Indexing:** Supports numeric index reading (`$list[0]`), updating (`$list[1] = 999`), and sequential appending (`$list[] = $val`).
 * **String Key Rejection:** Attempting to assign non-numeric string keys (such as `$list['name'] = 'val'`) is rejected with an `UndefinedIndex` error, preventing sequential lists from degrading into hash tables.
 * **Inline Type Annotations:** Local variable declarations using `list $arr = [1, 2, 3];` are compiled directly into optimized Rust `Vec<PhpValue>` allocations under the hood.
@@ -351,7 +382,7 @@ When RHP processes collection types, the lexer, parser, and IR lowerer collabora
 String-keyed map retaining strict deterministic insertion order and amortized $O(1)$ lookups, updates, and removals. Backed directly by Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`.
 
 * **Strict Insertion Ordering:** Unlike standard unordered hash tables, `dict` preserves exact key insertion order across all iterations, serializations, and mutations. Updating the value of an existing key preserves its original index slot.
-* **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` drives an `ActiveIterator::Dict` that indexes directly into the underlying `IndexMap` via an internal cursor, eliminating intermediate vector allocations.
+* **Zero-Allocation Streaming Iteration:** `for ($key, $val in $dict)` drives an `ActiveIterator::Dict` that indexes directly into the underlying `IndexMap` via an internal cursor, eliminating intermediate vector allocations.
 * **Laravel Collection Methods:** `dict` exposes the full suite of Laravel-style collection instance methods for fluent, functional data pipelines.
 
 ```php
@@ -399,7 +430,7 @@ dict $merged = $base->merge($overlay); // ['a' => 99, 'b' => 2]
 string $json = $product->toJson(); // '{"sku":"PROD-100","name":"Ergonomic Desk",...}'
 
 // 5. Zero-Allocation Streaming Iteration
-foreach ($product as $prop => $val) {
+for ($prop, $val in $product) {
     Sys::print("{}: {}", $prop, (string)$val);
 }
 ```
@@ -441,16 +472,16 @@ set $diffArr = $setA->diff([2, 4]);        // Cross-collection algebra with plai
 
 // 6. Higher-Order Transforms & Reductions
 set $nums = [1, 2, 3, 4, 5, 6];
-set $evens = $nums->filter(fn($n) => $n % 2 === 0);      // {2, 4, 6}
+set $evens = $nums->filter(fn($n) => $n % 2 == 0);      // {2, 4, 6}
 
 set $doubled = $evens->map(fn($n) => $n * 10); // {20, 40, 60}
 int $sum = $doubled->reduce(fn($acc, $n) => $acc + $n, 0); // 120
 
-// 7. Streaming Foreach & Export
+// 7. Streaming Iteration & Export
 list $asList = $tags->all();               // Converts to sequential list
 string $json = $tags->toJson();            // '["fast","rust",...]'
 
-foreach ($tags as $tag) {
+for ($tag in $tags) {
     // Visits each unique element exactly once
 }
 ```

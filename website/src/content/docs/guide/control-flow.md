@@ -12,7 +12,7 @@ Conditionals in RHP support standard boolean evaluations:
 ```php
 int $statusCode = 200;
 
-if ($statusCode === 200) {
+if ($statusCode == 200) {
     print("Success: Request completed");
 } elseif ($statusCode >= 400 && $statusCode < 500) {
     print("Client Error");
@@ -197,7 +197,7 @@ class NumberRange implements Iterator {
         $this->current = $start;
     }
 
-    public function rewind(): void {
+    public function rewind() {
         $this->current = $this->start;
     }
 
@@ -213,7 +213,7 @@ class NumberRange implements Iterator {
         return $this->current - $this->start;
     }
 
-    public function next(): void {
+    public function next() {
         $this->current++;
     }
 }

@@ -96,7 +96,7 @@ list $doubled = $numbers
     ->map(fn($n) => $n * 2)
     ->filter(fn($n) => $n > 30); // [40, 60, 80]
 
-list $rejected = $numbers->reject(fn($n) => $n % 20 === 0); // [10, 30]
+list $rejected = $numbers->reject(fn($n) => $n % 20 == 0); // [10, 30]
 int $reduced = $numbers->reduce(fn($acc, $n) => $acc + $n, 0); // 100
 
 // 4. Math & Aggregations
@@ -142,7 +142,7 @@ string $pipe = $letters->toCsv('|');             // "a|b"
 `dict` maps key-value dictionaries directly to Rust's `Rc<RefCell<IndexMap<String, PhpValue>>>`. It combines $O(1)$ amortized lookups, updates, and removals with **strict deterministic insertion ordering** and a full suite of Laravel-inspired fluent collection methods:
 
 * **Strict Insertion Ordering:** Unlike unordered hash tables, `IndexMap` retains the exact chronological insertion order of keys across all loops, serializations, and transforms. Mutating the value of an existing key preserves its original index slot.
-* **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` operates via `ActiveIterator::Dict` indexing directly into the `IndexMap` without creating temporary key or value vectors.
+* **Zero-Allocation Streaming Iteration:** `for ($key, $val in $dict)` operates via `ActiveIterator::Dict` indexing directly into the `IndexMap` without creating temporary key or value vectors.
 * **Laravel Collection Instance Methods:** Offers a rich, expressive functional API for manipulating key-value data with zero side effects.
 
 ```php
@@ -225,7 +225,7 @@ dict $intersect = $pair->intersect(['b' => 2]); // ['b' => 2]
 string $json = $product->toJson(); // '{"sku":"DESK-2026","name":"Standing Desk",...}'
 
 // 9. Zero-Allocation Streaming Iteration
-foreach ($product as $key => $value) {
+for ($key, $value in $product) {
     Sys::print("{}: {}", $key, (string)$value);
 }
 ```
@@ -276,17 +276,17 @@ $diffArr = $setA->diff([2, 4]); // {1, 3}
 
 // 6. Higher-Order Transforms & Reductions
 set $nums = [1, 2, 3, 4, 5, 6];
-set $evens = $nums->filter(fn($n) => $n % 2 === 0); // {2, 4, 6}
+set $evens = $nums->filter(fn($n) => $n % 2 == 0); // {2, 4, 6}
 
 $doubled = $evens->map(fn($n) => $n * 10); // {20, 40, 60}
 
 $sum = $doubled->reduce(fn($acc, $n) => $acc + $n, 0); // 120
 
-// 7. Streaming Native foreach Iteration
-foreach ($tags as $tag) {
+// 7. Streaming Native Iteration
+for ($tag in $tags) {
     // Visits each unique element exactly once
 }
-foreach ($tags as $index => $tag) {
+for ($index, $tag in $tags) {
     // Iterates with a 0-based sequence counter
 }
 ```
@@ -362,8 +362,8 @@ hashmap $other = ['a' => 1, 'b' => 2];
 $diffMap = $map->diff($other);           // Keys in $map not in $other
 $merged  = $map->merge($other);          // Combines maps into new instance
 
-// 8. Native foreach Iteration with Complex Keys
-foreach ($map as $key => $val) {
+// 8. Native Iteration with Complex Keys
+for ($key, $val in $map) {
     // $key yields the complex key directly (array, object, set, or scalar)!
 }
 ```
@@ -544,7 +544,7 @@ function processUniqueTags(set $tags): int {
     return $tags->count();
 }
 
-function processCoordinates(hashmap $coords): void {
+function processCoordinates(hashmap $coords) {
     // Accepts hashmap only
 }
 
@@ -674,7 +674,7 @@ Legacy `$_FILES` is **not supported** in RHP. In multi-part HTTP requests, uploa
 // Inspect uploaded file from incoming HTTP request ($_FILES is not supported)
 $uploaded = File::fromRequest('avatar');
 
-if ($uploaded !== null) {
+if ($uploaded != null) {
     // Read uploaded file metadata and contents
     string $tmpPath = $uploaded->path();
     string $origName = $uploaded->clientName();
@@ -762,7 +762,7 @@ $matched = Glob::match('/^[a-z]+$/', 'rhp');
 // 2. Lexical global variable scoping in functions
 $configCount = 10;
 
-function incrementConfig(): void {
+function incrementConfig() {
     global $configCount; // Scoped lexical global
     $configCount++;
 }
@@ -1323,7 +1323,7 @@ Time::setTestNow("2024-05-15 12:00:00");
 
 if (Time::hasTestNow()) {
     Time $mocked = Time::now();
-    assert($mocked->toDateString() === "2024-05-15");
+    assert($mocked->toDateString() == "2024-05-15");
 }
 
 // Reset mock fixture
@@ -1331,6 +1331,94 @@ Time::setTestNow(null);
 ```
 
 ---
+
+
+---
+
+## Duration Facade & Intervals (`Duration::*`, `CarbonInterval::*`)
+
+The `Duration` facade (with `CarbonInterval` supported as a direct alias) provides fluent interval arithmetic, ISO-8601 duration formatting, and human-readable time-span conversions with zero garbage collection overhead.
+
+### 1. Creating Durations & Interval Factories
+
+```php
+// Component factories (fluent chaining)
+Duration $interval = Duration::hours(2)->minutes(30);
+
+// Single unit constructors
+Duration $days = Duration::days(45);
+Duration $secs = Duration::seconds(90);
+
+// Explicit multidimensional construction (years, months, weeks, days, hours, minutes, seconds)
+Duration $exact = Duration::create(1, 2, 0, 3, 4, 5, 6);
+
+// Parsing ISO-8601 duration strings or natural language phrases
+Duration $iso = Duration::fromString("P1Y2M3DT4H5M6S");
+Duration $words = Duration::fromString("2 hours 30 minutes");
+
+// Cascade to normalize overflowed units (e.g. 90 minutes -> 1 hour 30 minutes)
+Duration $cascaded = Duration::minutes(90)->cascade();
+```
+
+### 2. Output & Human-Readable Representations
+
+```php
+Duration $d = Duration::hours(2)->minutes(30);
+
+string $spec = $d->spec();                   // "PT2H30M" (ISO 8601 specification string)
+string $words = $d->forHumans();             // "2 hours 30 minutes"
+string $short = $d->forHumans(["short" => true]); // "2h 30m"
+string $parts = Duration::days(45)->forHumans(["parts" => 1]); // "1 month"
+
+// Relative to now phrasing
+string $ago = Duration::days(3)->invert()->forHumans(["syntax" => Duration::DIFF_RELATIVE_TO_NOW]); // "3 days ago"
+
+// Custom formatting
+string $fmt = Duration::create(1, 2, 0, 3, 4, 5, 6)->format("%y years %m months"); // "1 years 2 months"
+```
+
+### 3. Duration Arithmetic & Comparisons
+
+```php
+Duration $a = Duration::hours(2);
+Duration $b = Duration::minutes(30);
+
+// Fluent arithmetic
+string $sum = $a->add($b)->spec();      // "PT2H30M"
+string $sub = $a->sub($b)->spec();      // "PT1H30M"
+Duration $half = $a->divide(2);         // 1 hour
+Duration $double = $b->times(2);        // 1 hour
+
+// Totals calculation
+float $totalHours = Duration::minutes(90)->total("hours"); // 1.5
+float $totalDays = Duration::months(1)->totalDays();       // 28.0 - 31.0 depending on context
+
+// Comparisons
+bool $isEqual = Duration::hours(1)->eq(Duration::minutes(60)); // true
+bool $isGreater = Duration::hours(3)->gt(Duration::hours(2));  // true
+bool $between = Duration::hours(2)->between(Duration::hours(1), Duration::hours(3)); // true
+bool $empty = Duration::seconds(0)->isEmpty(); // true
+```
+
+### 4. Integration with `Time` Facade
+
+`Duration` seamlessly interacts with `Time` instances for date-interval arithmetic:
+
+```php
+Time $start = Time::parse("2024-01-01 00:00:00");
+
+// Add / Subtract Durations directly on Time
+$start->add(Duration::days(2)->hours(3));
+string $added = $start->toDateTimeString(); // "2024-01-03 03:00:00"
+
+// Time::diff returns a rich Duration instance
+Time $a = Time::parse("2024-01-01 00:00:00");
+Time $b = Time::parse("2024-03-01 00:00:00");
+Duration $diff = $a->diff($b);
+
+string $isoDiff = $diff->spec();       // "P2M"
+string $humanDiff = $diff->forHumans(); // "2 months"
+```
 
 ## Uniq Facade & Unique Identifiers (`Uniq::*`)
 
@@ -1494,7 +1582,7 @@ string $rawContent = File::read('metrics.json');
 dict $data = json_decode($rawContent, true);
 
 list $activeUsers = $data->get('users')
-    ->filter(fn($u) => $u['is_active'] === true)
+    ->filter(fn($u) => $u['is_active'] == true)
     ->map(fn($u) => Str::slug($u['username']));
 
 Log::info("Found " + string($activeUsers->count()) + " active users");

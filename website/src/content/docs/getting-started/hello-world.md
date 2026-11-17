@@ -48,7 +48,7 @@ rhp run dev hello.rhp
 Output:
 ```text
 Output: hello-world-from-rhp-engine
-RHP Version: 0.1.0
+RHP Version: 0.2.0
 ```
 
 > **How it works:** Development Mode uses a direct tree-walking AST interpreter. It evaluates parse tree nodes directly in memory without emitting bytecode or waiting for JIT compilation, delivering cold startup times under 5 milliseconds.

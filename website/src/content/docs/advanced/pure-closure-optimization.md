@@ -113,7 +113,7 @@ class QueryBuilder {
         // Even though declared inside an instance method, this closure
         // does not use $this. RHP automatically elides $this!
         return function(int $status): bool {
-            return $status === 1;
+            return $status == 1;
         };
         // Result: PureNonCapturing (0 heap allocations, bare Cranelift function pointer)
     }

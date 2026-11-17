@@ -209,7 +209,7 @@ RHP supports standard mathematical operators with compile-time type validation:
 | `+\|` | **Saturating Addition** | `$a +\| $b` | Clamps result to `MIN` / `MAX` bound on overflow. |
 | `-` | **Subtraction** | `$a - $b` | Difference of operands (checked for underflow). |
 | `*` | **Multiplication** | `$a * $b` | Product of operands (checked for overflow). |
-| `/` | **Division** | `$a / $b` | Quotient of operands. Integer division truncates; division by zero traps. |
+| `/` | **Division** | `$a / $b` | Quotient of operands. Evaluates to `float`; assigning to `int` warns unless wrapped with `int()`. Division by zero traps. |
 | `%` | **Modulo** | `$a % $b` | Integer remainder of division. |
 | `**` | **Exponentiation** | `$a ** $b` | Base raised to exponent (**Right-associative**). |
 
@@ -487,7 +487,7 @@ When consecutive operator characters appear, RHP's lexer applies the **Maximal M
 function sum(int ...$values): int {}
 
 // Lexed as Range:
-foreach (1..5 as $i) {}
+for ($i in 1..5) {}
 
 // String concatenation uses '+' (dot operator is rejected):
 $label = "Item" + $idStr;

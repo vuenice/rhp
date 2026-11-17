@@ -39,7 +39,7 @@
   <path d="M144 120H164C170.6 120 176 125.4 176 132C176 138.1 171.5 143.1 165.6 143.9L177 160H167L157 144H152V160H144V120ZM152 127.6V136.4H163C165.7 136.4 167.8 134.3 167.8 131.6C167.8 128.9 165.7 127.6 163 127.6H152Z" fill="url(#accent)" />
 
   <text x="225" y="155" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="44" font-weight="800" letter-spacing="-1">RHP</text>
-  <text x="330" y="153" fill="#818cf8" font-family="Inter, sans-serif" font-size="20" font-weight="700" letter-spacing="2">v0.1.0-alpha</text>
+  <text x="330" y="153" fill="#818cf8" font-family="Inter, sans-serif" font-size="20" font-weight="700" letter-spacing="2">v0.2.0</text>
 
   <!-- Title & Subtitle -->
   <text x="120" y="270" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="58" font-weight="800" letter-spacing="-1.5">
