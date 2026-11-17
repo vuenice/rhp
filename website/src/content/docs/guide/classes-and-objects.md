@@ -69,13 +69,13 @@ Methods and properties can be invoked directly inside closures without manual bi
 
 ```php
 interface Loggable {
-    public function logMessage(string $message): void;
+    public function logMessage(string $message);
 }
 
 trait Timestampable {
     public string $createdAt;
 
-    public function touch(): void {
+    public function touch() {
         $this->createdAt = Sys::timestamp();
     }
 }
@@ -83,7 +83,7 @@ trait Timestampable {
 class AuditLog implements Loggable {
     use Timestampable;
 
-    public function logMessage(string $message): void {
+    public function logMessage(string $message) {
         Log::info("[Audit] " + $message);
     }
 }
@@ -137,19 +137,19 @@ To prevent silent typos and broken inheritance hierarchies, RHP fully enforces t
 
 ```php
 class BaseLogger {
-    public function log(string $msg): void {
+    public function log(string $msg) {
         print($msg);
     }
 }
 
 class FileLogger extends BaseLogger {
     #[\Override]
-    public function log(string $msg): void {
+    public function log(string $msg) {
         Log::info($msg);
     }
 
     #[\Override]
-    public function nonExistent(): void {
+    public function nonExistent() {
         // Compile Error: Method FileLogger::nonExistent() has '#[Override]' attribute 
         // but no matching parent or interface method was found.
     }
@@ -191,7 +191,7 @@ RHP does not reserve non-standard keywords like `open` or `sealed`. Words such a
 class FileManager {
     public function open(): bool { return true; }
     public function sealed(): bool { return false; }
-    public function override(): void {}
+    public function override() {}
 }
 ```
 
@@ -243,7 +243,7 @@ Anonymous classes participate fully in RHP's nominal type system. They can exten
 
 ```php
 interface LoggerInterface {
-    public function log(string $msg): void;
+    public function log(string $msg);
 }
 
 class BaseService {
@@ -253,7 +253,7 @@ class BaseService {
 }
 
 $mockService = new class extends BaseService implements LoggerInterface {
-    public function log(string $msg): void {
+    public function log(string $msg) {
         Log::info("[Mock] " + $msg);
     }
 };
@@ -376,7 +376,7 @@ If an object without an `__invoke()` method is called as a function, RHP throws 
 
 ## Object Iteration: `Traversable`, `IteratorAggregate`, & `Iterator`
 
-RHP supports standard object iteration interfaces, enabling custom collections and data domain objects to be looped over via `foreach`:
+RHP supports standard object iteration interfaces, enabling custom collections and data domain objects to be looped over via `for ($item in $collection)` (as well as `foreach`):
 
 ### 1. `IteratorAggregate`
 The simplest and most efficient way to make a class iterable is by implementing `IteratorAggregate` and returning a `Traversable` (such as `ArrayIterator`):
@@ -395,7 +395,7 @@ class OrderRepository implements IteratorAggregate {
 }
 
 $repo = new OrderRepository(['ORD-101', 'ORD-102', 'ORD-103']);
-foreach ($repo as $order) {
+for ($order in $repo) {
     print("Processing order: " + $order);
 }
 ```
@@ -413,7 +413,7 @@ class PagedCursor implements Iterator {
 
     public function __construct(private int $totalRecords) {}
 
-    public function rewind(): void {
+    public function rewind() {
         $this->position = 0;
     }
 
@@ -429,7 +429,7 @@ class PagedCursor implements Iterator {
         return $this->position;
     }
 
-    public function next(): void {
+    public function next() {
         $this->position++;
     }
 }
@@ -497,9 +497,9 @@ Available on **all** enums (both pure and backed). Returns a packed sequential l
 
 ```php
 $allPlans = PlanType::cases();
-// [$allPlans[0] === PlanType::Free, $allPlans[1] === PlanType::Pro, ...]
+// [$allPlans[0] == PlanType::Free, $allPlans[1] == PlanType::Pro, ...]
 
-foreach (SiteStatus::cases() as $case) {
+for ($case in SiteStatus::cases()) {
     print($case->name + " => " + $case->value + "\n");
 }
 
@@ -514,7 +514,7 @@ Available exclusively on **backed enums**. Maps a scalar value to its correspond
 $status = SiteStatus::from($request->status); // e.g. SiteStatus::Published
 
 $priority = Priority::from(2); // Priority::Medium
-$isMedium = ($priority === Priority::Medium); // true
+$isMedium = ($priority == Priority::Medium); // true
 ```
 
 * **Invalid Value Handling (`ValueError`):** If no matching case exists, `from()` raises a standard PHP-compatible `ValueError`:

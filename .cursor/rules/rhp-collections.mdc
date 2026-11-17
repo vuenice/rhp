@@ -35,7 +35,7 @@ $y[] = $y;
 print($x == $y); // true (finite comparison, zero crash)
 
 // In-place mutation across function boundaries via explicit &
-function addElement(list &$items): void {
+function addElement(list &$items) {
     $items[] = 99;
 }
 $list = [10];
@@ -43,7 +43,7 @@ addElement(&$list); // $list is now [10, 99]
 
 // Bidirectional graph nodes use Objects and Weak::to()
 class TreeNode {
-    public ?WeakReference $parent = null;
+    public WeakReference? $parent = null;
     public list $children = [];
 }
 ```

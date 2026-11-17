@@ -145,7 +145,7 @@ When a function genuinely needs to mutate a caller's collection in place, RHP us
 
 ```php
 // 1. Function explicitly declares an inout parameter with '&'
-function appendMetadata(list &$items, string $tag): void {
+function appendMetadata(list &$items, string $tag) {
     $items[] = $tag;
 }
 
@@ -179,12 +179,12 @@ class TreeNode {
         $this->id = $id;
     }
 
-    public function setParent(TreeNode $parent): void {
+    public function setParent(TreeNode $parent) {
         // Break the cycle using an explicit weak reference
         $this->parent = Weak::to($parent);
     }
 
-    public function addChild(TreeNode $child): void {
+    public function addChild(TreeNode $child) {
         $child->setParent($this);
         $this->children[] = $child;
     }

@@ -138,7 +138,7 @@ fn test_str_runes_and_bytes() {
         $byte_len = $str->byteLen();
         $reconstructed = Str::fromRunes($runes);
         $first_byte = Str::byteAt("ABC", 0);
-        $second_byte = "ABC"->byteAt(1);
+        $second_byte = string("ABC")->byteAt(1);
         $byte_str = Str::fromByte(65);
 
         return [

@@ -104,7 +104,7 @@ rhp --version
 
 Output:
 ```text
-rhp 0.1.0
+rhp 0.2.0
 ```
 
 Display CLI usage options:

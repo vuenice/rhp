@@ -66,6 +66,7 @@ FloatLiteral      ::= [0-9]+ ("_" [0-9]+)* "." [0-9]+ ("_" [0-9]+)* ([eE][+-]?[0
 SingleQuotedStr   ::= "'" ( [^'\\] | "\\" . )* "'"
 DoubleQuotedStr   ::= '"' ( [^"\\] | "\\" . )* '"'
 BacktickStr       ::= "`" ( [^`\\] | "\\" . )* "`"
+HeredocMarkdown   ::= "```" [a-zA-Z]* "\n" ( [^`\\] | "\\" . )* "\n```"
 ```
 
 > [!IMPORTANT]
@@ -92,7 +93,7 @@ Expressions are parsed in linear time $O(N)$ using a custom Pratt parser (Top-Do
 | **Additive & String** | `(75, 76)` | `+`, `-` | Left-to-right | Addition, subtraction, string concatenation (`+`) |
 | **Bitwise Shift** | `(70, 71)` | `<<`, `>>` | Left-to-right | Bitwise left and right shift |
 | **Relational Comparison** | `(65, 66)` | `<`, `<=`, `>`, `>=`, `<=>` | Left-to-right | Less, greater, spaceship comparison |
-| **Equality Check** | `(60, 61)` | `==`, `!=`, `===`, `!==`, `<>` | Left-to-right | Strict equivalence and identity |
+| **Equality Check** | `(60, 61)` | `==`, `!=` | Left-to-right | Strict equivalence (`===` and `!==` are removed; `==` is strict) |
 | **Bitwise AND** | `(55, 56)` | `&` | Left-to-right | Bitwise AND |
 | **Bitwise XOR** | `(50, 51)` | `^` | Left-to-right | Bitwise XOR |
 | **Bitwise OR** | `(45, 46)` | `\|` | Left-to-right | Bitwise OR |

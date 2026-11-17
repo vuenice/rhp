@@ -46,10 +46,16 @@ int $b = 3;
 int $sum  = $a + $b;   // 13
 int $diff = $a - $b;   // 7
 int $prod = $a * $b;   // 30
-int $div  = $a / $b;   // 3  (integer division — truncates)
+float $div = $a / $b;  // 3.3333333333333335 (division produces f64)
+int $intDiv = int($a / $b); // 3 (explicitly truncated with int())
 int $mod  = $a % $b;   // 1
 int $pow  = $a ** $b;  // 1000
 ```
+
+> [!TIP]
+> **Division Produces Float:**
+> In RHP, the `/` division operator produces an IEEE-754 `float` (`f64`). Storing the result of division directly into an `int`-typed variable emits a linter warning (`division-stored-in-int`). Wrap the quotient with `int(...)` (e.g. `int($a / $b)`) to explicitly truncate to an integer without a warning.
+
 
 ### Conversions & Fluent Instance Methods
 

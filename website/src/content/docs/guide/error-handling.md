@@ -133,7 +133,7 @@ Throwable (root interface)
 ```php
 class InsufficientFundsException extends Exception {}
 
-function transferFunds(Account $from, Account $to, float $amount): void {
+function transferFunds(Account $from, Account $to, float $amount) {
     if ($from->balance < $amount) {
         throw new InsufficientFundsException("Account {$from->id} has insufficient balance.");
     }

@@ -65,9 +65,9 @@ For backward compatibility with legacy codebases, standard PHP function invocati
 | `uasort($arr, $cb)` | `phpFun::uasort($arr, $cb)` | `Arr::uasort($arr, $cb)` |
 | `uksort($arr, $cb)` | `phpFun::uksort($arr, $cb)` | `Arr::uksort($arr, $cb)` |
 | `array_key_exists($k, $arr)` | `phpFun::array_key_exists($k, $arr)` | `Arr::has($arr, $k)` |
-| `in_array($needle, $haystack)` | `phpFun::in_array($needle, $haystack)` | `Arr::contains($haystack, $needle)` |
-| `array_keys($arr)` | `phpFun::array_keys($arr)` | `Arr::keys($arr)` |
-| `array_values($arr)` | `phpFun::array_values($arr)` | `Arr::values($arr)` |
+| `in_array($needle, $haystack)` | `phpFun::in_array($needle, $haystack)` | `$haystack->contains($needle)` |
+| `array_keys($arr)` | `phpFun::array_keys($arr)` | `$arr->keys()` |
+| `array_values($arr)` | `phpFun::array_values($arr)` | `$arr->values()` |
 | `array_slice($arr, $off, $len)` | `phpFun::array_slice(...)` | `Arr::slice($arr, $off, $len)` |
 | `array_reverse($arr)` | `phpFun::array_reverse($arr)` | `Arr::reverse($arr)` |
 | `strnatcmp($s1, $s2)` | `phpFun::strnatcmp($s1, $s2)` | `Str::natCompare($s1, $s2)` |

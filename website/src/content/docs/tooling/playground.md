@@ -17,7 +17,7 @@ Designed specifically after the workflow popularized by **[TweakPHP](https://git
       <div class="w-3 h-3 rounded-full bg-emerald-500/80"></div>
     </div>
     <span class="font-mono text-slate-300 font-medium">RHP Playground — Standalone & Connected Runner</span>
-    <span class="text-[10px] text-slate-500 font-mono">v0.1.0</span>
+    <span class="text-[10px] text-slate-500 font-mono">v0.2.0</span>
   </div>
   <img
     src="/playground/rhp-play.png"

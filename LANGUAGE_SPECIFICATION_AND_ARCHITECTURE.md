@@ -415,7 +415,7 @@ High-level file I/O interface supporting both synchronous fibers and non-blockin
 Session state management interface across requests:
 
 - **Key Methods:**
-  - `Session::get(?string $key = null, mixed $default = null)`: Reads a session variable, or returns all session data when called without arguments.
+  - `Session::get(string? $key = null, mixed $default = null)`: Reads a session variable, or returns all session data when called without arguments.
   - `Session::set(string $key, mixed $value)` / `Session::put(...)`: Stores a session variable.
   - `Session::has(string $key)`: Returns `true` if the session key exists and is non-null.
   - `Session::all()`: Returns a `dict` containing all active session entries.
@@ -427,7 +427,7 @@ Session state management interface across requests:
 HTTP cookie management interface:
 
 - **Key Methods:**
-  - `Cookie::get(?string $key = null, mixed $default = null)`: Reads a cookie value, or returns all cookies when called without arguments.
+  - `Cookie::get(string? $key = null, mixed $default = null)`: Reads a cookie value, or returns all cookies when called without arguments.
   - `Cookie::set(string $key, mixed $value, ...)` / `Cookie::put(...)`: Stores a cookie value (converted to string).
   - `Cookie::has(string $key)`: Checks whether a cookie is present.
   - `Cookie::all()`: Returns a `dict` of all active cookies.
@@ -439,7 +439,7 @@ HTTP cookie management interface:
 HTTP request inspection, parameter retrieval, and strict type casting:
 
 - **Key Methods:**
-  - `Request::get(?string $key = null, mixed $default = null)`: Reads a request parameter (query parameter or body payload), or returns all parameters when called without arguments.
+  - `Request::get(string? $key = null, mixed $default = null)`: Reads a request parameter (query parameter or body payload), or returns all parameters when called without arguments.
   - `Request::all()`: Returns a `dict` containing all active request parameters.
   - `Request::only(array|list|...string $keys)`: Filters and extracts only the specified keys. Supports both array lists `Request::only(['user', 'email'])` and variadic arguments `Request::only('user', 'email')`.
   - `Request::has(string $key)`: Checks if a request parameter exists.
@@ -498,17 +498,17 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
 
 - **W3C Distributed Trace Context:** Automatic extraction and injection of W3C `traceparent` (`00-{trace_id}-{span_id}-{flags}`) and `baggage` headers across incoming worker requests and outbound HTTP client calls.
 - **Hierarchical Span Lifecycle:**
-  - `Trace::startSpan(string $name, ?array $options = null)`: Starts a new active span with kind (`SERVER`, `CLIENT`, `INTERNAL`, `PRODUCER`, `CONSUMER`), attributes, and parent linking.
-  - `Trace::endSpan(?array $status = null)`: Closes the current active span, calculates nanosecond duration, and moves it to the completed spans store.
-  - `Trace::span(string $name, callable $fn, ?array $attributes = null)`: Helper closure wrapper that automatically starts a span, enters it as active, executes `$fn`, records uncaught exceptions or panics as semantic error events, sets status to `OK` or `ERROR`, and ends the span.
+  - `Trace::startSpan(string $name, array? $options = null)`: Starts a new active span with kind (`SERVER`, `CLIENT`, `INTERNAL`, `PRODUCER`, `CONSUMER`), attributes, and parent linking.
+  - `Trace::endSpan(array? $status = null)`: Closes the current active span, calculates nanosecond duration, and moves it to the completed spans store.
+  - `Trace::span(string $name, callable $fn, array? $attributes = null)`: Helper closure wrapper that automatically starts a span, enters it as active, executes `$fn`, records uncaught exceptions or panics as semantic error events, sets status to `OK` or `ERROR`, and ends the span.
   - `Trace::setAttribute(string $key, mixed $value)`: Associates string, numeric, boolean, or array attributes to the active span.
-  - `Trace::addEvent(string $name, ?array $attributes = null)`: Records a timestamped event with metadata on the active span.
-  - `Trace::recordException(string $type, string $message, ?string $stackTrace = null)`: Records a semantic exception event and marks the span status as `ERROR`.
+  - `Trace::addEvent(string $name, array? $attributes = null)`: Records a timestamped event with metadata on the active span.
+  - `Trace::recordException(string $type, string $message, string? $stackTrace = null)`: Records a semantic exception event and marks the span status as `ERROR`.
   - `Trace::traceId()`, `Trace::spanId()`, `Trace::parentSpanId()`, `Trace::isRecording()`: Contextual distributed ID inspection.
 - **High-Precision Metrics Engine:**
-  - `Trace::counter(string $name, float $delta = 1.0, ?array $attributes = null)`: Monotonically increasing or decreasable counters.
-  - `Trace::gauge(string $name, float $value, ?array $attributes = null)`: Instantaneous point-in-time value tracking (e.g. queue depth, memory usage).
-  - `Trace::histogram(string $name, float $value, ?array $attributes = null)`: High-precision distribution tracking computing count, sum, min, max, avg, and exact percentiles ($p50$, $p90$, $p95$, $p99$).
+  - `Trace::counter(string $name, float $delta = 1.0, array? $attributes = null)`: Monotonically increasing or decreasable counters.
+  - `Trace::gauge(string $name, float $value, array? $attributes = null)`: Instantaneous point-in-time value tracking (e.g. queue depth, memory usage).
+  - `Trace::histogram(string $name, float $value, array? $attributes = null)`: High-precision distribution tracking computing count, sum, min, max, avg, and exact percentiles ($p50$, $p90$, $p95$, $p99$).
   - `Trace::metricSummary(string $name)`: Returns a structured summary dict with calculated statistics and percentiles.
 - **OpenTelemetry Protocol (OTLP) Exporters:**
   - `Trace::exportOtlp()`: Canonical OTLP/HTTP JSON `/v1/traces` export.
@@ -527,7 +527,7 @@ Native Tier 1 static facades providing enterprise-grade, zero-overhead distribut
 Expressive path manipulation, path parsing, extension inspection, and filesystem pattern matching:
 
 - **Key Methods:**
-  - `Path::basename(string $path, ?string $ext = null): string`: Returns the trailing component (filename) of a path. If `$ext` is provided, any matching trailing suffix is stripped.
+  - `Path::basename(string $path, string? $ext = null): string`: Returns the trailing component (filename) of a path. If `$ext` is provided, any matching trailing suffix is stripped.
   - `Path::dirname(string $path, int $levels = 1): string`: Returns the parent directory name, traversing `$levels` upwards.
   - `Path::extname(string $path): string`: Returns the extension portion of a path including the leading dot (e.g. `".php"` or `".json"`), or empty string if no extension exists.
   - `Path::parse(string $path): dict`: Deconstructs a path into an associative dictionary containing `root`, `dir`, `base`, `ext`, and `name` properties:
@@ -569,10 +569,10 @@ High-performance binary data inspection, hexadecimal conversions, and cryptograp
 System environment, execution delays, and process intrinsics:
 
 - **Key Methods:**
-  - `Sys::usleep(int $microseconds): void`: Delays execution for the specified number of microseconds (canonical replacement for procedural `usleep()`).
+  - `Sys::usleep(int $microseconds)`: Delays execution for the specified number of microseconds (canonical replacement for procedural `usleep()`).
   - `Sys::sleep(int $seconds): int`: Delays execution for the specified number of seconds (canonical replacement for procedural `sleep()`).
-  - `Sys::osEnv(?string $key = null, mixed $default = null): mixed`: Retrieves host OS process environment variables (`std::env::var`). If `$key` is omitted, returns an associative array of all OS variables.
-  - `Sys::env(?string $key = null, mixed $default = null): mixed`: Retrieves variables from `.env` files located at the script (`index.rhp`) location or execution directory following Vite resolution hierarchy (`.env`, `.env.local`, `.env.[mode]`, `.env.[mode].local`). In dev mode, process restarts automatically on `.env` file changes (no in-memory hot reloading). If `$key` is omitted, returns an associative array of all loaded env variables.
+  - `Sys::osEnv(string? $key = null, mixed $default = null): mixed`: Retrieves host OS process environment variables (`std::env::var`). If `$key` is omitted, returns an associative array of all OS variables.
+  - `Sys::env(string? $key = null, mixed $default = null): mixed`: Retrieves variables from `.env` files located at the script (`index.rhp`) location or execution directory following Vite resolution hierarchy (`.env`, `.env.local`, `.env.[mode]`, `.env.[mode].local`). In dev mode, process restarts automatically on `.env` file changes (no in-memory hot reloading). If `$key` is omitted, returns an associative array of all loaded env variables.
   - `Sys::print(...)` / `Sys::echo(...)`: Native Rust-formatted standard output.
 
 ---
@@ -842,7 +842,7 @@ Inspired by [Carthage Software Mago](https://github.com/carthage-software/mago),
 #### 2. PER-CS Code Formatting Invariants
 - **4-Space Indentation:** All block nesting levels, function bodies, class declarations, and multi-line array literals strictly use 4 spaces. Hard tabs (`\t`) are normalized to 4 spaces.
 - **Brace Conventions:** K&R / 1TBS style for control flow blocks (`if`, `while`, `for`, `match`) and functions; PSR-12 class body alignment.
-- **Operator Spacing:** Single surrounding space for all binary and assignment operators (`+`, `-`, `*`, `/`, `===`, `!==`, `=>`, `=`).
+- **Operator Spacing:** Single surrounding space for all binary and assignment operators (`+`, `-`, `*`, `/`, `==`, `!=`, `=>`, `=`).
 - **Verbatim Literal Preservation:** Single-quoted, double-quoted, heredoc/nowdoc string literals, and comments (inline `//`, block `/* ... */`, and docblocks `/** ... */`) are preserved verbatim with exact byte ranges.
 
 #### 3. Automated Type Inference & Array Classification

@@ -160,7 +160,7 @@ final class MySlugger {
 use Rhp\MySlugger\MySlugger;
 
 $slug = MySlugger::slugify("Hello World RHP");
-if ($slug !== "hello-world-rhp") {
+if ($slug != "hello-world-rhp") {
     throw new \Exception("Test failed! Got: " + $slug);
 }
 
@@ -354,6 +354,12 @@ RHP's native packages use **Opaque Handles**:
 2. The RHP runtime receives a lightweight integer handle ID (`u64`).
 3. Subsequent operations pass this handle back to Rust. Rust looks up the connection in its global [`OpaqueHandleRegistry`](file:///home/yogesh/code/rhp/src/pkg/opaque_handle.rs) instantly.
 4. **Zero intermediate serialization:** Result documents are written directly into RHP's internal memory arena without intermediate JSON conversion.
+
+#### Fiber-Scoped Handles vs. Shared Process Driver Pools
+
+To prevent resource leaks across requests while allowing persistent connection pools:
+* **Fiber-Scoped Handles:** Handles opened within a worker request fiber are tagged with that fiber's unique ID. When the fiber completes or aborts, its request-scoped handles are automatically torn down and cleaned up.
+* **Persistent Process Pools in Shared Classes:** Connection pools created during application boot inside a `shared class` (or persistent parent process) are not tied to ephemeral fibers. They remain alive across worker requests, enabling zero-reconnect connection reuse across all worker threads.
 
 ---
 

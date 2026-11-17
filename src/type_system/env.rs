@@ -732,7 +732,15 @@ pub fn resolve_facade_static_call(
             "insert" | "update" | "delete" => Ok(RhpType::Future(Box::new(RhpType::Int))),
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
         },
-        "Log" => Ok(RhpType::Void),
+        "Log" => match method {
+            "history" | "getHistory" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
+            "channel" => Ok(RhpType::Class("LoggerChannel".to_string())),
+            "last" | "lastLog" => Ok(RhpType::Union(vec![
+                RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
+                RhpType::Null,
+            ])),
+            _ => Ok(RhpType::Void),
+        },
         "Sys" => match method {
             "print" | "echo" | "dd" | "dump" | "clearstatcache" | "clearStatCache" | "registerShutdownFunction" | "register_shutdown_function" | "usleep" => Ok(RhpType::Void),
             "print_r" => Ok(RhpType::Mixed),

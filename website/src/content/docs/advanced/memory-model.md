@@ -41,7 +41,7 @@ class Node {
     public WeakReference? $parent = null;
     public list $children;
 
-    public function setParent(Node $parent): void {
+    public function setParent(Node $parent) {
         $this->parent = Weak::to($parent);
     }
 }
@@ -75,7 +75,7 @@ Rather than using Zend Engine's monolithic `zend_array` (which incurs massive me
 - **Hardware AES-Accelerated Hashing (`ahash`):** Powered by `ahash::RandomState`, utilizing host CPU AES-NI instructions for 5x–10x faster key hashing than standard SipHash while remaining DOS-resistant.
 - **Dense Linear Storage:** Keys and values are stored in contiguous vectors indexed by a sparse hash table (`IndexMap`), achieving compact memory layout with near-zero pointer chasing.
 - **Strict Deterministic Ordering:** Iteration order strictly matches insertion order. Updating an existing key modifies its value in-place without altering its slot position in the iteration order.
-- **Zero-Allocation Streaming Iteration:** `foreach ($dict as $key => $val)` iterates directly across the underlying slice by index cursor, allocating **zero temporary vectors or key-value tuples**.
+- **Zero-Allocation Streaming Iteration:** `for ($key, $val in $dict)` iterates directly across the underlying slice by index cursor, allocating **zero temporary vectors or key-value tuples**.
 
 ### 3. `set`: `Rc<IndexSet<Key, ahash::RandomState>>`
 - **Unique Value Buffer:** Backed by `IndexSet` with `ahash::RandomState` for $O(1)$ membership checks, deduplication, and mathematical set operations (`diff`, `intersect`, `union`).
