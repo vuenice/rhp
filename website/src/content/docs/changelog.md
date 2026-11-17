@@ -9,9 +9,9 @@ order: 2
 
 - Continuous optimizations and performance benchmarks.
 
-## v0.2.0 (November 2026)
+## v0.2.0-alpha.1 (November 2026)
 
-The v0.2.0 release delivers major performance, runtime, and ecosystem additions:
+The v0.2.0-alpha.1 release delivers major performance, runtime, and ecosystem additions:
 
 ### Highlights:
 - **Rune Type & Text/Byte Separation:**

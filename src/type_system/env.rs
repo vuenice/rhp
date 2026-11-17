@@ -733,8 +733,12 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
         },
         "Log" => match method {
-            "history" | "getHistory" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
             "channel" => Ok(RhpType::Class("LoggerChannel".to_string())),
+            "fake" => Ok(RhpType::Class("TestLogHandler".to_string())),
+            "isEnabled" | "is_enabled" | "has" => Ok(RhpType::Bool),
+            "getLevel" | "get_level" => Ok(RhpType::String),
+            "count" => Ok(RhpType::Int),
+            "history" | "getHistory" => Ok(RhpType::Collection(CollectionSubtype::List(Box::new(RhpType::Mixed)))),
             "last" | "lastLog" => Ok(RhpType::Union(vec![
                 RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed))),
                 RhpType::Null,
