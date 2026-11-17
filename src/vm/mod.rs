@@ -27,6 +27,7 @@ pub mod facade;
 pub mod fiber;
 pub mod format;
 pub mod html;
+pub mod log;
 pub mod memory;
 pub mod mime;
 pub mod parent_process;
@@ -63,7 +64,9 @@ pub use facade::{
     has_runtime_closure_macro, has_tier2_plugin, init_cookie_data, init_request_params, init_session_data,
     parse_json_value, php_value_is_empty, register_runtime_closure_macro, register_tier2_plugin, register_tier2_plugin_handler,
     set_exit_hook, clear_stat_cache, stat_cache_cleared_count, get_disk_space, DiskSpaceMetric, FacadeResult, LogRecord, PluginFacade, Tier2PluginHandler,
+    get_active_request_id, set_active_request_id,
 };
+pub use log::{LogHandler, LogLevel, LogRegistry, StdoutLogHandler, TestLogHandler};
 pub use uniq::dispatch_uniq;
 pub use fiber::{
     current_fiber_id, current_fiber_name, current_fiber_state, current_fiber_stats, dispatch_blocking_native, enter_fiber,

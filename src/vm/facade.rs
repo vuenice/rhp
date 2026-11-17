@@ -138,40 +138,10 @@ pub fn clear_tier2_plugins() {
     FacadeRegistry::global().clear_tier2();
 }
 
-/// Structured log record captured by the centralized `Log` facade.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogRecord {
-    pub level: String,
-    pub message: String,
-    pub context: Option<PhpValue>,
-    pub channel: String,
-}
-
-thread_local! {
-    static LOG_HISTORY: RefCell<Vec<LogRecord>> = RefCell::new(Vec::new());
-}
-
-/// Record a structured log entry into the global log buffer.
-pub fn append_log(level: &str, message: &str, context: Option<PhpValue>, channel: &str) {
-    LOG_HISTORY.with(|cell| {
-        cell.borrow_mut().push(LogRecord {
-            level: level.to_string(),
-            message: message.to_string(),
-            context,
-            channel: channel.to_string(),
-        });
-    });
-}
-
-/// Retrieve all structured log records.
-pub fn get_recorded_logs() -> Vec<LogRecord> {
-    LOG_HISTORY.with(|cell| cell.borrow().clone())
-}
-
-/// Clear structured log history (for test isolation).
-pub fn clear_log_history() {
-    LOG_HISTORY.with(|cell| cell.borrow_mut().clear());
-}
+pub use crate::vm::log::{
+    append_log, clear_log_history, get_recorded_logs, LogHandler, LogLevel, LogRecord,
+    LogRegistry, StdoutLogHandler, TestLogHandler,
+};
 
 thread_local! {
     /// Thread-local runtime closure macro registry for dynamic facade macros (`Arr::macro(...)`, etc.).
@@ -272,6 +242,44 @@ pub fn init_request_server(server: impl IntoIterator<Item = (String, String)>) {
         }
     });
 }
+
+/// Retrieve the current request ID if one is active (from fiber local, request headers, or server vars).
+pub fn get_active_request_id() -> Option<String> {
+    if let Some(val) = crate::vm::fiber::get_fiber_local("request_id") {
+        return Some(val.to_php_string());
+    }
+    let from_headers = REQUEST_HEADERS.with(|cell| {
+        let map = cell.borrow();
+        map.get("x-request-id")
+            .or_else(|| map.get("X-Request-Id"))
+            .or_else(|| map.get("x-correlation-id"))
+            .or_else(|| map.get("X-Correlation-Id"))
+            .cloned()
+    });
+    if from_headers.is_some() {
+        return from_headers;
+    }
+    REQUEST_SERVER.with(|cell| {
+        let map = cell.borrow();
+        map.get("REQUEST_ID")
+            .or_else(|| map.get("HTTP_X_REQUEST_ID"))
+            .or_else(|| map.get("HTTP_X_CORRELATION_ID"))
+            .cloned()
+    })
+}
+
+/// Set active request ID for current fiber, request headers, and server variables.
+pub fn set_active_request_id(id: impl Into<String>) {
+    let s = id.into();
+    crate::vm::fiber::set_fiber_local("request_id", PhpValue::string(&s));
+    REQUEST_HEADERS.with(|cell| {
+        cell.borrow_mut().insert("x-request-id".to_string(), s.clone());
+    });
+    REQUEST_SERVER.with(|cell| {
+        cell.borrow_mut().insert("REQUEST_ID".to_string(), s);
+    });
+}
+
 
 /// Initialize or replace current request parameters.
 /// All request values are normalized to string values by default!
@@ -570,7 +578,16 @@ pub fn dispatch_facade_call(
         "AFile" => dispatch_afile(method, args),
         "HTTP" | "Http" => dispatch_http(method, args),
         "AHTTP" | "AHttp" => dispatch_ahttp(method, args),
-        "Log" => dispatch_log(method, args),
+        "Log" => {
+            if has_tier2_plugin("Log") {
+                if let Ok(g) = get_tier2_plugins().read() {
+                    if let Some(handler) = g.get("Log") {
+                        return handler(method, args, span);
+                    }
+                }
+            }
+            dispatch_log(method, args)
+        }
         "DB" => dispatch_db(method, args),
         "ADB" => dispatch_adb(method, args),
         "Int" => dispatch_int(method, args),
@@ -5015,61 +5032,9 @@ fn dispatch_ahttp(method: &str, args: &[PhpValue]) -> FacadeResult {
 }
 
 fn dispatch_log(method: &str, args: &[PhpValue]) -> FacadeResult {
-    let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-    let ctx = args.get(1).cloned();
-    match method {
-        "info" | "error" | "debug" | "warning" | "warn" | "notice" | "alert" | "critical"
-        | "emergency" => {
-            let lvl = if method == "warn" { "warning" } else { method };
-            append_log(lvl, &msg, ctx, "default");
-            Ok(PhpValue::Null)
-        }
-        "channel" => {
-            let ch = get_arg_str(args, 0, "Log::channel")?;
-            let mut obj = VmObject::new("LoggerChannel");
-            obj.set_property("channel", PhpValue::string(ch));
-            Ok(PhpValue::object(obj))
-        }
-        "history" | "getHistory" => {
-            let logs = get_recorded_logs();
-            let mut list = Vec::with_capacity(logs.len());
-            for entry in logs {
-                let mut dict = Vec::new();
-                dict.push(("level".to_string(), PhpValue::string(entry.level)));
-                dict.push(("message".to_string(), PhpValue::string(entry.message)));
-                dict.push(("channel".to_string(), PhpValue::string(entry.channel)));
-                if let Some(ctx_val) = entry.context {
-                    dict.push(("context".to_string(), ctx_val));
-                }
-                list.push(PhpValue::dict(dict));
-            }
-            Ok(PhpValue::list(list))
-        }
-        "clearHistory" | "clear" => {
-            clear_log_history();
-            Ok(PhpValue::Null)
-        }
-        "last" | "lastLog" => {
-            let logs = get_recorded_logs();
-            if let Some(last) = logs.last() {
-                let mut dict = Vec::new();
-                dict.push(("level".to_string(), PhpValue::string(last.level.clone())));
-                dict.push(("message".to_string(), PhpValue::string(last.message.clone())));
-                dict.push(("channel".to_string(), PhpValue::string(last.channel.clone())));
-                if let Some(ref ctx_val) = last.context {
-                    dict.push(("context".to_string(), ctx_val.clone()));
-                }
-                Ok(PhpValue::dict(dict))
-            } else {
-                Ok(PhpValue::Null)
-            }
-        }
-        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
-            facade: "Log".to_string(),
-            method: method.to_string(),
-        }),
-    }
+    crate::vm::log::dispatch_log(method, args).map_err(|e| e.kind)
 }
+
 
 fn dispatch_db(method: &str, args: &[PhpValue]) -> FacadeResult {
     let span_name = format!("DB::{}", method);

@@ -5601,6 +5601,39 @@ impl VM {
             }
         }
 
+        if facade == "Log" {
+            if matches!(method, "debug" | "info" | "notice" | "warn" | "warning" | "error" | "critical" | "alert" | "emergency" | "log") {
+                if let Some(user_handler) = crate::vm::log::get_userland_handler("default") {
+                    let lvl_str = if method == "log" {
+                        args.first().map(|v| v.to_php_string()).unwrap_or_default()
+                    } else {
+                        method.to_string()
+                    };
+                    let level = crate::vm::log::LogLevel::parse(&lvl_str).unwrap_or(crate::vm::log::LogLevel::Info);
+                    if !crate::vm::log::LogRegistry::global().is_enabled(level, "default") {
+                        return Ok(PhpValue::Null);
+                    }
+                    let (msg, ctx) = if method == "log" {
+                        (args.get(1).map(|v| v.to_php_string()).unwrap_or_default(), args.get(2).cloned())
+                    } else {
+                        (args.first().map(|v| v.to_php_string()).unwrap_or_default(), args.get(1).cloned())
+                    };
+                    let record = crate::vm::log::build_record(level, msg, ctx, "default".to_string());
+                    let rec_val = record.to_php_value();
+                    match user_handler {
+                        PhpValue::Closure(c) => {
+                            self.invoke_closure_sync(&c, vec![rec_val], span)?;
+                        }
+                        PhpValue::Object(o) => {
+                            self.invoke_method_sync(PhpValue::Object(o), "handle", vec![rec_val], span)?;
+                        }
+                        _ => {}
+                    }
+                    return Ok(PhpValue::Null);
+                }
+            }
+        }
+
         dispatch_facade_call(facade, method, args, span)
     }
 
@@ -10217,8 +10250,7 @@ impl VM {
                 iter_obj.set_property("cursor", PhpValue::Int(0));
                 Ok(PhpValue::object(iter_obj))
             }
-            ("LoggerChannel", "info" | "error" | "debug" | "warning" | "warn" | "notice"
-            | "alert" | "critical" | "emergency") => {
+            ("LoggerChannel", method) => {
                 let ch = if let PhpValue::Object(o) = receiver {
                     o.borrow()
                         .get_property("channel")
@@ -10227,11 +10259,40 @@ impl VM {
                 } else {
                     "default".to_string()
                 };
-                let msg = args.first().map(|v| v.to_php_string()).unwrap_or_default();
-                let ctx = args.get(1).cloned();
-                let lvl = if method == "warn" { "warning" } else { method };
-                crate::vm::facade::append_log(lvl, &msg, ctx, &ch);
-                Ok(PhpValue::Null)
+                if matches!(method, "debug" | "info" | "notice" | "warn" | "warning" | "error" | "critical" | "alert" | "emergency" | "log") {
+                    if let Some(user_handler) = crate::vm::log::get_userland_handler(&ch) {
+                        let lvl_str = if method == "log" {
+                            args.first().map(|v| v.to_php_string()).unwrap_or_default()
+                        } else {
+                            method.to_string()
+                        };
+                        let level = crate::vm::log::LogLevel::parse(&lvl_str).unwrap_or(crate::vm::log::LogLevel::Info);
+                        if !crate::vm::log::LogRegistry::global().is_enabled(level, &ch) {
+                            return Ok(PhpValue::Null);
+                        }
+                        let (msg, ctx) = if method == "log" {
+                            (args.get(1).map(|v| v.to_php_string()).unwrap_or_default(), args.get(2).cloned())
+                        } else {
+                            (args.first().map(|v| v.to_php_string()).unwrap_or_default(), args.get(1).cloned())
+                        };
+                        let record = crate::vm::log::build_record(level, msg, ctx, ch);
+                        let rec_val = record.to_php_value();
+                        match user_handler {
+                            PhpValue::Closure(c) => {
+                                self.invoke_closure_sync(&c, vec![rec_val], span)?;
+                            }
+                            PhpValue::Object(o) => {
+                                self.invoke_method_sync(PhpValue::Object(o), "handle", vec![rec_val], span)?;
+                            }
+                            _ => {}
+                        }
+                        return Ok(PhpValue::Null);
+                    }
+                }
+                crate::vm::log::dispatch_channel_method(&ch, method, args)
+            }
+            ("TestLogHandler", method) => {
+                crate::vm::log::dispatch_test_handler_method(method, args)
             }
             ("Image", "resize" | "crop") => Ok(receiver.clone()),
             ("Image", "save") => Ok(PhpValue::Bool(true)),
