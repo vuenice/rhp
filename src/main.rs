@@ -39,9 +39,15 @@ fn print_help() {
             "    update [PACKAGE]                 Update dependencies within version constraints\n",
             "    init [NAME] [OPTIONS]            Initialize a new rhp.toml manifest (--type=rhp|native-rust|wasm|hybrid)\n",
             "    list                             List installed dependencies\n\n",
+            "TEMPLATE ENGINE (RADE):\n",
+            "    view <cache|clear|compile>       Manage or pre-compile templates (.rade.rhp / .rade)\n",
+            "    view:cache [DIR]                 Recursively pre-compile all views ahead of time\n",
+            "    view:clear                       Clear all cached compiled view files\n\n",
             "ONE-TIME SCRIPT EXECUTION:\n",
             "    rhp ./script.rhp [OPTIONS]       Execute script directly in Production Mode (file must end with .rhp)\n\n",
             "COMPANION TOOLS:\n",
+            "    rhpm                             RHP Process Manager CLI (PM2-style supervisor)\n",
+            "    rade                             RHP Rade template engine standalone debugging CLI\n",
             "    rhp-play                         Launch the interactive desktop RHP Playground GUI\n\n",
             "OPTIONS for 'dev' and 'build':\n",
             "    --file <PATH>, -f <PATH>         Script file to execute (defaults to 'index.rhp' in current working directory)\n",
@@ -196,6 +202,22 @@ fn main() {
                 }
             }
         }
+        "view" | "views" => {
+            handle_view_cli(&args[2..]);
+        }
+        "view:cache" => {
+            let mut sub = vec!["cache".to_string()];
+            sub.extend_from_slice(&args[2..]);
+            handle_view_cli(&sub);
+        }
+        "view:clear" => {
+            let mut sub = vec!["clear".to_string()];
+            sub.extend_from_slice(&args[2..]);
+            handle_view_cli(&sub);
+        }
+        "rade" => {
+            handle_view_cli(&args[2..]);
+        }
         "run" => {
             if args.len() < 3 {
                 handle_run_script(&args[2..], RunMode::Build { jit_enabled: true, opt_level: 2 });
@@ -204,6 +226,9 @@ fn main() {
             match args[2].as_str() {
                 "playground" | "play" | "ui" | "gui" => {
                     print_playground_hint();
+                }
+                "view" | "views" | "rade" => {
+                    handle_view_cli(&args[3..]);
                 }
                 "migrate" | "migrate-php" | "migrate_php" | "upgrade-php" | "upgrade_php" => {
                     handle_run_migrate(&args[3..]);
@@ -237,6 +262,113 @@ fn main() {
         }
         cmd => {
             eprintln!("Error: Unknown command '{}'. Run 'rhp --help' for usage.", cmd);
+            process::exit(1);
+        }
+    }
+}
+
+/// Handle `rhp view <cache|clear|compile> [OPTIONS]`
+fn handle_view_cli(sub_args: &[String]) {
+    if sub_args.is_empty() || sub_args[0] == "-h" || sub_args[0] == "--help" || sub_args[0] == "help" {
+        println!(
+            concat!(
+                "RHP View & Template Engine (Rade):\n\n",
+                "USAGE:\n",
+                "    rhp view <COMMAND> [OPTIONS]\n\n",
+                "COMMANDS:\n",
+                "    cache [VIEWS_DIR] [STORAGE_DIR]  Recursively pre-compile all .rade.rhp / .rade templates\n",
+                "    clear [STORAGE_DIR]              Clear all cached compiled .rhp view files\n",
+                "    compile <FILE> [-o <OUTPUT>]     Compile a single template file and output RHP code\n\n",
+                "OPTIONS:\n",
+                "    -h, --help                       Show this help message\n"
+            )
+        );
+        return;
+    }
+
+    match sub_args[0].as_str() {
+        "cache" => {
+            let views_dir = sub_args.get(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(rhp::rade::runtime::default_views_dir);
+            let storage_dir = sub_args.get(2)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(rhp::rade::runtime::default_storage_dir);
+
+            match rhp::rade::runtime::cache_views(&views_dir, &storage_dir) {
+                Ok(count) => {
+                    println!("Successfully pre-compiled {} view(s) from '{}' into '{}'.", count, views_dir.display(), storage_dir.display());
+                }
+                Err(e) => {
+                    eprintln!("Error caching views: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        "clear" => {
+            let storage_dir = sub_args.get(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(rhp::rade::runtime::default_storage_dir);
+
+            match rhp::rade::runtime::clear_cache(&storage_dir) {
+                Ok(count) => {
+                    println!("Cleared {} cached view file(s) from '{}'.", count, storage_dir.display());
+                }
+                Err(e) => {
+                    eprintln!("Error clearing view cache: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        "compile" => {
+            if sub_args.len() < 2 {
+                eprintln!("Error: Missing template file to compile. Usage: rhp view compile <file.rade.rhp> [-o <output.rhp>]");
+                process::exit(1);
+            }
+            let file_path = &sub_args[1];
+            let content = match std::fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error reading file '{}': {}", file_path, e);
+                    process::exit(1);
+                }
+            };
+            let compiled = match rhp::rade::compile_to_rhp(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Compilation error in '{}': {}", file_path, e);
+                    process::exit(1);
+                }
+            };
+
+            let mut output_file: Option<&str> = None;
+            let mut i = 2;
+            while i < sub_args.len() {
+                if (sub_args[i] == "-o" || sub_args[i] == "--output") && i + 1 < sub_args.len() {
+                    output_file = Some(&sub_args[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+
+            if let Some(out_path) = output_file {
+                if let Some(parent) = std::path::Path::new(out_path).parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                if let Err(e) = std::fs::write(out_path, &compiled) {
+                    eprintln!("Error writing output file '{}': {}", out_path, e);
+                    process::exit(1);
+                }
+                println!("Compiled '{}' -> '{}'.", file_path, out_path);
+            } else {
+                println!("{}", compiled);
+            }
+        }
+        other => {
+            eprintln!("Error: Unknown view command '{}'. Run 'rhp view --help' for usage.", other);
             process::exit(1);
         }
     }

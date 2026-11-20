@@ -9,3 +9,5 @@ website/.astro/
 dist/
 config.bat
 node_modules
+.rhp/
+/rade/

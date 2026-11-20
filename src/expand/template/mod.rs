@@ -11,7 +11,7 @@ use crate::expand::context::ExpandCtx;
 use crate::expand::registry::ExpanderRegistry;
 use crate::lexer::span::Span;
 
-/// Parse and compile a template source string (.rhp.html, .blade.rhp) into a complete RHP AST Program.
+/// Parse and compile a template source string (.rhp.html, .rade.rhp) into a complete RHP AST Program.
 pub fn compile_template(
     source: &str,
     file_id: usize,

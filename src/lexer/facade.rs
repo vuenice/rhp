@@ -148,6 +148,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Static HTML encoding, decoding, entity transformation, and tag stripping facade (specialChars, stripTags, entities, specialCharsDecode, entityDecode)",
     ),
     FacadeInfo::native(
+        "View",
+        "RHP Blade/Rade templating engine facade (render, make, exists, cache, clearCache)",
+    ),
+    FacadeInfo::native(
+        "Rade",
+        "RHP Blade/Rade templating engine facade (render, compile, cache, clear)",
+    ),
+    FacadeInfo::native(
         "Url",
         "URL parsing, query string construction, base64 encoding, and route inspection facade (parseUrl, httpBuildQuery, base64Encode, base64Decode, encode, decode)",
     ),
@@ -928,6 +936,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_facade: "phpFun",
         rhp_method: "json_decode",
         rhp_signature: "phpFun::json_decode(string $json, bool $associative = true): mixed",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "view",
+        rhp_facade: "View",
+        rhp_method: "render",
+        rhp_signature: "View::render(string $view, array $data = []): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "render",
+        rhp_facade: "View",
+        rhp_method: "renderString",
+        rhp_signature: "View::renderString(string $template, array $data = []): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "round",
@@ -1721,6 +1741,8 @@ impl FacadeRegistry {
             "path" => "Path",
             "socket" => "Socket",
             "binary" => "Binary",
+            "view" => "View",
+            "rade" => "Rade",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -1782,7 +1804,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "response" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
-            | "time" | "carbon" | "path" | "socket" | "binary"
+            | "time" | "carbon" | "path" | "socket" | "binary" | "view" | "rade"
     )
 }
 

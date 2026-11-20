@@ -617,6 +617,7 @@ pub fn dispatch_facade_call(
         "Socket" => dispatch_socket(method, args),
         "Binary" => dispatch_binary(method, args),
         "WebSocket" | "Ws" => dispatch_websocket(method, args),
+        "View" | "Rade" => dispatch_view(method, args),
         _ => {
             if let Some((in_proc_fn, is_blocking)) =
                 crate::vm::rust_loader::get_in_process_native_function(facade, method)
@@ -7298,6 +7299,8 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
         "chmod" => dispatch_file("chmod", args),
         "chown" => dispatch_file("chown", args),
         "touch" => dispatch_file("touch", args),
+        "view" => dispatch_view("render", args),
+        "render" => dispatch_view("renderString", args),
         "parse_mode" => dispatch_file("parseMode", args),
         "number_format" => dispatch_float("format", args),
         "pathinfo" => {
@@ -9472,6 +9475,144 @@ pub fn dispatch_websocket(method: &str, args: &[PhpValue]) -> FacadeResult {
 
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Ws".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+/// Formats a `PhpValue` into valid RHP source code literal representation for template variable injection.
+pub fn php_value_to_rhp_code(val: &PhpValue) -> String {
+    match val {
+        PhpValue::Null => "null".to_string(),
+        PhpValue::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        PhpValue::Int(i) => format!("{i}"),
+        PhpValue::Float(f) => {
+            let s = format!("{f}");
+            if !s.contains('.') { format!("{s}.0") } else { s }
+        }
+        PhpValue::String(s) => format!("\"{}\"", crate::rade::compiler::codegen::escape_rhp_string(s)),
+        PhpValue::Bytes(b) => format!("\"{}\"", crate::rade::compiler::codegen::escape_rhp_string(&String::from_utf8_lossy(b))),
+        PhpValue::Rune(c) => format!("'{}'", c),
+        PhpValue::EmptyArray => "[]".to_string(),
+        PhpValue::List(l) => {
+            let items: Vec<String> = l.borrow().iter().map(php_value_to_rhp_code).collect();
+            format!("[{}]", items.join(", "))
+        }
+        PhpValue::Array(a) => {
+            let items: Vec<String> = a.borrow().iter().map(php_value_to_rhp_code).collect();
+            format!("[{}]", items.join(", "))
+        }
+        PhpValue::Dict(d) => {
+            let mut entries = Vec::new();
+            for (k, v) in d.borrow().iter() {
+                entries.push(format!("\"{}\" => {}", crate::rade::compiler::codegen::escape_rhp_string(k), php_value_to_rhp_code(v)));
+            }
+            format!("[{}]", entries.join(", "))
+        }
+        other => format!("\"{}\"", crate::rade::compiler::codegen::escape_rhp_string(&other.to_php_string())),
+    }
+}
+
+/// Rade template engine dispatcher supporting `view()`, `render()`, `View::render()`, `View::exists()`, etc.
+pub fn dispatch_view(method: &str, args: &[PhpValue]) -> FacadeResult {
+    let views_dir = crate::rade::runtime::default_views_dir();
+    let storage_dir = crate::rade::runtime::default_storage_dir();
+
+    let is_prod = std::env::var("RHP_ENV").map(|v| v == "production").unwrap_or(false);
+    let mode = if is_prod {
+        crate::rade::runtime::ViewMode::Production
+    } else {
+        crate::rade::runtime::ViewMode::Development
+    };
+
+    let engine = crate::rade::runtime::ViewEngine::new(views_dir.clone(), storage_dir.clone(), mode);
+
+    match method {
+        "render" | "make" => {
+            let view_name = get_arg_str(args, 0, "view")?;
+            let data_arg = args.get(1);
+
+            let mut var_bindings = String::new();
+            if let Some(data) = data_arg {
+                var_bindings.push_str(&format!("$__data = {};\n", php_value_to_rhp_code(data)));
+                for (k, v) in extract_dict_elements(data) {
+                    if !k.is_empty()
+                        && (k.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+                        && k.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        var_bindings.push_str(&format!("${} = {};\n", k, php_value_to_rhp_code(&v)));
+                    }
+                }
+            } else {
+                var_bindings.push_str("$__data = [];\n");
+            }
+
+            let compiled = engine.load(&view_name).map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Error loading view '{view_name}': {e}"),
+            })?;
+
+            let full_source = format!("{}\n{}", var_bindings, compiled);
+            let result = crate::vm::run_source(&full_source).map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Runtime error rendering view '{view_name}': {e}"),
+            })?;
+
+            Ok(result)
+        }
+        "renderString" | "render_string" => {
+            let template_str = get_arg_str(args, 0, "render")?;
+            let data_arg = args.get(1);
+
+            let mut var_bindings = String::new();
+            if let Some(data) = data_arg {
+                var_bindings.push_str(&format!("$__data = {};\n", php_value_to_rhp_code(data)));
+                for (k, v) in extract_dict_elements(data) {
+                    if !k.is_empty()
+                        && (k.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+                        && k.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        var_bindings.push_str(&format!("${} = {};\n", k, php_value_to_rhp_code(&v)));
+                    }
+                }
+            } else {
+                var_bindings.push_str("$__data = [];\n");
+            }
+
+            let compiled = crate::rade::compile_to_rhp(&template_str).map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Template compilation error: {e}"),
+            })?;
+
+            let full_source = format!("{}\n{}", var_bindings, compiled);
+            let result = crate::vm::run_source(&full_source).map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Runtime error rendering template string: {e}"),
+            })?;
+
+            Ok(result)
+        }
+        "exists" => {
+            let view_name = get_arg_str(args, 0, "View::exists")?;
+            Ok(PhpValue::Bool(engine.resolve_view_path(&view_name).is_ok()))
+        }
+        "compile" => {
+            let template_str = get_arg_str(args, 0, "Rade::compile")?;
+            let compiled = crate::rade::compile_to_rhp(&template_str).map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Template compilation error: {e}"),
+            })?;
+            Ok(PhpValue::string(compiled))
+        }
+        "clearCache" | "clear_cache" => {
+            let count = engine.clear().map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Error clearing view cache: {e}"),
+            })?;
+            Ok(PhpValue::Int(count as i64))
+        }
+        "cache" => {
+            let count = engine.cache_all().map_err(|e| RuntimeErrorKind::ValueError {
+                message: format!("Error caching views: {e}"),
+            })?;
+            Ok(PhpValue::Int(count as i64))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "View".to_string(),
             method: method.to_string(),
         }),
     }

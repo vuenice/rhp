@@ -56,7 +56,7 @@ pub fn expand_program(
     engine.expand_program(program)
 }
 
-/// Compile and expand a template source file (.rhp.html, .blade.rhp) into an RHP AST program.
+/// Compile and expand a template source file (.rhp.html, .rade.rhp) into an RHP AST program.
 pub fn expand_template(
     source: &str,
     file_id: usize,

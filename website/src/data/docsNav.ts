@@ -39,6 +39,7 @@ export const docsNavigation: DocNavSection[] = [
       item("Error Handling", "guide/error-handling"),
       item("Modules and Imports", "guide/modules-and-imports"),
       item("Concurrency & Async", "guide/concurrency-async"),
+      item("Template Engine (Rade)", "guide/template-engine-rade"),
       item("Standard Library Overview", "guide/standard-library"),
       item("Observability & OpenTelemetry", "guide/observability-opentelemetry"),
     ]

@@ -684,6 +684,12 @@ pub fn resolve_facade_static_call(
             | "clean" | "tag" | "attributes" => Ok(RhpType::String),
             _ => Ok(RhpType::Mixed),
         },
+        "View" | "Rade" => match method {
+            "render" | "make" | "renderString" | "render_string" | "compile" => Ok(RhpType::String),
+            "exists" => Ok(RhpType::Bool),
+            "cache" | "clear" | "clearCache" | "clear_cache" => Ok(RhpType::Int),
+            _ => Ok(RhpType::Mixed),
+        },
         "Session" => match method {
             "has" => Ok(RhpType::Bool),
             "set" | "put" => Ok(RhpType::Mixed),

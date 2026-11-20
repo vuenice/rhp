@@ -1828,6 +1828,38 @@ impl<'a> IrLowerer<'a> {
                         self.sync_ref_globals(b, args, expr.span)?;
                         return Ok(dst);
                     }
+                    if clean_fn.eq_ignore_ascii_case("view") && !self.module.function_index.contains_key(clean_fn) {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("View");
+                        let method_const = b.intern_string("render");
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
+                    if clean_fn.eq_ignore_ascii_case("render") && !self.module.function_index.contains_key(clean_fn) {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("View");
+                        let method_const = b.intern_string("renderString");
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
 
                     let arg_count = self.evaluate_and_push_args(b, args)?;
                     let func_name_const = b.intern_string(ident.name);

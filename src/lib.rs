@@ -19,6 +19,7 @@ pub mod telemetry;
 pub mod type_system;
 pub mod vm;
 pub mod runtime;
+pub mod rade;
 pub use lint::migrate;
 pub use lint::migrate as upgrade_php;
 

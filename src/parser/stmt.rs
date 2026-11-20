@@ -60,7 +60,7 @@ impl<'s> CombinatorStream<'s> {
                     return Err(ParseError::new(
                         ParseErrorKind::Custom {
                             message: format!(
-                                "Template directives (`@{}`) are only valid inside template files (.rhp.html, .blade.rhp). In RHP source code, use `#[{}]` for attributes or standard PHP control flow instead.",
+                                "Template directives (`@{}`) are only valid inside template files (.rhp.html, .rade.rhp). In RHP source code, use `#[{}]` for attributes or standard PHP control flow instead.",
                                 dname, dname
                             ),
                         },

@@ -97,7 +97,7 @@ fn test_template_compilation_to_generated_code() {
 </div>"#;
 
     let file_id = 42;
-    let file = SourceFile::new(file_id, "view.blade.rhp", template_source);
+    let file = SourceFile::new(file_id, "view.rade.rhp", template_source);
     let mut ctx = ExpandCtx::with_source_file(file);
     let registry = ExpanderRegistry::default_with_builtins();
 
@@ -238,7 +238,7 @@ fn test_hygiene_gensym_and_variable_isolation() {
   @endforeach
 </div>
 "#;
-    let file = SourceFile::new(0, "test.blade.rhp", template);
+    let file = SourceFile::new(0, "test.rade.rhp", template);
     let mut ctx2 = ExpandCtx::with_source_file(file);
     let registry = ExpanderRegistry::default_with_builtins();
     let res = expand_template(template, 0, &registry, &mut ctx2);
@@ -369,7 +369,7 @@ fn test_unbalanced_template_directive_error() {
   <!-- missing endif -->
 </div>
 "#;
-    let file = SourceFile::new(3, "broken.blade.rhp", unclosed_template);
+    let file = SourceFile::new(3, "broken.rade.rhp", unclosed_template);
     let mut ctx = ExpandCtx::with_source_file(file);
     let registry = ExpanderRegistry::default_with_builtins();
 
@@ -403,7 +403,7 @@ fn test_unknown_directive_produces_rhp0501() {
   @unknown_custom_directive($data)
 </div>
 "#;
-    let file = SourceFile::new(4, "unknown.blade.rhp", template);
+    let file = SourceFile::new(4, "unknown.rade.rhp", template);
     let mut ctx = ExpandCtx::with_source_file(file);
     let reg = ExpanderRegistry::default_with_builtins();
 

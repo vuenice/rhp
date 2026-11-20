@@ -32,7 +32,7 @@ impl TemplateToken {
     }
 }
 
-/// Tokenizer for template source buffers (.rhp.html, .blade.rhp).
+/// Tokenizer for template source buffers (.rhp.html, .rade.rhp).
 pub struct TemplateLexer<'a> {
     source: &'a str,
     file_id: usize,

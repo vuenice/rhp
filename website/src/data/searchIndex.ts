@@ -97,6 +97,13 @@ const rawSearchIndex: SearchItem[] = [
     keywords: ["concurrency", "async", "fibers", "tokio", "future", "wait", "defer", "parallel"]
   },
   {
+    title: "Template Engine (Rade)",
+    section: "Language Guide",
+    description: "High-performance Blade-inspired template engine with .rade.rhp files, dot notation, XSS escaping, directives, caching, and CLI tooling.",
+    url: "/docs/guide/template-engine-rade",
+    keywords: ["rade", "template engine", "blade", "views", "view", "render", ".rade.rhp", "directives", "templating", "view:cache", "view:clear", "compile"]
+  },
+  {
     title: "Standard Library Overview",
     section: "Language Guide",
     description: "Tier 1 native facades: Arr (list, dict, set, hashMap), Str, Crypt, Html, Url, Time, Duration, Uniq, Future, Memory, File, HTTP, Log, Sys, Debug, Json, Bin, Validate, and Csv, plus runtime macro registration.",
