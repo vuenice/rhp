@@ -2728,4 +2728,129 @@ fn test_migrate_removes_explicit_void_return_types() {
     assert!(!res.migrated_content.to_ascii_lowercase().contains(": void"), "{}", res.migrated_content);
 }
 
+#[test]
+fn test_migrate_strip_legacy_includes() {
+    let input = concat!(
+        "<?php\n",
+        "require_once __DIR__ . '/vendor/autoload.php';\n",
+        "require_once 'Models/User.php';\n",
+        "include_once 'config.php';\n",
+        "require 'bootstrap.php';\n",
+        "$msg = 'keep require_once inside string';\n",
+        "// require_once inside comment\n",
+        "$user = new User();\n"
+    );
+    let res = migrate_source(input, "app.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 4);
+    assert!(!res.migrated_content.contains("require_once __DIR__"));
+    assert!(!res.migrated_content.contains("require_once 'Models/User.php'"));
+    assert!(!res.migrated_content.contains("include_once 'config.php'"));
+    assert!(!res.migrated_content.contains("require 'bootstrap.php'"));
+    assert!(res.migrated_content.contains("$msg = 'keep require_once inside string';"));
+    assert!(res.migrated_content.contains("// require_once inside comment"));
+    assert!(res.migrated_content.contains("$user = new User();"));
+}
+
+#[test]
+fn test_migrate_simple_output_buffering_echo() {
+    let input = concat!(
+        "<?php\n",
+        "ob_start();\n",
+        "echo \"Hello, \";\n",
+        "echo $name;\n",
+        "$greeting = ob_get_clean();\n"
+    );
+    let res = migrate_source(input, "greet.php");
+    assert!(res.modified);
+    assert_eq!(res.ob_rewritten_count, 1);
+    assert!(!res.migrated_content.contains("ob_start()"));
+    assert!(!res.migrated_content.contains("ob_get_clean()"));
+    assert!(res.migrated_content.contains("$greeting = \"Hello, \" + $name;"));
+}
+
+#[test]
+fn test_migrate_simple_output_buffering_include_view() {
+    let input = concat!(
+        "<?php\n",
+        "ob_start();\n",
+        "include __DIR__ . '/partials/user_card.php';\n",
+        "$html = ob_get_clean();\n"
+    );
+    let res = migrate_source(input, "view.php");
+    assert!(res.modified);
+    assert_eq!(res.ob_rewritten_count, 1);
+    assert!(!res.migrated_content.contains("ob_start()"));
+    assert!(!res.migrated_content.contains("ob_get_clean()"));
+    assert!(res.migrated_content.contains("$html = View::render('partials.user_card');"));
+}
+
+#[test]
+fn test_migrate_simple_output_buffering_discard() {
+    let input = concat!(
+        "<?php\n",
+        "ob_start();\n",
+        "ob_end_clean();\n",
+        "$x = 10;\n"
+    );
+    let res = migrate_source(input, "discard.php");
+    assert!(res.modified);
+    assert_eq!(res.ob_rewritten_count, 1);
+    assert!(!res.migrated_content.contains("ob_start()"));
+    assert!(!res.migrated_content.contains("ob_end_clean()"));
+    assert!(res.migrated_content.contains("$x = 10;"));
+}
+
+#[test]
+fn test_migrate_controller_echo() {
+    let input = concat!(
+        "<?php\n",
+        "echo View::render('home.index');\n",
+        "echo json_encode($data);\n",
+        "echo Response::html($content);\n"
+    );
+    let res = migrate_source(input, "controller.php");
+    assert!(res.modified);
+    assert_eq!(res.echo_response_count, 3);
+    assert!(res.migrated_content.contains("return Response::html(View::render('home.index'));"));
+    assert!(res.migrated_content.contains("return Response::json($data);"));
+    assert!(res.migrated_content.contains("return Response::html($content);"));
+}
+
+#[test]
+fn test_transpile_php_template_to_rade() {
+    let input = concat!(
+        "<div class=\"user-card\">\n",
+        "    <h2><?= htmlspecialchars($user['name'], ENT_QUOTES, 'UTF-8') ?></h2>\n",
+        "    <span>ID: <?= $user['id'] ?></span>\n",
+        "    <?php if ($user['is_admin']): ?>\n",
+        "        <span class=\"badge\">Admin</span>\n",
+        "    <?php elseif ($user['is_mod']): ?>\n",
+        "        <span class=\"badge\">Mod</span>\n",
+        "    <?php else: ?>\n",
+        "        <span class=\"badge\">User</span>\n",
+        "    <?php endif; ?>\n",
+        "    <ul>\n",
+        "    <?php foreach ($items as $item): ?>\n",
+        "        <li><?= $item ?></li>\n",
+        "    <?php endforeach; ?>\n",
+        "    </ul>\n",
+        "    <?php include 'partials/footer.php'; ?>\n",
+        "</div>\n"
+    );
+    let res = migrate_source(input, "card.blade.php");
+    assert!(res.modified);
+    assert!(res.rade_directive_count >= 8);
+    assert!(res.migrated_content.contains("<h2>{{ $user['name'] }}</h2>"));
+    assert!(res.migrated_content.contains("<span>ID: {{ $user['id'] }}</span>"));
+    assert!(res.migrated_content.contains("@if ($user['is_admin'])"));
+    assert!(res.migrated_content.contains("@elseif ($user['is_mod'])"));
+    assert!(res.migrated_content.contains("@else"));
+    assert!(res.migrated_content.contains("@endif"));
+    assert!(res.migrated_content.contains("@foreach ($items as $item)"));
+    assert!(res.migrated_content.contains("@endforeach"));
+    assert!(res.migrated_content.contains("@include('partials.footer')"), "Output was:\n{}", res.migrated_content);
+}
+
+
 

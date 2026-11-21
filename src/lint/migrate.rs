@@ -57,6 +57,10 @@ pub struct MigrateFileResult {
     pub named_arg_count: usize,
     pub param_order_count: usize,
     pub void_return_count: usize,
+    pub legacy_include_count: usize,
+    pub ob_rewritten_count: usize,
+    pub echo_response_count: usize,
+    pub rade_directive_count: usize,
     pub warnings: Vec<String>,
     #[serde(skip)]
     pub original_content: String,
@@ -148,6 +152,18 @@ impl MigrateReport {
                     }
                     if res.void_return_count > 0 {
                         out.push_str(&format!("      ~ {} void return type(s) removed\n", res.void_return_count));
+                    }
+                    if res.legacy_include_count > 0 {
+                        out.push_str(&format!("      ~ {} legacy require/include statement(s) removed\n", res.legacy_include_count));
+                    }
+                    if res.ob_rewritten_count > 0 {
+                        out.push_str(&format!("      ~ {} output buffering (ob_*) construct(s) rewritten\n", res.ob_rewritten_count));
+                    }
+                    if res.echo_response_count > 0 {
+                        out.push_str(&format!("      ~ {} echo statement(s) converted to Response returns\n", res.echo_response_count));
+                    }
+                    if res.rade_directive_count > 0 {
+                        out.push_str(&format!("      ~ {} PHP template tag(s) transpiled to Rade directives\n", res.rade_directive_count));
                     }
                     for w in &res.warnings {
                         out.push_str(&format!("      ⚠ {}\n", w));
@@ -249,11 +265,36 @@ pub fn migrate_source_with_options_and_context(
     let mut named_arg_count = 0;
     let mut param_order_count = 0;
     let mut void_return_count = 0;
+    let mut legacy_include_count = 0;
+    let mut ob_rewritten_count = 0;
+    let mut echo_response_count = 0;
+    let mut rade_directive_count = 0;
     let mut warnings = Vec::new();
+
+    // Step -0.1: Transpile PHP template tags (<?=, <?php if (...): ?>, <?php foreach (...): ?>) to Rade directives
+    let (after_rade, r_count) = transpile_php_template_to_rade(&current);
+    rade_directive_count += r_count;
+    current = after_rade;
 
     // Step 0: Remove <?php from start and ?> from end
     let (after_tags, tags_removed) = remove_php_tags(&current);
     current = after_tags;
+
+    // Step 0.0003: Migrate simple output buffering (ob_start + echo / include -> concat / View::render)
+    let (after_ob, ob_count, ob_warnings) = migrate_simple_output_buffering(&current);
+    ob_rewritten_count += ob_count;
+    warnings.extend(ob_warnings);
+    current = after_ob;
+
+    // Step 0.0006: Strip legacy include/require statements (autoload, class files)
+    let (after_includes, inc_count) = strip_legacy_includes(&current);
+    legacy_include_count += inc_count;
+    current = after_includes;
+
+    // Step 0.0009: Migrate controller / action echo to Response::html / Response::json
+    let (after_resp, echo_resp_count) = migrate_controller_echo(&current);
+    echo_response_count += echo_resp_count;
+    current = after_resp;
 
     // Step 0.001: `===` / `!==` are parse errors in RHP. Rewrite them before any
     // later step parses the file. Strings and comments are left unchanged.
@@ -411,6 +452,10 @@ pub fn migrate_source_with_options_and_context(
         named_arg_count,
         param_order_count,
         void_return_count,
+        legacy_include_count,
+        ob_rewritten_count,
+        echo_response_count,
+        rade_directive_count,
         warnings,
         original_content: source.to_string(),
         migrated_content: current.clone(),
@@ -3517,7 +3562,7 @@ pub fn replace_foreach_with_for_in(source: &str) -> (String, usize) {
             i += 1;
             continue;
         }
-        if i > 0 && is_migrate_word_byte(bytes[i - 1]) {
+        if i > 0 && (is_migrate_word_byte(bytes[i - 1]) || bytes[i - 1] == b'@') {
             i += 1;
             continue;
         }
@@ -3789,7 +3834,7 @@ fn is_blade_directive(name: &str) -> bool {
             | "forelse" | "endforelse"
             | "while" | "endwhile"
             | "extends" | "section" | "endsection" | "yield" | "show"
-            | "includeif" | "includewhen" | "includeunless" | "includefirst"
+            | "include" | "includeif" | "includewhen" | "includeunless" | "includefirst"
             | "each" | "once" | "endonce"
             | "push" | "endpush" | "stack" | "prepend" | "endprepend"
             | "inject" | "component" | "endcomponent" | "slot" | "endslot"
@@ -5873,5 +5918,1009 @@ pub fn check_rune_and_ctype_usage(source: &str) -> Vec<String> {
     }
     warnings
 }
+
+// =========================================================================
+// Step 0.0001: Transpile PHP Template Tags to Rade Directives
+// =========================================================================
+
+fn extract_escaped_expr(inner: &str) -> String {
+    let s = inner.trim().trim_end_matches(';').trim();
+    let lower = s.to_ascii_lowercase();
+    let func = if lower.starts_with("htmlspecialchars") {
+        Some("htmlspecialchars")
+    } else if lower.starts_with("htmlentities") {
+        Some("htmlentities")
+    } else {
+        None
+    };
+
+    if let Some(f) = func {
+        let after_f = s[f.len()..].trim_start();
+        if after_f.starts_with('(') && after_f.ends_with(')') {
+            let inside = after_f[1..after_f.len() - 1].trim();
+            let mut depth = 0;
+            let mut in_single = false;
+            let mut in_double = false;
+            let mut first_arg_end = inside.len();
+
+            let bytes = inside.as_bytes();
+            for (idx, &b) in bytes.iter().enumerate() {
+                if b == b'\'' && !in_double {
+                    in_single = !in_single;
+                } else if b == b'"' && !in_single {
+                    in_double = !in_double;
+                } else if !in_single && !in_double {
+                    if b == b'(' || b == b'[' {
+                        depth += 1;
+                    } else if b == b')' || b == b']' {
+                        if depth > 0 { depth -= 1; }
+                    } else if depth == 0 && b == b',' {
+                        first_arg_end = idx;
+                        break;
+                    }
+                }
+            }
+            return inside[..first_arg_end].trim().to_string();
+        }
+    }
+    s.to_string()
+}
+
+fn is_template_source(source: &str) -> bool {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        if bytes[i..].starts_with(b"<?=") {
+            return true;
+        }
+
+        if bytes[i..].starts_with(b"<?php") {
+            let after = i + 5;
+            let mut p = after;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p + 2 <= n && &bytes[p..p + 2] == b"if" {
+                if let Some(tag_end) = source[p..].find("?>") {
+                    let inside = source[p..p + tag_end].trim();
+                    if inside.ends_with(':') {
+                        return true;
+                    }
+                }
+            } else if p + 7 <= n && &bytes[p..p + 7] == b"foreach" {
+                if let Some(tag_end) = source[p..].find("?>") {
+                    let inside = source[p..p + tag_end].trim();
+                    if inside.ends_with(':') {
+                        return true;
+                    }
+                }
+            } else if p + 3 <= n && &bytes[p..p + 3] == b"for" {
+                if let Some(tag_end) = source[p..].find("?>") {
+                    let inside = source[p..p + tag_end].trim();
+                    if inside.ends_with(':') {
+                        return true;
+                    }
+                }
+            } else if p + 5 <= n && (&bytes[p..p + 5] == b"endif" || &bytes[p..p + 5] == b"while") {
+                if &bytes[p..p + 5] == b"endif" {
+                    return true;
+                }
+                if let Some(tag_end) = source[p..].find("?>") {
+                    let inside = source[p..p + tag_end].trim();
+                    if inside.ends_with(':') {
+                        return true;
+                    }
+                }
+            } else if p + 10 <= n && &bytes[p..p + 10] == b"endforeach" {
+                return true;
+            } else if p + 6 <= n && (&bytes[p..p + 6] == b"endfor" || &bytes[p..p + 6] == b"elseif") {
+                return true;
+            } else if p + 8 <= n && &bytes[p..p + 8] == b"endwhile" {
+                return true;
+            }
+        }
+
+        i += 1;
+    }
+
+    false
+}
+
+pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
+    if !is_template_source(source) {
+        return (source.to_string(), 0);
+    }
+
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Match <?= ... ?> short echo tag
+        if bytes[i..].starts_with(b"<?=") {
+            let tag_start = i;
+            let after_open = i + 3;
+            let mut p = after_open;
+            let mut in_single = false;
+            let mut in_double = false;
+            let mut close_tag = None;
+
+            while p < n {
+                let b = bytes[p];
+                if b == b'\'' && !in_double {
+                    in_single = !in_single;
+                } else if b == b'"' && !in_single {
+                    in_double = !in_double;
+                } else if !in_single && !in_double && bytes[p..].starts_with(b"?>") {
+                    close_tag = Some(p);
+                    break;
+                }
+                p += 1;
+            }
+
+            if let Some(tag_end) = close_tag {
+                let inner = &source[after_open..tag_end];
+                let expr = extract_escaped_expr(inner);
+                edits.push(TextEdit {
+                    start: tag_start,
+                    end: tag_end + 2,
+                    replacement: format!("{{{{ {} }}}}", expr.trim()),
+                });
+                count += 1;
+                i = tag_end + 2;
+                continue;
+            }
+        }
+
+        // Match <?php ... ?> tags
+        if bytes[i..].starts_with(b"<?php") {
+            let tag_start = i;
+            let after_open = i + 5;
+            let mut p = after_open;
+            let mut in_single = false;
+            let mut in_double = false;
+            let mut close_tag = None;
+
+            while p < n {
+                let b = bytes[p];
+                if b == b'\'' && !in_double {
+                    in_single = !in_single;
+                } else if b == b'"' && !in_single {
+                    in_double = !in_double;
+                } else if !in_single && !in_double && bytes[p..].starts_with(b"?>") {
+                    close_tag = Some(p);
+                    break;
+                }
+                p += 1;
+            }
+
+            if let Some(tag_end) = close_tag {
+                let inner = source[after_open..tag_end].trim();
+
+                // 1) echo in template: <?php echo ...; ?>
+                if inner.starts_with("echo") && (inner.len() == 4 || inner.as_bytes()[4].is_ascii_whitespace()) {
+                    let rest = inner[4..].trim();
+                    let expr = extract_escaped_expr(rest);
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: format!("{{{{ {} }}}}", expr.trim()),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                // 2) Control flow directives with ':'
+                if inner.starts_with("if") && (inner.len() == 2 || inner.as_bytes()[2] == b' ' || inner.as_bytes()[2] == b'(') {
+                    let rest = inner[2..].trim();
+                    if rest.starts_with('(') && rest.ends_with(':') {
+                        let cond = rest[..rest.len() - 1].trim();
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@if {}", cond),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+
+                if inner.starts_with("elseif") && (inner.len() == 6 || inner.as_bytes()[6] == b' ' || inner.as_bytes()[6] == b'(') {
+                    let rest = inner[6..].trim();
+                    if rest.starts_with('(') && rest.ends_with(':') {
+                        let cond = rest[..rest.len() - 1].trim();
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@elseif {}", cond),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+
+                if inner == "else:" || inner == "else :" {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: "@else".to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                if inner == "endif;" || inner == "endif ;" || inner == "endif:" || inner == "endif" {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: "@endif".to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                if inner.starts_with("foreach") && (inner.len() == 7 || inner.as_bytes()[7] == b' ' || inner.as_bytes()[7] == b'(') {
+                    let rest = inner[7..].trim();
+                    if rest.starts_with('(') && rest.ends_with(':') {
+                        let loop_hdr = rest[1..rest.len() - 2].trim();
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@foreach ({})", loop_hdr),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+
+                if inner == "endforeach;" || inner == "endforeach ;" || inner == "endforeach:" || inner == "endforeach" {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: "@endforeach".to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                if inner.starts_with("for") && (inner.len() == 3 || inner.as_bytes()[3] == b' ' || inner.as_bytes()[3] == b'(') {
+                    let rest = inner[3..].trim();
+                    if rest.starts_with('(') && rest.ends_with(':') {
+                        let loop_hdr = rest[1..rest.len() - 2].trim();
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@for ({})", loop_hdr),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+
+                if inner == "endfor;" || inner == "endfor ;" || inner == "endfor:" || inner == "endfor" {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: "@endfor".to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                if inner.starts_with("while") && (inner.len() == 5 || inner.as_bytes()[5] == b' ' || inner.as_bytes()[5] == b'(') {
+                    let rest = inner[5..].trim();
+                    if rest.starts_with('(') && rest.ends_with(':') {
+                        let cond = rest[..rest.len() - 1].trim();
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@while {}", cond),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+
+                if inner == "endwhile;" || inner == "endwhile ;" || inner == "endwhile:" || inner == "endwhile" {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: "@endwhile".to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                // 3) include in template: <?php include 'path/to/view.php'; ?>
+                if inner.starts_with("include") && (inner.len() == 7 || inner.as_bytes()[7].is_ascii_whitespace() || inner.as_bytes()[7] == b'(') {
+                    if let Some(path) = extract_string_literal(inner) {
+                        let view_name = sanitize_view_name(&path);
+                        edits.push(TextEdit {
+                            start: tag_start,
+                            end: tag_end + 2,
+                            replacement: format!("@include('{}')", view_name),
+                        });
+                        count += 1;
+                        i = tag_end + 2;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+fn extract_string_literal(s: &str) -> Option<String> {
+    for quote in [b'\'', b'"'] {
+        if let Some(start) = s.as_bytes().iter().position(|&b| b == quote) {
+            if let Some(end) = s.as_bytes()[start + 1..].iter().position(|&b| b == quote) {
+                return Some(s[start + 1..start + 1 + end].to_string());
+            }
+        }
+    }
+    None
+}
+
+fn sanitize_view_name(path: &str) -> String {
+    let mut s = path.trim();
+    s = s.trim_start_matches('.').trim_start_matches('/');
+    if s.starts_with("resources/views/") {
+        s = &s["resources/views/".len()..];
+    } else if s.starts_with("views/") {
+        s = &s["views/".len()..];
+    }
+    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".php", ".html"] {
+        if s.ends_with(ext) {
+            s = &s[..s.len() - ext.len()];
+            break;
+        }
+    }
+    s.replace('/', ".")
+}
+
+fn parse_echo_expressions(body: &str) -> Option<Vec<String>> {
+    let mut exprs = Vec::new();
+    for stmt in body.split(';') {
+        let trimmed = stmt.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("echo") && (trimmed.len() == 4 || trimmed.as_bytes()[4].is_ascii_whitespace() || trimmed.as_bytes()[4] == b'(') {
+            let rest = trimmed[4..].trim();
+            let expr = if rest.starts_with('(') && rest.ends_with(')') {
+                rest[1..rest.len() - 1].trim()
+            } else {
+                rest
+            };
+            if !expr.is_empty() {
+                exprs.push(expr.to_string());
+            }
+        } else if trimmed.starts_with("print") && (trimmed.len() == 5 || trimmed.as_bytes()[5].is_ascii_whitespace() || trimmed.as_bytes()[5] == b'(') {
+            let rest = trimmed[5..].trim();
+            let expr = if rest.starts_with('(') && rest.ends_with(')') {
+                rest[1..rest.len() - 1].trim()
+            } else {
+                rest
+            };
+            if !expr.is_empty() {
+                exprs.push(expr.to_string());
+            }
+        } else {
+            return None; // Contains non-echo statement
+        }
+    }
+    if exprs.is_empty() {
+        None
+    } else {
+        Some(exprs)
+    }
+}
+
+// =========================================================================
+// Step 0.0003: Migrate Simple Output Buffering (ob_*)
+// =========================================================================
+
+pub fn migrate_simple_output_buffering(source: &str) -> (String, usize, Vec<String>) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut warnings = Vec::new();
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        if i > 0 && is_migrate_word_byte(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+
+        // Match ob_start
+        if i + 8 <= n && source[i..i + 8].eq_ignore_ascii_case("ob_start") {
+            let after_ob = i + 8;
+            if after_ob < n && is_migrate_word_byte(bytes[after_ob]) {
+                i = after_ob;
+                continue;
+            }
+
+            // Reject if preceded by ->, ::, $
+            let mut b_idx = i;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+            if b_idx >= 2 && (&bytes[b_idx - 2..b_idx] == b"::" || &bytes[b_idx - 2..b_idx] == b"->") {
+                i = after_ob;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_ob;
+                continue;
+            }
+
+            // Find '(' and matching ')'
+            let mut p = after_ob;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+            if p >= n || bytes[p] != b'(' {
+                i = after_ob;
+                continue;
+            }
+            let mut cp = p + 1;
+            while cp < n && (bytes[cp] == b' ' || bytes[cp] == b'\t' || bytes[cp] == b'\r' || bytes[cp] == b'\n') {
+                cp += 1;
+            }
+            if cp >= n || bytes[cp] != b')' {
+                let line = byte_offset_to_line(source, i);
+                warnings.push(format!("Notice: 'ob_start' with callback at line {} requires manual refactoring or AI migration to middleware.", line));
+                i = after_ob;
+                continue;
+            }
+
+            let mut semi = cp + 1;
+            while semi < n && (bytes[semi] == b' ' || bytes[semi] == b'\t' || bytes[semi] == b'\r' || bytes[semi] == b'\n') {
+                semi += 1;
+            }
+            if semi >= n || bytes[semi] != b';' {
+                i = after_ob;
+                continue;
+            }
+            let ob_start_stmt_end = semi + 1;
+
+            // Scan forward to find matching ob_get_clean() or ob_end_clean()
+            let mut scan = ob_start_stmt_end;
+            let mut found_match = None;
+
+            while scan < n {
+                if !mask[scan] {
+                    scan += 1;
+                    continue;
+                }
+
+                // If another ob_start occurs, nested buffer -> skip
+                if scan > 0 && !is_migrate_word_byte(bytes[scan - 1]) && scan + 8 <= n && source[scan..scan + 8].eq_ignore_ascii_case("ob_start") {
+                    let after = scan + 8;
+                    if after == n || !is_migrate_word_byte(bytes[after]) {
+                        break;
+                    }
+                }
+
+                // Look for: ob_end_clean()
+                if (scan == 0 || !is_migrate_word_byte(bytes[scan - 1])) && scan + 12 <= n && source[scan..scan + 12].eq_ignore_ascii_case("ob_end_clean") {
+                    let after = scan + 12;
+                    if after == n || !is_migrate_word_byte(bytes[after]) {
+                        let mut end_p = after;
+                        while end_p < n && bytes[end_p] != b';' && bytes[end_p] != b'\n' {
+                            end_p += 1;
+                        }
+                        if end_p < n && bytes[end_p] == b';' {
+                            found_match = Some((None, scan, end_p + 1, false));
+                            break;
+                        }
+                    }
+                }
+
+                // Look for: $var = ob_get_clean()
+                if bytes[scan] == b'$' {
+                    let var_start = scan;
+                    let mut var_end = scan + 1;
+                    while var_end < n && (bytes[var_end].is_ascii_alphanumeric() || bytes[var_end] == b'_') {
+                        var_end += 1;
+                    }
+                    let var_name = &source[var_start..var_end];
+
+                    let mut eq_p = var_end;
+                    while eq_p < n && (bytes[eq_p] == b' ' || bytes[eq_p] == b'\t' || bytes[eq_p] == b'\r' || bytes[eq_p] == b'\n') {
+                        eq_p += 1;
+                    }
+                    if eq_p < n && bytes[eq_p] == b'=' {
+                        let mut rhs = eq_p + 1;
+                        while rhs < n && (bytes[rhs] == b' ' || bytes[rhs] == b'\t' || bytes[rhs] == b'\r' || bytes[rhs] == b'\n') {
+                            rhs += 1;
+                        }
+                        if rhs < n && bytes[rhs] == b'\\' { rhs += 1; }
+                        if rhs + 12 <= n && source[rhs..rhs + 12].eq_ignore_ascii_case("ob_get_clean") {
+                            let after = rhs + 12;
+                            if after == n || !is_migrate_word_byte(bytes[after]) {
+                                let mut semi_p = after;
+                                while semi_p < n && bytes[semi_p] != b';' && bytes[semi_p] != b'\n' {
+                                    semi_p += 1;
+                                }
+                                if semi_p < n && bytes[semi_p] == b';' {
+                                    found_match = Some((Some(var_name.to_string()), var_start, semi_p + 1, true));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                scan += 1;
+            }
+
+            if let Some((target_var, end_stmt_start, end_stmt_end, is_get_clean)) = found_match {
+                let inner_body = &source[ob_start_stmt_end..end_stmt_start];
+                let trimmed_body = inner_body.trim();
+
+                let line_start = get_line_start(source, i);
+                let indent = &source[line_start..i];
+
+                if !is_get_clean {
+                    if trimmed_body.is_empty() {
+                        let full_end = get_line_end(source, end_stmt_end);
+                        edits.push(TextEdit {
+                            start: line_start,
+                            end: full_end,
+                            replacement: String::new(),
+                        });
+                        count += 1;
+                        i = full_end;
+                        continue;
+                    } else if !trimmed_body.contains("echo") && !trimmed_body.contains("print") {
+                        let mut replacement = String::new();
+                        replacement.push_str(indent);
+                        replacement.push_str(trimmed_body);
+                        replacement.push('\n');
+
+                        let full_end = get_line_end(source, end_stmt_end);
+                        edits.push(TextEdit {
+                            start: line_start,
+                            end: full_end,
+                            replacement,
+                        });
+                        count += 1;
+                        i = full_end;
+                        continue;
+                    }
+                } else if let Some(var) = target_var {
+                    let is_include = trimmed_body.starts_with("include")
+                        || trimmed_body.starts_with("require")
+                        || trimmed_body.starts_with("include_once")
+                        || trimmed_body.starts_with("require_once");
+
+                    if is_include {
+                        if let Some(view_path) = extract_string_literal(trimmed_body) {
+                            let view_name = sanitize_view_name(&view_path);
+                            let replacement = format!("{}{} = View::render('{}');\n", indent, var, view_name);
+                            let full_end = get_line_end(source, end_stmt_end);
+                            edits.push(TextEdit {
+                                start: line_start,
+                                end: full_end,
+                                replacement,
+                            });
+                            count += 1;
+                            i = full_end;
+                            continue;
+                        }
+                    }
+
+                    if let Some(echo_exprs) = parse_echo_expressions(trimmed_body) {
+                        let expr_str = if echo_exprs.len() == 1 {
+                            let e = &echo_exprs[0];
+                            if e.starts_with('"') || e.starts_with('\'') || e.contains('+') {
+                                e.clone()
+                            } else {
+                                format!("string({})", e)
+                            }
+                        } else {
+                            echo_exprs.join(" + ")
+                        };
+
+                        let replacement = format!("{}{} = {};\n", indent, var, expr_str);
+                        let full_end = get_line_end(source, end_stmt_end);
+                        edits.push(TextEdit {
+                            start: line_start,
+                            end: full_end,
+                            replacement,
+                        });
+                        count += 1;
+                        i = full_end;
+                        continue;
+                    }
+                }
+            }
+
+            i = after_ob;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0, warnings);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count, warnings)
+}
+
+// =========================================================================
+// Step 0.0006: Strip Legacy include / require Statements
+// =========================================================================
+
+pub fn strip_legacy_includes(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        if i > 0 && (is_migrate_word_byte(bytes[i - 1]) || bytes[i - 1] == b'@') {
+            i += 1;
+            continue;
+        }
+
+        let mut kw_len = 0;
+        let mut is_kw = false;
+        if i + 12 <= n && (source[i..i + 12].eq_ignore_ascii_case("require_once") || source[i..i + 12].eq_ignore_ascii_case("include_once")) {
+            kw_len = 12;
+            is_kw = true;
+        } else if i + 7 <= n && (source[i..i + 7].eq_ignore_ascii_case("require") || source[i..i + 7].eq_ignore_ascii_case("include")) {
+            kw_len = 7;
+            is_kw = true;
+        }
+
+        if !is_kw {
+            i += 1;
+            continue;
+        }
+
+        let after_kw = i + kw_len;
+        if after_kw < n && is_migrate_word_byte(bytes[after_kw]) {
+            i = after_kw;
+            continue;
+        }
+
+        // Reject if preceded by ->, ::, or $
+        let mut b_idx = i;
+        while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+            b_idx -= 1;
+        }
+        if b_idx >= 2 && (&bytes[b_idx - 2..b_idx] == b"::" || &bytes[b_idx - 2..b_idx] == b"->") {
+            i = after_kw;
+            continue;
+        }
+        if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+            i = after_kw;
+            continue;
+        }
+
+        // Standalone statement check (preceded by ;, {, }, <?php, <?, or start of file)
+        let is_standalone = if b_idx == 0 {
+            true
+        } else {
+            let prev_ch = bytes[b_idx - 1];
+            prev_ch == b';' || prev_ch == b'{' || prev_ch == b'}' || bytes[..b_idx].ends_with(b"<?php") || bytes[..b_idx].ends_with(b"<?")
+        };
+
+        if !is_standalone {
+            i = after_kw;
+            continue;
+        }
+
+        // Scan forward to statement terminator ';' or '?>'
+        let mut cur = after_kw;
+        let mut depth = 0;
+        let mut found_semi = None;
+
+        while cur < n {
+            if mask[cur] {
+                if bytes[cur] == b'(' || bytes[cur] == b'[' {
+                    depth += 1;
+                } else if bytes[cur] == b')' || bytes[cur] == b']' {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                } else if depth == 0 && bytes[cur] == b';' {
+                    found_semi = Some(cur);
+                    break;
+                } else if depth == 0 && cur + 1 < n && bytes[cur..].starts_with(b"?>") {
+                    found_semi = Some(cur);
+                    break;
+                }
+            }
+            cur += 1;
+        }
+
+        if let Some(semi_pos) = found_semi {
+            let after_stmt = if bytes[semi_pos] == b';' { semi_pos + 1 } else { semi_pos };
+
+            let line_start = get_line_start(source, i);
+            let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');
+
+            let mut line_end = after_stmt;
+            while line_end < n && (bytes[line_end] == b' ' || bytes[line_end] == b'\t') {
+                line_end += 1;
+            }
+            if (line_end + 1 < n && bytes[line_end] == b'/' && bytes[line_end + 1] == b'/')
+                || (line_end < n && bytes[line_end] == b'#')
+            {
+                while line_end < n && bytes[line_end] != b'\n' {
+                    line_end += 1;
+                }
+            }
+
+            let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+            if only_ws_before && only_ws_after {
+                let mut full_end = line_end;
+                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
+                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+
+                edits.push(TextEdit {
+                    start: line_start,
+                    end: full_end,
+                    replacement: String::new(),
+                });
+            } else {
+                edits.push(TextEdit {
+                    start: i,
+                    end: after_stmt,
+                    replacement: String::new(),
+                });
+            }
+
+            count += 1;
+            i = after_stmt;
+            continue;
+        }
+
+        i = after_kw;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+// =========================================================================
+// Step 0.0009: Migrate Controller / Action Echo to Response Returns
+// =========================================================================
+
+pub fn migrate_controller_echo(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        if i > 0 && is_migrate_word_byte(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+
+        if i + 4 <= n && source[i..i + 4].eq_ignore_ascii_case("echo") {
+            let after_echo = i + 4;
+            if after_echo < n && is_migrate_word_byte(bytes[after_echo]) {
+                i = after_echo;
+                continue;
+            }
+
+            let mut b_idx = i;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+            if b_idx >= 2 && (&bytes[b_idx - 2..b_idx] == b"::" || &bytes[b_idx - 2..b_idx] == b"->") {
+                i = after_echo;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_echo;
+                continue;
+            }
+
+            let mut p = after_echo;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                p += 1;
+            }
+
+            // 1) View::render(...)
+            let view_render = if p + 12 <= n && source[p..p + 12].eq_ignore_ascii_case("View::render") {
+                Some(12)
+            } else if p + 13 <= n && source[p..p + 13].eq_ignore_ascii_case("\\View::render") {
+                Some(13)
+            } else {
+                None
+            };
+
+            if let Some(_) = view_render {
+                let mut semi = p;
+                while semi < n && bytes[semi] != b';' && bytes[semi] != b'\n' {
+                    semi += 1;
+                }
+                if semi < n && bytes[semi] == b';' {
+                    let call_expr = source[p..semi].trim();
+                    edits.push(TextEdit {
+                        start: i,
+                        end: semi + 1,
+                        replacement: format!("return Response::html({});", call_expr),
+                    });
+                    count += 1;
+                    i = semi + 1;
+                    continue;
+                }
+            }
+
+            // 2) Response::html(...) / Response::json(...)
+            let is_response = (p + 10 <= n && source[p..p + 10].eq_ignore_ascii_case("Response::"))
+                || (p + 11 <= n && source[p..p + 11].eq_ignore_ascii_case("\\Response::"));
+
+            if is_response {
+                edits.push(TextEdit {
+                    start: i,
+                    end: p,
+                    replacement: "return ".to_string(),
+                });
+                count += 1;
+                i = p;
+                continue;
+            }
+
+            // 3) json_encode(...)
+            let is_json = if p + 11 <= n && source[p..p + 11].eq_ignore_ascii_case("json_encode") {
+                Some(11)
+            } else if p + 12 <= n && source[p..p + 12].eq_ignore_ascii_case("\\json_encode") {
+                Some(12)
+            } else {
+                None
+            };
+
+            if let Some(json_len) = is_json {
+                let mut cp = p + json_len;
+                while cp < n && bytes[cp] != b'(' {
+                    cp += 1;
+                }
+                if cp < n {
+                    let mut depth = 0;
+                    let mut close_paren = None;
+                    let mut cur = cp;
+                    while cur < n {
+                        if mask[cur] {
+                            if bytes[cur] == b'(' {
+                                depth += 1;
+                            } else if bytes[cur] == b')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    close_paren = Some(cur);
+                                    break;
+                                }
+                            }
+                        }
+                        cur += 1;
+                    }
+                    if let Some(end_paren) = close_paren {
+                        let mut semi = end_paren + 1;
+                        while semi < n && (bytes[semi] == b' ' || bytes[semi] == b'\t') {
+                            semi += 1;
+                        }
+                        if semi < n && bytes[semi] == b';' {
+                            let args = source[cp + 1..end_paren].trim();
+                            edits.push(TextEdit {
+                                start: i,
+                                end: semi + 1,
+                                replacement: format!("return Response::json({});", args),
+                            });
+                            count += 1;
+                            i = semi + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            i = after_echo;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
 
 
