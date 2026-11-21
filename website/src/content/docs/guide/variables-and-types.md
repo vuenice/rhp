@@ -36,11 +36,11 @@ All primitive type keywords are strictly lowercase:
 Capitalized scalar variants (such as `String` or `Integer`) are strictly rejected by the parser.
 
 ```php
-int $count = 42;
-float $pi = 3.14159;
-string $appName = "RHP Engine";
-byte $header = "GET / HTTP/1.1\r\n";
-bool $isProduction = true;
+$count: int = 42;
+$pi: float = 3.14159;
+$appName: string = "RHP Engine";
+$header: byte = "GET / HTTP/1.1\r\n";
+$isProduction: bool = true;
 
 // Attempting incompatible reassignment fails:
 // $count = "forty-two"; // Error: VariableTypeMismatch
@@ -176,25 +176,25 @@ string $rawPath = `C:\new_folder\test.txt`; // Literal backslashes preserved
 
 ---
 
-## Variable Declarations (Prefix Type Syntax)
+## Variable Declarations (Colon Type Syntax)
 
-RHP supports statically locked variable declarations using **prefix type notation**:
+RHP supports statically locked variable declarations using **colon type notation**:
 
 ```php
-int $x = 10;
-string $name = "Alice";
-float $rate = 0.05;
-bool $isActive = true;
-int $uninitialized; // Uninitialized typed declaration
+$x: int = 10;
+$name: string = "Alice";
+$rate: float = 0.05;
+$isActive: bool = true;
+$uninitialized: int; // Uninitialized typed declaration
 ```
 
 > [!IMPORTANT]
-> **No Colon Type Syntax (`$x: int = 10;`):**
-> RHP **only** supports prefix type declarations (`int $x = 10;`). TypeScript/Hack-style colon declarations (`$x: int = 10;` or `$x: int;`) are strictly forbidden and trigger a compile-time parse error:
+> **Colon Type Syntax (`$x: int = 10;`, `function foo($x: string)`):**
+> RHP supports colon type declarations (`$x: int = 10;` or `$x: int;`). Prefix type declarations (`int $x = 10;`) are strictly forbidden and trigger an informative compile-time parse error:
 > ```text
-> ParseError: Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+> ParseError: Prefix type syntax 'int $x' is not supported. Use colon type syntax '$x: int' instead (e.g., '$x: int = ...;').
 > ```
-> This rule applies uniformly across local variables, class properties (`public int $id = 1;`), and parameter lists (`function calc(int $id)`).
+> This rule applies uniformly across local variables, class properties (`public $id: int = 1;`), and parameter lists (`function calc($id: int)`). Nullable types use postfix `?` exclusively (e.g., `$id: int?`, `$name: string?`), matching Kotlin and Swift. Prefix `?int` is rejected with a parse error directing to postfix notation.
 
 ### Variable Identifier Validation Rules
 
@@ -213,9 +213,9 @@ ParseError: Variable names must start with a letter or underscore, followed by a
 
 ```php
 // ✅ Valid variable identifiers:
-int $count = 10;
-string $_temp = "cache";
-float $data_v2 = 3.14;
+$count: int = 10;
+$_temp: string = "cache";
+$data_v2: float = 3.14;
 
 // ❌ Invalid variable identifiers (trigger compile-time error):
 // $$variable; // Error: Variable names must start with a letter or underscore...

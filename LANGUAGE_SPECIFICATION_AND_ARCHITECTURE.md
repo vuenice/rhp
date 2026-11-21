@@ -48,26 +48,26 @@
 | Feature | Syntax | Architectural Rationale |
 | :--- | :--- | :--- |
 | **Type Casting** | `int($x)`, `string($x)` | Functional type conversion syntax `int($x)`, `string($x)`, `float($x)`, `bool($x)`. C-style/PHP-style `(int)$x` is not supported. |
-| **Scalar Type Hints** | `int $x`, `string $x`, `float $x`, `bool $x` | Strictly lowercase primitive keywords for function boundaries. Capitalized variants (e.g., `String`, `Integer`) are strictly rejected at parse and check time. |
-| **Collection Type Hints** | `List $arr`, `Dict $arr`, `Set $arr`, `HashMap $arr` (or lowercase `list`, `dict`, `set`, `hashmap`) | Explicit high-performance collection subtypes backed by dedicated Rust heap structures (`Box<Vec<PhpValue>>`, `Box<IndexMap>`). Enforces strict type boundaries. |
-| **Permissive Parent Type** | `array $arr = [1, 2, 3];`<br/>`function myFunc(): array` | Permissive parent collection type for backward compatibility. Accepts all collection variants (`List`, `Dict`, `Set`, `HashMap`) interchangeably behind a memory-safe pointer. |
+| **Scalar Type Hints** | `$x: int`, `$name: string`, `$rate: float`, `$flag: bool` | Strictly lowercase primitive keywords for function boundaries. Capitalized variants (e.g., `String`, `Integer`) are strictly rejected at parse and check time. |
+| **Collection Type Hints** | `$arr: list`, `$arr: dict`, `$arr: set`, `$arr: hashmap` | Explicit high-performance collection subtypes backed by dedicated Rust heap structures (`Box<Vec<PhpValue>>`, `Box<IndexMap>`). Enforces strict type boundaries. |
+| **Permissive Parent Type** | `$arr: array = [1, 2, 3];`<br/>`function myFunc(): array` | Permissive parent collection type for backward compatibility. Accepts all collection variants (`list`, `dict`, `set`, `hashmap`) interchangeably behind a memory-safe pointer. |
 
 - **Dynamic Typing via PhpValue & Flexible Reassignment:** Untyped variables (or variables initialized with standard PHP array syntax) store values dynamically under the hood using a unified type enum (`PhpValue`). Developers can easily reassign an untyped or `array`-hinted variable from a sequential list structure to a dictionary or map structure without throwing a type error:
   ```php
   $arr = [1, 2, 3];
   $arr = ['name' => 'yogesh']; // Seamless flexible reassignment
 
-  array $arr = [1, 2, 3];
+  $arr: array = [1, 2, 3];
   $arr = ['name' => 'yogesh']; // Supported via permissive parent array type
   ```
-- **Strict Type Bounds vs. Dynamic Variables:** While dynamic flexibility applies to untyped and generic `array`-hinted variables, once a variable or parameter is explicitly type-hinted with a strict collection subtype (like `list $arr` or `dict $arr`) or a primitive scalar (like `int $x`), RHP enforces strict type boundaries and throws a Rust-style value/type error if assigned an incompatible type.
-- **Variable Declarations — Prefix Syntax Only (`int $x = 10;`):**
-  - Typed variable declarations require prefix type notation: `int $x = 10;`, `string $name = "Alice";`, `float $rate = 0.05;`, `bool $flag = true;`, or uninitialized `int $x;`.
-  - Colon-based type declarations (`$x: int = 10;` or `$x: int;`) are **strictly unsupported** and produce a compile-time parse error:
+- **Strict Type Bounds vs. Dynamic Variables:** While dynamic flexibility applies to untyped and generic `array`-hinted variables, once a variable or parameter is explicitly type-hinted with a strict collection subtype (like `$arr: list` or `$arr: dict`) or a primitive scalar (like `$x: int`), RHP enforces strict type boundaries and throws a Rust-style value/type error if assigned an incompatible type.
+- **Variable & Parameter Declarations — Colon Syntax (`$x: int = 10;`, `function foo($x: string)`):**
+  - Typed variable declarations require colon notation: `$x: int = 10;`, `$name: string = "Alice";`, `$rate: float = 0.05;`, `$flag: bool = true;`, or uninitialized `$x: int;`.
+  - Prefix type declarations (`int $x = 10;` or `string $name;`) are **strictly unsupported** and produce an informative compile-time parse error:
     ```text
-    ParseError: Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+    ParseError: Prefix type syntax 'int $x' is not supported. Use colon type syntax '$x: int' instead (e.g., '$x: int = ...;').
     ```
-  - This rule applies consistently to local variables, class properties (`public int $id = 1;`), and formal function/method parameters (`function compute(int $val)`).
+  - This rule applies consistently to local variables (`$x: int?`), class properties (`public $id: int? = null;`), and formal function/method parameters (`function compute($val: int?)`). Nullable types use postfix `?` exclusively (e.g., `$id: int?`, `$name: string?`), matching Kotlin and Swift. Prefix nullable syntax (`?int`) is disallowed with a compile-time parse error directing to postfix notation.
 - **Type Conversion — Functional Syntax Only (`int($x)`, `string($x)`):**
   - Type conversions must use functional syntax: `int($x)`, `string($x)`, `float($x)`, `bool($x)`.
   - C-style and PHP-style parenthesized casts (`(int)$x`, `(string)$x`, `(float)$x`, `(bool)$x`) are **strictly unsupported** and produce an informative compile-time parse error:

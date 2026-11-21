@@ -170,7 +170,7 @@ fn test_rune_type_hint_contract() {
     clear_runtime_closure_macros();
 
     let code = r#"
-        function getCode(rune $r): int {
+        function getCode($r: rune): int {
             return $r->toInt();
         }
 
@@ -186,7 +186,7 @@ fn test_rune_type_hint_contract() {
 fn test_rune_strict_type_checking() {
     // 1. $r + 1 is rejected at compile time (no implicit arithmetic on runes)
     let arith_code = r#"
-        function addOne(rune $r): int {
+        function addOne($r: rune): int {
             return $r + 1;
         }
     "#;
@@ -203,7 +203,7 @@ fn test_rune_strict_type_checking() {
 
     // 2. $r == "a" is rejected at compile time (cannot compare rune to string)
     let cmp_code = r#"
-        function isA(rune $r): bool {
+        function isA($r: rune): bool {
             return $r == "a";
         }
     "#;

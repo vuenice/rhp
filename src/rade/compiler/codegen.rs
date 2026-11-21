@@ -20,7 +20,7 @@ pub enum OutputFormat {
 
     /// Callable closure format:
     /// ```rhp
-    /// return function(dict $__data): string {
+    /// return function($__data: dict): string {
     ///     $__out = "";
     ///     ...
     ///     return $__out;
@@ -169,7 +169,7 @@ impl CodeGenerator {
         };
 
         if is_closure {
-            lines.push("return function(dict $__data): string {".to_string());
+            lines.push("return function($__data: dict): string {".to_string());
         }
 
         // Initialize accumulator: $__out = "";

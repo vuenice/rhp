@@ -578,13 +578,18 @@ impl<'s> CombinatorStream<'s> {
     pub fn parse_type_hint(&mut self) -> Result<TypeHint<'s>, ParseError> {
         let start_span = self.current_span();
 
-        // Prefix `?Type` and untyped `?$var` are rejected. Nullability is `Type?`.
+        // Reject prefix `?` for nullable types: RHP standardizes on postfix `?` (e.g., `int?`, `string?`).
         if self.check(&Token::Question) {
+            let q_span = self.current_span();
+            self.advance();
+            let first = self.parse_type_segment()?;
             return Err(ParseError::new(
                 ParseErrorKind::Custom {
-                    message: "Nullable types use a postfix '?'. Write 'int?' instead of '?int', and 'mixed? $var' instead of '?$var'.".to_string(),
+                    message: format!(
+                        "Prefix nullable syntax '?{first}' is not supported. Use postfix nullable syntax '{first}?' instead (e.g., '{first}?')."
+                    ),
                 },
-                start_span,
+                q_span.merge(first.span),
             ));
         }
 
@@ -832,10 +837,9 @@ impl<'s> CombinatorStream<'s> {
     /// Check if the upcoming token stream matches a prefix-typed variable declaration (`Type $var = ...`, `Type? $var`, or `Type $var;`).
     pub fn is_prefix_typed_var_decl(&self) -> bool {
         let mut idx = 0;
-        // A leading `?` is the old nullable prefix. Treat it as a type position so
-        // `parse_type_hint` can reject it.
+        // A leading `?` is the nullable prefix (e.g. `?int $x`).
         if matches!(self.peek_nth(idx).map(|t| &t.token), Some(Token::Question)) {
-            return true;
+            idx += 1;
         }
 
         let mut found_type = false;

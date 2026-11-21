@@ -19,13 +19,13 @@ This document outlines the engineering roadmap and architectural improvements fo
     ```
   - Disallow automatic implicit type coercion or promotion from `Arr::list` to `dict` during key assignment unless using the generic permissive parent `array` type.
 
-- [x] **Prefix Variable Type Declarations Only (`int $x = 10;`):**
-  - Typed variable declarations support **prefix syntax only**: `int $x = 10;`, `string $name = "Alice";`, `float $pi = 3.14;`, `bool $flag = true;`, or `int $x;`.
-  - Colon-based type declarations (`$x: int = 10;` or `$x: int;`) are **explicitly disallowed** and produce a compile-time parse error:
+- [x] **Colon Variable & Parameter Type Declarations (`$x: int = 10;`, `function foo($x: string)`):**
+  - Typed variable declarations support **colon syntax**: `$x: int = 10;`, `$name: string = "Alice";`, `$pi: float = 3.14;`, `$flag: bool = true;`, or `$x: int;`.
+  - Prefix type declarations (`int $x = 10;` or `string $name;`) are **explicitly disallowed** and produce a compile-time parse error:
     ```text
-    Colon type syntax '$x: Type' is not supported. Use prefix type syntax 'Type $x' instead (e.g., 'int $x = 10;').
+    Prefix type syntax 'int $x' is not supported. Use colon type syntax '$x: int' instead (e.g., '$x: int = ...;').
     ```
-  - Applies consistently across local variables, class properties (`public int $x = 1;`), and parameter lists (`function foo(int $x)`).
+  - Applies consistently across local variables (`$x: int?`), class properties (`public $x: int? = null;`), and parameter lists (`function foo($x: int?)`). Nullable types are strictly **postfix `?`** (e.g., `$id: int?`, `$name: string?`), matching Kotlin and Swift. Prefix nullable syntax (`?int`) is disallowed with a compile-time parse error directing to postfix notation.
 
 - [x] **Functional Type Conversions Only (`int($x)`, `string($x)`):**
   - Type conversions must use functional conversion syntax: `int($x)`, `string($x)`, `float($x)`, `bool($x)`.

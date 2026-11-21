@@ -1,11 +1,11 @@
 class Todo {
-    public int $id;
-    public string $title;
-    public bool $completed;
-    public string $category;
-    public string $createdAt;
+    public $id: int;
+    public $title: string;
+    public $completed: bool;
+    public $category: string;
+    public $createdAt: string;
 
-    public function __construct(int $id, string $title, string $category = "General", string $createdAt = "Today") {
+    public function __construct($id: int, $title: string, $category: string = "General", $createdAt: string = "Today") {
         $this->id = $id;
         $this->title = $title;
         $this->completed = false;
@@ -20,11 +20,11 @@ class Todo {
 }
 
 class TodoStore {
-    public array $todos;
-    public int $nextId;
-    public string $filePath;
+    public $todos: array;
+    public $nextId: int;
+    public $filePath: string;
 
-    public function __construct(string $filePath = "") {
+    public function __construct($filePath: string = "") {
         $this->todos = [];
         $this->nextId = 1;
         if ($filePath == "") {
@@ -99,7 +99,7 @@ class TodoStore {
         $this->toggle(2);
     }
 
-    public function addInternal(string $title, string $category = "General", string $createdAt = "Today"): Todo {
+    public function addInternal($title: string, $category: string = "General", $createdAt: string = "Today"): Todo {
         $todo = new Todo($this->nextId, $title, $category, $createdAt);
         $this->nextId = $this->nextId + 1;
         $items = $this->todos;
@@ -108,13 +108,13 @@ class TodoStore {
         return $todo;
     }
 
-    public function add(string $title, string $category = "General", string $createdAt = "Today"): Todo {
+    public function add($title: string, $category: string = "General", $createdAt: string = "Today"): Todo {
         $todo = $this->addInternal($title, $category, $createdAt);
         $this->save();
         return $todo;
     }
 
-    public function toggle(int $id): bool {
+    public function toggle($id: int): bool {
         $found = false;
         foreach ($this->todos as $todo) {
             if ($todo->id == $id) {
@@ -128,7 +128,7 @@ class TodoStore {
         return $found;
     }
 
-    public function delete(int $id): bool {
+    public function delete($id: int): bool {
         $newTodos = [];
         $found = false;
         foreach ($this->todos as $todo) {
@@ -181,7 +181,7 @@ class TodoStore {
         ]);
     }
 
-    public function getFiltered(string $status): array {
+    public function getFiltered($status: string): array {
         if ($status == "active") {
             $filtered = [];
             foreach ($this->todos as $todo) {
@@ -207,7 +207,7 @@ class TodoStore {
 }
 
 class TodoRenderer {
-    public static function renderItem(Todo $todo): string {
+    public static function renderItem($todo: Todo): string {
         $idStr = string($todo->id);
         $checkedAttr = $todo->completed ? "checked" : "";
         $itemClass = $todo->completed
@@ -254,7 +254,7 @@ class TodoRenderer {
         return $html;
     }
 
-    public static function renderList(array $todos, string $filter, array $stats): string {
+    public static function renderList($todos: array, $filter: string, $stats: array): string {
         $html = "<div id=\"todo-list-container\" class=\"space-y-4\">\n";
         
         // Counter and stats bar
@@ -323,7 +323,7 @@ class TodoRenderer {
         return $html;
     }
 
-    public static function renderFullPage(array $todos, string $filter, array $stats): string {
+    public static function renderFullPage($todos: array, $filter: string, $stats: array): string {
         $listHtml = self::renderList($todos, $filter, $stats);
 
         $html = "<!DOCTYPE html>\n";

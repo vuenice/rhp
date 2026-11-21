@@ -88,17 +88,17 @@ fn test_arithmetic_bitwise_unary_and_short_circuit_execution() {
 #[test]
 fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
     let source = r#"
-        function fib(int $n): int {
+        function fib($n: int): int {
             if ($n <= 1) {
                 return $n;
             }
             return fib($n - 1) + fib($n - 2);
         }
 
-        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05, float $discount = 0.0): float {
+        function calculateTotal($quantity: int, $price: float, $taxRate: float = 0.05, $discount: float = 0.0): float {
             $subtotal = $quantity * $price;
             $tax = $subtotal * $taxRate;
-            float $total = $subtotal + $tax - $discount;
+            $total: float = $subtotal + $tax - $discount;
             return $total;
         }
 
@@ -121,7 +121,7 @@ fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
 
     // Named parameters must be rejected with ParseError
     let named_source = r#"
-        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
+        function calculateTotal($quantity: int, $price: float, $taxRate: float = 0.05): float {
             return $quantity * $price;
         }
         $res = calculateTotal(price: 50.0, quantity: 2);
@@ -132,10 +132,10 @@ fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
 #[test]
 fn test_runtime_boundary_type_contract_enforcement_and_stack_trace() {
     // Bypass static type-checker using `lower_program(..., None)` so a dynamic runtime type mismatch hits `OpCode::AssertType`
-    let source = r#"function requireInt(int $x): int {
+    let source = r#"function requireInt($x: int): int {
     return $x + 1;
 }
-function caller(mixed $val): int {
+function caller($val: mixed): int {
     return requireInt($val);
 }
 $boom = caller('not-an-int');
@@ -217,7 +217,7 @@ fn test_i64_arithmetic_does_not_wrap() {
 #[test]
 fn test_rust_numeric_wrappers_and_fluent_pipelines() {
     let source = r#"
-        int $i64Val = 100 + 50 - 30;
+        $i64Val: int = 100 + 50 - 30;
         return $i64Val;
     "#;
 
@@ -288,8 +288,8 @@ fn test_classes_inheritance_constructor_promotion_readonly_enums_and_try_catch()
             public const CURRENCY = 'USD';
 
             public function __construct(
-                public readonly int $id,
-                private float $amount
+                public readonly $id: int,
+                private $amount: float
             ) {}
 
             public function total(): float {
@@ -337,7 +337,7 @@ fn test_readonly_property_mutation_outside_constructor_fails_at_runtime() {
     // Lower without static checker so runtime readonly enforcement in `OpCode::SetProp` is tested directly
     let source = r#"
         class Account {
-            public function __construct(public readonly int $id) {}
+            public function __construct(public readonly $id: int) {}
         }
         $acc = new Account(1);
         $acc->id = 2;
@@ -578,7 +578,7 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
 
     // 4. VM runtime: Array Copy-on-Write across function calls
     let source_func_cow = r#"
-        function mutateList(array $items): array {
+        function mutateList($items: array): array {
             $items[0] = 777;
             $items[] = 888;
             return $items;
@@ -607,10 +607,10 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
 
     // 4b. VM runtime: Self-push creates an acyclic snapshot and equality succeeds
     let source_acyclic = r#"
-        list $a = [1];
+        $a: list = [1];
         $a[] = $a;
 
-        list $b = [1];
+        $b: list = [1];
         $b[] = $b;
 
         $are_equal = ($a == $b);
@@ -621,7 +621,7 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
 
     // 4c. VM runtime: Explicit pass-by-reference mutates caller variable in-place
     let source_by_ref = r#"
-        function mutateByRef(array &$items): void {
+        function mutateByRef(&$items: array): void {
             $items[0] = 555;
             $items[] = 666;
         }
@@ -641,7 +641,7 @@ fn test_dynamic_value_enum_and_copy_on_write_semantics() {
     // 5. VM runtime: Object Reference Semantics (objects share reference handle)
     let source_obj_ref = r#"
         class Customer {
-            public string $name = 'Initial';
+            public $name: string = 'Initial';
         }
 
         $c1 = new Customer();
@@ -716,7 +716,7 @@ fn test_vm_runtime_type_casting_and_collection_boundary_contracts() {
 
     // 2. Runtime Collection & Scalar Boundary Contracts: List $arr, Dict $arr, int $id, string $title
     let source_contracts = r#"
-        function formatEntry(int $id, string $title, List $items, Dict $config): List {
+        function formatEntry($id: int, $title: string, $items: List, $config: Dict): List {
             return $items;
         }
 

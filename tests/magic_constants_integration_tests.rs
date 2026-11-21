@@ -106,7 +106,7 @@ fn test_magic_function() {
     let code = r#"
 $global_fn = __FUNCTION__;
 
-function computeTotal(int $x, int $y): string {
+function computeTotal($x: int, $y: int): string {
     return __FUNCTION__;
 }
 
@@ -257,12 +257,12 @@ return [$global_trait, __trait__];
 #[test]
 fn test_magic_constants_in_defaults_and_expressions() {
     let code = r#"
-function logEvent(string $msg, int $line = __LINE__): string {
+function logEvent($msg: string, $line: int = __LINE__): string {
     return $msg + " at line " + string($line);
 }
 
 class Record {
-    public int $created_line = __LINE__;
+    public $created_line: int = __LINE__;
 }
 
 $rec = new Record();

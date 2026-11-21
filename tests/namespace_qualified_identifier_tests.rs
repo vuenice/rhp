@@ -6,7 +6,7 @@ fn test_basic_namespace_declaration_and_instantiation() {
         namespace App\Actions\Site;
 
         class Handler {
-            public string $action = 'render_home';
+            public $action: string = 'render_home';
             public function getAction(): string {
                 return $this->action;
             }
@@ -35,7 +35,7 @@ fn test_use_import_and_aliasing() {
     let source = r#"
         namespace App\Models {
             class User {
-                public string $name = 'Alice';
+                public $name: string = 'Alice';
                 public function getName(): string {
                     return $this->name;
                 }
@@ -120,7 +120,7 @@ fn test_subnamespace_use_and_instantiation() {
     let source = r#"
         namespace App\Models {
             class User {
-                public int $id = 99;
+                public $id: int = 99;
                 public function getId(): int {
                     return $this->id;
                 }
@@ -223,10 +223,10 @@ fn test_multiple_use_imports_in_single_statement() {
     let source = r#"
         namespace App\Entities {
             class Post {
-                public string $title = 'Post Title';
+                public $title: string = 'Post Title';
             }
             class Comment {
-                public string $body = 'Comment Body';
+                public $body: string = 'Comment Body';
             }
         }
 
@@ -256,7 +256,7 @@ fn test_class_extends_qualified_parent_and_trait_use() {
     let source = r#"
         namespace App\Traits {
             trait Timestampable {
-                public string $createdAt = '2026-01-01';
+                public $createdAt: string = '2026-01-01';
                 public function getCreatedAt(): string {
                     return $this->createdAt;
                 }
@@ -265,7 +265,7 @@ fn test_class_extends_qualified_parent_and_trait_use() {
 
         namespace App\Base {
             class Model {
-                public int $id = 100;
+                public $id: int = 100;
                 public function getId(): int {
                     return $this->id;
                 }
@@ -276,7 +276,7 @@ fn test_class_extends_qualified_parent_and_trait_use() {
             class User extends \App\Base\Model {
                 use \App\Traits\Timestampable;
 
-                public string $role = 'member';
+                public $role: string = 'member';
             }
 
             $u = new User();
@@ -303,7 +303,7 @@ fn test_qualified_type_hints_in_methods_and_properties() {
     let source = r#"
         namespace App\DTO {
             class UserData {
-                public string $username = 'admin_user';
+                public $username: string = 'admin_user';
             }
         }
 
@@ -311,7 +311,7 @@ fn test_qualified_type_hints_in_methods_and_properties() {
             use App\DTO\UserData;
 
             class UserService {
-                public function transform(\App\DTO\UserData $data): string {
+                public function transform($data: \App\DTO\UserData): string {
                     return $data->username;
                 }
             }
@@ -338,7 +338,7 @@ fn test_user_requested_dnf_and_namespaced_union_types() {
         class IdArrayItem implements HasId, Arrayable {}
 
         // Accepts: an object implementing BOTH interfaces, OR null
-        function save((HasId&Arrayable)|null $item): string {
+        function save($item: (HasId&Arrayable)|null): string {
             if ($item == null) {
                 return "saved_null";
             }
@@ -346,19 +346,19 @@ fn test_user_requested_dnf_and_namespaced_union_types() {
         }
 
         // Mixed: (A and B) or C
-        function render((Countable&Traversable)|array $data): string {
+        function render($data: (Countable&Traversable)|array): string {
             return "rendered";
         }
 
         // Return and property types work too
         class Repo {
-            private (HasId&Arrayable)|null $cached = null;
+            private $cached: (HasId&Arrayable)|null = null;
 
             public function find(): (HasId&Arrayable)|false {
                 return false;
             }
 
-            public function setCache((HasId&Arrayable)|null $val): void {
+            public function setCache($val: (HasId&Arrayable)|null): void {
                 $this->cached = $val;
             }
 
@@ -389,12 +389,12 @@ fn test_user_requested_dnf_and_namespaced_union_types() {
             use App\Models\User;
             use App\Models\Admin as AdminModel;
 
-            function notify(User|AdminModel|\Stringable $recipient): string {
+            function notify($recipient: User|AdminModel|\Stringable): string {
                 return "notified";
             }
 
             // Fully qualified are not supported, even in return value or function parameter
-            function handle(\App\Models\User|\App\Models\Team $subject): \App\Models\User|\App\Models\Team {
+            function handle($subject: \App\Models\User|\App\Models\Team): \App\Models\User|\App\Models\Team {
                 return $subject;
             }
 
@@ -429,7 +429,7 @@ fn test_dnf_type_rejects_partial_interface_implementation_at_compile_time() {
 
         class OnlyHasId implements HasId {}
 
-        function save((HasId&Arrayable)|null $item): void {}
+        function save($item: (HasId&Arrayable)|null): void {}
 
         $item = new OnlyHasId();
         save($item);
@@ -445,20 +445,20 @@ fn test_dnf_type_rejects_partial_interface_implementation_at_compile_time() {
 fn test_dnf_syntax_errors_for_unparenthesized_mixing() {
     // Unparenthesized & with | should fail parsing
     let source1 = r#"
-        function test(A & B | C $item): void {}
+        function test($item: A & B | C): void {}
     "#;
     let res1 = run_source_with_vm(source1);
     assert!(res1.is_err(), "Mixing unparenthesized '&' and '|' must fail parse");
 
     let source2 = r#"
-        function test(A | B & C $item): void {}
+        function test($item: A | B & C): void {}
     "#;
     let res2 = run_source_with_vm(source2);
     assert!(res2.is_err(), "Mixing unparenthesized '|' and '&' must fail parse");
 
     // Parenthesized with only 1 member (A) in union must fail
     let source3 = r#"
-        function test((A)|B $item): void {}
+        function test($item: (A)|B): void {}
     "#;
     let res3 = run_source_with_vm(source3);
     assert!(res3.is_err(), "Single member parenthesized type '(A)' must fail parse");
@@ -475,7 +475,7 @@ fn test_dnf_local_variable_declaration_and_multiple_clauses() {
         class AB implements A, B {}
         class CD implements C, D {}
 
-        function check((A&B)|(C&D) $val): string {
+        function check($val: (A&B)|(C&D)): string {
             if ($val instanceof A) {
                 return "AB";
             }
@@ -486,8 +486,8 @@ fn test_dnf_local_variable_declaration_and_multiple_clauses() {
         $cd = new CD();
 
         // Typed local variables with DNF types
-        (A&B)|null $local1 = $ab;
-        (C&D)|null $local2 = null;
+        $local1: (A&B)|null = $ab;
+        $local2: (C&D)|null = null;
 
         $r1 = check($ab);
         $r2 = check($cd);
@@ -517,7 +517,7 @@ fn test_namespaced_dnf_types_with_fully_qualified_and_aliased_interfaces() {
             class Entity implements Identifiable, JsonSerializable {}
 
             class Handler {
-                public function process((Identifiable&JsonSerializable)|null $target): string {
+                public function process($target: (Identifiable&JsonSerializable)|null): string {
                     if ($target == null) {
                         return "processed_null";
                     }

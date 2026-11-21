@@ -242,11 +242,11 @@ fn test_zero_rc_overhead_for_all_primitives() {
 #[test]
 fn test_script_execution_with_cased_and_primitive_hints() {
     let source = r#"
-        function compute(int $count, float $rate, bool $active, int? $fallback): float {
+        function compute($count: int, $rate: float, $active: bool, $fallback: int?): float {
             if (!$active) {
                 return 0.0;
             }
-            float $res = float($count) * $rate;
+            $res: float = float($count) * $rate;
             if ($fallback != null) {
                 $res = $res + float($fallback);
             }

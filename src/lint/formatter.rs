@@ -825,10 +825,27 @@ fn format_line_spacing(line: &str) -> String {
             continue;
         }
 
-        // Return type colon `: `
+        // Colon `:` formatting:
+        // 1. Double colon `::` handled above.
+        // 2. Colon at beginning of continuation line handled above.
+        // 3. Type annotation colon: `$var: Type`, `): Type`, `public $name: Type`
+        //    Standard colon spacing: no space before colon, 1 space after colon.
+        // 4. Ternary colon: `$cond ? $a : $b`
+        //    Standard ternary spacing: 1 space before colon, 1 space after colon.
         if c == ':' && i + 1 < n && chars[i + 1] != ':' {
-            // Check if this looks like a return type colon `): type` or case label
-            if output.ends_with(')') {
+            let trimmed = output.trim_end();
+            if trimmed.ends_with(')') || (ends_with_variable_name(trimmed) && !has_unmatched_ternary_question(&output)) {
+                while output.ends_with(' ') {
+                    output.pop();
+                }
+                output.push_str(": ");
+                i += 1;
+                while i < n && (chars[i] == ' ' || chars[i] == '\t') {
+                    i += 1;
+                }
+                continue;
+            } else if has_unmatched_ternary_question(&output) {
+                ensure_space_before(&mut output);
                 output.push_str(": ");
                 i += 1;
                 while i < n && (chars[i] == ' ' || chars[i] == '\t') {
@@ -1049,6 +1066,42 @@ fn ensure_space_before(output: &mut String) {
     if !output.is_empty() && !output.ends_with(' ') {
         output.push(' ');
     }
+}
+
+fn ends_with_variable_name(s: &str) -> bool {
+    let chars = s.chars().rev();
+    let mut saw_ident = false;
+    for c in chars {
+        if c.is_alphanumeric() || c == '_' {
+            saw_ident = true;
+        } else if c == '$' {
+            return saw_ident;
+        } else {
+            return false;
+        }
+    }
+    false
+}
+
+fn has_unmatched_ternary_question(output: &str) -> bool {
+    let chars: Vec<char> = output.chars().collect();
+    let mut idx = chars.len();
+    while idx > 0 {
+        idx -= 1;
+        let ch = chars[idx];
+        if ch == ';' || ch == ',' || ch == '(' || ch == '[' || ch == '{' || ch == '=' {
+            break;
+        }
+        if ch == '?' {
+            // Check if it's ?? or ?->
+            let is_null_coalesce = (idx > 0 && chars[idx - 1] == '?') || (idx + 1 < chars.len() && chars[idx + 1] == '?');
+            let is_nullsafe = idx + 1 < chars.len() && chars[idx + 1] == '-';
+            if !is_null_coalesce && !is_nullsafe {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn get_last_word(s: &str) -> String {

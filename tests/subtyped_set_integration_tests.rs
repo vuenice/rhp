@@ -346,7 +346,7 @@ fn test_set_type_boundary_contracts() {
 
     // 1. Strict `set $s` declaration and return type hint
     let valid_source = r#"
-        function processSet(set $items): int {
+        function processSet($items: set): int {
             return $items->count();
         }
 
@@ -354,7 +354,7 @@ fn test_set_type_boundary_contracts() {
             return Arr::set(['x', 'y', 'z', 'x']);
         }
 
-        set $s = buildUniqueSet();
+        $s: set = buildUniqueSet();
         return processSet($s);
     "#;
 
@@ -363,7 +363,7 @@ fn test_set_type_boundary_contracts() {
 
     // 2. Passing integer to function expecting `set` must fail static or runtime type checks
     let invalid_param_source = r#"
-        function requireSet(set $items): int {
+        function requireSet($items: set): int {
             return $items->count();
         }
 
@@ -381,7 +381,7 @@ fn test_set_type_boundary_contracts() {
 
     // 3. Passing Dict to function expecting `set` must fail
     let invalid_dict_param_source = r#"
-        function requireSet(set $items): int {
+        function requireSet($items: set): int {
             return $items->count();
         }
 
@@ -404,7 +404,7 @@ fn test_set_permissive_parent_array_type_acceptance() {
     clear_runtime_closure_macros();
 
     let source = r#"
-        function countAnyCollection(array $items): int {
+        function countAnyCollection($items: array): int {
             return $items->count();
         }
 
@@ -412,7 +412,7 @@ fn test_set_permissive_parent_array_type_acceptance() {
             return Arr::set([10, 20, 30, 20]);
         }
 
-        array $arr = Arr::set(['a', 'b', 'c']);
+        $arr: array = Arr::set(['a', 'b', 'c']);
         $c1 = countAnyCollection($arr);
         $c2 = countAnyCollection(returnSetAsArray());
 

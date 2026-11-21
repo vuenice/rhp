@@ -159,11 +159,11 @@ fn test_instanceof_operator_and_functional() {
 fn test_instanceof_in_if_condition() {
     let source = r#"
         class User {
-            public string $name = "Alice";
+            public $name: string = "Alice";
         }
         class Guest {}
 
-        function checkUser(mixed $obj): string {
+        function checkUser($obj: mixed): string {
             if ($obj instanceof User) {
                 return "is_user:" + $obj->name;
             } else {

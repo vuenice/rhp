@@ -19,8 +19,8 @@ fn test_attribute_expansion_fillable_guarded_table() {
 #[guarded('id', 'created_at')]
 #[table('users')]
 class User {
-    public int $id;
-    public string $name;
+    public $id: int;
+    public $name: string;
 }
 "#;
 
@@ -253,8 +253,8 @@ fn test_determinism_identical_output() {
 #[fillable('title', 'sku', 'price')]
 #[guarded('id', 'created_at')]
 class Product {
-    public int $id;
-    public string $title;
+    public $id: int;
+    public $title: string;
 }
 "#;
 

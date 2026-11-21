@@ -659,7 +659,7 @@ fn test_dict_type_boundary_contracts() {
 
     // 1. Function boundary contract with `Dict` parameter and return type
     let source = r#"
-        function mergeWithDefaults(Dict $options): Dict {
+        function mergeWithDefaults($options: Dict): Dict {
             return $options->merge(Arr::dict(['timeout' => 30, 'retries' => 3]));
         }
 
@@ -680,7 +680,7 @@ fn test_dict_type_boundary_contracts() {
 
     // 2. Static type boundary contract rejection at compile-time
     let source_compile_invalid = r#"
-        function requireDict(Dict $items): int {
+        function requireDict($items: Dict): int {
             return $items->count();
         }
 
@@ -698,11 +698,11 @@ fn test_dict_type_boundary_contracts() {
 
     // 3. Dynamic runtime boundary contract rejection
     let source_runtime_invalid = r#"
-        function requireDictDynamic(Dict $items): int {
+        function requireDictDynamic($items: Dict): int {
             return $items->count();
         }
 
-        function testBridge(mixed $x): int {
+        function testBridge($x: mixed): int {
             return requireDictDynamic($x);
         }
 
@@ -723,8 +723,8 @@ fn test_dict_lowercase_type_hint_and_local_scope() {
     clear_runtime_closure_macros();
 
     let source = r#"
-        function configureApp(dict $config): dict {
-            dict $scoped = [];
+        function configureApp($config: dict): dict {
+            $scoped: dict = [];
             $scoped['app_name'] = $config->get('name', 'MyApp');
             $scoped['env'] = $config->get('env', 'production');
             $scoped['ready'] = true;

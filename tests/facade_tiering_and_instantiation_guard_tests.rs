@@ -202,7 +202,7 @@ fn test_tier3_script_land_static_facades() {
     // 1. Userland static class declared with `static class MathUtil`
     let script = r#"
         static class MathUtil {
-            public static function square(int $x): int {
+            public static function square($x: int): int {
                 return $x * $x;
             }
         }
@@ -216,7 +216,7 @@ fn test_tier3_script_land_static_facades() {
 
         #[Facade]
         class TextHelper {
-            public static function shout(string $s): string {
+            public static function shout($s: string): string {
                 return Str::upper($s) + "!!!";
             }
         }
@@ -332,7 +332,7 @@ fn test_instantiation_guard_dynamic_runtime() {
 fn test_inheritance_guard_across_all_tiers() {
     register_tier2_plugin(CustomCryptoPlugin);
 
-    let def_script = "static class MathUtil { public static function square(int $x): int { return $x * $x; } }";
+    let def_script = "static class MathUtil { public static function square($x: int): int { return $x * $x; } }";
     let _ = parse(def_script).expect("Static class setup should pass");
 
     let static_classes = ["Int", "Str", "Arr", "DB", "Log", "Memory", "CustomCrypto", "MathUtil"];
@@ -374,21 +374,21 @@ fn test_facade_macro_registration_and_execution_across_tiers() {
 
     let script = r#"
         static class MathUtil {
-            public static function square(int $x): int {
+            public static function square($x: int): int {
                 return $x * $x;
             }
         }
 
         // Tier 1 dynamic macro
-        Str::macro("shout", fn(string $s) => Str::upper($s) + "!!!");
+        Str::macro("shout", fn($s: string) => Str::upper($s) + "!!!");
         $tier1_res = Str::shout("hello world");
 
         // Tier 2 dynamic macro
-        CustomCrypto::macro("salt", fn(string $s) => $s + "_salt_123");
+        CustomCrypto::macro("salt", fn($s: string) => $s + "_salt_123");
         $tier2_res = CustomCrypto::salt("pass");
 
         // Tier 3 dynamic macro
-        MathUtil::macro("cube", fn(int $x) => $x * $x * $x);
+        MathUtil::macro("cube", fn($x: int) => $x * $x * $x);
         $tier3_res = MathUtil::cube(4);
     "#;
 

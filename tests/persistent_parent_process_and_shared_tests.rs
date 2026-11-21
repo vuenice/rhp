@@ -10,8 +10,8 @@ use rhp::{
 fn test_shared_keyword_parsing_and_ast() {
     let src = r#"
         shared class DatabasePool {
-            public static string $driver = "pgsql";
-            private int $maxConnections = 50;
+            public static $driver: string = "pgsql";
+            private $maxConnections: int = 50;
 
             public function getLimit(): int {
                 return $this->maxConnections;
@@ -61,13 +61,13 @@ fn test_instance_methods_of_shared_class_allowed_everywhere() {
     // They are completely allowed to be called from non-shared classes!
     let src = r#"
         shared class Router {
-            public function dispatch(string $path): string {
+            public function dispatch($path: string): string {
                 return "route:" + $path;
             }
         }
 
         class HttpController {
-            public function handle(Router $router): string {
+            public function handle($router: Router): string {
                 // Instance method call on shared class is ALLOWED
                 return $router->dispatch("/home");
             }
@@ -83,7 +83,7 @@ fn test_static_methods_of_shared_class_inside_non_shared_class() {
     // Non-shared classes can use static methods of a shared class!
     let src = r#"
         shared class MetricsRegistry {
-            public readonly static int $counter = 100;
+            public readonly static $counter: int = 100;
 
             public static function getCount(): int {
                 return self::$counter;
@@ -210,7 +210,7 @@ fn test_non_shared_extends_shared_forbidden() {
 fn test_shared_class_cannot_inherit_mutable_properties() {
     let src = r#"
         class BaseRepository {
-            public string $table = "users";
+            public $table: string = "users";
         }
 
         shared class UserRepository extends BaseRepository {
@@ -241,7 +241,7 @@ fn test_shared_class_cannot_inherit_mutable_properties() {
 fn test_shared_class_mutable_property_forbidden() {
     let src = r#"
         shared class CounterStore {
-            public int $count = 0;
+            public $count: int = 0;
         }
     "#;
 
@@ -269,7 +269,7 @@ fn test_shared_class_scoped_service_injection_forbidden() {
         class Request {}
 
         shared class RequestTracker {
-            public function __construct(public readonly Request $request) {}
+            public function __construct(public readonly $request: Request) {}
         }
     "#;
 
@@ -297,7 +297,7 @@ fn test_shared_class_scoped_service_injection_forbidden() {
 fn test_shared_class_non_static_closure_forbidden() {
     let src = r#"
         shared class HookManager {
-            public readonly \Closure $hook = function() { return 42; };
+            public readonly $hook: \Closure = function() { return 42; };
         }
     "#;
 
@@ -323,7 +323,7 @@ fn test_shared_class_non_static_closure_forbidden() {
 fn test_shared_class_mutable_static_forbidden() {
     let src = r#"
         shared class StateHolder {
-            public static int $badState = 0;
+            public static $badState: int = 0;
         }
     "#;
 
@@ -349,7 +349,7 @@ fn test_shared_class_mutable_static_forbidden() {
 fn test_parent_process_and_shared_isolation() {
     let parent_code = r#"
         shared class GlobalCounter {
-            public readonly static int $base = 1000;
+            public readonly static $base: int = 1000;
 
             public static function getBase(): int {
                 return self::$base;
@@ -397,7 +397,7 @@ fn test_parent_process_and_shared_isolation() {
 fn test_parent_process_concurrent_workers_reading_shared() {
     let parent_code = r#"
         shared class SharedCache {
-            public readonly static int $hits = 500;
+            public readonly static $hits: int = 500;
 
             public static function getHits(): int {
                 return self::$hits;
@@ -414,7 +414,7 @@ fn test_parent_process_concurrent_workers_reading_shared() {
             let req_code = format!(
                 r#"
                 class WorkerTask_{} {{
-                    public function compute(int $idx): int {{
+                    public function compute($idx: int): int {{
                         return SharedCache::getHits() + $idx;
                     }}
                 }}
@@ -482,7 +482,7 @@ fn test_worker_extending_shared_rejected_and_calling_instance_method_allowed() {
     // 2. Request with non-shared class calling instance method on shared class -> ALLOWED!
     let valid_request_code = r#"
         class GoodController {
-            public function run(SecureVault $vault): string {
+            public function run($vault: SecureVault): string {
                 return $vault->decryptKey();
             }
         }
@@ -528,10 +528,10 @@ fn test_boot_phase_db_and_future_calls_forbidden() {
 fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
     let src = r#"
         shared class AppConfig {
-            public readonly string $appName;
-            public readonly int $version;
+            public readonly $appName: string;
+            public readonly $version: int;
 
-            public function __construct(string $name, int $ver) {
+            public function __construct($name: string, $ver: int) {
                 $this->appName = $name;
                 $this->version = $ver;
             }
@@ -546,7 +546,7 @@ fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
         }
 
         class NormalRequestState {
-            public string $requestId = "req-1";
+            public $requestId: string = "req-1";
         }
     "#;
 
@@ -596,8 +596,8 @@ fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
             let shared_val = PhpValue::SharedObject(arc_clone);
             let worker_src = r##"
                 shared class AppConfig {
-                    public readonly string $appName;
-                    public readonly int $version;
+                    public readonly $appName: string;
+                    public readonly $version: int;
 
                     public function getAppName(): string {
                         return $this->appName;
@@ -609,7 +609,7 @@ fn test_shared_class_arc_rwlock_concurrency_and_zero_copy() {
                 }
 
                 class RequestWorker {
-                    public function describe(AppConfig $cfg, string $id): string {
+                    public function describe($cfg: AppConfig, $id: string): string {
                         return $cfg->getAppName() + "#" + string($cfg->getVersion()) + "@" + $id;
                     }
                 }

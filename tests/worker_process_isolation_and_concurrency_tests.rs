@@ -23,9 +23,9 @@ use rhp::{
 fn test_multi_threaded_worker_pool_concurrency() {
     let parent_code = r#"
         class OrderCalculator {
-            public static int $taxRate = 15;
+            public static $taxRate: int = 15;
 
-            public static function computeTotal(int $subtotal, int $shipping): int {
+            public static function computeTotal($subtotal: int, $shipping: int): int {
                 $tax = ($subtotal * self::$taxRate) / 100;
                 return $subtotal + $shipping + $tax;
             }
@@ -83,10 +83,10 @@ fn test_multi_threaded_worker_pool_concurrency() {
 fn test_copy_on_write_state_isolation_static_properties() {
     let parent_code = r#"
         class ServerConfig {
-            public static int $counter = 100;
-            public static string $activeZone = "us-east-1";
+            public static $counter: int = 100;
+            public static $activeZone: string = "us-east-1";
 
-            public static function mutate(int $delta, string $zone): int {
+            public static function mutate($delta: int, $zone: string): int {
                 self::$counter = self::$counter + $delta;
                 self::$activeZone = $zone;
                 return self::$counter;
@@ -243,7 +243,7 @@ fn test_fault_isolation_and_panic_boundary() {
 #[test]
 fn test_direct_precompiled_function_call_concurrency() {
     let parent_code = r#"
-        function calculateHash(int $id, string $salt): string {
+        function calculateHash($id: int, $salt: string): string {
             return "hash:{$id}-{$salt}";
         }
     "#;
@@ -276,9 +276,9 @@ fn test_direct_precompiled_function_call_concurrency() {
 fn test_process_cow_worker_model() {
     let parent_code = r#"
         class HeavyFramework {
-            public static int $stateVersion = 42;
+            public static $stateVersion: int = 42;
 
-            public static function executeJob(int $id): string {
+            public static function executeJob($id: int): string {
                 self::$stateVersion = self::$stateVersion + $id;
                 echo "job_executed;";
                 return "res_" + string(self::$stateVersion);

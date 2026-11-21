@@ -233,8 +233,8 @@ fn test_userland_custom_handler_class() {
 
     let code = r#"
         class MemoryLogger {
-            public list $captured = [];
-            public function handle(dict $record): void {
+            public $captured: list = [];
+            public function handle($record: dict): void {
                 $this->captured = Arr::list([...$this->captured, $record["message"]]);
             }
         }

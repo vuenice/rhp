@@ -141,10 +141,10 @@ fn test_data_race_elimination_across_concurrent_worker_threads() {
     // without relying on a traditional tracing garbage collector.
     let parent_code = r#"
         class CounterService {
-            public static int $globalCounter = 1000;
-            public static string $serviceName = "rhp-core";
+            public static $globalCounter: int = 1000;
+            public static $serviceName: string = "rhp-core";
 
-            public static function process(int $reqId, int $increment): int {
+            public static function process($reqId: int, $increment: int): int {
                 self::$globalCounter = self::$globalCounter + $increment;
                 return self::$globalCounter + $reqId;
             }
@@ -241,7 +241,7 @@ fn test_prohibition_of_pass_by_reference_prevents_cyclic_leaks() {
 
     // 1. Pass-by-reference parameter with strict two-way contract: calling without & must be rejected
     let ref_param_code = r#"
-        function leakTester(mixed &$cyclicRef): void {}
+        function leakTester(&$cyclicRef: mixed): void {}
         $x = 10;
         leakTester($x);
     "#;

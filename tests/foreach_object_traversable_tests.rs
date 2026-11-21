@@ -4,9 +4,9 @@ use rhp::{run_source, PhpValue};
 fn test_foreach_custom_iterator_aggregate() {
     let source = r#"
         class TeamList implements IteratorAggregate {
-            private array $members;
+            private $members: array;
 
-            public function __construct(array $members) {
+            public function __construct($members: array) {
                 $this->members = $members;
             }
 
@@ -38,11 +38,11 @@ fn test_foreach_custom_iterator_aggregate() {
 fn test_foreach_custom_iterator_step_by_step() {
     let source = r#"
         class RangeIterator implements Iterator {
-            private int $start;
-            private int $end;
-            private int $curr;
+            private $start: int;
+            private $end: int;
+            private $curr: int;
 
-            public function __construct(int $start, int $end) {
+            public function __construct($start: int, $end: int) {
                 $this->start = $start;
                 $this->end = $end;
                 $this->curr = $start;
@@ -109,9 +109,9 @@ fn test_foreach_custom_iterator_step_by_step() {
 fn test_foreach_plain_object_visible_properties() {
     let source = r#"
         class UserDTO {
-            public string $name = "Yogesh";
-            public string $role = "Engineer";
-            public int $level = 7;
+            public $name: string = "Yogesh";
+            public $role: string = "Engineer";
+            public $level: int = 7;
         }
 
         $dto = new UserDTO();
@@ -137,8 +137,8 @@ fn test_foreach_plain_object_visible_properties() {
 fn test_foreach_nested_loops_and_matrices() {
     let source = r#"
         class MatrixRow implements IteratorAggregate {
-            private array $cells;
-            public function __construct(array $cells) {
+            private $cells: array;
+            public function __construct($cells: array) {
                 $this->cells = $cells;
             }
             public function getIterator(): Traversable {
@@ -147,8 +147,8 @@ fn test_foreach_nested_loops_and_matrices() {
         }
 
         class MatrixGrid implements IteratorAggregate {
-            private array $rows;
-            public function __construct(array $rows) {
+            private $rows: array;
+            public function __construct($rows: array) {
                 $this->rows = $rows;
             }
             public function getIterator(): Traversable {
@@ -179,8 +179,8 @@ fn test_foreach_nested_loops_and_matrices() {
 fn test_foreach_break_and_continue_on_object() {
     let source = r#"
         class NumberBox implements IteratorAggregate {
-            private array $numbers;
-            public function __construct(array $nums) {
+            private $numbers: array;
+            public function __construct($nums: array) {
                 $this->numbers = $nums;
             }
             public function getIterator(): Traversable {
@@ -360,7 +360,7 @@ fn test_instanceof_and_type_contracts() {
 #[test]
 fn test_iterable_parameter_type_hint_contract() {
     let source = r#"
-        function sumIterable(iterable $items): int {
+        function sumIterable($items: iterable): int {
             $total = 0;
             foreach ($items as $val) {
                 $total += $val;

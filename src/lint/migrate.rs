@@ -54,6 +54,7 @@ pub struct MigrateFileResult {
     pub var_dump_count: usize,
     pub strict_eq_count: usize,
     pub byte_param_count: usize,
+    pub param_type_count: usize,
     pub named_arg_count: usize,
     pub param_order_count: usize,
     pub void_return_count: usize,
@@ -143,6 +144,9 @@ impl MigrateReport {
                     }
                     if res.byte_param_count > 0 {
                         out.push_str(&format!("      ~ {} function parameter(s) receiving binary strings updated to 'byte'\n", res.byte_param_count));
+                    }
+                    if res.param_type_count > 0 {
+                        out.push_str(&format!("      ~ {} parameter & property type(s) migrated to colon syntax ($x: Type)\n", res.param_type_count));
                     }
                     if res.named_arg_count > 0 {
                         out.push_str(&format!("      ~ {} named argument call(s) converted to positional in proper order\n", res.named_arg_count));
@@ -262,6 +266,7 @@ pub fn migrate_source_with_options_and_context(
     let mut error_suppress_count = 0;
     let mut var_dump_count = 0;
     let mut strict_eq_count = 0;
+    let mut param_type_count = 0;
     let mut named_arg_count = 0;
     let mut param_order_count = 0;
     let mut void_return_count = 0;
@@ -383,14 +388,17 @@ pub fn migrate_source_with_options_and_context(
     let (after_lines, added_lines) = add_superglobal_declarations(&current);
     current = after_lines;
 
+    // Step 4.5: Migrate PHP parameter and property types from prefix syntax (Type $x) to colon syntax ($x: Type)
+    let (after_params, p_type_count) = migrate_php_parameter_and_property_types(&current);
+    param_type_count += p_type_count;
+    current = after_params;
+
+    // Step 4.6: Rewrite prefix nullable types (?int -> int?, ?User -> User?)
+    current = rewrite_postfix_nullable(&current);
+
     // Step 5: Detect non-UTF-8 strings and update function parameters receiving them to 'byte'
     let (after_bytes, byte_param_count) = upgrade_binary_string_arguments(&current);
     current = after_bytes;
-
-    // Step 5.5: `?int` / `?$var` become `int?` / `mixed? $var` before any step that
-    // parses the file. Prefix `?` is no longer a type, so parameter reordering
-    // would skip the whole file if it still saw `?$x`.
-    current = rewrite_postfix_nullable(&current);
 
     if options.php_version >= 8 {
         // Step 6: When PHP version is 8, only check for named arguments, reorder them, and remove argument names.
@@ -449,6 +457,7 @@ pub fn migrate_source_with_options_and_context(
         var_dump_count,
         strict_eq_count,
         byte_param_count,
+        param_type_count,
         named_arg_count,
         param_order_count,
         void_return_count,
@@ -4712,26 +4721,12 @@ fn check_fn_params(
                     });
                 }
             } else {
-                // Untyped parameter: insert "byte " before param name (or ampersand if reference)
-                let insert_pos = if param.is_reference {
-                    // Find '&' before param.name.span.start
-                    let bytes = source.as_bytes();
-                    let mut p = param.name.span.start;
-                    while p > param.span.start && bytes[p - 1] != b'&' {
-                        p -= 1;
-                    }
-                    if p > param.span.start && bytes[p - 1] == b'&' {
-                        p - 1
-                    } else {
-                        param.name.span.start
-                    }
-                } else {
-                    param.name.span.start
-                };
+                // Untyped parameter: insert ": byte" after param name
+                let insert_pos = param.name.span.end;
                 edits.push(TextEdit {
                     start: insert_pos,
                     end: insert_pos,
-                    replacement: "byte ".to_string(),
+                    replacement: ": byte".to_string(),
                 });
             }
         }
@@ -4864,6 +4859,324 @@ fn is_nullable_follower(tokens: &[crate::lexer::SpannedToken<'_>], idx: usize) -
             Some(Token::Variable(_) | Token::Ellipsis)
         ),
         _ => false,
+    }
+}
+
+fn is_prop_modifier(tok: &Token<'_>) -> bool {
+    matches!(
+        tok,
+        Token::Public | Token::Protected | Token::Private | Token::Readonly | Token::Static
+    ) || matches!(tok, Token::Ident("var"))
+}
+
+/// Migrates PHP parameter types (`Type $param`) and class property types (`public Type $prop;`)
+/// to RHP colon syntax (`$param: Type`, `public $prop: Type;`).
+/// Preserves prefix nullable `?Type` as `$param: ?Type` and `$prop: ?Type`.
+pub fn migrate_php_parameter_and_property_types(source: &str) -> (String, usize) {
+    let tokens = match Lexer::tokenize(source) {
+        Ok(t) => t,
+        Err(_) => return (source.to_string(), 0),
+    };
+    if tokens.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let n = tokens.len();
+    let mut i = 0;
+    let mut brace_depth = 0;
+    let mut class_depth_stack: Vec<usize> = Vec::new();
+    let mut next_open_brace_is_class = false;
+
+    while i < n {
+        match &tokens[i].token {
+            Token::Class | Token::Trait | Token::Interface | Token::Enum => {
+                if !(i > 0 && matches!(tokens[i - 1].token, Token::DoubleColon)) {
+                    next_open_brace_is_class = true;
+                }
+            }
+            Token::OpenBrace => {
+                brace_depth += 1;
+                if next_open_brace_is_class {
+                    class_depth_stack.push(brace_depth);
+                    next_open_brace_is_class = false;
+                }
+            }
+            Token::CloseBrace => {
+                if class_depth_stack.last() == Some(&brace_depth) {
+                    class_depth_stack.pop();
+                }
+                brace_depth = brace_depth.saturating_sub(1);
+            }
+            Token::Function | Token::Fn => {
+                let mut j = i + 1;
+                if j < n && matches!(tokens[j].token, Token::Ampersand) {
+                    j += 1;
+                }
+                if j < n && matches!(tokens[j].token, Token::Ident(_)) {
+                    j += 1;
+                }
+                if j < n && matches!(tokens[j].token, Token::OpenParen) {
+                    let paren_open = j;
+                    let mut paren_depth = 1;
+                    let mut k = j + 1;
+                    while k < n && paren_depth > 0 {
+                        match &tokens[k].token {
+                            Token::OpenParen => paren_depth += 1,
+                            Token::CloseParen => paren_depth -= 1,
+                            _ => {}
+                        }
+                        if paren_depth > 0 {
+                            k += 1;
+                        }
+                    }
+                    let paren_close = k;
+                    collect_parameter_list_edits(source, &tokens, paren_open + 1, paren_close, &mut edits);
+                    i = paren_close;
+                }
+            }
+            tok if is_prop_modifier(tok) && class_depth_stack.last() == Some(&brace_depth) =>
+            {
+                let mut m_end = i;
+                while m_end < n && is_prop_modifier(&tokens[m_end].token) {
+                    m_end += 1;
+                }
+                if m_end < n && !matches!(tokens[m_end].token, Token::Function | Token::Const | Token::Use) {
+                    let mut stmt_end = m_end;
+                    let mut p_depth = 0;
+                    let mut b_depth = 0;
+                    while stmt_end < n {
+                        match &tokens[stmt_end].token {
+                            Token::OpenParen => p_depth += 1,
+                            Token::CloseParen => if p_depth > 0 { p_depth -= 1; },
+                            Token::OpenBracket => b_depth += 1,
+                            Token::CloseBracket => if b_depth > 0 { b_depth -= 1; },
+                            Token::SemiColon if p_depth == 0 && b_depth == 0 => break,
+                            Token::OpenBrace if p_depth == 0 && b_depth == 0 => break,
+                            _ => {}
+                        }
+                        stmt_end += 1;
+                    }
+                    collect_property_edits(source, &tokens, m_end, stmt_end, &mut edits);
+                    i = stmt_end;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    edits.dedup_by(|a, b| a.start == b.start && a.end == b.end);
+
+    let count = edits.len();
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+fn collect_parameter_list_edits(
+    source: &str,
+    tokens: &[crate::lexer::SpannedToken<'_>],
+    start: usize,
+    end: usize,
+    edits: &mut Vec<TextEdit>,
+) {
+    let mut p_start = start;
+    let mut paren_depth = 0;
+    let mut bracket_depth = 0;
+    let mut brace_depth = 0;
+
+    for idx in start..=end {
+        let is_comma_or_end = if idx == end {
+            true
+        } else {
+            match &tokens[idx].token {
+                Token::OpenParen => { paren_depth += 1; false }
+                Token::CloseParen => { if paren_depth > 0 { paren_depth -= 1; } false }
+                Token::OpenBracket => { bracket_depth += 1; false }
+                Token::CloseBracket => { if bracket_depth > 0 { bracket_depth -= 1; } false }
+                Token::OpenBrace => { brace_depth += 1; false }
+                Token::CloseBrace => { if brace_depth > 0 { brace_depth -= 1; } false }
+                Token::Comma if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => true,
+                _ => false,
+            }
+        };
+
+        if is_comma_or_end {
+            let p_end = idx;
+            if p_start < p_end {
+                migrate_single_parameter(source, tokens, p_start, p_end, edits);
+            }
+            p_start = idx + 1;
+        }
+    }
+}
+
+fn migrate_single_parameter(
+    source: &str,
+    tokens: &[crate::lexer::SpannedToken<'_>],
+    start: usize,
+    end: usize,
+    edits: &mut Vec<TextEdit>,
+) {
+    let mut k = start;
+    // 1. Skip attribute blocks: #[...]
+    while k < end && matches!(tokens[k].token, Token::AttributeStart) {
+        k += 1;
+        let mut b_depth = 1;
+        while k < end && b_depth > 0 {
+            match &tokens[k].token {
+                Token::OpenBracket => b_depth += 1,
+                Token::CloseBracket => b_depth -= 1,
+                _ => {}
+            }
+            k += 1;
+        }
+    }
+
+    // 2. Skip constructor promotion modifiers: public, protected, private, readonly
+    while k < end && matches!(
+        tokens[k].token,
+        Token::Public | Token::Protected | Token::Private | Token::Readonly
+    ) {
+        k += 1;
+    }
+
+    let type_start_idx = k;
+
+    // 3. Find the parameter variable (at depth 0 before any Assign `=`)
+    let mut var_idx = None;
+    let mut p_depth = 0;
+    let mut b_depth = 0;
+    let mut curr = k;
+    while curr < end {
+        match &tokens[curr].token {
+            Token::OpenParen => p_depth += 1,
+            Token::CloseParen => if p_depth > 0 { p_depth -= 1; },
+            Token::OpenBracket => b_depth += 1,
+            Token::CloseBracket => if b_depth > 0 { b_depth -= 1; },
+            Token::Assign if p_depth == 0 && b_depth == 0 => break,
+            Token::Variable(_) if p_depth == 0 && b_depth == 0 => {
+                var_idx = Some(curr);
+                break;
+            }
+            _ => {}
+        }
+        curr += 1;
+    }
+
+    let Some(v_idx) = var_idx else { return };
+
+    // Check if '&' or '...' precedes v_idx
+    let mut var_start_idx = v_idx;
+    if var_start_idx > k && matches!(tokens[var_start_idx - 1].token, Token::Ellipsis) {
+        var_start_idx -= 1;
+    }
+    if var_start_idx > k && matches!(tokens[var_start_idx - 1].token, Token::Ampersand) {
+        var_start_idx -= 1;
+    }
+
+    // Check if there is already a colon after v_idx: `$x: Type`
+    if v_idx + 1 < end && matches!(tokens[v_idx + 1].token, Token::Colon) {
+        return;
+    }
+
+    if type_start_idx < var_start_idx {
+        let type_start = tokens[type_start_idx].span.start;
+        let type_end = tokens[var_start_idx - 1].span.end;
+        let var_start = tokens[var_start_idx].span.start;
+        let var_end = tokens[v_idx].span.end;
+
+        let type_slice = source[type_start..type_end].trim();
+        let var_slice = &source[var_start..var_end];
+
+        let replacement = if type_slice == "?" {
+            format!("{var_slice}: mixed?")
+        } else if let Some(stripped) = type_slice.strip_prefix('?') {
+            format!("{var_slice}: {stripped}?")
+        } else {
+            format!("{var_slice}: {type_slice}")
+        };
+
+        edits.push(TextEdit {
+            start: type_start,
+            end: var_end,
+            replacement,
+        });
+    }
+}
+
+fn collect_property_edits(
+    source: &str,
+    tokens: &[crate::lexer::SpannedToken<'_>],
+    start: usize,
+    end: usize,
+    edits: &mut Vec<TextEdit>,
+) {
+    if start >= end {
+        return;
+    }
+
+    // Find the property variable before '=' or ';' at depth 0
+    let mut var_idx = None;
+    let mut p_depth = 0;
+    let mut b_depth = 0;
+    let mut curr = start;
+
+    while curr < end {
+        match &tokens[curr].token {
+            Token::OpenParen => p_depth += 1,
+            Token::CloseParen => if p_depth > 0 { p_depth -= 1; },
+            Token::OpenBracket => b_depth += 1,
+            Token::CloseBracket => if b_depth > 0 { b_depth -= 1; },
+            Token::Assign if p_depth == 0 && b_depth == 0 => break,
+            Token::SemiColon if p_depth == 0 && b_depth == 0 => break,
+            Token::Variable(_) if p_depth == 0 && b_depth == 0 => {
+                var_idx = Some(curr);
+                break;
+            }
+            _ => {}
+        }
+        curr += 1;
+    }
+
+    let Some(v_idx) = var_idx else { return };
+
+    // Check if already in colon syntax: `$x: Type`
+    if v_idx + 1 < end && matches!(tokens[v_idx + 1].token, Token::Colon) {
+        return;
+    }
+
+    if v_idx > start {
+        let type_start = tokens[start].span.start;
+        let type_end = tokens[v_idx - 1].span.end;
+        let var_start = tokens[v_idx].span.start;
+        let var_end = tokens[v_idx].span.end;
+
+        let type_slice = source[type_start..type_end].trim();
+        let var_slice = &source[var_start..var_end];
+
+        let replacement = if type_slice == "?" {
+            format!("{var_slice}: mixed?")
+        } else if let Some(stripped) = type_slice.strip_prefix('?') {
+            format!("{var_slice}: {stripped}?")
+        } else {
+            format!("{var_slice}: {type_slice}")
+        };
+
+        edits.push(TextEdit {
+            start: type_start,
+            end: var_end,
+            replacement,
+        });
     }
 }
 

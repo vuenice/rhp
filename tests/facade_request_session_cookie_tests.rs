@@ -187,13 +187,13 @@ fn test_no_parser_confusion_between_type_declarations_and_bare_type_keywords() {
 
     let script = r#"
         // 1. Prefix typed variable declaration
-        int $typedVar = 50;
+        $typedVar: int = 50;
 
         // 2. Another prefix typed variable declaration
-        bool $colonTyped = true;
+        $colonTyped: bool = true;
 
         // 3. Typed function signature
-        function compute(int $multiplier): int {
+        function compute($multiplier: int): int {
             return $multiplier * 2;
         }
 

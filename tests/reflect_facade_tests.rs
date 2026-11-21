@@ -30,7 +30,7 @@ fn test_reflect_facade_registration_and_signature_mapping() {
 fn test_reflect_class_exists_user_classes_enums_traits_interfaces() {
     let source = r#"
         class User {
-            public string $name = "Alice";
+            public $name: string = "Alice";
         }
 
         trait LoggerTrait {
@@ -108,7 +108,7 @@ fn test_reflect_class_exists_builtin_classes_and_facades() {
 #[test]
 fn test_reflect_function_exists_user_functions_and_builtins() {
     let source = r#"
-        function calculateTotal(int $a, int $b): int {
+        function calculateTotal($a: int, $b: int): int {
             return $a + $b;
         }
 
@@ -156,7 +156,7 @@ fn test_reflect_function_exists_user_functions_and_builtins() {
 fn test_php_syntax_class_exists_and_function_exists_rewriting() {
     let source = r#"
         class Article {
-            public string $title = 'News';
+            public $title: string = 'News';
         }
 
         function publishArticle(): string {
@@ -192,7 +192,7 @@ fn test_reflect_method_aliases_and_namespaced_classes() {
     let source = r#"
         namespace App\Domain {
             class Customer {
-                public int $id = 42;
+                public $id: int = 42;
             }
 
             function getCustomer(): string {

@@ -19,10 +19,10 @@ fn test_basic_anonymous_class() {
 fn test_anonymous_class_with_constructor_and_properties() {
     let source = r#"
         $user = new class("Alice", 30) {
-            public string $name;
-            public int $age;
+            public $name: string;
+            public $age: int;
 
-            public function __construct(string $name, int $age) {
+            public function __construct($name: string, $age: int) {
                 $this->name = $name;
                 $this->age = $age;
             }
@@ -76,11 +76,11 @@ fn test_anonymous_class_inheritance_and_instanceof() {
 fn test_anonymous_class_implements_interface() {
     let source = r#"
         interface GreeterInterface {
-            public function greet(string $name): string;
+            public function greet($name: string): string;
         }
 
         $greeter = new class implements GreeterInterface {
-            public function greet(string $name): string {
+            public function greet($name: string): string {
                 return "Welcome, " + $name + "!";
             }
         };
@@ -108,8 +108,8 @@ fn test_anonymous_class_implements_interface() {
 fn test_anonymous_class_parent_constructor_forwarding() {
     let source = r#"
         class Vehicle {
-            public string $type;
-            public function __construct(string $type) {
+            public $type: string;
+            public function __construct($type: string) {
                 $this->type = $type;
             }
         }
@@ -146,11 +146,11 @@ fn test_chained_anonymous_class_instantiation() {
 #[test]
 fn test_anonymous_class_in_function_factory() {
     let source = r#"
-        function createCounter(int $start): object {
+        function createCounter($start: int): object {
             return new class($start) {
-                public int $count;
+                public $count: int;
 
-                public function __construct(int $start) {
+                public function __construct($start: int) {
                     $this->count = $start;
                 }
 
@@ -194,7 +194,7 @@ fn test_anonymous_class_name_prefix() {
 fn test_anonymous_class_with_trait() {
     let source = r#"
         trait LogHelper {
-            public function formatLog(string $msg): string {
+            public function formatLog($msg: string): string {
                 return "[LOG]: " + $msg;
             }
         }
@@ -202,7 +202,7 @@ fn test_anonymous_class_with_trait() {
         $logger = new class {
             use LogHelper;
 
-            public function log(string $msg): string {
+            public function log($msg: string): string {
                 return $this->formatLog($msg);
             }
         };
@@ -239,8 +239,8 @@ fn test_nested_anonymous_classes() {
 fn test_readonly_anonymous_class() {
     let source = r#"
         $ro = new readonly class("immutable") {
-            public string $val;
-            public function __construct(string $val) {
+            public $val: string;
+            public function __construct($val: string) {
                 $this->val = $val;
             }
             public function getVal(): string {

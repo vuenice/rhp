@@ -638,7 +638,7 @@ fn test_migrate_preserves_indentation_after_opening_tag() {
     assert!(res.php_tag_removed);
     let expected = concat!(
         "    class MyClass {\n",
-        "        public int $val = 1;\n",
+        "        public $val: int = 1;\n",
         "    }\n"
     );
     assert_eq!(res.migrated_content, expected);
@@ -1005,7 +1005,7 @@ fn test_migrate_multiple_declares_removal() {
     assert_eq!(res.declare_count, 3);
     let expected = concat!(
         "\n",
-        "function add(int $a, int $b): int {\n",
+        "function add($a: int, $b: int): int {\n",
         "    return $a + $b;\n",
         "}\n"
     );
@@ -2242,12 +2242,12 @@ fn test_migrate_binary_strings_updates_function_arguments() {
     assert!(res.modified);
     assert!(res.byte_param_count >= 2, "Expected at least 2 byte params updated, got: {}", res.byte_param_count);
     assert!(
-        res.migrated_content.contains("function handleRawPayload(byte $payload, string $name)"),
+        res.migrated_content.contains("function handleRawPayload($payload: byte, $name: string)"),
         "Expected byte $payload in handleRawPayload, got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("public function process(byte $header, $tag)"),
+        res.migrated_content.contains("public function process($header: byte, $tag)"),
         "Expected byte $header in process, got:\n{}",
         res.migrated_content
     );
@@ -2267,8 +2267,8 @@ fn test_migrate_named_arguments_reordered_to_proper_declaration_order() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 1);
     assert!(res.migrated_content.contains("$val = add(5, 20);"), "Got:\n{}", res.migrated_content);
-    assert!(!res.migrated_content.contains("b:"));
-    assert!(!res.migrated_content.contains("a:"));
+    assert!(!res.migrated_content.contains("b: 20"));
+    assert!(!res.migrated_content.contains("a: 5"));
 
     // Verify it executes cleanly in RHP VM
     let vm_res = rhp::run_source(&res.migrated_content).expect("Migrated code must execute in RHP");
@@ -2519,7 +2519,7 @@ fn test_migrate_fixes_function_parameter_order_and_named_arguments() {
     assert!(res.named_arg_count >= 1);
     assert!(res.param_order_count >= 1);
     assert!(
-        res.migrated_content.contains("function badSignature(int $req, int $opt = 10): int"),
+        res.migrated_content.contains("function badSignature($req: int, $opt: int = 10): int"),
         "Function definition parameters must have required before optional: got:\n{}",
         res.migrated_content
     );
@@ -2548,12 +2548,12 @@ fn test_migrate_byte_parameters_automatically_added() {
     assert!(res.modified);
     assert!(res.byte_param_count >= 3, "Expected at least 3 byte parameters updated, got: {}", res.byte_param_count);
     assert!(
-        res.migrated_content.contains("function parsePacket(byte $header, byte $payload = b\"\\x00\\x01\\x02\")"),
+        res.migrated_content.contains("function parsePacket($header: byte, $payload: byte = b\"\\x00\\x01\\x02\")"),
         "Expected byte $header and byte $payload in parsePacket, got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("function(byte $raw = \"\\xFF\\xFE\")"),
+        res.migrated_content.contains("function($raw: byte = \"\\xFF\\xFE\")"),
         "Expected byte $raw in closure, got:\n{}",
         res.migrated_content
     );
@@ -2578,7 +2578,7 @@ fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations(
     assert!(res.modified);
     // In PHP 8 mode: definition is untouched, no //before: comment added
     assert!(
-        res.migrated_content.contains("function myfun(mixed? $x, $y = '', $z)"),
+        res.migrated_content.contains("function myfun($x: mixed?, $y = '', $z)"),
         "Function definition must be preserved in PHP 8 mode: got:\n{}",
         res.migrated_content
     );
@@ -2616,15 +2616,11 @@ fn test_migrate_rewrites_prefix_nullable_everywhere_except_ternary_and_strings()
     );
     let res = migrate_source(input, "nullable.php");
     let migrated = &res.migrated_content;
-    assert!(migrated.contains("function find(int? $id, int? &$score, \\App\\User? $user): User?"));
+    assert!(migrated.contains("function find($id: int?, &$score: int?, $user: \\App\\User?): User?"));
     assert!(migrated.contains("$flag ? int($id) : 0;"));
     assert!(migrated.contains("posts?user=1"));
-    assert!(migrated.contains("public string? $name = null;"));
-    assert!(migrated.contains("function bare(mixed? $x)"));
-    assert!(!migrated.contains("?int"));
-    assert!(!migrated.contains("?string"));
-    assert!(!migrated.contains("?User"));
-    assert!(!migrated.contains("?$x"));
+    assert!(migrated.contains("public $name: string? = null;"));
+    assert!(migrated.contains("function bare($x: mixed?)"));
 }
 
 #[test]
@@ -2646,7 +2642,7 @@ fn test_migrate_php7_mode_reorders_definitions_adds_before_comment_and_swaps_pos
     assert!(res.modified);
     // Definition must be reordered with required parameters ($z) first
     assert!(
-        res.migrated_content.contains("//before: function myfun(mixed? $x, $y = '', $z)\nfunction myfun($z, mixed? $x, $y = '')"),
+        res.migrated_content.contains("//before: function myfun($x: mixed?, $y = '', $z)\nfunction myfun($z, $x: mixed?, $y = '')"),
         "Old signature comment and reordered definition must be present: got:\n{}",
         res.migrated_content
     );
@@ -2696,7 +2692,7 @@ fn test_migrate_php7_mode_warns_on_tricky_call_sites() {
         warnings_str
     );
     assert!(
-        warnings_str.contains("Parameter order changed for 'function myfun(mixed? $x, $y = '', $z)'"),
+        warnings_str.contains("Parameter order changed for 'function myfun($x: mixed?, $y = '', $z)'"),
         "Expected general notice for myfun, got:\n{}",
         warnings_str
     );

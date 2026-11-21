@@ -249,7 +249,7 @@ fn test_end_to_end_add_install_update_remove_workflow() {
 namespace Calc\Operations;
 
 class Calculator {
-    public static function multiply(int $a, int $b): int {
+    public static function multiply($a: int, $b: int): int {
         return $a * $b;
     }
 }
@@ -265,7 +265,7 @@ class Calculator {
 namespace Local\Formatter;
 
 class Format {
-    public static function wrap(string $s): string {
+    public static function wrap($s: string): string {
         return "[" + $s + "]";
     }
 }
@@ -316,10 +316,10 @@ class Format {
 namespace Calc\Operations;
 
 class Calculator {
-    public static function multiply(int $a, int $b): int {
+    public static function multiply($a: int, $b: int): int {
         return $a * $b;
     }
-    public static function add(int $a, int $b): int {
+    public static function add($a: int, $b: int): int {
         return $a + $b;
     }
 }

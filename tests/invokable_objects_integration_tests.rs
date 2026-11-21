@@ -4,7 +4,7 @@ use rhp::{run_source, ExecutionError, PhpValue, RuntimeErrorKind};
 fn test_basic_invokable_object() {
     let source = r#"
         class CreateSite {
-            public function __invoke(string $domain): string {
+            public function __invoke($domain: string): string {
                 return "site created: " + $domain;
             }
         }
@@ -22,13 +22,13 @@ fn test_basic_invokable_object() {
 fn test_laravel_single_action_controller_pattern() {
     let source = r#"
         class CreateSiteController {
-            private string $environment;
+            private $environment: string;
 
-            public function __construct(string $env) {
+            public function __construct($env: string) {
                 $this->environment = $env;
             }
 
-            public function __invoke(array $data): string {
+            public function __invoke($data: array): string {
                 return "Created site [" + $data["name"] + "] on " + $this->environment;
             }
         }
@@ -46,9 +46,9 @@ fn test_laravel_single_action_controller_pattern() {
 fn test_invokable_object_state_mutation() {
     let source = r#"
         class HitCounter {
-            public int $hits = 0;
+            public $hits: int = 0;
 
-            public function __invoke(int $step = 1): int {
+            public function __invoke($step: int = 1): int {
                 $this->hits += $step;
                 return $this->hits;
             }
@@ -77,7 +77,7 @@ fn test_invokable_object_state_mutation() {
 fn test_invokable_object_recursion_via_this() {
     let source = r#"
         class Factorial {
-            public function __invoke(int $n): int {
+            public function __invoke($n: int): int {
                 if ($n <= 1) {
                     return 1;
                 }
@@ -98,7 +98,7 @@ fn test_invokable_object_recursion_via_this() {
 fn test_invokable_object_trait_and_inheritance() {
     let source = r#"
         trait InvokableLogger {
-            public function __invoke(string $msg): string {
+            public function __invoke($msg: string): string {
                 return "[LOG] " + $msg;
             }
         }
@@ -121,12 +121,12 @@ fn test_invokable_object_trait_and_inheritance() {
 fn test_invokable_object_as_callable_boundary_parameter() {
     let source = r#"
         class ActionHandler {
-            public function __invoke(string $input): string {
+            public function __invoke($input: string): string {
                 return "processed: " + $input;
             }
         }
 
-        function dispatch(callable $action, string $param): string {
+        function dispatch($action: callable, $param: string): string {
             return $action($param);
         }
 
@@ -142,7 +142,7 @@ fn test_invokable_object_as_callable_boundary_parameter() {
 fn test_immediate_instantiation_invokable_call() {
     let source = r#"
         class Formatter {
-            public function __invoke(string $s): string {
+            public function __invoke($s: string): string {
                 return ">>> " + $s + " <<<";
             }
         }
@@ -159,7 +159,7 @@ fn test_immediate_instantiation_invokable_call() {
 fn test_invokable_stored_in_array() {
     let source = r#"
         class GreetingAction {
-            public function __invoke(string $target): string {
+            public function __invoke($target: string): string {
                 return "Hello, " + $target + "!";
             }
         }
@@ -180,7 +180,7 @@ fn test_invokable_stored_in_array() {
 fn test_non_invokable_object_call_fails() {
     let source = r#"
         class PlainObject {
-            public string $name = "foo";
+            public $name: string = "foo";
         }
 
         $obj = new PlainObject();

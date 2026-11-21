@@ -465,7 +465,7 @@ fn test_float_binary_and_decimal_operations() {
     clear_runtime_closure_macros();
 
     let code = r#"
-        float $x = 0.1;
+        $x: float = 0.1;
         $b_add = $x->bAdd(0.2); // float(0.30000000000000004)
         $b_sub = $x->bSub(0.05);
         $b_mul = $x->bMul(2.0);

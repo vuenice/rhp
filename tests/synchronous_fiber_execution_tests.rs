@@ -273,7 +273,7 @@ fn test_cooperative_fiber_scheduler_multitasking() {
 fn test_worker_pool_request_fibers_and_telemetry() {
     let parent_code = r#"
         class OrderService {
-            public static function process(int $orderId): array {
+            public static function process($orderId: int): array {
                 // Sequential standard helpers inside worker fiber
                 $table = DB::table("orders");
                 $record = $table->find($orderId);

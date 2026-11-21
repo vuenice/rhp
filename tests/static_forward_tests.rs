@@ -4,14 +4,14 @@ use rhp::{run_source, run_source_with_vm, ExecutionError, PhpValue};
 fn test_model_builder_forwarding_and_late_static_binding() {
     let source = r#"
         class Builder {
-            public string $model_class;
-            public array $conditions = [];
+            public $model_class: string;
+            public $conditions: array = [];
 
-            public function __construct(string $model_class) {
+            public function __construct($model_class: string) {
                 $this->model_class = $model_class;
             }
 
-            public function where(string $col, mixed $val): Builder {
+            public function where($col: string, $val: mixed): Builder {
                 $this->conditions[] = [$col, $val];
                 return $this;
             }
@@ -50,11 +50,11 @@ fn test_model_builder_forwarding_and_late_static_binding() {
 fn test_evaluation_order_factory_runs_before_arguments() {
     let source = r#"
         class Tracker {
-            public static string $order = '';
+            public static $order: string = '';
         }
 
         class Builder {
-            public function process(mixed $arg): int {
+            public function process($arg: mixed): int {
                 return 42;
             }
         }
@@ -86,7 +86,7 @@ fn test_evaluation_order_factory_runs_before_arguments() {
 fn test_real_static_method_precedence_over_forwarding() {
     let source = r#"
         class Builder {
-            public function find(int $id): string {
+            public function find($id: int): string {
                 return "builder find: {$id}";
             }
         }
@@ -96,7 +96,7 @@ fn test_real_static_method_precedence_over_forwarding() {
                 return new Builder();
             }
 
-            public static function find(int $id): string {
+            public static function find($id: int): string {
                 return "model static find: {$id}";
             }
         }
@@ -115,7 +115,7 @@ fn test_real_static_method_precedence_over_forwarding() {
 fn test_typo_diagnostics_compile_time_rewrite() {
     let source = r#"
         class Builder {
-            public function where(string $col, mixed $val): Builder {
+            public function where($col: string, $val: mixed): Builder {
                 return $this;
             }
         }
@@ -149,7 +149,7 @@ fn test_typo_diagnostics_compile_time_rewrite() {
 fn test_typo_diagnostics_dynamic_call() {
     let source = r#"
         class Builder {
-            public function where(string $col, mixed $val): Builder {
+            public function where($col: string, $val: mixed): Builder {
                 return $this;
             }
         }
@@ -184,8 +184,8 @@ fn test_typo_diagnostics_dynamic_call() {
 fn test_dynamic_class_static_forwarding() {
     let source = r#"
         class Builder {
-            public string $m;
-            public function __construct(string $m) {
+            public $m: string;
+            public function __construct($m: string) {
                 $this->m = $m;
             }
             public function query(): string {
@@ -214,7 +214,7 @@ fn test_dynamic_class_static_forwarding() {
 fn test_facade_pattern_with_forward() {
     let source = r#"
         class CacheStore {
-            public function get(string $key): string {
+            public function get($key: string): string {
                 return 'stored_' + $key;
             }
         }
@@ -237,7 +237,7 @@ fn test_facade_pattern_with_forward() {
 fn test_call_static_fallback_when_no_forward_hook() {
     let source = r#"
         class LegacyProxy {
-            public static function __callStatic(string $method, array $args): string {
+            public static function __callStatic($method: string, $args: array): string {
                 $argCount = count($args);
                 return "intercepted {$method} with {$argCount} args";
             }

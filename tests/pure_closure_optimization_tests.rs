@@ -6,16 +6,16 @@ use rhp::{
 fn test_closure_category_classification_in_ir() {
     let code = r#"
     class Service {
-        public int $factor = 10;
+        public $factor: int = 10;
 
         public function testCategories(): array {
             // 1. Pure non-capturing closure (no $this, no upvalues) -> should NOT capture $this!
-            $pureNonCap = function(int $x): int {
+            $pureNonCap = function($x: int): int {
                 return $x * 2;
             };
 
             // 2. Pure non-capturing arrow function
-            $pureArrow = fn(int $x): int => $x + 5;
+            $pureArrow = fn($x: int): int => $x + 5;
 
             // 3. Pure $this-capturing closure
             $thisClosure = function(): int {
@@ -24,14 +24,14 @@ fn test_closure_category_classification_in_ir() {
 
             // 4. Pure value-capturing small closure (1 variable)
             $multiplier = 3;
-            $valClosure = function(int $x) use ($multiplier): int {
+            $valClosure = function($x: int) use ($multiplier): int {
                 return $x * $multiplier;
             };
 
             // 5. Pure value-capturing small arrow function (2 variables)
             $a = 2;
             $b = 4;
-            $valArrow = fn(int $x): int => $x + $a + $b;
+            $valArrow = fn($x: int): int => $x + $a + $b;
 
             return [
                 $pureNonCap(7),
@@ -96,7 +96,7 @@ fn test_this_elision_optimization() {
     let code = r#"
     class DataFilter {
         public function makeGreeter(): callable {
-            return function(string $name): string {
+            return function($name: string): string {
                 return "Hello " + $name;
             };
         }

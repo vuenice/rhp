@@ -4,15 +4,15 @@ use rhp::{run_source_with_vm, PhpValue};
 fn test_closure_automatic_this_prop_and_method_access() {
     let source = r#"
         class Calculator {
-            public int $base = 100;
+            public $base: int = 100;
 
             public function getAdder(): callable {
-                return function(int $x): int {
+                return function($x: int): int {
                     return $this->base + $this->computeOffset($x);
                 };
             }
 
-            public function computeOffset(int $x): int {
+            public function computeOffset($x: int): int {
                 return $x * 2;
             }
         }
@@ -33,15 +33,15 @@ fn test_closure_automatic_this_prop_and_method_access() {
 fn test_closure_callbacks_with_list_map() {
     let source = r#"
         class ItemFormatter {
-            private string $prefix = "item_";
+            private $prefix: string = "item_";
 
-            public function formatAll(List $items): List {
-                return $items->map(function(string $item): string {
+            public function formatAll($items: List): List {
+                return $items->map(function($item: string): string {
                     return $this->formatSingle($item);
                 });
             }
 
-            private function formatSingle(string $val): string {
+            private function formatSingle($val: string): string {
                 return $this->prefix + $val;
             }
         }
@@ -66,7 +66,7 @@ fn test_closure_callbacks_with_list_map() {
 fn test_closure_mutates_this_property() {
     let source = r#"
         class Counter {
-            public int $count = 0;
+            public $count: int = 0;
 
             public function getIncrementer(): callable {
                 return function(): int {
@@ -93,10 +93,10 @@ fn test_closure_mutates_this_property() {
 fn test_closure_with_explicit_use_and_lexical_this() {
     let source = r#"
         class Multiplier {
-            private int $multiplier = 3;
+            private $multiplier: int = 3;
 
-            public function makeOperation(int $bonus): callable {
-                return function(int $x) use ($bonus): int {
+            public function makeOperation($bonus: int): callable {
+                return function($x: int) use ($bonus): int {
                     return ($x * $this->multiplier) + $bonus;
                 };
             }
@@ -118,11 +118,11 @@ fn test_closure_with_explicit_use_and_lexical_this() {
 fn test_nested_non_static_closures_capture_this_transitively() {
     let source = r#"
         class Greeter {
-            public string $greeting = "Welcome";
+            public $greeting: string = "Welcome";
 
             public function createPipeline(): callable {
-                return function(string $title): callable {
-                    return function(string $name) use ($title): string {
+                return function($title: string): callable {
+                    return function($name: string) use ($title): string {
                         return $this->greeting + ", " + $title + " " + $name + "!";
                     };
                 };
@@ -146,7 +146,7 @@ fn test_nested_non_static_closures_capture_this_transitively() {
 fn test_arrow_function_enclosing_closure_captures_this() {
     let source = r#"
         class Dispatcher {
-            public int $tag = 999;
+            public $tag: int = 999;
 
             public function getGenerator(): callable {
                 return fn() => function(): int {
@@ -169,10 +169,10 @@ fn test_arrow_function_enclosing_closure_captures_this() {
 fn test_static_closure_inside_method_does_not_capture_this() {
     let source = r#"
         class StrictClass {
-            public int $value = 42;
+            public $value: int = 42;
 
             public function getStaticFn(): callable {
-                return static function(int $x): int {
+                return static function($x: int): int {
                     return $x * 10;
                 };
             }

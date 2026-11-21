@@ -15,7 +15,7 @@ fn test_empty_template_standalone() {
 #[test]
 fn test_empty_template_closure() {
     let input = "";
-    let expected = r#"return function(dict $__data): string {
+    let expected = r#"return function($__data: dict): string {
     $__out = "";
     return $__out;
 };"#;
@@ -36,7 +36,7 @@ return $__out;"#;
 #[test]
 fn test_plain_text_closure() {
     let input = "<h1>Hello World</h1>";
-    let expected = r#"return function(dict $__data): string {
+    let expected = r#"return function($__data: dict): string {
     $__out = "";
     $__out += "<h1>Hello World</h1>";
     return $__out;
@@ -192,7 +192,7 @@ return $__out;"#;
 #[test]
 fn test_for_directive_closure() {
     let input = "@for($i = 0; $i < 5; $i++)<li>{{ $i }}</li>@endfor";
-    let expected = r#"return function(dict $__data): string {
+    let expected = r#"return function($__data: dict): string {
     $__out = "";
     for ($i = 0; $i < 5; $i++) {
         $__out += "<li>";
@@ -258,7 +258,7 @@ return $__out;"#;
 #[test]
 fn test_raw_rhp_inside_if_closure() {
     let input = "@if($debug)\n@rhp\nLog::info(\"debug mode enabled\");\n@endrhp\n@endif";
-    let expected = r#"return function(dict $__data): string {
+    let expected = r#"return function($__data: dict): string {
     $__out = "";
     if ($debug) {
         $__out += "\n";
@@ -297,7 +297,7 @@ return $__out;"#;
 fn test_compiler_with_format_builder() {
     let mut compiler = Compiler::new().with_format(OutputFormat::Closure);
     let input = "Hello {{ $name }}";
-    let expected = r#"return function(dict $__data): string {
+    let expected = r#"return function($__data: dict): string {
     $__out = "";
     $__out += "Hello ";
     $__out += Html::escape($name);
@@ -326,7 +326,7 @@ fn test_compiler_with_options_helper() {
     );
 
     let output_closure = compile_with_options(input, CompilerOptions::closure()).unwrap();
-    let expected_closure = "return function(dict $__data): string {\n    $__out = \"\";\n    $__out += \"<span>Test</span>\";\n    return $__out;\n};";
+    let expected_closure = "return function($__data: dict): string {\n    $__out = \"\";\n    $__out += \"<span>Test</span>\";\n    return $__out;\n};";
     assert_eq!(output_closure, expected_closure);
 }
 

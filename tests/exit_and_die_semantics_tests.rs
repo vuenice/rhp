@@ -16,9 +16,9 @@ fn test_exit_executes_shutdown_functions_and_destructors() {
 
     let src = r#"
         class ResourceCleaner {
-            public string $name;
+            public $name: string;
 
-            public function __construct(string $name) {
+            public function __construct($name: string) {
                 $this->name = $name;
             }
 
@@ -181,8 +181,8 @@ fn test_normal_completion_also_runs_shutdown_and_destructors() {
     let _guard = TEST_MUTEX.lock().unwrap();
     let src = r#"
         class AutoClean {
-            public string $id;
-            public function __construct(string $id) {
+            public $id: string;
+            public function __construct($id: string) {
                 $this->id = $id;
             }
             public function __destruct() {

@@ -7,7 +7,7 @@ use rhp::lexer::{
 
 #[test]
 fn test_zero_copy_string_slicing() {
-    let source = "function computeUserData(Int $userId, String $name): Float { return $userId * 1.5; }";
+    let source = "function computeUserData($userId: Int, $name: String): Float { return $userId * 1.5; }";
     let tokens = Lexer::tokenize(source).expect("Tokenization must succeed");
 
     let source_start = source.as_ptr() as usize;
@@ -219,7 +219,7 @@ fn test_spec_numeric_types_and_fluent_apis() {
 #[test]
 fn test_spec_surface_level_gradual_typing() {
     let source = r#"
-        function calculateTotal(int $quantity, float $unitPrice, string $currency): float {
+        function calculateTotal($quantity: int, $unitPrice: float, $currency: string): float {
             $subtotal = $quantity * $unitPrice;
             $tax = $subtotal * 0.18;
             return $subtotal + $tax;
@@ -228,23 +228,26 @@ fn test_spec_surface_level_gradual_typing() {
     let tokens = Lexer::tokenize(source).expect("Failed to tokenize function");
     assert_eq!(tokens[0].token, Token::Function);
     assert_eq!(tokens[1].token, Token::Ident("calculateTotal"));
-    assert_eq!(tokens[3].token, Token::TypeInt);
-    assert_eq!(tokens[4].token, Token::Variable("$quantity"));
-    assert_eq!(tokens[6].token, Token::TypeFloat);
+    assert_eq!(tokens[3].token, Token::Variable("$quantity"));
+    assert_eq!(tokens[4].token, Token::Colon);
+    assert_eq!(tokens[5].token, Token::TypeInt);
     assert_eq!(tokens[7].token, Token::Variable("$unitPrice"));
-    assert_eq!(tokens[9].token, Token::TypeString);
-    assert_eq!(tokens[10].token, Token::Variable("$currency"));
+    assert_eq!(tokens[8].token, Token::Colon);
+    assert_eq!(tokens[9].token, Token::TypeFloat);
+    assert_eq!(tokens[11].token, Token::Variable("$currency"));
     assert_eq!(tokens[12].token, Token::Colon);
-    assert_eq!(tokens[13].token, Token::TypeFloat);
+    assert_eq!(tokens[13].token, Token::TypeString);
+    assert_eq!(tokens[15].token, Token::Colon);
+    assert_eq!(tokens[16].token, Token::TypeFloat);
 }
 
 #[test]
 fn test_supporting_classes_vs_base_datatypes() {
     let source = r#"
         // int, float, string are base datatypes
-        int $x = 10;
-        float $y = 3.14;
-        string $s = "hello";
+        $x: int = 10;
+        $y: float = 3.14;
+        $s: string = "hello";
 
         // Int and Float are supporting facade classes
         $boxedInt = Int::i64();

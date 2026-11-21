@@ -1994,28 +1994,35 @@ impl<'s> CombinatorStream<'s> {
 
                 let is_readonly = s.matches(&Token::Readonly);
 
-                // Type hint (optional if gradual typing in local scope)
-                let type_hint = if !s.check_fn(|t| matches!(t, Token::Variable(_) | Token::Ampersand | Token::Ellipsis)) {
-                    Some(s.parse_type_hint()?)
-                } else {
-                    None
-                };
+                // Reject prefix type syntax before the parameter variable (e.g. `int $x`, `?int $x`)
+                if !s.check_fn(|t| matches!(t, Token::Variable(_) | Token::Ampersand | Token::Ellipsis)) {
+                    let prefix_type = s.parse_type_hint()?;
+                    let is_ref = s.matches(&Token::Ampersand);
+                    let is_var = s.matches(&Token::Ellipsis);
+                    let name = s.expect_variable()?;
+                    let ref_str = if is_ref { "&" } else { "" };
+                    let var_str = if is_var { "..." } else { "" };
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: format!(
+                                "Prefix type syntax '{} {}{}{}' is not supported. Use colon syntax '{}{}{}: {}' instead.",
+                                prefix_type, ref_str, var_str, name.name, ref_str, var_str, name.name, prefix_type
+                            ),
+                        },
+                        prefix_type.span.merge(name.span),
+                    ));
+                }
 
                 let is_reference = s.matches(&Token::Ampersand);
                 let is_variadic = s.matches(&Token::Ellipsis);
                 let name = s.expect_variable()?;
-                if s.check(&Token::Colon) {
-                    let colon = s.expect(Token::Colon)?;
-                    return Err(ParseError::new(
-                        ParseErrorKind::Custom {
-                            message: format!(
-                                "Colon type syntax '{}: Type' is not supported. Use prefix type syntax 'Type {}' instead (e.g., 'int {}').",
-                                name.name, name.name, name.name
-                            ),
-                        },
-                        name.span.merge(colon.span),
-                    ));
-                }
+
+                // Optional colon type hint: `$name: Type`
+                let type_hint = if s.matches(&Token::Colon) {
+                    Some(s.parse_type_hint()?)
+                } else {
+                    None
+                };
 
                 // Default parameter value
                 let default_value = if s.matches(&Token::Assign) {
@@ -2027,6 +2034,7 @@ impl<'s> CombinatorStream<'s> {
                 let end_span = default_value
                     .as_ref()
                     .map(|e| e.span)
+                    .or_else(|| type_hint.as_ref().map(|t| t.span))
                     .unwrap_or(name.span);
                 let span = start_span.merge(end_span);
 

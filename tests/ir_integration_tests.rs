@@ -52,10 +52,10 @@ fn test_flat_copy_opcode_and_standalone_expr_compilation() {
 #[test]
 fn test_function_boundary_contracts_and_dynamic_body_register_allocation() {
     let source = r#"
-        function calculateTotal(int $quantity, float $price, float $taxRate = 0.05): float {
+        function calculateTotal($quantity: int, $price: float, $taxRate: float = 0.05): float {
             $subtotal = $quantity * $price;
             $tax = $subtotal * $taxRate;
-            float $total = $subtotal + $tax;
+            $total: float = $subtotal + $tax;
             return $total;
         }
 
@@ -195,7 +195,7 @@ fn test_subtyped_collections_and_fluent_arrow_closures() {
 #[test]
 fn test_rust_numeric_wrappers_and_fluent_methods() {
     let source = r#"
-        int $big = 2147483647 + 1;
+        $big: int = 2147483647 + 1;
     "#;
 
     let module = compile_source(source).expect("i64 arithmetic should compile");
@@ -449,8 +449,8 @@ fn test_classes_constructor_promotion_enums_and_try_catch_exception_table() {
             public const CURRENCY = 'USD';
 
             public function __construct(
-                public readonly int $id,
-                private float $amount
+                public readonly $id: int,
+                private $amount: float
             ) {}
 
             public function total(): float {
@@ -515,7 +515,7 @@ fn test_classes_constructor_promotion_enums_and_try_catch_exception_table() {
 
 #[test]
 fn test_source_span_mapping_and_disassembler() {
-    let source = r#"function add(int $a, int $b): int {
+    let source = r#"function add($a: int, $b: int): int {
     return $a + $b;
 }
 $res = add(10, 20);

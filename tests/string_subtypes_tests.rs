@@ -183,9 +183,9 @@ fn test_constructors_str_utf8_and_str_bytes() {
 
 #[test]
 fn test_type_hints_string_and_bytes() {
-    // 1. function foo(string $s) accepts Utf8
+    // 1. function foo($s: string) accepts Utf8
     let code_ok = r#"
-        function takeString(string $s): string {
+        function takeString($s: string): string {
             return $s;
         }
         return takeString("hello");
@@ -193,9 +193,9 @@ fn test_type_hints_string_and_bytes() {
     let res = run_source(code_ok).expect("takeString with Utf8 should succeed");
     assert_eq!(res.to_php_string(), "hello");
 
-    // 2. function foo(string $s) rejects Bytes
+    // 2. function foo($s: string) rejects Bytes
     let code_reject_bytes = r#"
-        function takeString(string $s): string {
+        function takeString($s: string): string {
             return $s;
         }
         return takeString(b"hello");
@@ -208,9 +208,9 @@ fn test_type_hints_string_and_bytes() {
         err_str
     );
 
-    // 3. function bar(bytes $b) accepts Bytes
+    // 3. function bar($b: bytes) accepts Bytes
     let code_bytes_ok = r#"
-        function takeBytes(bytes $b): int {
+        function takeBytes($b: bytes): int {
             return $b->len();
         }
         return takeBytes(b"foobar");
@@ -218,12 +218,12 @@ fn test_type_hints_string_and_bytes() {
     let res_b = run_source(code_bytes_ok).expect("takeBytes with Bytes should succeed");
     assert_eq!(res_b, PhpValue::Int(6));
 
-    // 4. function bar(bytes $b) rejects string variable
+    // 4. function bar($b: bytes) rejects string variable
     let code_reject_string = r#"
-        function takeBytes(bytes $b): int {
+        function takeBytes($b: bytes): int {
             return $b->len();
         }
-        string $s = "foobar";
+        $s: string = "foobar";
         return takeBytes($s);
     "#;
     let err_b = run_source(code_reject_string).expect_err("takeBytes should reject string");
@@ -528,7 +528,7 @@ fn test_file_io_strict_lossy_and_bytes() {
 fn test_contextual_target_typing_bytes_and_string() {
     // 1. Variable type hint `byte` allows normal double quotes without `b` prefix
     let code_byte_var = r#"
-        byte $header = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        $header: byte = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
         return $header->len();
     "#;
     let res = run_source(code_byte_var).expect("byte variable with double quotes should work");
@@ -536,7 +536,7 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 2. Binary magic bytes in `byte` variable with normal double quotes
     let code_magic = r#"
-        byte $magic = "\x89PNG\r\n\x1a\n";
+        $magic: byte = "\x89PNG\r\n\x1a\n";
         return $magic->len();
     "#;
     let res = run_source(code_magic).expect("byte variable with binary hex escapes should work");
@@ -544,7 +544,7 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 3. Single-quoted literal target-typed to byte
     let code_single = r#"
-        byte $greeting = 'hello world';
+        $greeting: byte = 'hello world';
         return $greeting->len();
     "#;
     let res = run_source(code_single).expect("single-quoted byte should work");
@@ -552,7 +552,7 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 4. Function parameter target-typed to byte
     let code_fn_param = r#"
-        function sendPayload(byte $data): int {
+        function sendPayload($data: byte): int {
             return $data->len();
         }
         return sendPayload("PING \x00\x01\r\n");
@@ -594,7 +594,7 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 8. Explicit string variable with invalid UTF-8 escape raises compile error
     let code_string_err = r#"
-        string $s = "foo \x89 bar";
+        $s: string = "foo \x89 bar";
     "#;
     let err = run_source(code_string_err).expect_err("string invalid UTF-8 should fail");
     let err_str = format!("{:?}", err);
@@ -602,7 +602,7 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 9. Valid string variable works as expected
     let code_string_ok = r#"
-        string $s = "Hello \u{1F600} world!";
+        $s: string = "Hello \u{1F600} world!";
         return $s->length();
     "#;
     let res = run_source(code_string_ok).expect("valid string should succeed");
@@ -610,8 +610,8 @@ fn test_contextual_target_typing_bytes_and_string() {
 
     // 10. Slice and byte indexing on byte values
     let code_slice = r#"
-        byte $data = "\x01\x02\x03\x04\x05";
-        byte $sub = $data->slice(1, 3);
+        $data: byte = "\x01\x02\x03\x04\x05";
+        $sub: byte = $data->slice(1, 3);
         return $sub->len();
     "#;
     let res = run_source(code_slice).expect("byte slice should succeed");
@@ -622,8 +622,8 @@ fn test_contextual_target_typing_bytes_and_string() {
 fn test_byte_fluent_helpers_and_shared_text_api() {
     // 1. Shared slice and substr on "The quick brown fox" for both string and byte
     let code_shared = r#"
-        string $s = "The quick brown fox";
-        byte $b = byte("The quick brown fox");
+        $s: string = "The quick brown fox";
+        $b: byte = byte("The quick brown fox");
 
         $s_slice1 = $s->slice(4, 9);
         $s_slice2 = $s->slice(10);

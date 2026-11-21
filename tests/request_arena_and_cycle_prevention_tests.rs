@@ -105,7 +105,7 @@ fn test_static_closure_assigned_to_property_is_allowed() {
         public $transformer;
 
         public function register(): void {
-            $this->transformer = static fn(int $x): int => $x * 2;
+            $this->transformer = static fn($x: int): int => $x * 2;
         }
     }
     "#;
@@ -147,7 +147,7 @@ fn test_bidirectional_parent_link_without_weak_reference_rejected() {
     class Node {
         public $parent;
 
-        public function attach(Node $p): void {
+        public function attach($p: Node): void {
             $this->parent = $p;
         }
     }
@@ -174,7 +174,7 @@ fn test_bidirectional_parent_link_with_weak_wrapper_is_allowed() {
     class Node {
         public $parent;
 
-        public function attach(Node $p): void {
+        public function attach($p: Node): void {
             $this->parent = Weak::to($p);
         }
     }
@@ -228,13 +228,13 @@ fn test_weak_facade_runtime_get_and_is_valid() {
     let parent = ParentProcess::boot(
         r#"
         class ParentNode {
-            public string $name = "Root";
+            public $name: string = "Root";
         }
 
         class ChildNode {
             public $parentRef;
 
-            public function setParent(ParentNode $p): void {
+            public function setParent($p: ParentNode): void {
                 $this->parentRef = Weak::to($p);
             }
 
@@ -362,7 +362,7 @@ fn test_memory_arena_stats_telemetry_in_scripts() {
 fn test_worker_request_executes_with_instant_arena_drop() {
     let parent = ParentProcess::boot(
         r#"
-        function handleRequest(string $payload): string {
+        function handleRequest($payload: string): string {
             $temp = Str::upper($payload) + " PROCESSED";
             return $temp;
         }
@@ -400,7 +400,7 @@ fn test_parent_state_unaffected_by_repeated_worker_requests() {
     let parent = ParentProcess::boot(
         r#"
         class GlobalConfig {
-            public static string $appName = "RHP Enterprise";
+            public static $appName: string = "RHP Enterprise";
         }
         function getAppName(): string {
             return GlobalConfig::$appName;

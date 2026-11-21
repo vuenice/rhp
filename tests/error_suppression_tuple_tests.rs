@@ -209,10 +209,10 @@ fn test_at_operator_deep_call_stack_exception_unwinding() {
 #[test]
 fn test_at_operator_multiple_sequential_suppressions() {
     let code = r#"
-        function throwErr(string $msg) {
+        function throwErr($msg: string) {
             throw new Exception($msg);
         }
-        function okVal(int $val): int {
+        function okVal($val: int): int {
             return $val * 2;
         }
 
@@ -249,7 +249,7 @@ fn test_at_operator_multiple_sequential_suppressions() {
 fn test_at_operator_object_method_call() {
     let code = r#"
         class Worker {
-            public function process(bool $shouldFail): string {
+            public function process($shouldFail: bool): string {
                 if ($shouldFail) {
                     throw new RuntimeException("worker failed");
                 }
@@ -289,7 +289,7 @@ fn test_at_operator_closure_invocation() {
             throw new Exception("closure error");
         };
 
-        $passClosure = function(int $x): int {
+        $passClosure = function($x: int): int {
             return $x + 10;
         };
 

@@ -5,7 +5,7 @@ use rhp::{
 #[test]
 fn test_pass_by_reference_basic_scalar_mutation() {
     let source = r#"
-        function addTen(int &$val): void {
+        function addTen(&$val: int): void {
             $val = $val + 10;
         }
 
@@ -20,7 +20,7 @@ fn test_pass_by_reference_basic_scalar_mutation() {
 #[test]
 fn test_pass_by_reference_swap_multiple_arguments() {
     let source = r#"
-        function swap(int &$a, int &$b): void {
+        function swap(&$a: int, &$b: int): void {
             $temp = $a;
             $a = $b;
             $b = $temp;
@@ -39,11 +39,11 @@ fn test_pass_by_reference_swap_multiple_arguments() {
 #[test]
 fn test_pass_by_reference_nested_call_frames() {
     let source = r#"
-        function doubleVal(int &$x): void {
+        function doubleVal(&$x: int): void {
             $x = $x * 2;
         }
 
-        function calculate(int &$val): void {
+        function calculate(&$val: int): void {
             doubleVal(&$val);
             $val = $val + 5;
         }
@@ -60,7 +60,7 @@ fn test_pass_by_reference_nested_call_frames() {
 #[test]
 fn test_pass_by_reference_array_mutation() {
     let source = r#"
-        function appendNumber(array &$arr, int $num): void {
+        function appendNumber(&$arr: array, $num: int): void {
             $arr[] = $num;
         }
 
@@ -83,7 +83,7 @@ fn test_pass_by_reference_array_mutation() {
 fn test_pass_by_reference_class_method() {
     let source = r#"
         class Modifier {
-            public function increment(int &$target, int $step = 1): void {
+            public function increment(&$target: int, $step: int = 1): void {
                 $target = $target + $step;
             }
         }
@@ -101,7 +101,7 @@ fn test_pass_by_reference_class_method() {
 fn test_pass_by_reference_static_method() {
     let source = r#"
         class MathHelper {
-            public static function triple(int &$num): void {
+            public static function triple(&$num: int): void {
                 $num = $num * 3;
             }
         }
@@ -117,7 +117,7 @@ fn test_pass_by_reference_static_method() {
 #[test]
 fn test_pass_by_reference_named_arguments() {
     let source = r#"
-        function applyBonus(int $bonus, int &$score): void {
+        function applyBonus($bonus: int, &$score: int): void {
             $score = $score + $bonus;
         }
 
@@ -132,7 +132,7 @@ fn test_pass_by_reference_named_arguments() {
 #[test]
 fn test_pass_by_reference_rejection_missing_ampersand_at_call_site() {
     let source = r#"
-        function modify(int &$num): void {
+        function modify(&$num: int): void {
             $num = $num + 1;
         }
 
@@ -162,7 +162,7 @@ fn test_pass_by_reference_rejection_missing_ampersand_at_call_site() {
 #[test]
 fn test_pass_by_reference_rejection_unexpected_ampersand_at_call_site() {
     let source = r#"
-        function display(int $num): void {}
+        function display($num: int): void {}
 
         $x = 10;
         display(&$x);
@@ -189,7 +189,7 @@ fn test_pass_by_reference_rejection_unexpected_ampersand_at_call_site() {
 #[test]
 fn test_pass_by_reference_rejection_literal_argument() {
     let source = r#"
-        function update(int &$num): void {
+        function update(&$num: int): void {
             $num = $num + 1;
         }
 

@@ -122,9 +122,9 @@ fn collect_nested_declarations(
                             if prop.type_hint.is_none() {
                                 if let Some(init) = &prop.default {
                                     if let Some(ty_str) = infer_expression_type_name(init, type_info, &HashMap::new()) {
-                                        let offset = prop.name.span.start;
-                                        if should_insert_type_before(offset, &ty_str, source) {
-                                            edits.push((offset, format!("{} ", ty_str)));
+                                        let offset = prop.name.span.end;
+                                        if should_insert_type_after(offset, source) {
+                                            edits.push((offset, format!(": {ty_str}")));
                                         }
                                     }
                                 }
@@ -222,9 +222,9 @@ fn collect_param_edits(
         if let Some(ref def_val) = param.default_value {
             if let Some(ty_str) = infer_expression_type_name(def_val, type_info, &HashMap::new()) {
                 let ty_str = refine_untyped_array(body.unwrap_or(&[]), param.name.name, &ty_str);
-                let offset = param.name.span.start;
-                if should_insert_type_before(offset, &ty_str, source) {
-                    edits.push((offset, format!("{} ", ty_str)));
+                let offset = param.name.span.end;
+                if should_insert_type_after(offset, source) {
+                    edits.push((offset, format!(": {ty_str}")));
                 }
             }
         }
@@ -497,7 +497,7 @@ fn collect_scope_edits(
                             .entry(var_name)
                             .or_default()
                             .push(VarAssignment {
-                                offset: var.span.start,
+                                offset: var.span.end,
                                 inferred_type: ty,
                                 references_self: refs_self,
                             });
@@ -548,37 +548,20 @@ fn collect_scope_edits(
         }
 
         // Safe to add type to the first assignment!
-        if should_insert_type_before(first.offset, initial_type, source) {
-            edits.push((first.offset, format!("{} ", initial_type)));
+        if should_insert_type_after(first.offset, source) {
+            edits.push((first.offset, format!(": {}", initial_type)));
         }
     }
 }
 
-/// Check if the source code immediately preceding `offset` already contains this type annotation.
-fn should_insert_type_before(offset: usize, ty_str: &str, source: &str) -> bool {
-    let prefix = if offset > 0 {
-        let start = offset.saturating_sub(40);
-        &source[start..offset]
+/// Check if the source code immediately following `offset` already contains a colon type annotation.
+fn should_insert_type_after(offset: usize, source: &str) -> bool {
+    let suffix = if offset < source.len() {
+        &source[offset..]
     } else {
         ""
     };
-
-    let trimmed_prefix = prefix.trim_end();
-    // Check if prefix already ends with the type name or any type keyword
-    if trimmed_prefix.ends_with(ty_str) {
-        return false;
-    }
-
-    let type_keywords = [
-        "int", "float", "string", "bool", "void", "mixed", "array", "list", "dict", "set", "hashmap", "hashMap", "object",
-    ];
-    for kw in &type_keywords {
-        if trimmed_prefix.ends_with(kw) {
-            return false;
-        }
-    }
-
-    true
+    !suffix.trim_start().starts_with(':')
 }
 
 /// A write that reveals what an empty untyped array should become.

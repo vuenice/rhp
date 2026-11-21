@@ -30,7 +30,7 @@ fn test_array_type_hint_as_permissive_parent_variable() {
 
     // Variable explicitly declared with permissive parent type `array`
     let source = r#"
-        array $arr = [1, 2, 3];
+        $arr: array = [1, 2, 3];
         $first = $arr;
         $arr = ['name' => 'yogesh'];
         $second = $arr;
@@ -99,7 +99,7 @@ fn test_permissive_array_parameter_accepts_all_collection_variants() {
     clear_runtime_closure_macros();
 
     let source = r#"
-        function getCount(array $items): int {
+        function getCount($items: array): int {
             return $items->count();
         }
 
@@ -129,7 +129,7 @@ fn test_strict_type_bounds_vs_dynamic_variables() {
 
     // The written type decides the collection. A literal is only an array.
     let source_list_reassign_dict = r#"
-        list $arr = [1, 2, 3];
+        $arr: list = [1, 2, 3];
         $arr = ['name' => 'yogesh'];
         return $arr;
     "#;
@@ -143,7 +143,7 @@ fn test_strict_type_bounds_vs_dynamic_variables() {
     }
 
     let source_dict_reassign_list = r#"
-        dict $arr = ['name' => 'yogesh'];
+        $arr: dict = ['name' => 'yogesh'];
         $arr = [1, 2, 3];
         return $arr;
     "#;
@@ -161,7 +161,7 @@ fn test_strict_type_bounds_vs_dynamic_variables() {
 
     // 3. Passing Dict to function requiring strict List fails
     let source_strict_list_param = r#"
-        function requireStrictList(list $items): int {
+        function requireStrictList($items: list): int {
             return $items->count();
         }
 
@@ -180,7 +180,7 @@ fn test_strict_type_bounds_vs_dynamic_variables() {
 
     // 4. Strict scalar bounds (int $x cannot take string)
     let source_strict_scalar = r#"
-        int $x = 0;
+        $x: int = 0;
         $x = 'hello';
     "#;
     let err4 = run_source(source_strict_scalar)

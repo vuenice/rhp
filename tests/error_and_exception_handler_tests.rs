@@ -18,7 +18,7 @@ fn run_php(source: &str) -> (VM, Result<PhpValue, RuntimeError>) {
 fn test_set_error_handler_basic_capture() {
     let code = r#"
         class ErrorRecorder {
-            public static string $captured = "";
+            public static $captured: string = "";
         }
 
         set_error_handler(function($errno, $errstr, $errfile, $errline) {
@@ -44,7 +44,7 @@ fn test_set_error_handler_basic_capture() {
 fn test_set_error_handler_level_bitmask_filtering() {
     let code = r#"
         class FilterRecorder {
-            public static string $captured = "";
+            public static $captured: string = "";
         }
 
         // Only listen for E_USER_WARNING (512)
@@ -101,7 +101,7 @@ fn test_set_error_handler_convert_to_error_exception() {
 fn test_restore_error_handler_stack() {
     let code = r#"
         class StackRecorder {
-            public static string $log = "";
+            public static $log: string = "";
         }
 
         $h1 = function($errno, $errstr) {

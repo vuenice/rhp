@@ -389,7 +389,7 @@ fn test_list_type_boundary_contracts() {
 
     // 1. Function boundary contract with `List` parameter and return type
     let source = r#"
-        function doubleElements(List $items): List {
+        function doubleElements($items: List): List {
             return $items->map(fn($x) => $x * 2);
         }
 
@@ -410,7 +410,7 @@ fn test_list_type_boundary_contracts() {
 
     // 2. Static type boundary contract rejection at compile-time
     let source_compile_invalid = r#"
-        function requireList(List $items): int {
+        function requireList($items: List): int {
             return $items->count();
         }
 
@@ -426,11 +426,11 @@ fn test_list_type_boundary_contracts() {
 
     // 3. Dynamic runtime boundary contract rejection with AssertType
     let source_runtime_invalid = r#"
-        function requireListDynamic(List $items): int {
+        function requireListDynamic($items: List): int {
             return $items->count();
         }
 
-        function testBridge(mixed $x): int {
+        function testBridge($x: mixed): int {
             return requireListDynamic($x);
         }
 
@@ -451,9 +451,9 @@ fn test_user_requested_lowercase_list_and_dict_syntax() {
 
     // 1. The user's exact specification syntax:
     let source = r#"
-        function process_items(list $my_arr, dict $my_dict) {
-            list $my_new_scoped_arr = [];
-            dict $my_new_scoped_dict = [];
+        function process_items($my_arr: list, $my_dict: dict) {
+            $my_new_scoped_arr: list = [];
+            $my_new_scoped_dict: dict = [];
         }
 
         $input_arr = Arr::list([1, 2, 3]);
@@ -466,9 +466,9 @@ fn test_user_requested_lowercase_list_and_dict_syntax() {
 
     // 2. Verifying mutations and operations on locally scoped list and dict:
     let source_returns = r#"
-        function process_items_and_return(list $my_arr, dict $my_dict): list {
-            list $my_new_scoped_arr = [];
-            dict $my_new_scoped_dict = [];
+        function process_items_and_return($my_arr: list, $my_dict: dict): list {
+            $my_new_scoped_arr: list = [];
+            $my_new_scoped_dict: dict = [];
 
             $my_new_scoped_arr[] = 100;
             $my_new_scoped_arr[] = 200;
@@ -491,9 +491,9 @@ fn test_user_requested_lowercase_list_and_dict_syntax() {
 
     // 3. Parameter type safety rejects non-collection arguments:
     let source_invalid_list = r#"
-        function process_items(list $my_arr, dict $my_dict) {
-            list $my_new_scoped_arr = [];
-            dict $my_new_scoped_dict = [];
+        function process_items($my_arr: list, $my_dict: dict) {
+            $my_new_scoped_arr: list = [];
+            $my_new_scoped_dict: dict = [];
         }
 
         process_items('not a list', Arr::dict([]));
@@ -653,7 +653,7 @@ fn test_list_allows_mixed_elements() {
     clear_runtime_closure_macros();
 
     let source_init_mixed = r#"
-        list $x = [1, 2, "three"];
+        $x: list = [1, 2, "three"];
         return $x;
     "#;
     let res = run_source(source_init_mixed).expect("mixed list literal");

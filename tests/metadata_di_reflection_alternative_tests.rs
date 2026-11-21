@@ -16,15 +16,15 @@ fn test_metadata_table_emitted_at_compile_time() {
     let source = r#"
         #[Route('/api/orders')]
         class OrderController {
-            public string $name;
+            public $name: string;
 
             #[Inject]
-            public function __construct(PaymentGateway $gateway, Logger $logger) {
+            public function __construct($gateway: PaymentGateway, $logger: Logger) {
                 $this->name = "orders";
             }
 
             #[Get('/{id}')]
-            public function show(int $id): string {
+            public function show($id: int): string {
                 return "order_{$id}";
             }
         }
@@ -73,22 +73,22 @@ fn test_metadata_table_emitted_at_compile_time() {
 fn test_dependency_injection_compile_time_factories() {
     let source = r#"
         class DatabaseConnection {
-            public string $dsn;
+            public $dsn: string;
             public function __construct() {
                 $this->dsn = "sqlite::memory:";
             }
         }
 
         class UserRepository {
-            public DatabaseConnection $db;
-            public function __construct(DatabaseConnection $db) {
+            public $db: DatabaseConnection;
+            public function __construct($db: DatabaseConnection) {
                 $this->db = $db;
             }
         }
 
         class UserService {
-            public UserRepository $users;
-            public function __construct(UserRepository $users) {
+            public $users: UserRepository;
+            public function __construct($users: UserRepository) {
                 $this->users = $users;
             }
         }
@@ -136,15 +136,15 @@ fn test_dependency_injection_compile_time_factories() {
 fn test_compile_time_circular_dependency_error() {
     let source = r#"
         class ServiceA {
-            public function __construct(ServiceB $b) {}
+            public function __construct($b: ServiceB) {}
         }
 
         class ServiceB {
-            public function __construct(ServiceC $c) {}
+            public function __construct($c: ServiceC) {}
         }
 
         class ServiceC {
-            public function __construct(ServiceA $a) {}
+            public function __construct($a: ServiceA) {}
         }
     "#;
 
@@ -166,10 +166,10 @@ fn test_compile_time_circular_dependency_error() {
 fn test_method_injection_and_handler_shim_resolution() {
     let source = r#"
         class User {
-            public int $id;
-            public string $name;
+            public $id: int;
+            public $name: string;
 
-            public static function resolveRouteBinding(string $value): User? {
+            public static function resolveRouteBinding($value: string): User? {
                 if ($value == "42") {
                     $u = new User();
                     $u->id = 42;
@@ -181,11 +181,11 @@ fn test_method_injection_and_handler_shim_resolution() {
         }
 
         class Mailer {
-            public string $driver = "smtp";
+            public $driver: string = "smtp";
         }
 
         class UserController {
-            public function show(Request $req, User $user, int $postId, Mailer $mailer): string {
+            public function show($req: Request, $user: User, $postId: int, $mailer: Mailer): string {
                 return "User {$user->name} post {$postId} with {$mailer->driver}";
             }
         }
@@ -308,8 +308,8 @@ fn test_container_swapping_for_zero_reflection_testing() {
         }
 
         class OrderCheckout {
-            public StripeGateway $gateway;
-            public function __construct(StripeGateway $gateway) {
+            public $gateway: StripeGateway;
+            public function __construct($gateway: StripeGateway) {
                 $this->gateway = $gateway;
             }
 
@@ -345,11 +345,11 @@ fn test_container_swapping_for_zero_reflection_testing() {
 fn test_app_facade_container_integration_in_script() {
     let source = r#"
         class NotificationService {
-            public string $channel = "email";
+            public $channel: string = "email";
         }
 
         class MockNotificationService {
-            public string $channel = "mock_memory";
+            public $channel: string = "mock_memory";
         }
 
         // Test App::swap in script
@@ -444,7 +444,7 @@ fn test_build_time_attribute_registry_discovery() {
 fn test_request_scoped_container_hierarchy() {
     let source = r#"
         class AppConfig {
-            public string $env = "production";
+            public $env: string = "production";
         }
     "#;
 

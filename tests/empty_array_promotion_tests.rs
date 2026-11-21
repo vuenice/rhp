@@ -125,7 +125,7 @@ fn nested_list_holds_a_list_and_a_dict() {
 #[test]
 fn list_index_past_the_end_is_an_error() {
     let code = r#"
-        list $a = [1];
+        $a: list = [1];
         $a[2] = 9;
     "#;
     let err = run_source(code).expect_err("gapped list index");
@@ -183,7 +183,7 @@ fn remove_deletes_from_dict_and_hashmap() {
     );
 
     for code in [
-        "list $items = [1]; unset($items[0]);",
+        "$items: list = [1]; unset($items[0]);",
         "$set = Arr::set([1]); unset($set[1]);",
         "$tuple = [1, 'a']; unset($tuple[0]);",
         "$dict = ['k' => 1]; unset($dict['k']);",

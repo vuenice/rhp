@@ -4,7 +4,7 @@ use rhp::{run_source, PhpValue, ExecutionError, RuntimeErrorKind};
 fn test_enum_from_string_backed() {
     let source = r#"
         class UserRequest {
-            public function __construct(public string $status) {}
+            public function __construct(public $status: string) {}
         }
 
         enum SiteStatus: string {

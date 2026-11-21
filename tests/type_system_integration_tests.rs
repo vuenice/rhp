@@ -7,7 +7,7 @@ use rhp::{
 fn test_strict_function_and_method_boundary_signatures_enforced() {
     // 1. Standalone function missing parameter type must be rejected
     let missing_param_fn = r#"
-        function processOrder($orderId, float $amount): bool {
+        function processOrder($orderId, $amount: float): bool {
             return true;
         }
     "#;
@@ -30,7 +30,7 @@ fn test_strict_function_and_method_boundary_signatures_enforced() {
 
     // 2. Standalone function missing return type must be rejected
     let missing_ret_fn = r#"
-        function processOrder(int $orderId, float $amount) {
+        function processOrder($orderId: int, $amount: float) {
             return true;
         }
     "#;
@@ -77,8 +77,8 @@ fn test_strict_function_and_method_boundary_signatures_enforced() {
     // 4. Class method missing return type must be rejected (except __construct / __destruct)
     let missing_method_ret = r#"
         class UserController {
-            public function __construct(string $prefix) {}
-            public function show(int $id) {
+            public function __construct($prefix: string) {}
+            public function show($id: int) {
                 return "user";
             }
         }
@@ -101,7 +101,7 @@ fn test_strict_function_and_method_boundary_signatures_enforced() {
     // 5. Constructor declaring non-void return type must be rejected
     let bad_ctor_ret = r#"
         class UserController {
-            public function __construct(string $prefix): int {}
+            public function __construct($prefix: string): int {}
         }
     "#;
     let err = parse_and_check(bad_ctor_ret).expect_err("Expected ConstructorReturnTypeForbidden");
@@ -136,7 +136,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
 
     // 2. Typed pass-by-reference parameter `array &$items` is valid, but calling without & is rejected
     let typed_ref = r#"
-        function mutate(array &$items): void {}
+        function mutate(&$items: array): void {}
         $list = [1, 2, 3];
         mutate($list);
     "#;
@@ -154,7 +154,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
 
     // 3. Passing by reference to a non-reference parameter is rejected
     let unexpected_ref = r#"
-        function inspect(array $items): void {}
+        function inspect($items: array): void {}
         $list = [1, 2, 3];
         inspect(&$list);
     "#;
@@ -172,7 +172,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
 
     // 4. Passing a literal or expression by reference is rejected
     let literal_ref = r#"
-        function mutate(int &$val): void {}
+        function mutate(&$val: int): void {}
         mutate(&10);
     "#;
     let err = parse_and_check(literal_ref).expect_err("Expected ReferenceArgumentMustBeVariable");
@@ -188,7 +188,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
 
     // 5. Valid pass-by-reference with &$x at both declaration and call site
     let valid_ref = r#"
-        function mutate(array &$items): void {}
+        function mutate(&$items: array): void {}
         $list = [1, 2, 3];
         mutate(&$list);
     "#;
@@ -197,7 +197,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
     // 3. Closure capture-by-reference `use (&$count)`
     let closure_ref = r#"
         $count = 0;
-        $inc = function(int $step) use (&$count): int {
+        $inc = function($step: int) use (&$count): int {
             return $count + $step;
         };
     "#;
@@ -215,7 +215,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
     // 4. Value capture `use ($count)` is valid
     let valid_closure = r#"
         $count = 10;
-        $add = function(int $step) use ($count): int {
+        $add = function($step: int) use ($count): int {
             return $count + $step;
         };
     "#;
@@ -225,7 +225,7 @@ fn test_reference_mechanics_pass_by_reference_and_capture_forbidden() {
 #[test]
 fn test_dynamic_type_inference_within_function_bodies() {
     let source = r#"
-        function calculateTotal(int $quantity, float $unitPrice, string $currency): float {
+        function calculateTotal($quantity: int, $unitPrice: float, $currency: string): float {
             $subtotal = $quantity * $unitPrice;
             $tax = $subtotal * 0.18;
             $label = "Currency: " + $currency;
@@ -275,7 +275,7 @@ fn test_dynamic_type_inference_within_function_bodies() {
 fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
     // Untyped variables inside function bodies can be dynamically reassigned to new types
     let ergonomic_dynamic_body = r#"
-        function formatPayload(int $id): string {
+        function formatPayload($id: int): string {
             $data = $id * 10;
             $data = "ID-" + string($data);
             return $data;
@@ -290,8 +290,8 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
 
     // Explicitly typed variable `int $locked = 10;` cannot be reassigned to `string`
     let locked_var_violation = r#"
-        function brokenLock(int $id): int {
-            int $locked = $id + 1;
+        function brokenLock($id: int): int {
+            $locked: int = $id + 1;
             $locked = "cannot assign string to locked int";
             return $locked;
         }
@@ -315,7 +315,7 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
 
     // Prefix typed variable `int $x = 0;` cannot be reassigned to `string`
     let prefix_typed_violation = r#"
-        int $x = 0;
+        $x: int = 0;
         $x = 'hello';
     "#;
     let err3 = parse_and_check(prefix_typed_violation).expect_err("Expected VariableTypeMismatch on prefix typed var");
@@ -339,9 +339,9 @@ fn test_dynamic_reassignment_vs_locked_typed_variables_in_body() {
 #[test]
 fn test_extended_rust_numeric_types_and_fluent_wrappers() {
     let source = r#"
-        function computeMetrics(int $bigId, int $counter, float $ratio): float {
-            int $generatedId = $bigId + 1;
-            int $stored = 42;
+        function computeMetrics($bigId: int, $counter: int, $ratio: float): float {
+            $generatedId: int = $bigId + 1;
+            $stored: int = 42;
             return $ratio;
         }
     "#;
@@ -430,7 +430,7 @@ fn test_async_future_concurrent_core_and_destructuring_inference() {
     let source = r#"
         class User {}
 
-        function findUser(int $id): User {
+        function findUser($id: int): User {
             return new User();
         }
 
@@ -472,7 +472,7 @@ fn test_async_future_concurrent_core_and_destructuring_inference() {
 fn test_boundary_call_argument_and_return_type_verification() {
     // 1. ArgumentTypeMismatch on user function call
     let bad_arg = r#"
-        function addNumbers(int $a, int $b): int {
+        function addNumbers($a: int, $b: int): int {
             return $a + $b;
         }
         $res = addNumbers(10, "not an int");
@@ -500,7 +500,7 @@ fn test_boundary_call_argument_and_return_type_verification() {
 
     // 2. ArityMismatch (too few arguments)
     let too_few_args = r#"
-        function addNumbers(int $a, int $b): int {
+        function addNumbers($a: int, $b: int): int {
             return $a + $b;
         }
         $res = addNumbers(10);
@@ -526,7 +526,7 @@ fn test_boundary_call_argument_and_return_type_verification() {
 
     // 3. ReturnTypeMismatch inside function body
     let bad_return = r#"
-        function computeScore(int $base): int {
+        function computeScore($base: int): int {
             $msg = "score is " + string($base);
             return $msg;
         }
@@ -551,7 +551,7 @@ fn test_boundary_call_argument_and_return_type_verification() {
 
     // 4. VoidReturnWithValue when returning value from `: void` function
     let bad_void = r#"
-        function logEvent(string $msg): void {
+        function logEvent($msg: string): void {
             return 42;
         }
     "#;
@@ -566,7 +566,7 @@ fn test_boundary_call_argument_and_return_type_verification() {
 
     // 5. MissingReturnStatement when non-empty body fails to return
     let missing_ret_stmt = r#"
-        function getTax(float $price): float {
+        function getTax($price: float): float {
             $tax = $price * 0.18;
         }
     "#;
@@ -585,22 +585,22 @@ fn test_class_interface_inheritance_and_readonly_property_contracts() {
     // 1. Valid class implementing interface and initializing readonly property in __construct
     let valid_oop = r#"
         interface PaymentGateway {
-            public function charge(int $cents, string $currency): bool;
+            public function charge($cents: int, $currency: string): bool;
         }
 
         class StripeGateway implements PaymentGateway {
-            private readonly string $secretKey;
+            private readonly $secretKey: string;
 
-            public function __construct(string $secretKey) {
+            public function __construct($secretKey: string) {
                 $this->secretKey = $secretKey;
             }
 
-            public function charge(int $cents, string $currency): bool {
+            public function charge($cents: int, $currency: string): bool {
                 return $cents > 0;
             }
         }
 
-        function processPayment(PaymentGateway $gateway, int $amount): bool {
+        function processPayment($gateway: PaymentGateway, $amount: int): bool {
             return $gateway->charge($amount, 'USD');
         }
 
@@ -621,11 +621,11 @@ fn test_class_interface_inheritance_and_readonly_property_contracts() {
     // 2. Interface contract violation (wrong return type on implementing method)
     let broken_iface = r#"
         interface PaymentGateway {
-            public function charge(int $cents, string $currency): bool;
+            public function charge($cents: int, $currency: string): bool;
         }
 
         class BrokenGateway implements PaymentGateway {
-            public function charge(int $cents, string $currency): string {
+            public function charge($cents: int, $currency: string): string {
                 return "ok";
             }
         }
@@ -642,13 +642,13 @@ fn test_class_interface_inheritance_and_readonly_property_contracts() {
     // 3. Readonly property mutated outside constructor
     let readonly_mutation = r#"
         class Config {
-            public readonly string $env;
+            public readonly $env: string;
 
-            public function __construct(string $env) {
+            public function __construct($env: string) {
                 $this->env = $env;
             }
 
-            public function overrideEnv(string $newEnv): void {
+            public function overrideEnv($newEnv: string): void {
                 $this->env = $newEnv;
             }
         }
@@ -666,7 +666,7 @@ fn test_class_interface_inheritance_and_readonly_property_contracts() {
 #[test]
 fn test_branch_type_unification_and_source_map_diagnostics() {
     let source = r#"
-        function resolveValue(bool $asNumber): int|string {
+        function resolveValue($asNumber: bool): int|string {
             if ($asNumber) {
                 $val = 42;
             } else {
@@ -683,7 +683,7 @@ fn test_branch_type_unification_and_source_map_diagnostics() {
     );
 
     // Verify exact SourceMap diagnostic formatting on TypeError
-    let bad_source = "function broken(int $x): int {\n    return \"wrong\";\n}";
+    let bad_source = "function broken($x: int): int {\n    return \"wrong\";\n}";
     let mut sm = SourceMap::new();
     let file_id = sm.add_file("broken.rhp", bad_source);
     let err = parse_and_check_with_file_id(bad_source, file_id).unwrap_err();
@@ -695,7 +695,7 @@ fn test_branch_type_unification_and_source_map_diagnostics() {
 #[test]
 fn test_collection_and_scalar_type_hint_boundary_contracts() {
     let source = r#"
-        function transformData(int $id, string $prefix, List $items, Dict $attributes): List {
+        function transformData($id: int, $prefix: string, $items: List, $attributes: Dict): List {
             return $items;
         }
 
@@ -728,7 +728,7 @@ fn test_collection_and_scalar_type_hint_boundary_contracts() {
 
     // Verify passing mismatched type (e.g., int passed to List parameter) produces ArgumentTypeMismatch
     let bad_call = r#"
-        function acceptList(List $arr): void {}
+        function acceptList($arr: List): void {}
         acceptList(123);
     "#;
     let err = parse_and_check(bad_call).expect_err("ArgumentTypeMismatch expected for List $arr");
@@ -745,7 +745,7 @@ fn test_collection_and_scalar_type_hint_boundary_contracts() {
 fn test_plus_concatenation_strict_typing_and_dot_removal() {
     // 1. Valid string concatenation using +
     let valid_concat = r#"
-        function greet(string $first, string $last): string {
+        function greet($first: string, $last: string): string {
             return $first + " " + $last;
         }
     "#;
@@ -757,7 +757,7 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 
     // 2. Valid string concatenation assignment using +=
     let valid_assign = r#"
-        function appendMsg(string $msg): string {
+        function appendMsg($msg: string): string {
             $msg += " world";
             return $msg;
         }
@@ -766,7 +766,7 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 
     // 3. Mismatched string + int must produce InvalidBinaryOperation
     let bad_concat_str_int = r#"
-        function bad(string $s, int $n): string {
+        function bad($s: string, $n: int): string {
             return $s + $n;
         }
     "#;
@@ -781,7 +781,7 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 
     // 4. Mismatched int + string must produce InvalidBinaryOperation
     let bad_concat_int_str = r#"
-        function bad(int $n, string $s): string {
+        function bad($n: int, $s: string): string {
             return $n + $s;
         }
     "#;
@@ -796,7 +796,7 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 
     // 5. Legacy '.' operator must be rejected by parser with educational message
     let dot_code = r#"
-        function oldDot(string $a, string $b): string {
+        function oldDot($a: string, $b: string): string {
             return $a . $b;
         }
     "#;
@@ -815,7 +815,7 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 
     // 6. Legacy '.=' operator must be rejected by parser with educational message
     let dot_assign_code = r#"
-        function oldDotAssign(string $a): string {
+        function oldDotAssign($a: string): string {
             $a .= " test";
             return $a;
         }
@@ -837,10 +837,10 @@ fn test_plus_concatenation_strict_typing_and_dot_removal() {
 #[test]
 fn test_null_union_matches_postfix_nullable() {
     let source = r#"
-        function find(int? $id, int|null $other): User|null {
+        function find($id: int?, $other: int|null): User|null {
             return null;
         }
-        function both(int|string|null $value): void {}
+        function both($value: int|string|null): void {}
     "#;
     let program = rhp::parse(source).expect("parse nullable unions");
     let StmtKind::FunctionDecl(find) = &program.statements[0].kind else {
@@ -887,7 +887,7 @@ fn test_void_function_result_cannot_be_assigned() {
 
     let declared = r#"
         function ping() {}
-        int $y = ping();
+        $y: int = ping();
     "#;
     let err = parse_and_check(declared).expect_err("declaring from a void call must fail");
     match err {

@@ -352,7 +352,7 @@ fn test_spec_async_concurrent_core_and_destructuring() {
 #[test]
 fn test_spec_surface_level_gradual_typing_and_function_signatures() {
     let source = r#"
-        function calculateTotal(int $quantity, float $unitPrice, string $currency): float {
+        function calculateTotal($quantity: int, $unitPrice: float, $currency: string): float {
             $subtotal = $quantity * $unitPrice;
             $tax = $subtotal * 0.18;
             return $subtotal + $tax;
@@ -393,10 +393,10 @@ fn test_spec_surface_level_gradual_typing_and_function_signatures() {
 #[test]
 fn test_typed_variable_declarations() {
     let source = r#"
-        int $x = 10;
-        float $y = 3.14;
-        string $s = "hello";
-        bool $flag;
+        $x: int = 10;
+        $y: float = 3.14;
+        $s: string = "hello";
+        $flag: bool;
     "#;
     let program = parse(source).expect("Failed to parse typed var decls");
     assert_eq!(program.statements.len(), 4);
@@ -421,28 +421,28 @@ fn test_typed_variable_declarations() {
 }
 
 #[test]
-fn test_rejection_of_colon_typed_variable_declarations() {
-    let bad_source = "$x: int = 10;";
-    let err = parse(bad_source).expect_err("Colon type syntax must be rejected");
-    assert!(err.to_string().contains("Colon type syntax '$x: Type' is not supported"));
+fn test_rejection_of_prefix_typed_declarations() {
+    let bad_source = "int $x = 10;";
+    let err = parse(bad_source).expect_err("Prefix type syntax must be rejected");
+    assert!(err.to_string().contains("Prefix type syntax 'int $x' is not supported"));
 
-    let bad_prop = "class Foo { public $x: int = 10; }";
-    let err_prop = parse(bad_prop).expect_err("Colon type property must be rejected");
-    assert!(err_prop.to_string().contains("Colon type syntax '$x: Type' is not supported"));
+    let bad_prop = "class Foo { public int $x = 10; }";
+    let err_prop = parse(bad_prop).expect_err("Prefix type property must be rejected");
+    assert!(err_prop.to_string().contains("Prefix type syntax 'int $x' is not supported"));
 
-    let bad_param = "function bar($x: int) {}";
-    let err_param = parse(bad_param).expect_err("Colon type parameter must be rejected");
-    assert!(err_param.to_string().contains("Colon type syntax '$x: Type' is not supported"));
+    let bad_param = "function bar(int $x) {}";
+    let err_param = parse(bad_param).expect_err("Prefix type parameter must be rejected");
+    assert!(err_param.to_string().contains("Prefix type syntax 'int $x' is not supported"));
 }
 
 #[test]
 fn test_advanced_type_hints_nullable_union_intersection() {
     let source = r#"
-        function find(int? $id): User? {}
-        function process(int|float $val): string|bool {}
-        function handle(Countable&ArrayAccess $items): void {}
-        function refParam(int? &$id): void {}
-        int? $local = null;
+        function find($id: int?): User? {}
+        function process($val: int|float): string|bool {}
+        function handle($items: Countable&ArrayAccess): void {}
+        function refParam(&$id: int?): void {}
+        $local: int? = null;
     "#;
     let program = parse(source).expect("Failed to parse advanced type hints");
     assert_eq!(program.statements.len(), 5);
@@ -497,15 +497,18 @@ fn test_advanced_type_hints_nullable_union_intersection() {
 #[test]
 fn test_prefix_nullable_and_nullable_union_are_rejected() {
     let prefix = parse("function find(?int $id): void {}").expect_err("prefix ?int");
-    assert!(prefix.to_string().contains("postfix"));
+    assert!(prefix.to_string().contains("Prefix nullable syntax '?int' is not supported"));
 
-    let union_suffix = parse("function find(int?|string $id): void {}").expect_err("int?|string");
+    let prefix_colon = parse("function find($id: ?int): void {}").expect_err("prefix ?int colon");
+    assert!(prefix_colon.to_string().contains("Prefix nullable syntax '?int' is not supported"));
+
+    let union_suffix = parse("function find($id: int?|string): void {}").expect_err("int?|string");
     assert!(union_suffix.to_string().contains("cannot be combined with '|'"));
 
-    let union_member = parse("function find(string|int? $id): void {}").expect_err("string|int?");
+    let union_member = parse("function find($id: string|int?): void {}").expect_err("string|int?");
     assert!(union_member.to_string().contains("cannot be combined with '|'"));
 
-    let intersection = parse("function find(Countable&Iterator? $id): void {}").expect_err("Iterator?");
+    let intersection = parse("function find($id: Countable&Iterator?): void {}").expect_err("Iterator?");
     assert!(intersection.to_string().contains("cannot be combined with '&'"));
 }
 
@@ -636,16 +639,16 @@ fn test_object_oriented_classes_attributes_and_interfaces() {
         #[Route('/api/orders')]
         final class OrderService extends BaseService implements IOrderService {
             public const MAX_RETRIES = 3;
-            private readonly string $apiKey;
-            public static int $instances = 0;
+            private readonly $apiKey: string;
+            public static $instances: int = 0;
 
-            public function __construct(string $apiKey) {
+            public function __construct($apiKey: string) {
                 $this->apiKey = $apiKey;
                 self::$instances++;
             }
 
             #[Authorize('admin')]
-            public function process(int $orderId): bool {
+            public function process($orderId: int): bool {
                 return true;
             }
         }
@@ -772,7 +775,7 @@ fn test_exact_source_span_tracking_and_diagnostics() {
 #[test]
 fn test_ast_visitor_traversal() {
     let source = r#"
-        function calculate(int $x, int $y): int {
+        function calculate($x: int, $y: int): int {
             return $x + $y;
         }
         $total = calculate($a, $b) + 10;
@@ -1018,7 +1021,7 @@ fn test_spec_global_helpers_reserved_intrinsics_and_custom_helper_lowering() {
     assert!(!is_reserved_intrinsic("my_custom_function"));
 
     let source = r#"
-        function calculateTax(float $amount): float {
+        function calculateTax($amount: float): float {
             return $amount * 0.18;
         }
 
@@ -1300,9 +1303,9 @@ fn test_scalar_and_collection_type_hint_casing_rules() {
     // Strictly lowercase primitives: int, string, float, bool
     // Collections: list, dict, set, hashmap (both lowercase native and capitalized supported)
     let valid_source = r#"
-        function processItems(int $id, string $name, list $items, dict $meta): list {
-            list $scoped_list = [];
-            dict $scoped_dict = [];
+        function processItems($id: int, $name: string, $items: list, $meta: dict): list {
+            $scoped_list: list = [];
+            $scoped_dict: dict = [];
             return $items;
         }
     "#;
@@ -1319,14 +1322,14 @@ fn test_scalar_and_collection_type_hint_casing_rules() {
 
     // 2. Reject capitalized primitives
     for invalid_prim in ["String", "Integer", "Boolean", "Float"] {
-        let code = format!("function bad({} $x): void {{}}", invalid_prim);
+        let code = format!("function bad($x: {}): void {{}}", invalid_prim);
         let err = parse(&code).expect_err(&format!("Expected rejection for {}", invalid_prim));
         assert!(err.to_string().contains("primitive types must be strictly lowercase"));
     }
 
     // 3. Accept lowercase collections (list, dict, set, hashmap)
     for col in ["list", "dict", "set", "hashmap"] {
-        let code = format!("function process({} $arr): void {{ {} $local = []; }}", col, col);
+        let code = format!("function process($arr: {}): void {{ $local: {} = []; }}", col, col);
         let program = parse(&code).expect(&format!("Lowercase collection {} must parse", col));
         if let StmtKind::FunctionDecl(ref f) = program.statements[0].kind {
             assert_eq!(f.params[0].type_hint.as_ref().unwrap().simple_name(), Some(col));

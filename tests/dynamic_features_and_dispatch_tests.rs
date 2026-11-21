@@ -4,9 +4,9 @@ use rhp::{compile_source, run_source_with_vm, PhpValue};
 fn test_instance_magic_call_forwarding() {
     let source = r#"
         class EloquentModel {
-            public string $table = 'users';
+            public $table: string = 'users';
 
-            public function __call(string $name, array $args): string {
+            public function __call($name: string, $args: array): string {
                 return "dynamic_call:" + $name + ":" + implode(",", $args);
             }
         }
@@ -32,11 +32,11 @@ fn test_instance_magic_call_forwarding() {
 fn test_class_name_as_value_and_escape_tracking() {
     let source = r#"
         class UserRepository {
-            public string $name = 'UserRepository';
+            public $name: string = 'UserRepository';
         }
 
         class OrderRepository {
-            public string $name = 'OrderRepository';
+            public $name: string = 'OrderRepository';
         }
 
         $user_class = UserRepository::class;
@@ -63,11 +63,11 @@ fn test_class_name_as_value_and_escape_tracking() {
 fn test_di_container_app_make_and_bind() {
     let source = r#"
         class ServiceA {
-            public int $val = 100;
+            public $val: int = 100;
         }
 
         class ServiceB {
-            public int $val = 200;
+            public $val: int = 200;
         }
 
         // Test 1: Direct app(Foo::class) resolution
@@ -144,7 +144,7 @@ fn test_polymorphic_method_dispatch_runtime() {
             }
         }
 
-        function makeItSpeak(Animal $a): string {
+        function makeItSpeak($a: Animal): string {
             return $a->speak();
         }
 
@@ -165,10 +165,10 @@ fn test_polymorphic_method_dispatch_runtime() {
 fn test_dynamic_method_and_property_with_curly_braces() {
     let source = r#"
         class ServiceHandler {
-            public string $status = 'initial';
-            public int $count = 10;
+            public $status: string = 'initial';
+            public $count: int = 10;
 
-            public function calculate(int $a, int $b): int {
+            public function calculate($a: int, $b: int): int {
                 return $a * $b;
             }
 
@@ -176,7 +176,7 @@ fn test_dynamic_method_and_property_with_curly_braces() {
                 return "secret_value";
             }
 
-            public function __call(string $name, array $args): string {
+            public function __call($name: string, $args: array): string {
                 return "fallback:" + $name + ":" + implode("-", $args);
             }
         }
@@ -252,7 +252,7 @@ fn test_final_method_non_overriding_and_devirtualization() {
                 return "model_saved";
             }
 
-            final public function update(string $status): string {
+            final public function update($status: string): string {
                 return "updated_to_" + $status;
             }
         }

@@ -69,8 +69,8 @@ fn test_hashmap_complex_keys_support() {
 
     let source = r#"
         class Entity {
-            public int $id;
-            public function __construct(int $id) {
+            public $id: int;
+            public function __construct($id: int) {
                 $this->id = $id;
             }
         }
@@ -318,8 +318,8 @@ fn test_hashmap_foreach_iteration_with_complex_keys() {
 
     let source = r#"
         class KeyItem {
-            public int $val;
-            public function __construct(int $v) { $this->val = $v; }
+            public $val: int;
+            public function __construct($v: int) { $this->val = $v; }
         }
 
         $map = Arr::hashMap();
@@ -363,7 +363,7 @@ fn test_hashmap_type_boundary_contracts() {
 
     // 1. Strict `hashmap $m` declaration, parameter, and return type contracts
     let valid_source = r#"
-        function processMap(hashmap $m): int {
+        function processMap($m: hashmap): int {
             return $m->count();
         }
 
@@ -374,7 +374,7 @@ fn test_hashmap_type_boundary_contracts() {
             ]);
         }
 
-        hashmap $myMap = createMap();
+        $myMap: hashmap = createMap();
         return processMap($myMap);
     "#;
 
@@ -383,11 +383,11 @@ fn test_hashmap_type_boundary_contracts() {
 
     // 2. Strict `map $m` alias
     let valid_alias_source = r#"
-        function processMapAlias(map $m): int {
+        function processMapAlias($m: map): int {
             return $m->count();
         }
 
-        map $myMap = Arr::map(['a' => 10, 'b' => 20, 'c' => 30]);
+        $myMap: map = Arr::map(['a' => 10, 'b' => 20, 'c' => 30]);
         return processMapAlias($myMap);
     "#;
 
@@ -396,7 +396,7 @@ fn test_hashmap_type_boundary_contracts() {
 
     // 3. Passing integer to function expecting `hashmap` must fail
     let invalid_scalar_source = r#"
-        function requireHashMap(hashmap $m): int {
+        function requireHashMap($m: hashmap): int {
             return $m->count();
         }
 
@@ -414,7 +414,7 @@ fn test_hashmap_type_boundary_contracts() {
 
     // 4. Passing sequential List to function expecting `hashmap` must fail
     let invalid_list_source = r#"
-        function requireHashMap(hashmap $m): int {
+        function requireHashMap($m: hashmap): int {
             return $m->count();
         }
 
@@ -436,7 +436,7 @@ fn test_hashmap_permissive_parent_array_type_acceptance() {
     clear_runtime_closure_macros();
 
     let source = r#"
-        function countAnyCollection(array $items): int {
+        function countAnyCollection($items: array): int {
             return $items->count();
         }
 
@@ -447,7 +447,7 @@ fn test_hashmap_permissive_parent_array_type_acceptance() {
             ]);
         }
 
-        array $arr = Arr::hashMap(['k' => 'v']);
+        $arr: array = Arr::hashMap(['k' => 'v']);
         $c1 = countAnyCollection($arr);
         $c2 = countAnyCollection(returnHashMapAsArray());
 

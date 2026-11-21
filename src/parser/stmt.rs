@@ -117,22 +117,32 @@ impl<'s> CombinatorStream<'s> {
             ));
         }
 
-        // 4. Strongly-typed variable declaration: only prefix type syntax `int $x = 10;` is supported.
-        // Colon syntax `$x: int = 10;` is explicitly rejected.
+        // 4. Strongly-typed variable declaration: colon syntax `$x: int = 10;` or `$x: int;`.
+        // Prefix type syntax `int $x = 10;` is rejected.
         if let Some(tok) = self.peek() {
             if matches!(tok.token, Token::Variable(_))
                 && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
             {
                 let var = self.expect_variable()?;
-                let colon = self.expect(Token::Colon)?;
-                return Err(ParseError::new(
-                    ParseErrorKind::Custom {
-                        message: format!(
-                            "Colon type syntax '{}: Type' is not supported. Use prefix type syntax 'Type {}' instead (e.g., 'int {} = 10;').",
-                            var.name, var.name, var.name
-                        ),
+                self.expect(Token::Colon)?;
+                let type_hint = self.parse_type_hint()?;
+                let init = if self.matches(&Token::Assign) {
+                    Some(self.parse_expr_lowest()?)
+                } else {
+                    None
+                };
+                self.expect_statement_terminator()?;
+                let end_span = init
+                    .as_ref()
+                    .map(|e| e.span)
+                    .unwrap_or(type_hint.span);
+                return Ok(Stmt::new(
+                    StmtKind::VarDecl {
+                        var,
+                        type_hint: Some(type_hint),
+                        init,
                     },
-                    var.span.merge(colon.span),
+                    start_span.merge(end_span),
                 ));
             }
         }
@@ -140,23 +150,14 @@ impl<'s> CombinatorStream<'s> {
         if self.is_prefix_typed_var_decl() {
             let type_hint = self.parse_type_hint()?;
             let var = self.expect_variable()?;
-            let init = if self.matches(&Token::Assign) {
-                Some(self.parse_expr_lowest()?)
-            } else {
-                None
-            };
-            self.expect_statement_terminator()?;
-            let end_span = init
-                .as_ref()
-                .map(|e| e.span)
-                .unwrap_or(var.span);
-            return Ok(Stmt::new(
-                StmtKind::VarDecl {
-                    var,
-                    type_hint: Some(type_hint),
-                    init,
+            return Err(ParseError::new(
+                ParseErrorKind::Custom {
+                    message: format!(
+                        "Prefix type syntax '{} {}' is not supported. Use colon type syntax '{}: {}' instead (e.g., '{}: {} = ...;').",
+                        type_hint, var.name, var.name, type_hint, var.name, type_hint
+                    ),
                 },
-                start_span.merge(end_span),
+                type_hint.span.merge(var.span),
             ));
         }
 
@@ -1228,26 +1229,28 @@ impl<'s> CombinatorStream<'s> {
             });
         }
 
-        // Property member `[type] $name [= default];`
-        let type_hint = if !self.check_fn(|t| matches!(t, Token::Variable(_))) {
+        // Property member `[visibility] [static] [readonly] $name[: type] [= default];`
+        // Prefix type syntax `int $name` is rejected with an informative error.
+        if !self.check_fn(|t| matches!(t, Token::Variable(_))) {
+            let prefix_type = self.parse_type_hint()?;
+            let name = self.expect_variable()?;
+            return Err(ParseError::new(
+                ParseErrorKind::Custom {
+                    message: format!(
+                        "Prefix type syntax '{} {}' is not supported for properties. Use colon syntax '{}: {}' instead.",
+                        prefix_type, name.name, name.name, prefix_type
+                    ),
+                },
+                prefix_type.span.merge(name.span),
+            ));
+        }
+
+        let name = self.expect_variable()?;
+        let type_hint = if self.matches(&Token::Colon) {
             Some(self.parse_type_hint()?)
         } else {
             None
         };
-
-        let name = self.expect_variable()?;
-        if self.check(&Token::Colon) {
-            let colon = self.expect(Token::Colon)?;
-            return Err(ParseError::new(
-                ParseErrorKind::Custom {
-                    message: format!(
-                        "Colon type syntax '{}: Type' is not supported. Use prefix type syntax 'Type {}' instead (e.g., 'int {} = 10;').",
-                        name.name, name.name, name.name
-                    ),
-                },
-                name.span.merge(colon.span),
-            ));
-        }
         let default = if self.matches(&Token::Assign) {
             Some(self.parse_expr_lowest()?)
         } else {

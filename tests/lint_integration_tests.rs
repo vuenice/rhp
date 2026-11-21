@@ -40,13 +40,13 @@ $dict = Arr::dict(['name' => 'Alice']);
 
     let typed = add_variable_types(unformatted);
 
-    assert!(typed.contains("string $x = '';"), "Expected string $x: {}", typed);
-    assert!(typed.contains("int $y = 1;"), "Expected int $y: {}", typed);
-    assert!(typed.contains("float $f = 3.14;"), "Expected float $f: {}", typed);
-    assert!(typed.contains("bool $b = true;"), "Expected bool $b: {}", typed);
-    assert!(typed.contains("array $empty = [];"), "Expected array $empty: {}", typed);
-    assert!(typed.contains("list $list = Arr::list([1, 2]);"), "Expected list $list: {}", typed);
-    assert!(typed.contains("dict $dict = Arr::dict(['name' => 'Alice']);"), "Expected dict $dict: {}", typed);
+    assert!(typed.contains("$x: string = '';"), "Expected string $x: {}", typed);
+    assert!(typed.contains("$y: int = 1;"), "Expected int $y: {}", typed);
+    assert!(typed.contains("$f: float = 3.14;"), "Expected float $f: {}", typed);
+    assert!(typed.contains("$b: bool = true;"), "Expected bool $b: {}", typed);
+    assert!(typed.contains("$empty: array = [];"), "Expected array $empty: {}", typed);
+    assert!(typed.contains("$list: list = Arr::list([1, 2]);"), "Expected list $list: {}", typed);
+    assert!(typed.contains("$dict: dict = Arr::dict(['name' => 'Alice']);"), "Expected dict $dict: {}", typed);
 }
 
 #[test]
@@ -59,10 +59,10 @@ $b3 = Str::toEncoding($utf8, "Shift-JIS");
 "#;
 
     let typed = add_variable_types(unformatted);
-    assert!(typed.contains("string $utf8 = \"Hello world\";"), "Got: {}", typed);
-    assert!(typed.contains("byte $b1 = b\"abc\";"), "Got: {}", typed);
-    assert!(typed.contains("byte $b2 = byte(\"xyz\");"), "Got: {}", typed);
-    assert!(typed.contains("byte $b3 = Str::toEncoding($utf8, \"Shift-JIS\");"), "Got: {}", typed);
+    assert!(typed.contains("$utf8: string = \"Hello world\";"), "Got: {}", typed);
+    assert!(typed.contains("$b1: byte = b\"abc\";"), "Got: {}", typed);
+    assert!(typed.contains("$b2: byte = byte(\"xyz\");"), "Got: {}", typed);
+    assert!(typed.contains("$b3: byte = Str::toEncoding($utf8, \"Shift-JIS\");"), "Got: {}", typed);
 }
 
 #[test]
@@ -77,10 +77,10 @@ $emptyArray = [];
 
     let typed = add_variable_types(code);
 
-    assert!(typed.contains("list $numbers = [10, 20, 30];"), "Got: {}", typed);
-    assert!(typed.contains("dict $person = ['name' => 'Alice', 'role' => 'admin'];"), "Got: {}", typed);
-    assert!(typed.contains("hashMap $complexMap = [1 => 'first', 2 => 'second'];"), "Got: {}", typed);
-    assert!(typed.contains("array $emptyArray = [];"), "Got: {}", typed);
+    assert!(typed.contains("$numbers: list = [10, 20, 30];"), "Got: {}", typed);
+    assert!(typed.contains("$person: dict = ['name' => 'Alice', 'role' => 'admin'];"), "Got: {}", typed);
+    assert!(typed.contains("$complexMap: hashMap = [1 => 'first', 2 => 'second'];"), "Got: {}", typed);
+    assert!(typed.contains("$emptyArray: array = [];"), "Got: {}", typed);
 }
 
 #[test]
@@ -104,12 +104,12 @@ $unique = Arr::set([1, 1, 2]);
 "#;
 
     let typed = add_variable_types(code);
-    assert!(typed.contains("list $items = [];"), "Got: {}", typed);
-    assert!(typed.contains("dict $named = [];"), "Got: {}", typed);
-    assert!(typed.contains("hashMap $sparse = [];"), "Got: {}", typed);
-    assert!(typed.contains("list $at_zero = [];"), "Got: {}", typed);
-    assert!(typed.contains("array $untouched = [];"), "Got: {}", typed);
-    assert!(typed.contains("set $unique = Arr::set([1, 1, 2]);"), "Got: {}", typed);
+    assert!(typed.contains("$items: list = [];"), "Got: {}", typed);
+    assert!(typed.contains("$named: dict = [];"), "Got: {}", typed);
+    assert!(typed.contains("$sparse: hashMap = [];"), "Got: {}", typed);
+    assert!(typed.contains("$at_zero: list = [];"), "Got: {}", typed);
+    assert!(typed.contains("$untouched: array = [];"), "Got: {}", typed);
+    assert!(typed.contains("$unique: set = Arr::set([1, 1, 2]);"), "Got: {}", typed);
 }
 
 #[test]
@@ -132,7 +132,7 @@ function ping() {
     $n = 1;
 }
 
-function keep(list $items): list {
+function keep($items: list): list {
     return $items;
 }
 "#;
@@ -143,7 +143,7 @@ function keep(list $items): list {
     assert!(typed.contains("function emptyBag(): array"), "Got: {}", typed);
     assert!(typed.contains("function ping()"), "Got: {}", typed);
     assert!(!typed.contains("function ping():"), "void stays unannotated, got: {}", typed);
-    assert!(typed.contains("function keep(list $items): list"), "Got: {}", typed);
+    assert!(typed.contains("function keep($items: list): list"), "Got: {}", typed);
     assert!(!typed.contains("): list: list"), "Got: {}", typed);
 }
 
@@ -164,33 +164,33 @@ function configure(
 
     let typed = add_variable_types(code);
 
-    assert!(typed.contains("int $timeout = 30"), "Got: {}", typed);
-    assert!(typed.contains("string $appName = 'my-app'"), "Got: {}", typed);
-    assert!(typed.contains("bool $debug = false"), "Got: {}", typed);
-    assert!(typed.contains("list $tags = ['prod', 'v1']"), "Got: {}", typed);
-    assert!(typed.contains("dict $headers = ['Content-Type' => 'application/json']"), "Got: {}", typed);
-    assert!(typed.contains("hashMap $portMap = [80 => 8080, 443 => 8443]"), "Got: {}", typed);
+    assert!(typed.contains("$timeout: int = 30"), "Got: {}", typed);
+    assert!(typed.contains("$appName: string = 'my-app'"), "Got: {}", typed);
+    assert!(typed.contains("$debug: bool = false"), "Got: {}", typed);
+    assert!(typed.contains("$tags: list = ['prod', 'v1']"), "Got: {}", typed);
+    assert!(typed.contains("$headers: dict = ['Content-Type' => 'application/json']"), "Got: {}", typed);
+    assert!(typed.contains("$portMap: hashMap = [80 => 8080, 443 => 8443]"), "Got: {}", typed);
 }
 
 #[test]
 fn test_existing_types_are_not_changed_and_mismatches_reported_in_json() {
     // If types are already written, DO NOT change them. Just show error if they are wrong in completion.
     let code = r#"
-int $wrongVar = 'hello';
+$wrongVar: int = 'hello';
 
 class Config {
-    public int $wrongProp = [1, 2, 3];
+    public $wrongProp: int = [1, 2, 3];
 
-    public function process(int $wrongParam = 'not-an-int'): void {
+    public function process($wrongParam: int = 'not-an-int'): void {
     }
 }
 "#;
 
     // 1. autotype must NOT rewrite or change the existing types
     let typed = add_variable_types(code);
-    assert!(typed.contains("int $wrongVar = 'hello';"), "Should preserve int type: {}", typed);
-    assert!(typed.contains("public int $wrongProp = [1, 2, 3];"), "Should preserve int property: {}", typed);
-    assert!(typed.contains("int $wrongParam = 'not-an-int'"), "Should preserve int param: {}", typed);
+    assert!(typed.contains("$wrongVar: int = 'hello';"), "Should preserve int type: {}", typed);
+    assert!(typed.contains("public $wrongProp: int = [1, 2, 3];"), "Should preserve int property: {}", typed);
+    assert!(typed.contains("$wrongParam: int = 'not-an-int'"), "Should preserve int param: {}", typed);
 
     // 2. lint/typecheck must detect and report these mismatches in the JSON output
     let res = lint_source(code, "mismatch.rhp");
@@ -217,20 +217,20 @@ $data = "ID-" + string($data);
 
     let typed = add_variable_types(conflicting);
     // Should NOT lock $data to int
-    assert!(!typed.contains("int $data = 100;"), "Should not lock dynamic variable: {}", typed);
+    assert!(!typed.contains("$data: int = 100;"), "Should not lock dynamic variable: {}", typed);
     assert!(typed.contains("$data = 100;"));
 }
 
 #[test]
 fn test_autotype_does_not_duplicate_existing_types() {
     let already_typed = r#"
-string $msg = "hello";
-int $counter = 0;
+$msg: string = "hello";
+$counter: int = 0;
 "#;
 
     let typed = add_variable_types(already_typed);
-    assert!(!typed.contains("string string $msg"));
-    assert!(!typed.contains("int int $counter"));
+    assert!(!typed.contains("$msg: string: string"));
+    assert!(!typed.contains("$counter: int: int"));
 }
 
 #[test]
@@ -246,11 +246,11 @@ class User {
 "#;
 
     let typed = add_variable_types(class_src);
-    assert!(typed.contains("public string $name = 'guest';"), "Got: {}", typed);
-    assert!(typed.contains("private int $age = 20;"), "Got: {}", typed);
-    assert!(typed.contains("protected bool $isAdmin = false;"), "Got: {}", typed);
-    assert!(typed.contains("public list $roles = ['editor', 'viewer'];"), "Got: {}", typed);
-    assert!(typed.contains("public dict $meta = ['theme' => 'dark'];"), "Got: {}", typed);
+    assert!(typed.contains("public $name: string = 'guest';"), "Got: {}", typed);
+    assert!(typed.contains("private $age: int = 20;"), "Got: {}", typed);
+    assert!(typed.contains("protected $isAdmin: bool = false;"), "Got: {}", typed);
+    assert!(typed.contains("public $roles: list = ['editor', 'viewer'];"), "Got: {}", typed);
+    assert!(typed.contains("public $meta: dict = ['theme' => 'dark'];"), "Got: {}", typed);
 }
 
 #[test]
@@ -265,8 +265,8 @@ if ($y > 0) {
 
     let res = lint_source(code, "test.rhp");
     // Code should be formatted and autotyped
-    assert!(res.formatted_content.contains("string $x = '';"));
-    assert!(res.formatted_content.contains("int $y = 1;"));
+    assert!(res.formatted_content.contains("$x: string = '';"));
+    assert!(res.formatted_content.contains("$y: int = 1;"));
     // Clean code should have 0 issues
     assert_eq!(res.issues.len(), 0);
 }
@@ -328,7 +328,7 @@ fn test_cli_rhp_run_lint_autoapplies_and_reports_json() {
 
     // Check that the file on disk was automatically modified with indentation, formatting, and types!
     let updated_content = fs::read_to_string(&temp_file).expect("Failed to read updated file");
-    assert_eq!(updated_content, "string $x = '';\nint $y = 1;\n");
+    assert_eq!(updated_content, "$x: string = '';\n$y: int = 1;\n");
 
     let _ = fs::remove_file(temp_file);
     let _ = fs::remove_dir(temp_dir);
@@ -348,8 +348,8 @@ $getQuery = $_GET;
     let content = res.formatted_content;
 
     // Check variables converted to snake_case
-    assert!(content.contains("int $my_var = 10;"), "Got: {}", content);
-    assert!(content.contains("$total_sum = $my_var + 5;"), "Got: {}", content);
+    assert!(content.contains("$my_var: int = 10;"), "Got: {}", content);
+    assert!(content.contains("$total_sum: int = $my_var + 5;"), "Got: {}", content);
     assert!(content.contains("$user_xml_parser = null;"), "Got: {}", content);
 
     // Special variables $this and $_GET must NEVER be mangled
@@ -368,7 +368,7 @@ class user_account {
     }
 }
 
-function calculate_user_tax(int $taxAmount): int {
+function calculate_user_tax($taxAmount: int): int {
     return $taxAmount * 2;
 }
 
@@ -385,13 +385,13 @@ $res = calculate_user_tax(50);
 
     // Function and method names to camelCase, with opening braces on the next line
     assert!(content.contains("function getUserEmail(): string\n    {"), "Got: {}", content);
-    assert!(content.contains("function calculateUserTax(int $tax_amount): int\n{"), "Got: {}", content);
+    assert!(content.contains("function calculateUserTax($tax_amount: int): int\n{"), "Got: {}", content);
     assert!(content.contains("calculateUserTax(50);"), "Got: {}", content);
 
     // Variable and property to snake_case
-    assert!(content.contains("public string $user_email = 'test@example.com';"), "Got: {}", content);
+    assert!(content.contains("public $user_email: string = 'test@example.com';"), "Got: {}", content);
     assert!(content.contains("$this->user_email"), "Got: {}", content);
-    assert!(content.contains("int $tax_amount"), "Got: {}", content);
+    assert!(content.contains("$tax_amount: int"), "Got: {}", content);
 }
 
 #[test]
@@ -421,8 +421,8 @@ function normal_utility_function(): void {
     assert!(content.contains("function normalUtilityFunction(): void\n{"), "Got: {}", content);
 
     // Variables inside both are snake_case
-    assert!(content.contains("string $session_token = 'xyz';"), "Got: {}", content);
-    assert!(content.contains("string $db_host = 'localhost';"), "Got: {}", content);
+    assert!(content.contains("$session_token: string = 'xyz';"), "Got: {}", content);
+    assert!(content.contains("$db_host: string = 'localhost';"), "Got: {}", content);
 }
 
 #[test]
@@ -477,8 +477,8 @@ class my_service {
     // Formatted and autotyped, but original casing preserved!
     let content = res.formatted_content;
     assert!(content.contains("class my_service {"), "Casing should NOT change: {}", content);
-    assert!(content.contains("function calculate_total(int $itemPrice = 100): int\n    {"), "Casing should NOT change: {}", content);
-    assert!(content.contains("int $myVar = $itemPrice;"), "Casing should NOT change: {}", content);
+    assert!(content.contains("function calculate_total($itemPrice: int = 100): int\n    {"), "Casing should NOT change: {}", content);
+    assert!(content.contains("$myVar: int = $itemPrice;"), "Casing should NOT change: {}", content);
 }
 
 #[test]
@@ -523,7 +523,7 @@ fn test_cli_no_fix_and_no_case_change_options() {
 
     let content_no_case = fs::read_to_string(&temp_file).unwrap();
     assert!(content_no_case.contains("class my_demo {"), "Expected original class name: {}", content_no_case);
-    assert!(content_no_case.contains("string $userName = 'Alice'"), "Expected original var name: {}", content_no_case);
+    assert!(content_no_case.contains("$userName: string = 'Alice'"), "Expected original var name: {}", content_no_case);
 
     // 3. Run default (with fixes & casing enabled): must rename to PascalCase, snake_case, etc.
     let _output_fixed = Command::new(exe_path)
@@ -535,8 +535,8 @@ fn test_cli_no_fix_and_no_case_change_options() {
 
     let content_fixed = fs::read_to_string(&temp_file).unwrap();
     assert!(content_fixed.contains("class MyDemo {"), "Expected PascalCase: {}", content_fixed);
-    assert!(content_fixed.contains("function test_run(string $user_name = 'Alice'): void {"), "Expected snake_case test func: {}", content_fixed);
-    assert!(content_fixed.contains("int $total_count = 1;"), "Expected snake_case var: {}", content_fixed);
+    assert!(content_fixed.contains("function test_run($user_name: string = 'Alice'): void {"), "Expected snake_case test func: {}", content_fixed);
+    assert!(content_fixed.contains("$total_count: int = 1;"), "Expected snake_case var: {}", content_fixed);
 
     let _ = fs::remove_file(temp_file);
     let _ = fs::remove_dir(temp_dir);
@@ -544,18 +544,18 @@ fn test_cli_no_fix_and_no_case_change_options() {
 
 #[test]
 fn test_user_requested_format_code_snippet() {
-    let unformatted = r#"int $int_value = 1;
-float $float_value = 1.1;
-bool $bool_value = true;
-string $string_value = 'hello world';
+    let unformatted = r#"$int_value: int = 1;
+$float_value: float = 1.1;
+$bool_value: bool = true;
+$string_value: string = 'hello world';
 
-dict $arr_dict = [
+$arr_dict: dict = [
 "name" => "RHP Playground",
 "mode" => "Standalone",
 "description" => "Easily run and test PHP & RHP code instantly",
 ];
 
-list $arr_list = [ 1, 2, 3 ];
+$arr_list: list = [ 1, 2, 3 ];
 
 dd(
 $int_value,
@@ -569,18 +569,18 @@ $arr_list
 
     let res = rhp::lint::lint_source(unformatted, "playground.rhp");
     let expected = "\
-int $int_value = 1;
-float $float_value = 1.1;
-bool $bool_value = true;
-string $string_value = 'hello world';
+$int_value: int = 1;
+$float_value: float = 1.1;
+$bool_value: bool = true;
+$string_value: string = 'hello world';
 
-dict $arr_dict = [
+$arr_dict: dict = [
     \"name\" => \"RHP Playground\",
     \"mode\" => \"Standalone\",
     \"description\" => \"Easily run and test PHP & RHP code instantly\",
 ];
 
-list $arr_list = [ 1, 2, 3 ];
+$arr_list: list = [ 1, 2, 3 ];
 
 dd(
     $int_value,
@@ -598,9 +598,9 @@ dd(
 fn test_multiline_function_params_and_next_line_curly_braces() {
     let unformatted = r#"
 function computeTax(
-int $subtotal,
-float $rate,
-list $discounts = [10, 20]
+$subtotal: int,
+$rate: float,
+$discounts: list = [10, 20]
 ): float {
 return $subtotal * $rate;
 }
@@ -609,9 +609,9 @@ return $subtotal * $rate;
     let formatted = format_source(unformatted);
     let expected = "\
 function computeTax(
-    int $subtotal,
-    float $rate,
-    list $discounts = [10, 20]
+    $subtotal: int,
+    $rate: float,
+    $discounts: list = [10, 20]
 ): float
 {
     return $subtotal * $rate;
@@ -828,11 +828,11 @@ fn test_unassigned_collection_calls_auto_assigned_and_statements_split() {
 #[test]
 fn test_mutated_array_parameters_converted_to_copy_by_reference_and_comma_spacing() {
     // User request:
-    // myFunction(array $x,list $y,dict $z)
+    // myFunction($x: array, $y: list, $z: dict)
     // should become
-    // myFunction(array &$x, list &$y, dict &$z)
+    // myFunction(&$x: array, &$y: list, &$z: dict)
     let code = r#"
-function myFunction(array $x,list $y,dict $z) {
+function myFunction($x: array, $y: list, $z: dict) {
     $x[0] = 1;
     $y[] = 2;
     $z['key'] = 'val';
@@ -841,8 +841,8 @@ function myFunction(array $x,list $y,dict $z) {
 
     let res = lint_source(code, "test.rhp");
     assert!(
-        res.formatted_content.contains("function myFunction(array &$x, list &$y, dict &$z)"),
-        "Expected 'function myFunction(array &$x, list &$y, dict &$z)', got:\n{}",
+        res.formatted_content.contains("function myFunction(&$x: array, &$y: list, &$z: dict)"),
+        "Expected 'function myFunction(&$x: array, &$y: list, &$z: dict)', got:\n{}",
         res.formatted_content
     );
 }
@@ -855,7 +855,7 @@ fn test_combined_user_request_array_mutation_and_auto_assign() {
     // 3. $y is mutated via index assignment
     // 4. Space added between parameters and statements on different lines
     let code = r#"
-function myFunction(array $x,list $y,dict $z) {
+function myFunction($x: array, $y: list, $z: dict) {
     $x->map();Arr::list($z)->map();
     $y[0] = 100;
 }
@@ -863,7 +863,7 @@ function myFunction(array $x,list $y,dict $z) {
 
     let res = lint_source(code, "test.rhp");
     assert!(
-        res.formatted_content.contains("function myFunction(array &$x, list &$y, dict &$z)"),
+        res.formatted_content.contains("function myFunction(&$x: array, &$y: list, &$z: dict)"),
         "Expected signature with reference params and space between commas:\n{}",
         res.formatted_content
     );
@@ -887,7 +887,7 @@ function myFunction(array $x,list $y,dict $z) {
 #[test]
 fn test_non_mutated_arrays_and_scalars_remain_unchanged() {
     let code = r#"
-function process(array $x, list $y, int $count): void {
+function process($x: array, $y: list, $count: int): void {
     $x[] = 'modified';
     echo $y[0];
     $count = $count + 1;
@@ -895,11 +895,11 @@ function process(array $x, list $y, int $count): void {
 "#;
 
     let res = lint_source(code, "test.rhp");
-    // $x is mutated array -> becomes array &$x
-    // $y is read-only array -> remains list $y
-    // $count is scalar -> remains int $count
+    // $x is mutated array -> becomes &$x: array
+    // $y is read-only array -> remains $y: list
+    // $count is scalar -> remains $count: int
     assert!(
-        res.formatted_content.contains("function process(array &$x, list $y, int $count): void"),
+        res.formatted_content.contains("function process(&$x: array, $y: list, $count: int): void"),
         "Got:\n{}",
         res.formatted_content
     );
@@ -908,7 +908,7 @@ function process(array $x, list $y, int $count): void {
 #[test]
 fn test_call_sites_updated_with_references_when_variables_passed() {
     let code = r#"
-function appendVal(array $arr): void {
+function appendVal($arr: array): void {
     $arr[] = 42;
 }
 
@@ -918,7 +918,7 @@ appendVal($myList);
 
     let res = lint_source(code, "test.rhp");
     assert!(
-        res.formatted_content.contains("function appendVal(array &$arr): void"),
+        res.formatted_content.contains("function appendVal(&$arr: array): void"),
         "Got:\n{}",
         res.formatted_content
     );
@@ -953,13 +953,13 @@ for ($i = 0; $i < 10; $i++) {
 #[test]
 fn test_division_stored_in_int_warns_without_type_error() {
     let code = r#"
-int $exact = 6 / 2;
-int $n = (5 / 2) + 1;
-int $later = 4;
+$exact: int = 6 / 2;
+$n: int = (5 / 2) + 1;
+$later: int = 4;
 $later = $later / 2;
 $later /= 2;
-int $truncated = int(5 / 2);
-float $f = 5 / 2;
+$truncated: int = int(5 / 2);
+$f: float = 5 / 2;
 "#;
 
     let res = lint_source(code, "division.rhp");
@@ -1017,7 +1017,7 @@ function titled(): Void {
         "Type Error: Cannot assign the result of void function 'ping'."
     );
 
-    let declared = "function ping() {\n}\nint $y = ping();\n";
+    let declared = "function ping() {\n}\n$y: int = ping();\n";
     let declared_res = lint_source(declared, "declare.rhp");
     let declared_assignments: Vec<_> = declared_res
         .issues
@@ -1046,3 +1046,32 @@ fn test_omitted_void_call_is_not_an_error() {
         res.issues
     );
 }
+
+#[test]
+fn test_formatter_colon_type_spacing() {
+    let input = r#"
+$x : int = 10;
+$y:string = "hello";
+function compute($a : int, &$b:string, ...$c : list) : int {
+    return $a;
+}
+class User {
+    public $name : string = "";
+    private readonly $id:int;
+}
+$ternary = $cond ? $x : $y;
+"#;
+
+    let formatted = format_source(input);
+    assert!(formatted.contains("$x: int = 10;"), "got:\n{}", formatted);
+    assert!(formatted.contains("$y: string = \"hello\";"), "got:\n{}", formatted);
+    assert!(
+        formatted.contains("function compute($a: int, &$b: string, ...$c: list): int\n{"),
+        "got:\n{}",
+        formatted
+    );
+    assert!(formatted.contains("public $name: string = \"\";"), "got:\n{}", formatted);
+    assert!(formatted.contains("private readonly $id: int;"), "got:\n{}", formatted);
+    assert!(formatted.contains("$ternary = $cond ? $x : $y;"), "got:\n{}", formatted);
+}
+

@@ -183,7 +183,7 @@ fn test_cli_rhp_check_clean_file_exits_zero() {
     let _ = fs::create_dir_all(&temp_dir);
     let temp_file = temp_dir.join("clean.rhp");
 
-    let valid_code = "function add(int $a, int $b): int {\n    return $a + $b;\n}\n";
+    let valid_code = "function add($a: int, $b: int): int {\n    return $a + $b;\n}\n";
     fs::write(&temp_file, valid_code).expect("write temp file");
 
     let exe_path = env!("CARGO_BIN_EXE_rhp");
@@ -294,7 +294,7 @@ fn test_utf16_column_units_and_byte_offsets() {
 
 #[test]
 fn test_c_style_for_emits_rhp0403() {
-    let c_style = "int $n = 0;\nfor ($i = 0; $i < 3; $i++) {\n    $n = $i;\n}\n";
+    let c_style = "$n: int = 0;\nfor ($i = 0; $i < 3; $i++) {\n    $n = $i;\n}\n";
     let diags = check_source(c_style, "loop.rhp", 10);
     let warning = diags.iter().find(|d| d.code == "RHP0403");
     let warning = warning.expect("C-style for must warn");

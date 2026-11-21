@@ -6,14 +6,14 @@ use rhp::{run_source_with_vm, PhpValue};
 #[test]
 fn test_linter_fixes_function_parameter_order_required_before_optional() {
     let code = r#"
-function calculatePrice(float $taxRate = 0.05, float $basePrice, float $discount = 0.0, string $currency): float {
+function calculatePrice($taxRate: float = 0.05, $basePrice: float, $discount: float = 0.0, $currency: string): float {
     return ($basePrice + ($basePrice * $taxRate)) - $discount;
 }
 "#;
 
     let fixed = fix_parameter_order(code);
     assert!(
-        fixed.contains("function calculatePrice(float $basePrice, string $currency, float $taxRate = 0.05, float $discount = 0.0): float"),
+        fixed.contains("function calculatePrice($basePrice: float, $currency: string, $taxRate: float = 0.05, $discount: float = 0.0): float"),
         "Parameters should be reordered so required come before optional: {}",
         fixed
     );
@@ -23,7 +23,7 @@ function calculatePrice(float $taxRate = 0.05, float $basePrice, float $discount
 fn test_linter_fixes_class_method_parameter_order() {
     let code = r#"
 class PaymentGateway {
-    public function charge(string $provider = 'stripe', int $amount, bool $capture = true, string $customerId): bool {
+    public function charge($provider: string = 'stripe', $amount: int, $capture: bool = true, $customerId: string): bool {
         return true;
     }
 }
@@ -31,7 +31,7 @@ class PaymentGateway {
 
     let fixed = fix_parameter_order(code);
     assert!(
-        fixed.contains("public function charge(int $amount, string $customerId, string $provider = 'stripe', bool $capture = true): bool"),
+        fixed.contains("public function charge($amount: int, $customerId: string, $provider: string = 'stripe', $capture: bool = true): bool"),
         "Method parameters must have required before optional: {}",
         fixed
     );
@@ -40,21 +40,21 @@ class PaymentGateway {
 #[test]
 fn test_linter_fixes_closures_and_arrow_functions() {
     let code = r#"
-$calc = function(int $factor = 2, int $value): int {
+$calc = function($factor: int = 2, $value: int): int {
     return $value * $factor;
 };
 
-$arrow = fn(int $step = 1, int $x) => $x + $step;
+$arrow = fn($step: int = 1, $x: int) => $x + $step;
 "#;
 
     let fixed = fix_parameter_order(code);
     assert!(
-        fixed.contains("function(int $value, int $factor = 2): int"),
+        fixed.contains("function($value: int, $factor: int = 2): int"),
         "Closure parameters reordered: {}",
         fixed
     );
     assert!(
-        fixed.contains("fn(int $x, int $step = 1) => $x + $step"),
+        fixed.contains("fn($x: int, $step: int = 1) => $x + $step"),
         "Arrow function parameters reordered: {}",
         fixed
     );
@@ -63,14 +63,14 @@ $arrow = fn(int $step = 1, int $x) => $x + $step;
 #[test]
 fn test_linter_pipeline_end_to_end_fixes_parameter_order() {
     let code = r#"
-function greet(string $greeting = 'Hello', string $name): string {
+function greet($greeting: string = 'Hello', $name: string): string {
     return $greeting + ' ' + $name;
 }
 "#;
 
     let result = lint_source(code, "test.rhp");
     assert!(
-        result.formatted_content.contains("function greet(string $name, string $greeting = 'Hello')"),
+        result.formatted_content.contains("function greet($name: string, $greeting: string = 'Hello')"),
         "Linter pipeline auto-fixed parameter order: {}",
         result.formatted_content
     );
@@ -79,7 +79,7 @@ function greet(string $greeting = 'Hello', string $name): string {
 #[test]
 fn test_linter_check_mode_reports_issue_for_bad_parameter_order() {
     let code = r#"
-function badOrder(int $opt = 10, int $req): int {
+function badOrder($opt: int = 10, $req: int): int {
     return $opt + $req;
 }
 "#;
@@ -107,7 +107,7 @@ function badOrder(int $opt = 10, int $req): int {
 #[test]
 fn test_type_checker_rejects_required_param_after_optional() {
     let code = r#"
-function invalidSignature(int $a = 1, int $b): int {
+function invalidSignature($a: int = 1, $b: int): int {
     return $a + $b;
 }
 "#;
@@ -124,7 +124,7 @@ function invalidSignature(int $a = 1, int $b): int {
 #[test]
 fn test_named_parameters_rejected_at_call_site() {
     let code = r#"
-function add(int $a, int $b = 10): int {
+function add($a: int, $b: int = 10): int {
     return $a + $b;
 }
 $val = add(b: 20, a: 5);
@@ -144,11 +144,11 @@ $val = add(b: 20, a: 5);
 fn test_call_with_skipped_optional_arguments_using_extra_comma() {
     let code = r#"
 function configureApp(
-    string $name,
-    string $env = 'production',
-    int $port = 8080,
-    bool $debug = false,
-    string $logLevel = 'info'
+    $name: string,
+    $env: string = 'production',
+    $port: int = 8080,
+    $debug: bool = false,
+    $logLevel: string = 'info'
 ): string {
     $d = $debug ? '1' : '0';
     return "{$name}:{$env}:{$port}:{$d}:{$logLevel}";
@@ -184,13 +184,13 @@ fn test_call_method_and_constructor_with_skipped_optional_parameters() {
     let code = r#"
 class Service {
     public function __construct(
-        public string $host,
-        public int $port = 3306,
-        public string $user = 'root',
-        public string $database = 'main'
+        public $host: string,
+        public $port: int = 3306,
+        public $user: string = 'root',
+        public $database: string = 'main'
     ) {}
 
-    public function query(string $sql, int $timeout = 30, bool $fetchAssoc = true): string {
+    public function query($sql: string, $timeout: int = 30, $fetchAssoc: bool = true): string {
         $mode = $fetchAssoc ? 'assoc' : 'list';
         return "{$this->host}:{$this->port}:{$this->user}:{$this->database}|{$sql}|{$timeout}|{$mode}";
     }
@@ -213,7 +213,7 @@ $res = $svc->query('SELECT 1', , false);
 #[test]
 fn test_call_closure_with_skipped_optional_parameter() {
     let code = r#"
-$calc = function(int $base, int $multiplier = 2, int $offset = 5): int {
+$calc = function($base: int, $multiplier: int = 2, $offset: int = 5): int {
     return ($base * $multiplier) + $offset;
 };
 
@@ -228,7 +228,7 @@ $val = $calc(10, , 100);
 #[test]
 fn test_call_all_optional_parameters_with_leading_skipped_comma() {
     let code = r#"
-function coords(int $x = 0, int $y = 0, int $z = 0): string {
+function coords($x: int = 0, $y: int = 0, $z: int = 0): string {
     return "{$x},{$y},{$z}";
 }
 
@@ -247,7 +247,7 @@ $c2 = coords(, , 100);
 #[test]
 fn test_skipping_required_parameter_is_rejected() {
     let code = r#"
-function requireFirst(int $required, int $optional = 42): int {
+function requireFirst($required: int, $optional: int = 42): int {
     return $required + $optional;
 }
 $val = requireFirst(, 100);

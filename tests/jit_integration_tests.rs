@@ -41,7 +41,7 @@ fn test_hot_loop_jit_compilation_and_execution() {
 #[test]
 fn test_hot_function_invocation_compilation() {
     let source = r#"
-        function computeSquare(int $n): int {
+        function computeSquare($n: int): int {
             return $n * $n;
         }
 
