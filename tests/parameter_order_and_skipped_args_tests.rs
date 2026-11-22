@@ -122,7 +122,20 @@ function invalidSignature($a: int = 1, $b: int): int {
 }
 
 #[test]
-fn test_named_parameters_rejected_at_call_site() {
+fn test_named_arguments_bind_in_any_order() {
+    let code = r#"
+function add($a: int, $b: int = 10): int {
+    return $a + $b;
+}
+$val = add('b' => 20, 'a' => 5);
+"#;
+
+    let (vm, _) = run_source_with_vm(code).expect("Named call should run");
+    assert_eq!(vm.get_main_variable("$val"), Some(&PhpValue::Int(25)));
+}
+
+#[test]
+fn test_colon_named_arguments_are_rejected() {
     let code = r#"
 function add($a: int, $b: int = 10): int {
     return $a + $b;
@@ -131,13 +144,44 @@ $val = add(b: 20, a: 5);
 "#;
 
     let parse_res = parse(code);
-    assert!(parse_res.is_err(), "Named parameters must be rejected at parse time");
+    assert!(parse_res.is_err(), "Colon named arguments must be rejected");
     let err_str = parse_res.unwrap_err().to_string();
     assert!(
-        err_str.contains("Named parameters are not supported in RHP"),
-        "Error should explain named parameters are not supported: {}",
+        err_str.contains("'b' => value"),
+        "Error should point at the arrow form: {}",
         err_str
     );
+}
+
+#[test]
+fn test_mixed_and_non_literal_named_arguments_are_rejected() {
+    let mixed = r#"
+function add($a: int, $b: int = 10): int {
+    return $a + $b;
+}
+$val = add(5, 'b' => 20);
+"#;
+    let mixed_err = parse(mixed).unwrap_err().to_string();
+    assert!(mixed_err.contains("entirely positional or entirely named"), "{}", mixed_err);
+
+    let variable_label = r#"
+function add($a: int, $b: int = 10): int {
+    return $a + $b;
+}
+$key = 'a';
+$val = add($key => 5);
+"#;
+    let label_err = parse(variable_label).unwrap_err().to_string();
+    assert!(label_err.contains("string literals"), "{}", label_err);
+
+    let empty = r#"
+function add($a: int, $b: int = 10): int {
+    return $a + $b;
+}
+$val = add(5, ,);
+"#;
+    let empty_err = parse(empty).unwrap_err().to_string();
+    assert!(empty_err.contains("Empty argument slots"), "{}", empty_err);
 }
 
 #[test]
@@ -154,14 +198,9 @@ function configureApp(
     return "{$name}:{$env}:{$port}:{$d}:{$logLevel}";
 }
 
-// 1. Skip $env and $port with extra commas, specify $debug = true, skip $logLevel
-$cfg1 = configureApp('myApp', , , true);
-
-// 2. Specify $env = 'staging', skip $port, skip $debug, specify $logLevel = 'debug'
-$cfg2 = configureApp('apiServer', 'staging', , , 'debug');
-
-// 3. Skip $env, specify $port = 9000
-$cfg3 = configureApp('webServer', , 9000);
+$cfg1 = configureApp('name' => 'myApp', 'debug' => true);
+$cfg2 = configureApp('logLevel' => 'debug', 'name' => 'apiServer', 'env' => 'staging');
+$cfg3 = configureApp('name' => 'webServer', 'port' => 9000);
 "#;
 
     let (vm, _) = run_source_with_vm(code).expect("Execution with skipped args should succeed");
@@ -196,11 +235,8 @@ class Service {
     }
 }
 
-// Skip $port and $user in constructor call
-$svc = new Service('db.local', , , 'ecommerce');
-
-// Skip $timeout in method call
-$res = $svc->query('SELECT 1', , false);
+$svc = new Service('database' => 'ecommerce', 'host' => 'db.local');
+$res = $svc->query('sql' => 'SELECT 1', 'fetchAssoc' => false);
 "#;
 
     let (vm, _) = run_source_with_vm(code).expect("Method and constructor calls with skipped args should succeed");
@@ -217,8 +253,7 @@ $calc = function($base: int, $multiplier: int = 2, $offset: int = 5): int {
     return ($base * $multiplier) + $offset;
 };
 
-// Skip $multiplier (use 2), provide $offset = 100
-$val = $calc(10, , 100);
+$val = $calc('base' => 10, 'offset' => 100);
 "#;
 
     let (vm, _) = run_source_with_vm(code).expect("Closure call with skipped args should succeed");
@@ -232,11 +267,8 @@ function coords($x: int = 0, $y: int = 0, $z: int = 0): string {
     return "{$x},{$y},{$z}";
 }
 
-// Skip $x, provide $y = 50, skip $z
-$c1 = coords(, 50);
-
-// Skip $x and $y, provide $z = 100
-$c2 = coords(, , 100);
+$c1 = coords('y' => 50);
+$c2 = coords('z' => 100);
 "#;
 
     let (vm, _) = run_source_with_vm(code).expect("Leading skipped commas should succeed");
@@ -250,7 +282,7 @@ fn test_skipping_required_parameter_is_rejected() {
 function requireFirst($required: int, $optional: int = 42): int {
     return $required + $optional;
 }
-$val = requireFirst(, 100);
+$val = requireFirst('optional' => 100);
 "#;
 
     let program = parse(code).expect("Parse succeeds");

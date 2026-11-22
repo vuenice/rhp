@@ -542,40 +542,38 @@ function createEndpoint(string $path, bool $auth, string $version = 'v1', int $t
 
 ---
 
-### 18. Function Argument Ordering & Named Argument Stripping
+### 18. Named argument syntax
 
-RHP enforces zero-overhead ABI calls and does not allow named arguments at call sites (`RHP0206: Named arguments not supported`). 
+`rhp migrate` rewrites PHP named arguments from `name: value` to `'name' => value` and keeps the written order. It does not turn them into positional arguments.
 
-Instead, RHP supports **skipped parameter syntax** using extra commas (`, ,`) at call sites when omitting intermediate optional arguments.
+A named RHP call must name every argument. Optional parameters are skipped by leaving their name out.
 
-The `rhp migrate` command resolves function signatures across the entire project, reorders arguments to match the definition's exact parameter order, removes argument names (`name: $value` $\rightarrow$ `$value`), and inserts skipped commas for omitted intermediate parameters.
-
-#### Basic Reordering & Name Stripping:
+#### Basic rewrite:
 
 ```php
 function renderButton(string $label, string $theme = 'primary', bool $disabled = false): string {
     // ...
 }
 
-// BEFORE (Named arguments in arbitrary order):
+// BEFORE:
 renderButton(theme: 'secondary', label: 'Submit');
 
-// AFTER (Reordered into positional signature):
-renderButton('Submit', 'secondary');
+// AFTER:
+renderButton('theme' => 'secondary', 'label' => 'Submit');
 ```
 
-#### Omitted Intermediate Optional Arguments (Skipped Comma Syntax):
+#### Omitted optional arguments:
 
 ```php
 function connect(string $host, int $port = 8080, int $timeout = 30, bool $ssl = false): Connection {
     // ...
 }
 
-// BEFORE (Omitting intermediate parameter $timeout):
+// BEFORE:
 connect(ssl: true, host: 'localhost');
 
-// AFTER (Using RHP skipped parameter commas):
-connect('localhost', , , true);
+// AFTER:
+connect('ssl' => true, 'host' => 'localhost');
 ```
 
 #### Class Methods, Static Calls & Constructors:
@@ -598,8 +596,8 @@ $mailer = new UserMailer(fromName: 'Billing Team', fromEmail: 'billing@example.c
 $mailer->send(subject: 'Invoice #1024', to: 'customer@example.com', priority: 5);
 
 // AFTER:
-$mailer = new UserMailer('billing@example.com', 'Billing Team');
-$mailer->send('customer@example.com', 'Invoice #1024', , 5);
+$mailer = new UserMailer('fromName' => 'Billing Team', 'fromEmail' => 'billing@example.com');
+$mailer->send('subject' => 'Invoice #1024', 'to' => 'customer@example.com', 'priority' => 5);
 ```
 
 #### Built-in PHP / RHP Functions:
@@ -613,9 +611,9 @@ $slice = array_slice(offset: 2, array: $items, length: 5);
 $sub = substr(offset: 7, string: $text);
 
 // AFTER:
-$json = json_encode($payload, JSON_PRETTY_PRINT);
-$slice = array_slice($items, 2, 5);
-$sub = substr($text, 7);
+$json = json_encode('flags' => JSON_PRETTY_PRINT, 'value' => $payload);
+$slice = array_slice('offset' => 2, 'array' => $items, 'length' => 5);
+$sub = substr('offset' => 7, 'string' => $text);
 ```
 
 #### Attribute Preservation:
@@ -693,5 +691,5 @@ When run with `--format=json`, `rhp migrate` outputs structured migration teleme
 | `$data` receiving binary / `$data = "\x80"` | `byte $data` | Auto-inferred `byte` parameter type |
 | `?int $id`, `?$x` | `int? $id`, `mixed? $x` | Postfix nullable |
 | `fn($opt = 1, $req)` | `fn($req, $opt = 1)` | Required before optional |
-| `fn(b: 2, a: 1)` | `fn(1, 2)` | Positional reordering & name stripping |
-| `fn(c: 3, a: 1)` (omitting `$b`) | `fn(1, , 3)` | Skipped comma syntax |
+| `fn(b: 2, a: 1)` | `fn('b' => 2, 'a' => 1)` | Arrow named arguments, source order kept |
+| `fn(c: 3, a: 1)` (omitting `$b`) | `fn('c' => 3, 'a' => 1)` | Omitted names keep their defaults |

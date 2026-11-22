@@ -240,11 +240,11 @@ pub static ALL_DIAGNOSTIC_CODES: &[DiagnosticCodeInfo] = &[
     },
     DiagnosticCodeInfo {
         code: "RHP0206",
-        title: "Named arguments not supported",
-        summary: "Named arguments are not supported in RHP.",
-        explanation: "RHP does not support named arguments (e.g. 'fn(param: $val)'). To skip optional parameters, use extra commas at the call site (e.g. 'fn($req, , $opt)').",
-        example: Some("function calculate(int $a, int $b = 1, int $c = 2): int {}\ncalculate(a: 5, c: 10); // Not supported"),
-        fix: Some("Use positional arguments and extra commas to skip optional parameters: 'calculate(5, , 10)'."),
+        title: "Unknown named argument",
+        summary: "A named argument does not match any parameter of the function.",
+        explanation: "Named calls use a string label and `=>`, for example `'ssl' => true`. The label must be the parameter name without `$`. Every argument in that call must be named. Optional parameters are skipped by leaving their name out.",
+        example: Some("function connect($host: string, $port: int = 8080): string { return $host; }\nconnect('hostname' => 'localhost');"),
+        fix: Some("Use the parameter's bare name: `connect('host' => 'localhost')`, or pass the arguments positionally."),
     },
     DiagnosticCodeInfo {
         code: "RHP0207",
