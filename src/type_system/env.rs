@@ -918,6 +918,12 @@ pub fn resolve_facade_static_call(
             _ => Ok(RhpType::Class("Time".to_string())),
         },
         "phpFun" => {
+            if method == "serialize" {
+                return Ok(RhpType::String);
+            }
+            if method == "unserialize" {
+                return Ok(RhpType::Mixed);
+            }
             if let Some(mapping) = crate::lexer::facade::get_legacy_php_function(method) {
                 if mapping.rhp_facade != "phpFun" {
                     resolve_facade_static_call(

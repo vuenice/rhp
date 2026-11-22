@@ -7534,6 +7534,11 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
                 Ok(PhpValue::list(list))
             })
         }
+        "serialize" | "unserialize" => Err(RuntimeErrorKind::Custom {
+            message: format!(
+                "{method}() is handled by the VM serialization engine"
+            ),
+        }),
         "http_response_code" => {
             ACTIVE_RESPONSE.with(|cell| {
                 let mut b = cell.borrow_mut();

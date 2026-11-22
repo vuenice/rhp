@@ -930,6 +930,18 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
         rhp_signature: "phpFun::json_decode(string $json, bool $associative = true): mixed",
     },
     LegacyPhpFunctionMapping {
+        php_name: "serialize",
+        rhp_facade: "phpFun",
+        rhp_method: "serialize",
+        rhp_signature: "phpFun::serialize(mixed $value): string",
+    },
+    LegacyPhpFunctionMapping {
+        php_name: "unserialize",
+        rhp_facade: "phpFun",
+        rhp_method: "unserialize",
+        rhp_signature: "phpFun::unserialize(string $payload): mixed",
+    },
+    LegacyPhpFunctionMapping {
         php_name: "view",
         rhp_facade: "View",
         rhp_method: "render",
