@@ -4260,6 +4260,9 @@ impl TypeChecker {
         arg_types: &[RhpType],
         call_span: Span,
     ) -> Result<(), TypeError> {
+        if args.iter().any(|a| a.name.is_some()) {
+            return self.verify_named_call_arguments(callable_name, sig, args, arg_types, call_span);
+        }
         let has_unpack = args.iter().any(|a| a.is_unpack);
         let min_args = sig.min_arity();
         let max_args = sig.max_arity();
@@ -4299,26 +4302,9 @@ impl TypeChecker {
             }
 
             if arg.is_skipped {
-                if let Some(target_param) = sig.params.get(idx) {
-                    if !target_param.has_default {
-                        return Err(TypeError::new(
-                            TypeErrorKind::CannotSkipRequiredParameter {
-                                callable_name: callable_name.to_string(),
-                                param_name: target_param.name.clone(),
-                            },
-                            arg.span,
-                        ));
-                    }
-                }
-                continue;
-            }
-
-            // Reject named arguments
-            if let Some(ref named_id) = arg.name {
                 return Err(TypeError::new(
-                    TypeErrorKind::UnknownNamedArgument {
-                        callable_name: callable_name.to_string(),
-                        arg_name: named_id.name.to_string(),
+                    TypeErrorKind::Custom {
+                        message: "Empty argument slots are not supported. Name every argument to skip an optional parameter.".to_string(),
                     },
                     arg.span,
                 ));
@@ -4385,6 +4371,129 @@ impl TypeChecker {
             }
         }
 
+        Ok(())
+    }
+
+    /// Bind an all-named call. Every argument must have a string label that matches a parameter's bare name.
+    fn verify_named_call_arguments(
+        &self,
+        callable_name: &str,
+        sig: &FunctionSignature,
+        args: &[Argument<'_>],
+        arg_types: &[RhpType],
+        call_span: Span,
+    ) -> Result<(), TypeError> {
+        if let Some(positional) = args.iter().find(|a| a.name.is_none()) {
+            return Err(TypeError::new(
+                TypeErrorKind::Custom {
+                    message: format!(
+                        "A call to {callable_name} must be entirely positional or entirely named."
+                    ),
+                },
+                positional.span,
+            ));
+        }
+
+        let hierarchy = Some(&self.result.hierarchy);
+        let mut filled = vec![false; sig.params.len()];
+
+        for (arg, arg_ty) in args.iter().zip(arg_types.iter()) {
+            let label = arg.name.as_ref().map(|id| id.name).unwrap_or("");
+            let Some(idx) = sig.params.iter().position(|p| bare_param_name(&p.name) == label) else {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnknownNamedArgument {
+                        callable_name: callable_name.to_string(),
+                        arg_name: label.to_string(),
+                    },
+                    arg.span,
+                ));
+            };
+            let target_param = &sig.params[idx];
+            if target_param.is_variadic {
+                return Err(TypeError::new(
+                    TypeErrorKind::Custom {
+                        message: format!(
+                            "Variadic parameter '{}' cannot be passed by name in call to {callable_name}.",
+                            target_param.name
+                        ),
+                    },
+                    arg.span,
+                ));
+            }
+            if filled[idx] {
+                return Err(TypeError::new(
+                    TypeErrorKind::Custom {
+                        message: format!(
+                            "Parameter '{}' is already specified in call to {callable_name}.",
+                            target_param.name
+                        ),
+                    },
+                    arg.span,
+                ));
+            }
+            filled[idx] = true;
+
+            if target_param.is_reference {
+                if !arg.is_reference {
+                    let var_name = match &arg.value.kind {
+                        ExprKind::Variable(v) => v.name.to_string(),
+                        _ => target_param.name.clone(),
+                    };
+                    return Err(TypeError::new(
+                        TypeErrorKind::MissingReferenceArgument {
+                            callable_name: callable_name.to_string(),
+                            param_name: target_param.name.clone(),
+                            arg_index: idx + 1,
+                            var_name,
+                        },
+                        arg.span,
+                    ));
+                }
+                if !matches!(arg.value.kind, ExprKind::Variable(_)) {
+                    return Err(TypeError::new(
+                        TypeErrorKind::ReferenceArgumentMustBeVariable {
+                            callable_name: callable_name.to_string(),
+                            arg_index: idx + 1,
+                        },
+                        arg.span,
+                    ));
+                }
+            } else if arg.is_reference {
+                return Err(TypeError::new(
+                    TypeErrorKind::UnexpectedReferenceArgument {
+                        callable_name: callable_name.to_string(),
+                        param_name: target_param.name.clone(),
+                        arg_index: idx + 1,
+                    },
+                    arg.span,
+                ));
+            }
+
+            if !arg_ty.is_assignable_to(&target_param.rhp_type, hierarchy) {
+                return Err(TypeError::new(
+                    TypeErrorKind::ArgumentTypeMismatch {
+                        callable_name: callable_name.to_string(),
+                        param_name: target_param.name.clone(),
+                        arg_index: idx + 1,
+                        expected: target_param.rhp_type.to_string(),
+                        found: arg_ty.to_string(),
+                    },
+                    arg.span,
+                ));
+            }
+        }
+
+        for (idx, param) in sig.params.iter().enumerate() {
+            if !filled[idx] && !param.has_default && !param.is_variadic {
+                return Err(TypeError::new(
+                    TypeErrorKind::CannotSkipRequiredParameter {
+                        callable_name: callable_name.to_string(),
+                        param_name: param.name.clone(),
+                    },
+                    call_span,
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -4559,6 +4668,10 @@ enum KeyedLiteral {
     List,
     Dict,
     HashMap,
+}
+
+fn bare_param_name(name: &str) -> &str {
+    name.strip_prefix('$').unwrap_or(name)
 }
 
 fn void_function_name(expr: &Expr<'_>) -> String {

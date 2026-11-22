@@ -1053,9 +1053,9 @@ App::onError(function(Throwable $e, Request $req): Response {
 
 ---
 
-## 10. Named Arguments (`func(param: $val)`)
+## 10. PHP named arguments (`func(param: $val)`)
 
-**Not supported:** PHP 8.0+ named argument call syntax (`func(name: $val)`).
+**Rewritten:** PHP 8.0+ `func(name: $val)` becomes `func('name' => $val)`. The colon form is not valid RHP. A call must be entirely positional or entirely named.
 
 ### What Was Bad About It in PHP
 
@@ -1068,15 +1068,14 @@ App::onError(function(Throwable $e, Request $req): Response {
 
 ### What Replaces It in RHP
 
-1. **Positional Arguments with Skipped Parameters (`func($a, , $c)`):**
-   When calling functions or methods with multiple optional parameters, callers can skip intermediate optional arguments while preserving their default values simply by using extra commas:
+1. **String labels (`'name' => value`):**
+   Name every argument, in any order. Leave a name out to keep the default:
    ```php
-   function createToken(string $user, int $ttl = 3600, bool $refreshable = false, string $scope = 'read'): Token {
-       // ...
+   function createToken($user: string, $ttl: int = 3600, $refreshable: bool = false, $scope: string = 'read'): string {
+       return $user;
    }
 
-   // Skip $ttl (3600) and $refreshable (false), but customize $scope:
-   $token = createToken('alice', , , 'admin');
+   $token = createToken('scope' => 'admin', 'user' => 'alice');
    ```
 2. **Strict Parameter Ordering Invariant:**
    All required parameters must strictly precede optional parameters. The RHP linter (`rhp run lint`) automatically reorders non-conforming signatures so required parameters always come first.
@@ -1098,13 +1097,11 @@ $client = new ApiClient(
 );
 ```
 
-**After (Modern RHP Positional & Skipped Parameters):**
+**After (RHP arrow names):**
 ```php
-// In RHP: Method defined with required parameter before optional parameters:
-// public function __construct(string $apiKey, int $timeout = 30, bool $debug = false)
+// public function __construct($apiKey: string, $timeout: int = 30, $debug: bool = false)
 
-// Call site skips $timeout (uses default 30) with an extra comma:
-$client = new ApiClient('secret_key', , true);
+$client = new ApiClient('apiKey' => 'secret_key', 'debug' => true);
 ```
 
 ---
@@ -1325,7 +1322,7 @@ $client = new Client();
 | **Classic `list()` Destructuring** (`list($a, $b) = $array`) | ❌ **Rejected** | Lexical keyword collision with `list` collection type; archaic pseudo-function syntax | Square-bracket destructuring `[$a, $b] = $array;`, dedicated `list` collection type | Clean grammar; `list` keyword dedicated to high-performance sequential collections; unified syntax |
 | **`die()` Language Construct** (`die()`) | ❌ **Rejected** | Abrupt process termination crashes persistent workers; bypasses exception unwinding; emits raw text with `200 OK` | Typed exceptions (`throw new ...`), `abort(status, msg)`, `Response::json(...)`, `Sys::exit($code)` | Zero worker crashes; structured HTTP error payloads; guaranteed `finally` and `defer` resource cleanup |
 | **Error Reporting Configuration** (`error_reporting()`, `set_error_handler()`, `@`) | ❌ **Rejected / Deprecated** | Process-global mutable error bitmask causes race conditions in concurrent workers; masks silent bugs | Compile-time checks, `rhp.toml` logging, structured `Log` facade, `try-catch` | Thread-safe; zero silent production bugs; native OpenTelemetry tracing integration |
-| **Named Arguments** (`func(param: $val)`) | ❌ **Rejected** | Couples call sites to internal variable names; breaks refactoring and interface variance; runtime dictionary binding tax | Positional arguments with skipped optional arguments via extra comma (`func($a, , $c)`), typed `dict $options` | High-performance positional register calling; safe parameter renaming; clean skipped-argument syntax |
+| **PHP colon named arguments** (`func(param: $val)`) | ❌ **Rewritten** | The colon is RHP's type mark. A bare name at a call also looks like an assignment target | `'name' => value` on an all-named call. Positional calls stay the normal form | Names are string labels, so they do not declare variables or types |
 | **Code Export & Caching** (`var_export()`, `__set_state()`) | ❌ **Rejected** | Generating executable source code for caching is an anti-pattern in compiled binaries; silent failure on closures/cycles | `Debug::dump/dd/format` for inspection; `Json`/`Bin::encode/decode` for caching | Zero `__set_state` boilerplate; $10\times$ faster binary cache loading; fail-fast serialization |
 | **Dynamic Include & Runtime Autoloading** (`include`, `require`, `*_once`, `spl_autoload_register`) | ❌ **Rejected** | Runtime file loading undermines compile-time types; prevents AOT single-binary distribution (`rhp run build`); leaks scope | Static `import`/`use` with literal paths/namespaces, build-time PSR-4 module graph, Go/Rust module init | Predictable whole-program typing; self-contained AOT native binaries; zero runtime autoloading I/O |
 

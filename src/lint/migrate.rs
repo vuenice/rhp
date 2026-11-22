@@ -401,7 +401,7 @@ pub fn migrate_source_with_options_and_context(
     current = after_bytes;
 
     if options.php_version >= 8 {
-        // Step 6: When PHP version is 8, only check for named arguments, reorder them, and remove argument names.
+        // Step 6: When PHP version is 8, rewrite named arguments to `'name' => value`.
         // Parameter declarations are NOT reordered.
         let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
         named_arg_count += n_count;
@@ -420,7 +420,7 @@ pub fn migrate_source_with_options_and_context(
         current = after_pos;
         warnings.extend(p_warnings);
 
-        // 3. Convert any named arguments to positional arguments in proper parameter order and strip argument names
+        // 3. Rewrite named arguments from `name: value` to `'name' => value`, keeping source order
         let (after_named, n_count) = migrate_named_arguments_with_context(&current, extra_signatures);
         named_arg_count += n_count;
         current = after_named;
@@ -4734,13 +4734,12 @@ fn check_fn_params(
 }
 
 // =========================================================================
-// Step 6: Convert named arguments to positional arguments in proper order
+// Step 6: Rewrite PHP named arguments to `'name' => value`
 // =========================================================================
 
 /// Migrate named arguments across a PHP source string.
-/// Converts call sites with named arguments (`fn(b: 2, a: 1)`) to positional arguments
-/// in the proper parameter declaration order (`fn(1, 2)`), stripping argument names
-/// and inserting skipped argument commas (`fn($a, , $c)`) for omitted optional parameters.
+/// Converts call sites with named arguments (`fn(b: 2, a: 1)`) to
+/// `'name' => value` (`fn('b' => 2, 'a' => 1)`), keeping the written order.
 /// Rewrite prefix nullable types to postfix form.
 ///
 /// `?int` becomes `int?`, `\App\User` prefixed with `?` becomes `\App\User?`,
@@ -5191,11 +5190,7 @@ pub fn migrate_named_arguments_with_context(
 ) -> (String, usize) {
     let mut current = source.to_string();
     let mut total_count = 0;
-
-    // Build combined parameter signatures: built-ins + local source definitions + extra context
-    let mut signatures = build_builtin_parameter_map();
-    signatures.extend(extract_function_signatures(source));
-    signatures.extend(extra_signatures.clone());
+    let _ = extra_signatures;
 
     let mut iteration = 0;
     while iteration < 50 {
@@ -5221,14 +5216,11 @@ pub fn migrate_named_arguments_with_context(
                 continue;
             }
 
-            // Extract callee name preceding open paren
-            let (full_callee, simple_callee) = match extract_callee_preceding_paren(&current, &mask, open_paren) {
-                Some(c) => c,
-                None => {
-                    i += 1;
-                    continue;
-                }
-            };
+            // Extract callee name preceding open paren. A named rewrite still runs for unknown callees.
+            if extract_callee_preceding_paren(&current, &mask, open_paren).is_none() {
+                i += 1;
+                continue;
+            }
 
             // Find matching closing paren
             let close_paren = match find_matching_paren(&current, &mask, open_paren) {
@@ -5263,60 +5255,18 @@ pub fn migrate_named_arguments_with_context(
                 continue;
             }
 
-            // Find parameter list for this callee
-            let params_opt = signatures
-                .get(&full_callee)
-                .or_else(|| signatures.get(&simple_callee));
-
             let multiline = args_str.contains('\n');
             let indent = detect_indent(args_str);
             let had_trailing_comma = args_str.trim_end().ends_with(',');
 
-            let formatted = if let Some(params) = params_opt {
-                let mut slots: Vec<Option<String>> = vec![None; params.len()];
-                let mut extra_args: Vec<String> = Vec::new();
-
-                for (opt_name, val) in parsed_args {
-                    match opt_name {
-                        Some(name) => {
-                            if let Some(idx) = params.iter().position(|p| p == &name) {
-                                if idx >= slots.len() {
-                                    slots.resize(idx + 1, None);
-                                }
-                                slots[idx] = Some(val);
-                            } else {
-                                extra_args.push(val);
-                            }
-                        }
-                        None => {
-                            let next_free = slots.iter().position(|s| s.is_none()).unwrap_or(slots.len());
-                            if next_free < slots.len() {
-                                slots[next_free] = Some(val);
-                            } else {
-                                slots.push(Some(val));
-                            }
-                        }
-                    }
-                }
-
-                let max_idx = slots.iter().rposition(|s| s.is_some());
-                let mut final_slots = Vec::new();
-                if let Some(max_i) = max_idx {
-                    for j in 0..=max_i {
-                        final_slots.push(slots[j].clone().unwrap_or_default());
-                    }
-                }
-                final_slots.extend(extra_args);
-
-                format_call_args(&final_slots, multiline, &indent, had_trailing_comma)
-            } else {
-                // Unknown function: keep arguments in original order, strip names
-                let mut final_slots = Vec::new();
-                for (_, val) in parsed_args {
-                    final_slots.push(val);
-                }
-                format_call_args(&final_slots, multiline, &indent, had_trailing_comma)
-            };
+            let final_slots: Vec<String> = parsed_args
+                .into_iter()
+                .map(|(opt_name, val)| match opt_name {
+                    Some(name) => format!("'{name}' => {val}"),
+                    None => val,
+                })
+                .collect();
+            let formatted = format_call_args(&final_slots, multiline, &indent, had_trailing_comma);
 
             edits.push(TextEdit {
                 start: open_paren + 1,

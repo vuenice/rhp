@@ -2782,6 +2782,16 @@ impl VM {
                         (f, m)
                     };
 
+                    if let Some(label) = staged.iter().find_map(|a| a.name.clone()) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                                ),
+                            },
+                            span,
+                        ));
+                    }
                     let flat_args = Self::flatten_positional_args(&staged);
                     let res = match self.exec_facade_call(&facade_name, &method_name, &flat_args, span) {
                         Ok(v) => v,
@@ -2850,8 +2860,14 @@ impl VM {
                         continue;
                     }
 
-                    let flat_args = Self::flatten_positional_args(&staged);
+                    let has_named = staged.iter().any(|a| a.name.is_some());
+                    let flat_args = if has_named {
+                        Vec::new()
+                    } else {
+                        Self::flatten_positional_args(&staged)
+                    };
 
+                    if !has_named {
                     match self.exec_enum_static_method(&class_name, &method_name, &flat_args, stop_depth, span)? {
                         EnumStaticCallResult::Handled(res) => {
                             self.registers[base_reg + dst.index()] = res;
@@ -2891,6 +2907,7 @@ impl VM {
                             self.registers[base_reg + dst.index()] = PhpValue::Null;
                             continue;
                         }
+                    }
                     }
 
                     if let Some(target_id) = self.resolve_method_id(&class_name, &method_name) {
@@ -2967,6 +2984,16 @@ impl VM {
                                         span,
                                     )?;
                                     continue;
+                                } else if has_named {
+                                    let label = staged.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+                                    return Err(self.make_error(
+                                        RuntimeErrorKind::Custom {
+                                            message: format!(
+                                                "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                                            ),
+                                        },
+                                        span,
+                                    ));
                                 } else {
                                     match self.exec_builtin_object_method(
                                         &recv_cls,
@@ -2992,6 +3019,18 @@ impl VM {
                                     }
                                 }
                             }
+                        }
+
+                        if has_named {
+                            let label = staged.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!(
+                                        "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                                    ),
+                                },
+                                span,
+                            ));
                         }
 
                         // 4. __callStatic:
@@ -3910,13 +3949,12 @@ impl VM {
             }
         }
 
-        if !named_values.is_empty() {
-            let (arg_name, _, _, _) = &named_values[0];
+        if !named_values.is_empty() && !positional_values.is_empty() {
             return Err(self.make_error(
                 RuntimeErrorKind::Custom {
                     message: format!(
-                        "Named parameters are not supported in RHP (found '${}' in call to '{}()'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at call site.",
-                        arg_name, func.name
+                        "A call to '{}()' must be entirely positional or entirely named.",
+                        func.name
                     ),
                 },
                 span,
@@ -3925,7 +3963,78 @@ impl VM {
 
         let mut ref_bindings = Vec::new();
         let mut assigned_params = vec![false; func.params.len()];
+        if !named_values.is_empty() {
+            for (name, val, is_ref, caller_reg) in &named_values {
+                let Some(idx) = func
+                    .params
+                    .iter()
+                    .position(|p| p.name.trim_start_matches('$') == name.as_str())
+                else {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UnknownNamedArgument {
+                            callable: func.name.clone(),
+                            name: name.clone(),
+                        },
+                        span,
+                    ));
+                };
+                let param = &func.params[idx];
+                if param.is_variadic {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::Custom {
+                            message: format!(
+                                "Variadic parameter '${}' cannot be passed by name in call to '{}()'",
+                                param.name.trim_start_matches('$'),
+                                func.name
+                            ),
+                        },
+                        span,
+                    ));
+                }
+                if assigned_params[idx] {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::Custom {
+                            message: format!(
+                                "Parameter '${}' is already specified in call to '{}()'",
+                                param.name.trim_start_matches('$'),
+                                func.name
+                            ),
+                        },
+                        span,
+                    ));
+                }
+                if param.is_reference {
+                    if !*is_ref {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::MissingReferenceArgument {
+                                callable: func.name.clone(),
+                                param_name: param.name.clone(),
+                                arg_index: idx + 1,
+                            },
+                            span,
+                        ));
+                    }
+                    if let Some(caller_r) = caller_reg {
+                        ref_bindings.push((new_base + param.reg.index(), *caller_r));
+                    }
+                } else if *is_ref {
+                    return Err(self.make_error(
+                        RuntimeErrorKind::UnexpectedReferenceArgument {
+                            callable: func.name.clone(),
+                            param_name: param.name.clone(),
+                            arg_index: idx + 1,
+                        },
+                        span,
+                    ));
+                }
+                self.registers[new_base + param.reg.index()] = val.clone();
+                assigned_params[idx] = true;
+            }
+        }
         for (idx, param) in func.params.iter().enumerate() {
+            if assigned_params[idx] {
+                continue;
+            }
             if param.is_variadic {
                 let rest: Vec<PhpValue> = if idx < positional_values.len() {
                     positional_values[idx..].iter().map(|(v, _, _, _)| v.clone()).collect()
@@ -10896,6 +11005,30 @@ impl VM {
             PhpValue::Object(obj_rc) => {
                 let cls_name = obj_rc.borrow().class_name.clone();
 
+                if staged.iter().any(|a| a.name.is_some()) {
+                    if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
+                        self.push_compiled_call_frame(
+                            target_id,
+                            Some(receiver),
+                            &staged,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+                    let label = staged.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+                    return Err(self.make_error(
+                        RuntimeErrorKind::Custom {
+                            message: format!(
+                                "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                            ),
+                        },
+                        span,
+                    ));
+                }
+
                 let is_throwable_final_method = match method_name.as_str() {
                     "getFile" | "getLine" | "getTrace" | "getPrevious" | "source"
                     | "rootCause" | "getRootCause" | "chain" | "getChain"
@@ -10987,6 +11120,30 @@ impl VM {
             PhpValue::SharedObject(shared_rc) => {
                 let cls_name = shared_rc.class_name.clone();
 
+                if staged.iter().any(|a| a.name.is_some()) {
+                    if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
+                        self.push_compiled_call_frame(
+                            target_id,
+                            Some(receiver),
+                            &staged,
+                            &[],
+                            Some(base_reg + dst.index()),
+                            Some(cls_name),
+                            span,
+                        )?;
+                        return Ok(true);
+                    }
+                    let label = staged.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+                    return Err(self.make_error(
+                        RuntimeErrorKind::Custom {
+                            message: format!(
+                                "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                            ),
+                        },
+                        span,
+                    ));
+                }
+
                 if let Some(target_id) = self.resolve_method_id(&cls_name, &method_name) {
                     self.push_compiled_call_frame(
                         target_id,
@@ -11053,6 +11210,29 @@ impl VM {
             _ => {
                 if let PhpValue::String(ref cls_str) = receiver {
                     let cls_name = cls_str.as_ref();
+                    if staged.iter().any(|a| a.name.is_some()) {
+                        if let Some(target_id) = self.resolve_method_id(cls_name, &method_name) {
+                            self.push_compiled_call_frame(
+                                target_id,
+                                None,
+                                &staged,
+                                &[],
+                                Some(base_reg + dst.index()),
+                                Some(cls_name.to_string()),
+                                span,
+                            )?;
+                            return Ok(true);
+                        }
+                        let label = staged.iter().find_map(|a| a.name.clone()).unwrap_or_default();
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Named argument '{label}' is not supported on this call. Pass the arguments positionally."
+                                ),
+                            },
+                            span,
+                        ));
+                    }
                     match self.exec_enum_static_method(
                         cls_name,
                         &method_name,
@@ -12007,12 +12187,12 @@ impl VM {
                 }
                 OpCode::PushArg {
                     src,
+                    name,
                     is_unpack,
                     is_reference,
                     is_skipped,
-                    ..
                 } => {
-                    if is_unpack || is_reference {
+                    if name.is_some() || is_unpack || is_reference {
                         break;
                     }
                     let val = if is_skipped {

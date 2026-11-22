@@ -104,8 +104,7 @@ fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
 
         $fib8 = fib(8);
         $totalDefault = calculateTotal(4, 25.0);
-        // Skip $taxRate with extra comma to use default 0.05, and provide $discount = 10.0:
-        $totalSkipped = calculateTotal(4, 25.0, , 10.0);
+        $totalSkipped = calculateTotal('quantity' => 4, 'price' => 25.0, 'discount' => 10.0);
     "#;
 
     let (vm, _) = run_source_with_vm(source).expect("Function execution should pass");
@@ -119,14 +118,22 @@ fn test_functions_recursion_default_and_skipped_arguments_and_type_contracts() {
         Some(&PhpValue::Float(95.0))
     );
 
-    // Named parameters must be rejected with ParseError
     let named_source = r#"
         function calculateTotal($quantity: int, $price: float, $taxRate: float = 0.05): float {
             return $quantity * $price;
         }
+        $res = calculateTotal('price' => 50.0, 'quantity' => 2);
+    "#;
+    let (named_vm, _) = run_source_with_vm(named_source).expect("Named call should run");
+    assert_eq!(named_vm.get_main_variable("$res"), Some(&PhpValue::Float(100.0)));
+
+    let colon_source = r#"
+        function calculateTotal($quantity: int, $price: float): float {
+            return $quantity * $price;
+        }
         $res = calculateTotal(price: 50.0, quantity: 2);
     "#;
-    assert!(run_source_with_vm(named_source).is_err(), "Named parameters must be rejected");
+    assert!(run_source_with_vm(colon_source).is_err(), "Colon named arguments must be rejected");
 }
 
 #[test]

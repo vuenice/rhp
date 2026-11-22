@@ -1896,44 +1896,103 @@ impl<'s> CombinatorStream<'s> {
         loop {
             let arg_start = self.current_span();
 
-            // Check if this argument is skipped (empty argument indicated by comma)
             if self.check(&Token::Comma) {
-                args.push(Argument::skipped(arg_start));
-                self.advance(); // consume the comma
-                if self.check(&Token::CloseParen) {
-                    break;
+                if self.allow_named_arguments {
+                    args.push(Argument::skipped(arg_start));
+                    self.advance();
+                    if self.check(&Token::CloseParen) {
+                        break;
+                    }
+                    continue;
                 }
-                continue;
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "Empty argument slots are not supported. To skip an optional parameter, name every argument (e.g. `connect('host' => 'localhost', 'ssl' => true)`).".to_string(),
+                    },
+                    arg_start,
+                ));
             }
 
             let is_unpack = self.matches(&Token::Ellipsis);
-            let is_reference = self.matches(&Token::Ampersand);
+            let mut is_reference = self.matches(&Token::Ampersand);
 
-            // Named argument check `name: $val` or `name: &$val`
             let mut arg_name = None;
-            if let Some(tok) = self.peek() {
-                if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
-                    && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
-                {
-                    let name = self.expect_ident()?;
-                    let colon = self.expect(Token::Colon)?;
-                    if !self.allow_named_arguments {
+            let next_is_arrow = self.peek_nth(1).map(|t| &t.token) == Some(&Token::DoubleArrow);
+            if !is_unpack && !is_reference && next_is_arrow {
+                let label_tok = self.peek().cloned();
+                match label_tok.as_ref().map(|t| &t.token) {
+                    Some(Token::SingleQuotedString(_) | Token::DoubleQuotedString(_) | Token::BacktickString(_)) => {
+                        let spanned = self.advance().unwrap();
+                        if spanned.token.has_interpolation() || spanned.token.as_str().contains('\\') {
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: "Named argument labels must be plain string literals (e.g. `'host' => $value`).".to_string(),
+                                },
+                                spanned.span,
+                            ));
+                        }
+                        let name_text = spanned.token.raw_string_content().unwrap_or("");
+                        let name = crate::ast::types::Ident::new(name_text, spanned.span);
+                        self.expect(Token::DoubleArrow)?;
+                        if self.matches(&Token::Ampersand) {
+                            is_reference = true;
+                        }
+                        arg_name = Some(name);
+                    }
+                    Some(_) => {
                         return Err(ParseError::new(
                             ParseErrorKind::Custom {
-                                message: format!(
-                                    "Named parameters are not supported in RHP (found '{}:'). To skip optional parameters, use extra commas (e.g. `fn($req, , $opt)`) at the call site.",
-                                    name.name
-                                ),
+                                message: "Named argument labels must be string literals (e.g. `'host' => $value`).".to_string(),
                             },
-                            arg_start.merge(colon.span),
+                            arg_start,
                         ));
                     }
-                    arg_name = Some(name);
+                    None => {}
+                }
+            } else if !is_unpack {
+                if let Some(tok) = self.peek() {
+                    if (tok.token.is_keyword() || matches!(tok.token, Token::Ident(_)))
+                        && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Colon)
+                    {
+                        let name = self.expect_ident()?;
+                        let colon = self.expect(Token::Colon)?;
+                        if !self.allow_named_arguments {
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: format!(
+                                        "Named arguments use `'{}' => value` (found `{}:`).",
+                                        name.name, name.name
+                                    ),
+                                },
+                                arg_start.merge(colon.span),
+                            ));
+                        }
+                        if self.matches(&Token::Ampersand) {
+                            is_reference = true;
+                        }
+                        arg_name = Some(name);
+                    }
                 }
             }
 
             let value = self.parse_expr_lowest()?;
             let span = arg_start.merge(value.span);
+            if arg_name.is_some() && args.iter().any(|a| a.name.is_none()) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "A call must be entirely positional or entirely named. `connect('localhost', 'ssl' => true)` is not allowed.".to_string(),
+                    },
+                    span,
+                ));
+            }
+            if arg_name.is_none() && args.iter().any(|a| a.name.is_some()) {
+                return Err(ParseError::new(
+                    ParseErrorKind::Custom {
+                        message: "A call must be entirely positional or entirely named. `connect('localhost', 'ssl' => true)` is not allowed.".to_string(),
+                    },
+                    span,
+                ));
+            }
             args.push(Argument {
                 span,
                 name: arg_name,
