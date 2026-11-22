@@ -917,6 +917,15 @@ pub fn resolve_facade_static_call(
             "setTestNow" | "sleepMs" | "sleep_ms" => Ok(RhpType::Void),
             _ => Ok(RhpType::Class("Time".to_string())),
         },
+        "Json" => match method {
+            "encode" | "stringify" | "serialize" => Ok(RhpType::String),
+            "parse" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(
+                RhpType::Mixed,
+            )))),
+            "validate" => Ok(RhpType::Bool),
+            "decode" | "deserialize" => Ok(RhpType::Mixed),
+            _ => Ok(RhpType::Dynamic),
+        },
         "phpFun" => {
             if method == "serialize" {
                 return Ok(RhpType::String);

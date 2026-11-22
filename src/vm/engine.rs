@@ -5675,6 +5675,75 @@ impl VM {
             }
         }
 
+        if facade == "Json" {
+            match method {
+                "serialize" => {
+                    let val = match args.first() {
+                        Some(v) => v,
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "Json::serialize() expects a class object".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    if !matches!(val, PhpValue::Object(_)) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Json::serialize() expects a class object, got {}",
+                                    val.type_name()
+                                ),
+                            },
+                            span,
+                        ));
+                    }
+                    let json = self.serialize_value(val, span)?;
+                    return Ok(PhpValue::string(json));
+                }
+                "deserialize" => {
+                    let payload = match args.first() {
+                        Some(PhpValue::String(s)) => s.as_ref(),
+                        Some(other) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!(
+                                        "Json::deserialize() expects a string, got {}",
+                                        other.type_name()
+                                    ),
+                                },
+                                span,
+                            ));
+                        }
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "Json::deserialize() expects a string".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    let val = self.unserialize_value(payload, span)?;
+                    if !matches!(val, PhpValue::Object(_)) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Json::deserialize() expects a serialized class object, got {}",
+                                    val.type_name()
+                                ),
+                            },
+                            span,
+                        ));
+                    }
+                    return Ok(val);
+                }
+                _ => {}
+            }
+        }
+
         dispatch_facade_call(facade, method, args, span)
     }
 
