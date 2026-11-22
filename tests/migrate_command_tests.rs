@@ -2266,7 +2266,7 @@ fn test_migrate_named_arguments_reordered_to_proper_declaration_order() {
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 1);
-    assert!(res.migrated_content.contains("$val = add(5, 20);"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("$val = add('b' => 20, 'a' => 5);"), "Got:\n{}", res.migrated_content);
     assert!(!res.migrated_content.contains("b: 20"));
     assert!(!res.migrated_content.contains("a: 5"));
 
@@ -2282,20 +2282,20 @@ fn test_migrate_named_arguments_with_skipped_optional_arguments() {
         "function configureApp(string $name, string $env = 'production', string $port = '8080', bool $debug = false, string $logLevel = 'info'): string {\n",
         "    return $name + ':' + $env + ':' + $port + ':' + ($debug ? '1' : '0') + ':' + $logLevel;\n",
         "}\n",
-        "$cfg1 = configureApp('myApp', debug: true);\n",
+        "$cfg1 = configureApp(name: 'myApp', debug: true);\n",
         "$cfg2 = configureApp(logLevel: 'debug', name: 'apiServer', env: 'staging');\n"
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 2);
     assert!(
-        res.migrated_content.contains("$cfg1 = configureApp('myApp', , , true);"),
-        "Expected skipped commas for $env and $port, got:\n{}",
+        res.migrated_content.contains("$cfg1 = configureApp('name' => 'myApp', 'debug' => true);"),
+        "Expected arrow names, got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("$cfg2 = configureApp('apiServer', 'staging', , , 'debug');"),
-        "Expected skipped commas for $port and $debug, got:\n{}",
+        res.migrated_content.contains("$cfg2 = configureApp('logLevel' => 'debug', 'name' => 'apiServer', 'env' => 'staging');"),
+        "Expected arrow names in source order, got:\n{}",
         res.migrated_content
     );
 
@@ -2325,13 +2325,13 @@ fn test_migrate_named_arguments_leading_skipped_parameters() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 2);
     assert!(
-        res.migrated_content.contains("$c1 = coords(, '50');"),
-        "Expected coords(, '50'), got:\n{}",
+        res.migrated_content.contains("$c1 = coords('y' => '50');"),
+        "Expected coords('y' => '50'), got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("$c2 = coords(, , '100');"),
-        "Expected coords(, , '100'), got:\n{}",
+        res.migrated_content.contains("$c2 = coords('z' => '100');"),
+        "Expected coords('z' => '100'), got:\n{}",
         res.migrated_content
     );
 
@@ -2352,19 +2352,19 @@ fn test_migrate_named_arguments_class_methods_and_constructors() {
         "    }\n",
         "}\n",
         "$svc = new Service(database: 'ecommerce', host: 'db.local');\n",
-        "$res = $svc->query('SELECT 1', fetchAssoc: false);\n"
+        "$res = $svc->query(sql: 'SELECT 1', fetchAssoc: false);\n"
     );
     let res = migrate_source(input, "test.php");
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 2);
     assert!(
-        res.migrated_content.contains("$svc = new Service('db.local', , , 'ecommerce');"),
-        "Constructor call should put host first and database at index 3: got:\n{}",
+        res.migrated_content.contains("$svc = new Service('database' => 'ecommerce', 'host' => 'db.local');"),
+        "Constructor call should keep named arguments: got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("$res = $svc->query('SELECT 1', , false);"),
-        "Method call should skip $timeout: got:\n{}",
+        res.migrated_content.contains("$res = $svc->query('sql' => 'SELECT 1', 'fetchAssoc' => false);"),
+        "Method call should keep named arguments: got:\n{}",
         res.migrated_content
     );
 
@@ -2393,7 +2393,7 @@ fn test_migrate_named_arguments_static_calls() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 1);
     assert!(
-        res.migrated_content.contains("$clamped = MathHelper::clamp(50, 0, 100);"),
+        res.migrated_content.contains("$clamped = MathHelper::clamp('max' => 100, 'min' => 0, 'value' => 50);"),
         "Got:\n{}",
         res.migrated_content
     );
@@ -2414,13 +2414,13 @@ fn test_migrate_named_arguments_builtins() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 2);
     assert!(
-        res.migrated_content.contains("$slice = array_slice($items, 1, 2);"),
-        "array_slice should reorder offset and length: got:\n{}",
+        res.migrated_content.contains("$slice = array_slice($items, 'length' => 2, 'offset' => 1);"),
+        "array_slice should keep named arguments in source order: got:\n{}",
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("$html = htmlspecialchars('hello & world', , , false);"),
-        "htmlspecialchars should skip flags and encoding: got:\n{}",
+        res.migrated_content.contains("$html = htmlspecialchars('hello & world', 'double_encode' => false);"),
+        "htmlspecialchars should rewrite the named flag: got:\n{}",
         res.migrated_content
     );
 }
@@ -2436,7 +2436,7 @@ fn test_migrate_named_arguments_unknown_function_preserves_order_and_removes_nam
     assert_eq!(res.named_arg_count, 1);
     assert_eq!(
         res.migrated_content,
-        "$res = customExternalFunc(1, 2, 3);\n"
+        "$res = customExternalFunc('foo' => 1, 'bar' => 2, 'baz' => 3);\n"
     );
 }
 
@@ -2454,7 +2454,7 @@ fn test_migrate_named_arguments_pass_by_reference() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 1);
     assert!(
-        res.migrated_content.contains("applyBonus(&$playerScore, 50);"),
+        res.migrated_content.contains("applyBonus('bonus' => 50, 'score' => &$playerScore);"),
         "Pass-by-reference must be preserved: got:\n{}",
         res.migrated_content
     );
@@ -2476,7 +2476,7 @@ fn test_migrate_named_arguments_nested_calls() {
     assert!(res.modified);
     assert_eq!(res.named_arg_count, 2);
     assert!(
-        res.migrated_content.contains("$val = add(10, mul(5, 4));"),
+        res.migrated_content.contains("$val = add('b' => mul('y' => 4, 'x' => 5), 'a' => 10);"),
         "Nested calls must both be reordered: got:\n{}",
         res.migrated_content
     );
@@ -2524,8 +2524,8 @@ fn test_migrate_fixes_function_parameter_order_and_named_arguments() {
         res.migrated_content
     );
     assert!(
-        res.migrated_content.contains("$ans = badSignature(50, 10);"),
-        "Call site must place required argument first according to normalized definition: got:\n{}",
+        res.migrated_content.contains("$ans = badSignature('opt' => 10, 'req' => 50);"),
+        "Call site must keep named arguments: got:\n{}",
         res.migrated_content
     );
 
@@ -2589,8 +2589,8 @@ fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations(
     );
     // Named arguments swapped to declaration order (x, y, z) and names removed
     assert!(
-        res.migrated_content.contains("$res = myfun(42, 'world', 'hello');"),
-        "Named arguments must be swapped to declaration order and stripped: got:\n{}",
+        res.migrated_content.contains("$res = myfun('z' => 'hello', 'x' => 42, 'y' => 'world');"),
+        "Named arguments must be rewritten to arrow form in source order: got:\n{}",
         res.migrated_content
     );
     // Normal positional calls untouched

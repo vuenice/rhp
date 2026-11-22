@@ -645,10 +645,10 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "  - Flags curl_multi_* loops for manual review with guide link and Http::pool recommendations\n",
                     "  - Normalizes function parameter declarations so required parameters precede optional ones\n",
                     "  - Automatically infers and adds 'byte' parameter type hints to functions and closures receiving binary data or non-UTF-8 strings\n",
-                    "  - Reorders named function call arguments into positional order and strips argument names (using extra commas for skipped optional arguments)\n\n",
+                    "  - Rewrites PHP named arguments `name: value` to `'name' => value` and keeps their written order\n\n",
                     "OPTIONS:\n",
                     "    PATH                         Target file or directory (default: current directory '.')\n",
-                    "    --php-version <8|7>          Source PHP version: '8' (swap named args only) or '7' (reorder params, swap calls, warn tricky calls)\n",
+                    "    --php-version <8|7>          Source PHP version: '8' (rewrite named args only) or '7' (reorder params, swap calls, warn tricky calls)\n",
                     "    --check, --dry-run           Check only without writing changes to disk\n",
                     "    --format <human|json>        Output format: 'human' (default) or 'json'\n",
                     "    --help, -h                   Show this help message\n"

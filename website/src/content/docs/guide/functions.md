@@ -35,34 +35,27 @@ function query(string $sql, int $limit = 10, int $offset = 0): list {
 
 If an existing codebase declares optional parameters before required ones, running the RHP linter (`rhp run lint`) will automatically reorder the parameter signatures so that required parameters appear first without changing parameter types or comments.
 
-### No Named Parameters & Skipping Optional Parameters (`fn($req, , $opt)`)
+### Named arguments (`'name' => value`)
 
-RHP **deliberately does not support named arguments** (e.g. `query(sql: "SELECT ...")` is rejected with compile diagnostic `RHP0206`). Call sites strictly use positional arguments to ensure high-performance execution, eliminate runtime argument-dictionary binding overhead, and prevent brittle coupling to internal parameter variable names.
-
-To skip optional parameters at call time while retaining their default values, provide an **extra comma** at the call site:
+A call is either all positional or all named. A named call uses a string label and `=>`. The label is the parameter name without `$`. Named arguments may appear in any order. Leave a name out to keep that parameter's default. `:` stays a type mark, so `name: $value` is a parse error.
 
 ```php
 function sendNotification(
-    string $userId,
-    string $channel = 'email',
-    string $priority = 'normal',
-    bool $retry = true
+    $userId: string,
+    $channel: string = 'email',
+    $priority: string = 'normal',
+    $retry: bool = true
 ): bool {
-    // ...
+    return true;
 }
 
-// 1. Standard call providing all arguments:
 sendNotification('u123', 'sms', 'urgent', false);
-
-// 2. Skip $channel (uses default 'email') and $priority (uses default 'normal'), while setting $retry = false:
-sendNotification('u123', , , false);
-
-// 3. Skip $channel (uses default 'email'), but specify $priority as 'high':
-sendNotification('u123', , 'high');
+sendNotification('userId' => 'u123', 'retry' => false);
+sendNotification('retry' => false, 'userId' => 'u123');
 ```
 
 > [!IMPORTANT]
-> You **cannot** skip required parameters. Attempting to skip a parameter without a default value (e.g., `sendNotification(, 'sms')`) triggers compile-time and runtime error `RHP0231` (`Cannot skip required parameter '$userId'`).
+> `sendNotification('u123', 'retry' => false)` is a compile error: the call mixes a positional argument with a named one. Omitting a required name is `RHP0231`. An unknown label is `RHP0206`. An empty slot such as `sendNotification('u123', , false)` is a parse error.
 
 ### Parameter & Return Type Hints: `array` vs. `list`, `dict`, `set`, `hashmap`
 
