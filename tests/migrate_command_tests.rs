@@ -2848,5 +2848,49 @@ fn test_transpile_php_template_to_rade() {
     assert!(res.migrated_content.contains("@include('partials.footer')"), "Output was:\n{}", res.migrated_content);
 }
 
+#[test]
+fn test_migrate_json_encode_flags_to_options_dict() {
+    let input = concat!(
+        "<?php\n",
+        "$pretty = json_encode($v, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR, 32);\n",
+        "$num = json_encode($v, 128);\n",
+        "$html = json_encode($v, JSON_HEX_TAG | JSON_HEX_AMP);\n",
+        "$dyn = json_encode($v, $flags);\n",
+        "$named = json_encode(value: $v, flags: JSON_PRETTY_PRINT);\n",
+        "$data = json_decode($s, true);\n",
+        "$ok = json_validate($raw);\n",
+        "$err = json_last_error();\n",
+    );
+    let res = migrate_source(input, "json.php");
+    assert!(res.migrated_content.contains(
+        "Json::encode($v, [\"pretty\" => true, \"depth\" => 32])"
+    ));
+    assert!(
+        res.migrated_content
+            .matches("Json::encode($v, [\"pretty\" => true])")
+            .count()
+            >= 2
+    );
+    assert!(res.migrated_content.contains("Json::encode($v, [\"html\" => true])"));
+    assert!(res.migrated_content.contains("$dyn = Json::encode($v);"));
+    assert!(res.migrated_content.contains("Json::decode($s)"));
+    assert!(res.migrated_content.contains("Json::validate($raw)"));
+    assert!(res.migrated_content.contains("json_last_error()"));
+    assert!(res.warnings.iter().any(|w| w.contains("$flags")));
+    assert!(res.warnings.iter().any(|w| w.contains("json_last_error")));
+}
+
+#[test]
+fn test_migrate_echo_json_encode_drops_flags() {
+    let input = concat!(
+        "<?php\n",
+        "echo json_encode($data, JSON_PRETTY_PRINT);\n",
+    );
+    let res = migrate_source(input, "controller.php");
+    assert!(res.migrated_content.contains("return Response::json($data);"));
+    assert!(!res.migrated_content.contains("JSON_PRETTY_PRINT"));
+    assert!(res.warnings.iter().any(|w| w.contains("echo json_encode flags")));
+}
+
 
 

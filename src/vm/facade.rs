@@ -603,6 +603,7 @@ pub fn dispatch_facade_call(
         "Regex" => dispatch_regex(method, args),
         "Glob" => dispatch_glob(method, args),
         "phpFun" => dispatch_php_fun(method, args),
+        "Json" => dispatch_json(method, args),
         "Fiber" => dispatch_fiber(method, args),
         "Memory" => dispatch_memory(method, args),
         "Weak" => dispatch_weak(method, args),
@@ -7231,17 +7232,8 @@ fn dispatch_php_fun(method: &str, args: &[PhpValue]) -> FacadeResult {
             };
             Ok(PhpValue::Int(res))
         }
-        "json_encode" => {
-            let val = args.first().cloned().unwrap_or(PhpValue::Null);
-            Ok(PhpValue::string(php_value_to_json(&val)))
-        }
-        "json_decode" => {
-            let s = get_arg_str(args, 0, "json_decode")?;
-            match parse_json_value(&s) {
-                Ok(val) => Ok(val),
-                Err(_) => Ok(PhpValue::Null),
-            }
-        }
+        "json_encode" => json_encode_value("encode", args),
+        "json_decode" => json_decode_value(args),
         "class_exists" => dispatch_reflect("classExists", args),
         "function_exists" => dispatch_reflect("functionExists", args),
         "is_null" => dispatch_validate("null", args),
@@ -8211,6 +8203,534 @@ pub fn arr_undot(dotted: &IndexMap<String, PhpValue>) -> PhpValue {
         arr_set_dot(&mut root, k, v.clone());
     }
     root
+}
+
+fn dispatch_json(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "encode" | "stringify" => json_encode_value(method, args),
+        "decode" => json_decode_value(args),
+        "validate" => {
+            let s = get_arg_str(args, 0, "Json::validate")?;
+            Ok(PhpValue::Bool(json_text_is_valid(&s)))
+        }
+        "parse" => {
+            let s = get_arg_str(args, 0, "Json::parse")?;
+            match parse_json_value(&s) {
+                Ok(PhpValue::Dict(d)) => Ok(PhpValue::Dict(d)),
+                Ok(_) => Err(RuntimeErrorKind::Custom {
+                    message: "Json::parse() expects a JSON object".to_string(),
+                }),
+                Err(err) => Err(RuntimeErrorKind::Custom {
+                    message: format!("Json::parse() failed: {err}"),
+                }),
+            }
+        }
+        "serialize" | "deserialize" => Err(RuntimeErrorKind::Custom {
+            message: format!("Json::{method}() is handled by the VM serialization engine"),
+        }),
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Json".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+struct JsonEncodeOptions {
+    pretty: bool,
+    force_object: bool,
+    preserve_zero_fraction: bool,
+    numeric_check: bool,
+    html: bool,
+    depth: usize,
+}
+
+impl Default for JsonEncodeOptions {
+    fn default() -> Self {
+        Self {
+            pretty: false,
+            force_object: false,
+            preserve_zero_fraction: false,
+            numeric_check: false,
+            html: false,
+            depth: 512,
+        }
+    }
+}
+
+fn json_encode_value(method: &str, args: &[PhpValue]) -> FacadeResult {
+    let val = args.first().cloned().unwrap_or(PhpValue::Null);
+    let options = match args.get(1) {
+        None => JsonEncodeOptions::default(),
+        Some(PhpValue::EmptyArray) => JsonEncodeOptions::default(),
+        Some(PhpValue::Dict(map)) => parse_json_encode_options(&map.borrow())?,
+        Some(_) => {
+            return Err(RuntimeErrorKind::Custom {
+                message: format!("Json::{method}() options must be a dict"),
+            });
+        }
+    };
+    match write_json_text(&val, &options, 0) {
+        Ok(text) => Ok(PhpValue::string(text)),
+        Err(message) => Err(RuntimeErrorKind::Custom {
+            message: message.replace("Json::encode()", &format!("Json::{method}()")),
+        }),
+    }
+}
+
+fn parse_json_encode_options(
+    map: &indexmap::IndexMap<String, PhpValue>,
+) -> Result<JsonEncodeOptions, RuntimeErrorKind> {
+    let mut options = JsonEncodeOptions::default();
+    for (key, value) in map {
+        match key.as_str() {
+            "pretty" => options.pretty = expect_json_bool(key, value)?,
+            "forceObject" => options.force_object = expect_json_bool(key, value)?,
+            "preserveZeroFraction" => {
+                options.preserve_zero_fraction = expect_json_bool(key, value)?
+            }
+            "numericCheck" => options.numeric_check = expect_json_bool(key, value)?,
+            "html" => options.html = expect_json_bool(key, value)?,
+            "depth" => {
+                let depth = match value {
+                    PhpValue::Int(n) if *n >= 1 => *n as usize,
+                    _ => {
+                        return Err(RuntimeErrorKind::Custom {
+                            message: "Json::encode() option 'depth' must be an int greater than 0"
+                                .to_string(),
+                        });
+                    }
+                };
+                options.depth = depth;
+            }
+            other => {
+                return Err(RuntimeErrorKind::Custom {
+                    message: format!("Json::encode() unknown option '{other}'"),
+                });
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn expect_json_bool(key: &str, value: &PhpValue) -> Result<bool, RuntimeErrorKind> {
+    match value {
+        PhpValue::Bool(b) => Ok(*b),
+        _ => Err(RuntimeErrorKind::Custom {
+            message: format!("Json::encode() option '{key}' must be a bool"),
+        }),
+    }
+}
+
+fn write_json_text(val: &PhpValue, options: &JsonEncodeOptions, level: usize) -> Result<String, String> {
+    let mut out = String::new();
+    write_json_value(&mut out, val, options, level)?;
+    Ok(out)
+}
+
+fn write_json_value(
+    out: &mut String,
+    val: &PhpValue,
+    options: &JsonEncodeOptions,
+    level: usize,
+) -> Result<(), String> {
+    match val {
+        PhpValue::Null => out.push_str("null"),
+        PhpValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        PhpValue::Int(n) => out.push_str(&n.to_string()),
+        PhpValue::Float(fl) => {
+            if !fl.is_finite() {
+                return Err("Json::encode() cannot encode a non-finite float".to_string());
+            }
+            let mut text = fl.to_string();
+            if options.preserve_zero_fraction
+                && !text.contains('.')
+                && !text.contains('e')
+                && !text.contains('E')
+            {
+                text.push_str(".0");
+            }
+            out.push_str(&text);
+        }
+        PhpValue::String(s) => write_json_string(out, s, options),
+        PhpValue::Rune(c) => write_json_string(out, &c.to_string(), options),
+        PhpValue::EmptyArray => {
+            enter_json_depth(level, options)?;
+            out.push_str(if options.force_object { "{}" } else { "[]" });
+        }
+        PhpValue::Array(items) | PhpValue::List(items) => {
+            let cloned = items.borrow().clone();
+            write_json_list(out, &cloned, options, level)?;
+        }
+        PhpValue::Set(items) => {
+            let cloned: Vec<PhpValue> = items.borrow().iter().cloned().collect();
+            write_json_list(out, &cloned, options, level)?;
+        }
+        PhpValue::Dict(map) => {
+            let pairs: Vec<(String, PhpValue)> = map
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            write_json_object(out, &pairs, options, level)?;
+        }
+        PhpValue::HashMap(map) => {
+            let pairs: Vec<(String, PhpValue)> = map
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.to_php_string(), v.clone()))
+                .collect();
+            write_json_object(out, &pairs, options, level)?;
+        }
+        PhpValue::Object(obj) => {
+            let borrowed = obj.borrow();
+            if borrowed.class_name == "Time" || borrowed.class_name == "Duration" {
+                if let Some(iso) = borrowed.get_property("iso") {
+                    let text = iso.to_php_string();
+                    drop(borrowed);
+                    write_json_string(out, &text, options);
+                    return Ok(());
+                }
+            }
+            let pairs: Vec<(String, PhpValue)> = borrowed
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            drop(borrowed);
+            write_json_object(out, &pairs, options, level)?;
+        }
+        other => {
+            return Err(format!("Json::encode() cannot encode {}", other.type_name()));
+        }
+    }
+    Ok(())
+}
+
+fn enter_json_depth(level: usize, options: &JsonEncodeOptions) -> Result<(), String> {
+    if level + 1 > options.depth {
+        Err("Json::encode() exceeded the maximum nesting depth".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn write_json_list(
+    out: &mut String,
+    items: &[PhpValue],
+    options: &JsonEncodeOptions,
+    level: usize,
+) -> Result<(), String> {
+    enter_json_depth(level, options)?;
+    if options.force_object {
+        let pairs: Vec<(String, PhpValue)> = items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v.clone()))
+            .collect();
+        return write_json_object_body(out, &pairs, options, level);
+    }
+    if items.is_empty() {
+        out.push_str("[]");
+        return Ok(());
+    }
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        if options.pretty {
+            out.push('\n');
+            push_json_indent(out, level + 1);
+        }
+        write_json_value(out, item, options, level + 1)?;
+    }
+    if options.pretty {
+        out.push('\n');
+        push_json_indent(out, level);
+    }
+    out.push(']');
+    Ok(())
+}
+
+fn write_json_object(
+    out: &mut String,
+    pairs: &[(String, PhpValue)],
+    options: &JsonEncodeOptions,
+    level: usize,
+) -> Result<(), String> {
+    enter_json_depth(level, options)?;
+    write_json_object_body(out, pairs, options, level)
+}
+
+fn write_json_object_body(
+    out: &mut String,
+    pairs: &[(String, PhpValue)],
+    options: &JsonEncodeOptions,
+    level: usize,
+) -> Result<(), String> {
+    if pairs.is_empty() {
+        out.push_str("{}");
+        return Ok(());
+    }
+    out.push('{');
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        if options.pretty {
+            out.push('\n');
+            push_json_indent(out, level + 1);
+        }
+        write_json_string(out, key, options);
+        out.push(':');
+        if options.pretty {
+            out.push(' ');
+        }
+        write_json_value(out, value, options, level + 1)?;
+    }
+    if options.pretty {
+        out.push('\n');
+        push_json_indent(out, level);
+    }
+    out.push('}');
+    Ok(())
+}
+
+fn push_json_indent(out: &mut String, level: usize) {
+    for _ in 0..level * 4 {
+        out.push(' ');
+    }
+}
+
+fn write_json_string(out: &mut String, raw: &str, options: &JsonEncodeOptions) {
+    if options.numeric_check {
+        if let Some(number) = json_numeric_string(raw, options.preserve_zero_fraction) {
+            out.push_str(&number);
+            return;
+        }
+    }
+    out.push('"');
+    for ch in raw.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' if options.html => out.push_str("\\u0022"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
+            '<' if options.html => out.push_str("\\u003C"),
+            '>' if options.html => out.push_str("\\u003E"),
+            '&' if options.html => out.push_str("\\u0026"),
+            '\'' if options.html => out.push_str("\\u0027"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn json_numeric_string(raw: &str, preserve_zero_fraction: bool) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    if bytes[0] == b'+' || bytes[0] == b'-' {
+        i = 1;
+    }
+    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+        return None;
+    }
+    let mut saw_dot = false;
+    let mut saw_exp = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        if b == b'.' && !saw_dot && !saw_exp {
+            saw_dot = true;
+            i += 1;
+            if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+                return None;
+            }
+            continue;
+        }
+        if (b == b'e' || b == b'E') && !saw_exp {
+            saw_exp = true;
+            i += 1;
+            if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+                i += 1;
+            }
+            if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+                return None;
+            }
+            continue;
+        }
+        return None;
+    }
+    if !saw_dot && !saw_exp {
+        let digits = text.trim_start_matches('+');
+        if let Ok(n) = digits.parse::<i64>() {
+            return Some(n.to_string());
+        }
+    }
+    let number: f64 = text.parse().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+    let mut rendered = number.to_string();
+    if preserve_zero_fraction
+        && !rendered.contains('.')
+        && !rendered.contains('e')
+        && !rendered.contains('E')
+    {
+        rendered.push_str(".0");
+    }
+    Some(rendered)
+}
+
+fn json_text_is_valid(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    skip_ws(&chars, &mut i);
+    if i >= chars.len() {
+        return false;
+    }
+    if parse_json_strict(&chars, &mut i).is_err() {
+        return false;
+    }
+    skip_ws(&chars, &mut i);
+    i == chars.len()
+}
+
+fn parse_json_strict(chars: &[char], i: &mut usize) -> Result<(), ()> {
+    skip_ws(chars, i);
+    if *i >= chars.len() {
+        return Err(());
+    }
+    match chars[*i] {
+        'n' => expect_json_literal(chars, i, "null"),
+        't' => expect_json_literal(chars, i, "true"),
+        'f' => expect_json_literal(chars, i, "false"),
+        '"' => parse_json_string(chars, i).map(|_| ()).map_err(|_| ()),
+        '[' => {
+            *i += 1;
+            skip_ws(chars, i);
+            if *i < chars.len() && chars[*i] == ']' {
+                *i += 1;
+                return Ok(());
+            }
+            loop {
+                parse_json_strict(chars, i)?;
+                skip_ws(chars, i);
+                if *i < chars.len() && chars[*i] == ',' {
+                    *i += 1;
+                    continue;
+                }
+                if *i < chars.len() && chars[*i] == ']' {
+                    *i += 1;
+                    return Ok(());
+                }
+                return Err(());
+            }
+        }
+        '{' => {
+            *i += 1;
+            skip_ws(chars, i);
+            if *i < chars.len() && chars[*i] == '}' {
+                *i += 1;
+                return Ok(());
+            }
+            loop {
+                skip_ws(chars, i);
+                if *i >= chars.len() || chars[*i] != '"' {
+                    return Err(());
+                }
+                parse_json_string(chars, i).map_err(|_| ())?;
+                skip_ws(chars, i);
+                if *i >= chars.len() || chars[*i] != ':' {
+                    return Err(());
+                }
+                *i += 1;
+                parse_json_strict(chars, i)?;
+                skip_ws(chars, i);
+                if *i < chars.len() && chars[*i] == ',' {
+                    *i += 1;
+                    continue;
+                }
+                if *i < chars.len() && chars[*i] == '}' {
+                    *i += 1;
+                    return Ok(());
+                }
+                return Err(());
+            }
+        }
+        '-' | '0'..='9' => {
+            let start = *i;
+            if chars[*i] == '-' {
+                *i += 1;
+            }
+            if *i >= chars.len() || !chars[*i].is_ascii_digit() {
+                return Err(());
+            }
+            while *i < chars.len() && chars[*i].is_ascii_digit() {
+                *i += 1;
+            }
+            if *i < chars.len() && chars[*i] == '.' {
+                *i += 1;
+                if *i >= chars.len() || !chars[*i].is_ascii_digit() {
+                    return Err(());
+                }
+                while *i < chars.len() && chars[*i].is_ascii_digit() {
+                    *i += 1;
+                }
+            }
+            if *i < chars.len() && (chars[*i] == 'e' || chars[*i] == 'E') {
+                *i += 1;
+                if *i < chars.len() && (chars[*i] == '+' || chars[*i] == '-') {
+                    *i += 1;
+                }
+                if *i >= chars.len() || !chars[*i].is_ascii_digit() {
+                    return Err(());
+                }
+                while *i < chars.len() && chars[*i].is_ascii_digit() {
+                    *i += 1;
+                }
+            }
+            let text: String = chars[start..*i].iter().collect();
+            if text.parse::<f64>().ok().filter(|n| n.is_finite()).is_some() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+        _ => Err(()),
+    }
+}
+
+fn expect_json_literal(chars: &[char], i: &mut usize, literal: &str) -> Result<(), ()> {
+    let expected: Vec<char> = literal.chars().collect();
+    if chars[*i..].starts_with(&expected) {
+        *i += expected.len();
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+fn json_decode_value(args: &[PhpValue]) -> FacadeResult {
+    let s = get_arg_str(args, 0, "Json::decode")?;
+    match parse_json_value(&s) {
+        Ok(val) => Ok(val),
+        Err(_) => Ok(PhpValue::Null),
+    }
 }
 
 pub fn php_value_to_json(val: &PhpValue) -> String {
@@ -9636,5 +10156,12 @@ mod tests {
             }
             other => panic!("Expected Dict, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn encode_rejects_non_finite_float() {
+        let err = write_json_text(&PhpValue::float(f64::NAN), &JsonEncodeOptions::default(), 0)
+            .expect_err("nan");
+        assert!(err.contains("non-finite"), "{err}");
     }
 }

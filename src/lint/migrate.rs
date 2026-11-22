@@ -297,9 +297,15 @@ pub fn migrate_source_with_options_and_context(
     current = after_includes;
 
     // Step 0.0009: Migrate controller / action echo to Response::html / Response::json
-    let (after_resp, echo_resp_count) = migrate_controller_echo(&current);
+    let (after_resp, echo_resp_count, echo_warnings) = migrate_controller_echo(&current);
     echo_response_count += echo_resp_count;
+    warnings.extend(echo_warnings);
     current = after_resp;
+
+    // Step 0.00095: Rewrite json_encode / json_decode / json_validate to Json::
+    let (after_json, json_warnings) = migrate_json_calls(&current);
+    warnings.extend(json_warnings);
+    current = after_json;
 
     // Step 0.001: `===` / `!==` are parse errors in RHP. Rewrite them before any
     // later step parses the file. Strings and comments are left unchanged.
@@ -1146,9 +1152,15 @@ fn parse_curl_block_options(block_text: &str, init_url: &str) -> ParsedCurlSessi
                 }
             }
             "CURLOPT_POSTFIELDS" => {
-                if trimmed_val.starts_with("json_encode(") && trimmed_val.ends_with(')') {
-                    let inner = trimmed_val["json_encode(".len()..trimmed_val.len() - 1].trim();
-                    let data_arg = extract_first_call_arg(inner);
+                let encoded_inner = if trimmed_val.starts_with("json_encode(") && trimmed_val.ends_with(')') {
+                    Some(&trimmed_val["json_encode(".len()..trimmed_val.len() - 1])
+                } else if trimmed_val.starts_with("Json::encode(") && trimmed_val.ends_with(')') {
+                    Some(&trimmed_val["Json::encode(".len()..trimmed_val.len() - 1])
+                } else {
+                    None
+                };
+                if let Some(inner) = encoded_inner {
+                    let data_arg = extract_first_call_arg(inner.trim());
                     opts.body = Some(data_arg.to_string());
                 } else {
                     opts.body = Some(trimmed_val.to_string());
@@ -7077,11 +7089,12 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
 // Step 0.0009: Migrate Controller / Action Echo to Response Returns
 // =========================================================================
 
-pub fn migrate_controller_echo(source: &str) -> (String, usize) {
+pub fn migrate_controller_echo(source: &str) -> (String, usize, Vec<String>) {
     let mask = build_code_mask(source);
     let bytes = source.as_bytes();
     let n = bytes.len();
     let mut edits: Vec<TextEdit> = Vec::new();
+    let mut warnings = Vec::new();
     let mut count = 0;
     let mut i = 0;
 
@@ -7202,10 +7215,17 @@ pub fn migrate_controller_echo(source: &str) -> (String, usize) {
                         }
                         if semi < n && bytes[semi] == b';' {
                             let args = source[cp + 1..end_paren].trim();
+                            let parts = split_top_level_args(args);
+                            let value = parts.first().map(|s| s.trim()).unwrap_or("");
+                            if parts.len() > 1 {
+                                warnings.push(format!(
+                                    "echo json_encode flags were dropped; Response::json keeps the value only: {args}"
+                                ));
+                            }
                             edits.push(TextEdit {
                                 start: i,
                                 end: semi + 1,
-                                replacement: format!("return Response::json({});", args),
+                                replacement: format!("return Response::json({value});"),
                             });
                             count += 1;
                             i = semi + 1;
@@ -7223,7 +7243,7 @@ pub fn migrate_controller_echo(source: &str) -> (String, usize) {
     }
 
     if edits.is_empty() {
-        return (source.to_string(), 0);
+        return (source.to_string(), 0, warnings);
     }
 
     edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
@@ -7232,7 +7252,360 @@ pub fn migrate_controller_echo(source: &str) -> (String, usize) {
         result.replace_range(edit.start..edit.end, &edit.replacement);
     }
 
-    (result, count)
+    (result, count, warnings)
+}
+
+fn split_top_level_args(args: &str) -> Vec<&str> {
+    if args.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in args.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' && q == '"' {
+                escaped = true;
+                continue;
+            }
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '[' => bracket += 1,
+            ']' => bracket = bracket.saturating_sub(1),
+            '{' => brace += 1,
+            '}' => brace = brace.saturating_sub(1),
+            ',' if paren == 0 && bracket == 0 && brace == 0 => {
+                parts.push(&args[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&args[start..]);
+    parts
+}
+
+fn strip_named_arg(arg: &str) -> &str {
+    let trimmed = arg.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.is_empty() || !(bytes[0].is_ascii_alphabetic() || bytes[0] == b'_') {
+        return trimmed;
+    }
+    let mut i = 1;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    let mut j = i;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < bytes.len() && bytes[j] == b':' && (j + 1 >= bytes.len() || bytes[j + 1] != b':') {
+        trimmed[j + 1..].trim()
+    } else {
+        trimmed
+    }
+}
+
+const JSON_HEX_TAG: u64 = 1;
+const JSON_HEX_AMP: u64 = 2;
+const JSON_HEX_APOS: u64 = 4;
+const JSON_HEX_QUOT: u64 = 8;
+const JSON_FORCE_OBJECT: u64 = 16;
+const JSON_NUMERIC_CHECK: u64 = 32;
+const JSON_UNESCAPED_SLASHES: u64 = 64;
+const JSON_PRETTY_PRINT: u64 = 128;
+const JSON_UNESCAPED_UNICODE: u64 = 256;
+const JSON_PARTIAL_OUTPUT_ON_ERROR: u64 = 512;
+const JSON_PRESERVE_ZERO_FRACTION: u64 = 1024;
+const JSON_UNESCAPED_LINE_TERMINATORS: u64 = 2048;
+const JSON_INVALID_UTF8_IGNORE: u64 = 1_048_576;
+const JSON_INVALID_UTF8_SUBSTITUTE: u64 = 2_097_152;
+const JSON_THROW_ON_ERROR: u64 = 4_194_304;
+const JSON_HTML_FLAGS: u64 = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+
+fn migrate_json_calls(source: &str) -> (String, Vec<String>) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let names = [
+        "json_last_error_msg",
+        "json_last_error",
+        "json_validate",
+        "json_encode",
+        "json_decode",
+    ];
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut warnings = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] || (i > 0 && is_migrate_word_byte(bytes[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let mut matched = None;
+        for name in names {
+            let len = name.len();
+            if i + len <= n
+                && source[i..i + len].eq_ignore_ascii_case(name)
+                && (i + len == n || !is_migrate_word_byte(bytes[i + len]))
+            {
+                matched = Some((name, len));
+                break;
+            }
+        }
+        let Some((name, len)) = matched else {
+            i += 1;
+            continue;
+        };
+        let mut start = i;
+        if start > 0 && bytes[start - 1] == b'\\' {
+            start -= 1;
+        }
+        if name == "json_last_error" || name == "json_last_error_msg" {
+            warnings.push(format!("{name}() has no Json facade equivalent"));
+            i += len;
+            continue;
+        }
+        let mut p = i + len;
+        while p < n && (bytes[p] == b' ' || bytes[p] == b'\t') {
+            p += 1;
+        }
+        if p >= n || bytes[p] != b'(' {
+            i += len;
+            continue;
+        }
+        let mut depth = 0i32;
+        let mut end = None;
+        let mut cur = p;
+        while cur < n {
+            if mask[cur] {
+                if bytes[cur] == b'(' {
+                    depth += 1;
+                } else if bytes[cur] == b')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(cur);
+                        break;
+                    }
+                }
+            }
+            cur += 1;
+        }
+        let Some(end_paren) = end else {
+            i += len;
+            continue;
+        };
+        let args = split_top_level_args(&source[p + 1..end_paren]);
+        let replacement = match name {
+            "json_encode" => rewrite_json_encode(&args, &mut warnings),
+            "json_decode" => rewrite_json_decode(&args, &mut warnings),
+            "json_validate" => rewrite_json_validate(&args, &mut warnings),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            edits.push(TextEdit {
+                start,
+                end: end_paren + 1,
+                replacement,
+            });
+        }
+        i = end_paren + 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), warnings);
+    }
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    (result, warnings)
+}
+
+fn rewrite_json_encode(args: &[&str], warnings: &mut Vec<String>) -> Option<String> {
+    let value = strip_named_arg(args.first().copied().unwrap_or(""));
+    if args.len() <= 1 {
+        return Some(format!("Json::encode({value})"));
+    }
+    let flags_expr = strip_named_arg(args[1]);
+    let depth_expr = args.get(2).map(|arg| strip_named_arg(arg));
+    let Some(bits) = parse_json_flag_expr(flags_expr) else {
+        warnings.push(format!(
+            "json_encode flags were not a constant expression and were dropped: {flags_expr}"
+        ));
+        return Some(format!("Json::encode({value})"));
+    };
+    let mut depth = None;
+    if let Some(expr) = depth_expr {
+        match expr.parse::<i64>() {
+            Ok(n) => depth = Some(n),
+            Err(_) => warnings.push(format!(
+                "json_encode depth was not an integer literal and was dropped: {expr}"
+            )),
+        }
+    }
+    Some(format!(
+        "Json::encode({value}{})",
+        json_options_dict(bits, depth, flags_expr, warnings)
+    ))
+}
+
+fn rewrite_json_decode(args: &[&str], warnings: &mut Vec<String>) -> Option<String> {
+    let json = strip_named_arg(args.first().copied().unwrap_or(""));
+    if let Some(second) = args.get(1) {
+        let assoc = strip_named_arg(second);
+        let associative = matches!(
+            assoc,
+            "true" | "TRUE" | "True" | "1" | "JSON_OBJECT_AS_ARRAY" | "\\JSON_OBJECT_AS_ARRAY"
+        );
+        let explicit_false = matches!(assoc, "false" | "FALSE" | "False" | "0");
+        if explicit_false {
+            warnings.push(
+                "json_decode associative false has no object mode; migrated to Json::decode"
+                    .to_string(),
+            );
+        } else if !associative {
+            warnings.push(format!(
+                "json_decode associative argument was dropped: {assoc}"
+            ));
+        }
+    }
+    if args.len() > 2 {
+        warnings.push("json_decode depth and flags were dropped".to_string());
+    }
+    Some(format!("Json::decode({json})"))
+}
+
+fn rewrite_json_validate(args: &[&str], warnings: &mut Vec<String>) -> Option<String> {
+    let json = strip_named_arg(args.first().copied().unwrap_or(""));
+    if args.len() > 1 {
+        warnings.push("json_validate extra arguments were dropped".to_string());
+    }
+    Some(format!("Json::validate({json})"))
+}
+
+fn parse_json_flag_expr(expr: &str) -> Option<u64> {
+    let mut bits = 0u64;
+    let mut current = String::new();
+    let mut paren = 0i32;
+    for ch in expr.chars() {
+        match ch {
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren = paren.saturating_sub(1);
+                current.push(ch);
+            }
+            '|' if paren == 0 => {
+                bits |= json_flag_token(current.trim())?;
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        bits |= json_flag_token(current.trim())?;
+    }
+    Some(bits)
+}
+
+fn json_flag_token(token: &str) -> Option<u64> {
+    let name = token.trim().trim_start_matches('\\');
+    if let Ok(n) = name.parse::<u64>() {
+        return Some(n);
+    }
+    Some(match name {
+        "JSON_HEX_TAG" => JSON_HEX_TAG,
+        "JSON_HEX_AMP" => JSON_HEX_AMP,
+        "JSON_HEX_APOS" => JSON_HEX_APOS,
+        "JSON_HEX_QUOT" => JSON_HEX_QUOT,
+        "JSON_FORCE_OBJECT" => JSON_FORCE_OBJECT,
+        "JSON_NUMERIC_CHECK" => JSON_NUMERIC_CHECK,
+        "JSON_UNESCAPED_SLASHES" => JSON_UNESCAPED_SLASHES,
+        "JSON_PRETTY_PRINT" => JSON_PRETTY_PRINT,
+        "JSON_UNESCAPED_UNICODE" => JSON_UNESCAPED_UNICODE,
+        "JSON_PARTIAL_OUTPUT_ON_ERROR" => JSON_PARTIAL_OUTPUT_ON_ERROR,
+        "JSON_PRESERVE_ZERO_FRACTION" => JSON_PRESERVE_ZERO_FRACTION,
+        "JSON_UNESCAPED_LINE_TERMINATORS" => JSON_UNESCAPED_LINE_TERMINATORS,
+        "JSON_INVALID_UTF8_IGNORE" => JSON_INVALID_UTF8_IGNORE,
+        "JSON_INVALID_UTF8_SUBSTITUTE" => JSON_INVALID_UTF8_SUBSTITUTE,
+        "JSON_THROW_ON_ERROR" => JSON_THROW_ON_ERROR,
+        _ => return None,
+    })
+}
+
+fn json_options_dict(
+    bits: u64,
+    depth: Option<i64>,
+    original: &str,
+    warnings: &mut Vec<String>,
+) -> String {
+    let silent = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR;
+    let warned = JSON_PARTIAL_OUTPUT_ON_ERROR
+        | JSON_INVALID_UTF8_IGNORE
+        | JSON_INVALID_UTF8_SUBSTITUTE
+        | JSON_UNESCAPED_LINE_TERMINATORS;
+    let known = JSON_HTML_FLAGS
+        | JSON_FORCE_OBJECT
+        | JSON_NUMERIC_CHECK
+        | JSON_PRETTY_PRINT
+        | JSON_PRESERVE_ZERO_FRACTION
+        | silent
+        | warned;
+    if bits & warned != 0 {
+        warnings.push(format!(
+            "json_encode flags have no options-dict key and were dropped: {original}"
+        ));
+    }
+    if bits & !known != 0 {
+        warnings.push(format!(
+            "json_encode flags contained unknown bits and were dropped: {original}"
+        ));
+    }
+    let mut pairs = Vec::new();
+    if bits & JSON_PRETTY_PRINT != 0 {
+        pairs.push("\"pretty\" => true".to_string());
+    }
+    if bits & JSON_FORCE_OBJECT != 0 {
+        pairs.push("\"forceObject\" => true".to_string());
+    }
+    if bits & JSON_PRESERVE_ZERO_FRACTION != 0 {
+        pairs.push("\"preserveZeroFraction\" => true".to_string());
+    }
+    if bits & JSON_NUMERIC_CHECK != 0 {
+        pairs.push("\"numericCheck\" => true".to_string());
+    }
+    if bits & JSON_HTML_FLAGS != 0 {
+        pairs.push("\"html\" => true".to_string());
+    }
+    if let Some(depth) = depth {
+        if depth != 512 {
+            pairs.push(format!("\"depth\" => {depth}"));
+        }
+    }
+    if pairs.is_empty() {
+        String::new()
+    } else {
+        format!(", [{}]", pairs.join(", "))
+    }
 }
 
 

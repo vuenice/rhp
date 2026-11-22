@@ -252,6 +252,10 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
         "Runtime diagnostics, value inspection, and type reflection facade (type, dump, dd, format)",
     ),
     FacadeInfo::native(
+        "Json",
+        "JSON text and class-object serialization facade (encode, decode, parse, stringify, validate, serialize, deserialize)",
+    ),
+    FacadeInfo::native(
         "Path",
         "Filesystem path operations, extension inspection, and glob pattern matching facade (basename, dirname, extname, parse, isAbsolute, glob, tempDir)",
     ),
@@ -919,15 +923,15 @@ pub static LEGACY_PHP_FUNCTIONS: &[LegacyPhpFunctionMapping] = &[
     },
     LegacyPhpFunctionMapping {
         php_name: "json_encode",
-        rhp_facade: "phpFun",
-        rhp_method: "json_encode",
-        rhp_signature: "phpFun::json_encode(mixed $value): string",
+        rhp_facade: "Json",
+        rhp_method: "encode",
+        rhp_signature: "Json::encode(mixed $value): string",
     },
     LegacyPhpFunctionMapping {
         php_name: "json_decode",
-        rhp_facade: "phpFun",
-        rhp_method: "json_decode",
-        rhp_signature: "phpFun::json_decode(string $json, bool $associative = true): mixed",
+        rhp_facade: "Json",
+        rhp_method: "decode",
+        rhp_signature: "Json::decode(string $json): mixed",
     },
     LegacyPhpFunctionMapping {
         php_name: "serialize",
