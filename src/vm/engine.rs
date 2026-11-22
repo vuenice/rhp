@@ -57,6 +57,9 @@ impl StagedArg {
     }
 }
 
+#[path = "serialize.rs"]
+mod serialize;
+
 /// Active iterator state held for `foreach` loops (`IterInit` / `IterNext`).
 ///
 /// Implements Technical Points #8, #9, #10, and #11 of the RHP Architecture Specification:
@@ -5260,6 +5263,46 @@ impl VM {
 
         if facade == "phpFun" {
             match method {
+                "serialize" => {
+                    let val = match args.first() {
+                        Some(v) => v,
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "serialize() expects 1 argument".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    let json = self.serialize_value(val, span)?;
+                    return Ok(PhpValue::string(json));
+                }
+                "unserialize" => {
+                    let payload = match args.first() {
+                        Some(PhpValue::String(s)) => s.as_ref(),
+                        Some(other) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!(
+                                        "unserialize() expects a string payload, got {}",
+                                        other.type_name()
+                                    ),
+                                },
+                                span,
+                            ));
+                        }
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "unserialize() expects a string payload".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    return self.unserialize_value(payload, span);
+                }
                 "exit" => {
                     let mut exit_code = 0;
                     if let Some(arg) = args.first() {
@@ -5629,6 +5672,75 @@ impl VM {
                     }
                     return Ok(PhpValue::Null);
                 }
+            }
+        }
+
+        if facade == "Json" {
+            match method {
+                "serialize" => {
+                    let val = match args.first() {
+                        Some(v) => v,
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "Json::serialize() expects a class object".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    if !matches!(val, PhpValue::Object(_)) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Json::serialize() expects a class object, got {}",
+                                    val.type_name()
+                                ),
+                            },
+                            span,
+                        ));
+                    }
+                    let json = self.serialize_value(val, span)?;
+                    return Ok(PhpValue::string(json));
+                }
+                "deserialize" => {
+                    let payload = match args.first() {
+                        Some(PhpValue::String(s)) => s.as_ref(),
+                        Some(other) => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: format!(
+                                        "Json::deserialize() expects a string, got {}",
+                                        other.type_name()
+                                    ),
+                                },
+                                span,
+                            ));
+                        }
+                        None => {
+                            return Err(self.make_error(
+                                RuntimeErrorKind::Custom {
+                                    message: "Json::deserialize() expects a string".to_string(),
+                                },
+                                span,
+                            ));
+                        }
+                    };
+                    let val = self.unserialize_value(payload, span)?;
+                    if !matches!(val, PhpValue::Object(_)) {
+                        return Err(self.make_error(
+                            RuntimeErrorKind::Custom {
+                                message: format!(
+                                    "Json::deserialize() expects a serialized class object, got {}",
+                                    val.type_name()
+                                ),
+                            },
+                            span,
+                        ));
+                    }
+                    return Ok(val);
+                }
+                _ => {}
             }
         }
 
