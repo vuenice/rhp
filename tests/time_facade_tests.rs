@@ -336,28 +336,6 @@ fn test_time_instantiation_forbidden() {
 }
 
 #[test]
-fn test_carbon_alias_backward_compatibility() {
-    clear_runtime_closure_macros();
-    TimeDate::clear_test_now();
-
-    let code = r#"
-        $d = Carbon::parse("2024-06-01 12:00:00");
-        $sun = Carbon::SUNDAY;
-        $date = Carbon::toDateString();
-        return [$d->toDateTimeString(), $sun];
-    "#;
-
-    let res = run_source(code).expect("Carbon alias execution failed");
-    if let PhpValue::Array(items_rc) | PhpValue::List(items_rc) = res {
-        let items = items_rc.borrow();
-        assert_eq!(items[0].to_php_string(), "2024-06-01 12:00:00");
-        assert_eq!(items[1].to_i64(), Some(0));
-    } else {
-        panic!("Expected array return, got: {:?}", res);
-    }
-}
-
-#[test]
 fn test_now_helper_lowering() {
     clear_runtime_closure_macros();
     TimeDate::clear_test_now();

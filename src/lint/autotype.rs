@@ -889,7 +889,7 @@ pub fn infer_expression_type_name(
                         _ => Some("string".to_string()),
                     },
                     "Html" => Some("string".to_string()),
-                    "Duration" | "CarbonInterval" => match method.name {
+                    "Duration" => match method.name {
                         "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
                             Some("string".to_string())
                         }
@@ -903,7 +903,7 @@ pub fn infer_expression_type_name(
                         }
                         _ => Some("Duration".to_string()),
                     },
-                    "Time" | "Carbon" => match method.name {
+                    "Time" => match method.name {
                         "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                         | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
                         | "toFormattedDateString" | "toDayDateTimeString" | "format" | "diffForHumans" | "date" => Some("string".to_string()),

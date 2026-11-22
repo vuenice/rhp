@@ -1453,7 +1453,7 @@ Time::macro(string $name, callable $closure): bool;
 
 ---
 
-## `Duration` Facade API (Intervals & CarbonInterval)
+## `Duration` Facade API
 
 ```php
 // Factory Constructors

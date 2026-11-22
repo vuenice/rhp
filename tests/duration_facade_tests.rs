@@ -17,7 +17,7 @@ fn test_duration_factories_spec_and_humans() {
         $h = Duration::hours(2)->minutes(30);
         $iso = Duration::fromString("P1Y2M3DT4H5M6S")->spec();
         $words = Duration::fromString("2 hours 30 minutes")->forHumans();
-        $alias = CarbonInterval::minutes(90)->cascade()->spec();
+        $cascaded = Duration::minutes(90)->cascade()->spec();
         $created = Duration::create(1, 2, 0, 3, 4, 5, 6)->spec();
         $neg = Duration::hours(-5)->spec();
         $days = Duration::days(45)->forHumans();
@@ -31,7 +31,7 @@ fn test_duration_factories_spec_and_humans() {
             $h->minutes,
             $iso,
             $words,
-            $alias,
+            $cascaded,
             $created,
             $neg,
             $days,

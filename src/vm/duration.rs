@@ -1,10 +1,10 @@
-//! Duration — interval helper with the same behavior as Carbon's `CarbonInterval`.
+//! Duration — interval helper for calendar and clock spans.
 //!
 //! Static factories (`Duration::hours(2)`, `Duration::fromString("1y 2m")`, ISO `P1Y2M`),
 //! fluent setters and `add*` / `sub*` modifiers, `cascade`, `total`, `forHumans`, `spec`,
 //! `format`, arithmetic (`times`, `divide`), and comparisons.
 //!
-//! Month length follows Carbon's default cascade factors: 1 month = 4 weeks = 28 days,
+//! Month length follows these cascade factors: 1 month = 4 weeks = 28 days,
 //! 1 year = 12 months = 336 days. `forHumans` cascades a copy before it prints.
 
 use crate::lexer::span::Span;
@@ -49,7 +49,7 @@ const UNIT_ORDER: [Unit; 9] = [
     Unit::Microsecond,
 ];
 
-/// A signed span of calendar and clock units, stored the way CarbonInterval stores them:
+/// A signed span of calendar and clock units:
 /// non-negative components plus an `invert` flag when the whole span is negative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurationInterval {
@@ -114,7 +114,7 @@ impl DurationInterval {
         }
     }
 
-    /// Carry overflow toward larger units using Carbon's factors, then store the sign in `invert`.
+    /// Carry overflow toward larger units, then store the sign in `invert`.
     pub fn cascade(&self) -> Self {
         let mut years = self.signed(self.years);
         let mut months = self.signed(self.months);
@@ -994,7 +994,7 @@ pub fn interval_from_value(val: &PhpValue) -> Option<DurationInterval> {
         return None;
     };
     let obj = rc.borrow();
-    if obj.class_name != "Duration" && obj.class_name != "CarbonInterval" {
+    if obj.class_name != "Duration" {
         return None;
     }
     let read = |name: &str| -> i64 {
@@ -1157,7 +1157,6 @@ pub fn dispatch_duration(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         };
         register_runtime_closure_macro("Duration", &name, (**closure).clone());
-        register_runtime_closure_macro("CarbonInterval", &name, (**closure).clone());
         return Ok(PhpValue::Null);
     }
 
@@ -1200,10 +1199,6 @@ pub fn dispatch_duration(method: &str, args: &[PhpValue]) -> FacadeResult {
     let zero = DurationInterval::default();
     let receiver = PhpValue::object(zero.to_vm_object());
     exec_duration_instance_method(&receiver, method, args, Span::new(0, 0, 0, 1, 1)).map_err(|e| e.kind)
-}
-
-pub fn dispatch_carbon_interval(method: &str, args: &[PhpValue]) -> FacadeResult {
-    dispatch_duration(method, args)
 }
 
 pub fn exec_duration_instance_method(

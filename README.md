@@ -133,9 +133,9 @@ $map = Arr::hashMap([$key => $value]);
 Expressive, static class facades that wrap optimized Rust implementations:
 
 ```php
-// Arr, Str, Http, Request, Response, Carbon, File, Json, Log
+// Arr, Str, Http, Request, Response, Time, File, Json, Log
 $token = Str::random(32);
-$now = Carbon::now()->addDays(7);
+$now = Time::now()->addDays(7);
 $data = Json::decode($responseBody);
 
 // Web requests & responses in RHPM

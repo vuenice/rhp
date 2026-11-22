@@ -608,8 +608,8 @@ pub fn dispatch_facade_call(
         "Weak" => dispatch_weak(method, args),
         "Trace" | "Telemetry" => crate::telemetry::facade::dispatch_trace(method, args),
         "Reflect" => dispatch_reflect(method, args),
-        "Time" | "Carbon" => dispatch_time(method, args),
-        "Duration" | "CarbonInterval" => crate::vm::duration::dispatch_duration(method, args),
+        "Time" => dispatch_time(method, args),
+        "Duration" => crate::vm::duration::dispatch_duration(method, args),
         "Ip" => dispatch_ip(method, args),
         "Compress" => dispatch_compress(method, args),
         "Uniq" => crate::vm::uniq::dispatch_uniq(method, args),
@@ -7627,10 +7627,6 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
     crate::vm::time::dispatch_time(method, args)
 }
 
-pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
-    dispatch_time(method, args)
-}
-
 pub fn dispatch_uniq(method: &str, args: &[PhpValue]) -> FacadeResult {
     crate::vm::uniq::dispatch_uniq(method, args)
 }
@@ -8260,7 +8256,7 @@ pub fn php_value_to_json(val: &PhpValue) -> String {
         }
         PhpValue::Object(o) => {
             let obj = o.borrow();
-            if obj.class_name == "Time" || obj.class_name == "Carbon" || obj.class_name == "Duration" {
+            if obj.class_name == "Time" || obj.class_name == "Duration" {
                 if let Some(iso) = obj.get_property("iso") {
                     let escaped = iso.to_php_string().replace('\\', "\\\\").replace('"', "\\\"");
                     return format!("\"{}\"", escaped);

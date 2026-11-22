@@ -221,19 +221,11 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     ),
     FacadeInfo::native(
         "Time",
-        "Static date and time manipulation facade inspired by Laravel Carbon (now, parse, today, tomorrow, yesterday, create, toDateTimeString, toDateString, addDay, subDay, lastOfMonth, diffForHumans)",
-    ),
-    FacadeInfo::native(
-        "Carbon",
-        "Date and time manipulation alias facade for Time",
+        "Static date and time manipulation facade (now, parse, today, tomorrow, yesterday, create, toDateTimeString, toDateString, addDay, subDay, lastOfMonth, diffForHumans)",
     ),
     FacadeInfo::native(
         "Duration",
-        "Static interval helper with CarbonInterval behavior (hours, fromString, cascade, forHumans, spec, total, add, sub, times)",
-    ),
-    FacadeInfo::native(
-        "CarbonInterval",
-        "Interval alias facade for Duration",
+        "Static interval helper (hours, fromString, cascade, forHumans, spec, total, add, sub, times)",
     ),
     FacadeInfo::native(
         "Ip",
@@ -1733,7 +1725,7 @@ impl FacadeRegistry {
             "html" => "Html",
             "url" => "Url",
             "time" => "Time",
-            "carbon" => "Carbon",
+            "duration" => "Duration",
             "validate" => "Validate",
             "csv" => "Csv",
             "uniq" => "Uniq",
@@ -1804,7 +1796,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "response" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
-            | "time" | "carbon" | "path" | "socket" | "binary" | "view" | "rade"
+            | "time" | "duration" | "path" | "socket" | "binary" | "view" | "rade"
     )
 }
 

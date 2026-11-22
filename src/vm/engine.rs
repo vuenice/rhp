@@ -3649,8 +3649,7 @@ impl VM {
                     };
                     if c_name == "class" {
                         self.registers[base_reg + dst.index()] = PhpValue::string(resolved_cls);
-                    } else if resolved_cls == "Time" || resolved_cls == "\\Time"
-                        || resolved_cls == "Carbon" || resolved_cls == "\\Carbon" {
+                    } else if resolved_cls == "Time" || resolved_cls == "\\Time" {
                         if let Some(val) = crate::vm::time::get_time_constant(&c_name) {
                             self.registers[base_reg + dst.index()] = val;
                         } else {
@@ -3662,8 +3661,7 @@ impl VM {
                                 span,
                             ));
                         }
-                    } else if resolved_cls == "Duration" || resolved_cls == "\\Duration"
-                        || resolved_cls == "CarbonInterval" || resolved_cls == "\\CarbonInterval" {
+                    } else if resolved_cls == "Duration" || resolved_cls == "\\Duration" {
                         if let Some(val) = crate::vm::duration::get_duration_constant(&c_name) {
                             self.registers[base_reg + dst.index()] = val;
                         } else {
@@ -9151,7 +9149,7 @@ impl VM {
         span: Span,
     ) -> Result<PhpValue, RuntimeError> {
         if method == "toJson" {
-            if class_name == "Time" || class_name == "Carbon" {
+            if class_name == "Time" {
                 if let PhpValue::Object(rc) = receiver {
                     if let Some(iso) = rc.borrow().get_property("iso") {
                         return Ok(PhpValue::string(format!("\"{}\"", iso.to_php_string())));
@@ -9160,10 +9158,10 @@ impl VM {
             }
             return Ok(PhpValue::string(php_value_to_json(receiver)));
         }
-        if class_name == "Time" || class_name == "Carbon" {
+        if class_name == "Time" {
             return crate::vm::time::exec_time_instance_method(receiver, method, args, span);
         }
-        if class_name == "Duration" || class_name == "CarbonInterval" {
+        if class_name == "Duration" {
             return crate::vm::duration::exec_duration_instance_method(receiver, method, args, span);
         }
 
@@ -11235,11 +11233,6 @@ impl VM {
         let actual_clean = actual_cls.strip_prefix('\\').unwrap_or(actual_cls);
         let target_clean = target_cls.strip_prefix('\\').unwrap_or(target_cls);
         if actual_clean == target_clean || target_clean == "object" {
-            return true;
-        }
-        if (actual_clean == "Duration" && target_clean == "CarbonInterval")
-            || (actual_clean == "CarbonInterval" && target_clean == "Duration")
-        {
             return true;
         }
         if let Some(ref h) = self.type_hierarchy {

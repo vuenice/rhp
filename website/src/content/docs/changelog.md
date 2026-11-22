@@ -30,7 +30,7 @@ The v0.2.0-alpha.1 release delivers major performance, runtime, and ecosystem ad
   - `rhp migrate` command to convert legacy PHP 8.x codebases to idiomatic RHP.
   - Rewrites strict equality (`===`, `!==` to `==`, `!=`), strips PHP opening tags and `declare` statements, reorders parameters (required before optional), and converts cURL to async HTTP calls.
 - **Extended Standard Library & Facades:**
-  - `Carbon`: Laravel-compatible date and time handling facade.
+  - `Time`: Date and time handling facade.
   - `Crypt`, `Html`, and `Url`: Cryptographic hashing (AES-256, HMAC, MD5, SHA), HTML sanitization, and URL parsing helpers.
   - `Duration`: Ergonomic time unit math and conversions.
   - `Uniq`: UUID v4, UUID v7, and NanoID generation.

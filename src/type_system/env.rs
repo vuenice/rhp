@@ -878,7 +878,7 @@ pub fn resolve_facade_static_call(
             "randomBytes" | "random_bytes" | "random" => Ok(RhpType::String),
             _ => Ok(RhpType::Mixed),
         },
-        "Duration" | "CarbonInterval" => match method {
+        "Duration" => match method {
             "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
                 Ok(RhpType::String)
             }
@@ -894,7 +894,7 @@ pub fn resolve_facade_static_call(
             "toArray" => Ok(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
             _ => Ok(RhpType::Class("Duration".to_string())),
         },
-        "Time" | "Carbon" => match method {
+        "Time" => match method {
             "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
             | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
             | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"
@@ -1237,7 +1237,7 @@ pub fn resolve_builtin_fluent_method(
                 "isValid" => Some(RhpType::Bool),
                 _ => Some(RhpType::Dynamic),
             },
-            "Duration" | "CarbonInterval" => match method {
+            "Duration" => match method {
                 "spec" | "format" | "forHumans" | "toString" | "toIso8601String" | "toDateInterval" => {
                     Some(RhpType::String)
                 }
@@ -1253,7 +1253,7 @@ pub fn resolve_builtin_fluent_method(
                 "toArray" => Some(RhpType::Collection(CollectionSubtype::Dict(Box::new(RhpType::Mixed)))),
                 _ => Some(RhpType::Class("Duration".to_string())),
             },
-            "Time" | "Carbon" => match method {
+            "Time" => match method {
                 "toDateTimeString" | "toDateString" | "toDatString" | "toTimeString"
                 | "toISOString" | "toIso8601String" | "toAtomString" | "toRfc2822String"
                 | "toRfc822String" | "toRfc3339String" | "toFormattedDateString"

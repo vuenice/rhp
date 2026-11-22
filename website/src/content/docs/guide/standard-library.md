@@ -23,7 +23,7 @@ RHP replaces procedural legacy functions (`array_map`, `strlen`, `var_dump`) wit
 | `Crypt` | Cryptographic hashing, HMAC, OpenSSL AES encryption & random bytes | `hash()`, `hashHmac()`, `opensslEncrypt()`, `opensslDecrypt()`, `randomBytes()`, `md5()` | &mdash; |
 | `Html` | HTML entity escaping, tag stripping, sanitization & tag generation | `specialChars()`, `stripTags()`, `entities()`, `specialCharsDecode()`, `clean()`, `tag()` | &mdash; |
 | `Url` | URL component parsing, query string building & Base64 encoding | `parseUrl()`, `httpBuildQuery()`, `base64Encode()`, `base64Decode()`, `to()`, `encode()` | &mdash; |
-| `Carbon` | High-performance date & time manipulation modeled after Laravel Carbon | `now()`, `parse()`, `today()`, `toDateTimeString()`, `toDateString()`, `addDay()`, `lastOfMonth()`, `diffForHumans()` | &mdash; |
+| `Time` | High-performance date & time manipulation | `now()`, `parse()`, `today()`, `toDateTimeString()`, `toDateString()`, `addDay()`, `lastOfMonth()`, `diffForHumans()` | &mdash; |
 | `Uniq` | High-speed unique identifiers: microsecond `uniqid()` with LCG entropy, and RFC UUIDs (`uuid4`, `uuid5`, `uuid7`, `uuid3`) | `uniqid()`, `uuid4()`, `uuid5()`, `uuid7()`, `uuid3()`, `isValid()`, `version()`, `parse()` | &mdash; |
 | `Future` | Tokio fiber concurrency & async coordination | `run()`, `wait()`, `any()`, `delayed()`, `defer()` | &mdash; |
 | `Memory` | Zero-GC telemetry & scoped request arena inspection | `usage()`, `peak()`, `isGcFree()`, `gcPauseMs()`, `scope()` | &mdash; |
@@ -1231,7 +1231,7 @@ string $dashUrl = Url::to('dashboard'); // "https://example.com/dashboard"
 
 ## Time Facade & DateTime Manipulation (`Time::*`)
 
-The `Time` facade brings Laravel Carbon-inspired fluent date and time manipulation natively into RHP (with `Carbon` supported as a backward-compatible alias). Implemented in pure Rust over `chrono`, it provides high-throughput datetime arithmetic, RFC/ISO formatting, period boundary adjustments, and human-readable diffs with zero garbage collection overhead.
+The `Time` facade brings fluent date and time manipulation natively into RHP. Implemented in pure Rust over `chrono`, it provides high-throughput datetime arithmetic, RFC/ISO formatting, period boundary adjustments, and human-readable diffs with zero garbage collection overhead.
 
 ### Creating and Parsing Dates
 
@@ -1335,9 +1335,9 @@ Time::setTestNow(null);
 
 ---
 
-## Duration Facade & Intervals (`Duration::*`, `CarbonInterval::*`)
+## Duration Facade & Intervals (`Duration::*`)
 
-The `Duration` facade (with `CarbonInterval` supported as a direct alias) provides fluent interval arithmetic, ISO-8601 duration formatting, and human-readable time-span conversions with zero garbage collection overhead.
+The `Duration` facade provides fluent interval arithmetic, ISO-8601 duration formatting, and human-readable time-span conversions with zero garbage collection overhead.
 
 ### 1. Creating Durations & Interval Factories
 

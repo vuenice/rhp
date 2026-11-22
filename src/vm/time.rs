@@ -1,6 +1,6 @@
 //! Time - Time & DateTime Facade & Instance Implementation for RHP
 //!
-//! Provides full-featured, fluent date/time manipulation modeled after Laravel's Carbon:
+//! Provides full-featured, fluent date/time manipulation:
 //! - Factory constructors: `Time::now()`, `Time::today()`, `Time::yesterday()`,
 //!   `Time::tomorrow()`, `Time::parse()`, `Time::create()`, `Time::createFromTimestamp()`,
 //!   `Time::createFromFormat()`, `Time::setTestNow()`, `Time::hasTestNow()`.
@@ -23,8 +23,8 @@ use crate::vm::facade::{get_arg_str, register_runtime_closure_macro, FacadeResul
 use crate::vm::value::{PhpValue, VmObject};
 
 thread_local! {
-    /// Thread-safe mock test fixture time (`Carbon::setTestNow(...)`).
-    static TEST_NOW: RefCell<Option<CarbonDate>> = const { RefCell::new(None) };
+    /// Thread-safe mock test fixture time (`Time::setTestNow(...)`).
+    static TEST_NOW: RefCell<Option<TimeDate>> = const { RefCell::new(None) };
 }
 
 /// Return true if the given year is a leap year.
@@ -103,18 +103,15 @@ pub fn parse_timezone(tz: &str) -> (FixedOffset, String) {
     (offset, canonical.to_string())
 }
 
-/// Representation of a Time / Carbon date-time value.
+/// Representation of a Time date-time value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CarbonDate {
+pub struct TimeDate {
     pub dt: DateTime<FixedOffset>,
     pub tz_name: String,
 }
 
-/// Alias for `CarbonDate` matching the `Time` facade.
-pub type TimeDate = CarbonDate;
-
-impl CarbonDate {
-    /// Create a new `CarbonDate` from a `DateTime<FixedOffset>` and timezone name.
+impl TimeDate {
+    /// Create a new `TimeDate` from a `DateTime<FixedOffset>` and timezone name.
     pub fn new(dt: DateTime<FixedOffset>, tz_name: impl Into<String>) -> Self {
         Self {
             dt,
@@ -122,7 +119,7 @@ impl CarbonDate {
         }
     }
 
-    /// Construct `CarbonDate::now([$tz])`. If `TEST_NOW` is set, returns the mock test date.
+    /// Construct `TimeDate::now([$tz])`. If `TEST_NOW` is set, returns the mock test date.
     pub fn now(tz_opt: Option<&str>) -> Self {
         let mock_opt = TEST_NOW.with(|cell| cell.borrow().clone());
         if let Some(mock) = mock_opt {
@@ -145,22 +142,22 @@ impl CarbonDate {
         Self { dt, tz_name }
     }
 
-    /// Construct `CarbonDate::today([$tz])` at 00:00:00.
+    /// Construct `TimeDate::today([$tz])` at 00:00:00.
     pub fn today(tz_opt: Option<&str>) -> Self {
         Self::now(tz_opt).start_of_day()
     }
 
-    /// Construct `CarbonDate::yesterday([$tz])` at 00:00:00.
+    /// Construct `TimeDate::yesterday([$tz])` at 00:00:00.
     pub fn yesterday(tz_opt: Option<&str>) -> Self {
         Self::today(tz_opt).sub_days(1)
     }
 
-    /// Construct `CarbonDate::tomorrow([$tz])` at 00:00:00.
+    /// Construct `TimeDate::tomorrow([$tz])` at 00:00:00.
     pub fn tomorrow(tz_opt: Option<&str>) -> Self {
         Self::today(tz_opt).add_days(1)
     }
 
-    /// Construct `CarbonDate::create($year, $month, $day, $hour, $minute, $second, $micro, $tz)`.
+    /// Construct `TimeDate::create($year, $month, $day, $hour, $minute, $second, $micro, $tz)`.
     pub fn create(
         year: i32,
         month: u32,
@@ -190,7 +187,7 @@ impl CarbonDate {
         Ok(Self { dt, tz_name })
     }
 
-    /// Construct `CarbonDate::createFromTimestamp($timestamp, [$tz])`.
+    /// Construct `TimeDate::createFromTimestamp($timestamp, [$tz])`.
     pub fn create_from_timestamp(ts: i64, micro: u32, tz_opt: Option<&str>) -> Self {
         let (offset, tz_name) = match tz_opt {
             Some(tz) => parse_timezone(tz),
@@ -203,14 +200,14 @@ impl CarbonDate {
         Self { dt, tz_name }
     }
 
-    /// Construct `CarbonDate::createFromTimestampMs($timestampMs, [$tz])`.
+    /// Construct `TimeDate::createFromTimestampMs($timestampMs, [$tz])`.
     pub fn create_from_timestamp_ms(ts_ms: i64, tz_opt: Option<&str>) -> Self {
         let secs = ts_ms / 1000;
         let millis = (ts_ms % 1000).unsigned_abs() as u32;
         Self::create_from_timestamp(secs, millis * 1000, tz_opt)
     }
 
-    /// Construct `CarbonDate::createFromFormat($format, $time, [$tz])`.
+    /// Construct `TimeDate::createFromFormat($format, $time, [$tz])`.
     pub fn create_from_format(
         format: &str,
         time_str: &str,
@@ -250,7 +247,7 @@ impl CarbonDate {
     pub fn parse(input: &str, tz_opt: Option<&str>) -> Result<Self, String> {
         let raw = input.trim();
         if raw.is_empty() {
-            return Err("Cannot parse empty date string into Carbon".to_string());
+            return Err("Cannot parse empty date string into Time".to_string());
         }
 
         let (target_offset, tz_name) = match tz_opt {
@@ -343,21 +340,21 @@ impl CarbonDate {
             return Ok(c);
         }
 
-        Err(format!("Could not parse date string into Carbon: '{raw}'"))
+        Err(format!("Could not parse date string into Time: '{raw}'"))
     }
 
-    /// Return the maximum representable Carbon date.
+    /// Return the maximum representable Time date.
     pub fn max_value() -> Self {
         Self::create(9999, 12, 31, 23, 59, 59, 999_999, None).unwrap()
     }
 
-    /// Return the minimum representable Carbon date.
+    /// Return the minimum representable Time date.
     pub fn min_value() -> Self {
         Self::create(1, 1, 1, 0, 0, 0, 0, None).unwrap()
     }
 
-    /// Set a mock test now date (`Carbon::setTestNow(...)`).
-    pub fn set_test_now(date: CarbonDate) {
+    /// Set a mock test now date (`Time::setTestNow(...)`).
+    pub fn set_test_now(date: TimeDate) {
         TEST_NOW.with(|cell| {
             *cell.borrow_mut() = Some(date);
         });
@@ -376,7 +373,7 @@ impl CarbonDate {
     }
 
     /// Get current mock test now if any.
-    pub fn get_test_now() -> Option<CarbonDate> {
+    pub fn get_test_now() -> Option<TimeDate> {
         TEST_NOW.with(|cell| cell.borrow().clone())
     }
 
@@ -439,7 +436,7 @@ impl CarbonDate {
         &self.tz_name
     }
 
-    /// Day of week (0 for Sunday, 1 for Monday, ..., 6 for Saturday) matching PHP Carbon.
+    /// Day of week (0 for Sunday, 1 for Monday, ..., 6 for Saturday) matching PHP (`0` = Sunday).
     #[inline]
     pub fn day_of_week(&self) -> u32 {
         self.dt.weekday().num_days_from_sunday()
@@ -836,7 +833,7 @@ impl CarbonDate {
         self.add_microseconds(-micros)
     }
 
-    /// Add a `Duration` / CarbonInterval. Calendar units use `add_years` / `add_months`;
+    /// Add a `Duration`. Calendar units use `add_years` / `add_months`;
     /// weeks are 7 days. The interval's `invert` flag subtracts.
     #[must_use]
     pub fn add_duration(&self, interval: &crate::vm::duration::DurationInterval) -> Self {
@@ -852,7 +849,7 @@ impl CarbonDate {
     }
 
     /// Calendar difference from `self` to `other`, as a `Duration`.
-    pub fn diff_interval(&self, other: &CarbonDate) -> crate::vm::duration::DurationInterval {
+    pub fn diff_interval(&self, other: &TimeDate) -> crate::vm::duration::DurationInterval {
         let invert = self.dt > other.dt;
         let (start, end) = if invert { (other, self) } else { (self, other) };
         let mut cursor = start.clone();
@@ -1272,17 +1269,17 @@ impl CarbonDate {
     }
 
     #[inline]
-    pub fn is_same_day(&self, other: &CarbonDate) -> bool {
+    pub fn is_same_day(&self, other: &TimeDate) -> bool {
         self.year() == other.year() && self.month() == other.month() && self.day() == other.day()
     }
 
     #[inline]
-    pub fn is_same_month(&self, other: &CarbonDate) -> bool {
+    pub fn is_same_month(&self, other: &TimeDate) -> bool {
         self.year() == other.year() && self.month() == other.month()
     }
 
     #[inline]
-    pub fn is_same_year(&self, other: &CarbonDate) -> bool {
+    pub fn is_same_year(&self, other: &TimeDate) -> bool {
         self.year() == other.year()
     }
 
@@ -1347,7 +1344,7 @@ impl CarbonDate {
     }
 
     #[inline]
-    pub fn is_birthday(&self, other_opt: Option<&CarbonDate>) -> bool {
+    pub fn is_birthday(&self, other_opt: Option<&TimeDate>) -> bool {
         let other = match other_opt {
             Some(o) => o.clone(),
             None => Self::now(Some(&self.tz_name)),
@@ -1356,36 +1353,36 @@ impl CarbonDate {
     }
 
     #[inline]
-    pub fn eq(&self, other: &CarbonDate) -> bool {
+    pub fn eq(&self, other: &TimeDate) -> bool {
         self.dt == other.dt
     }
 
     #[inline]
-    pub fn ne(&self, other: &CarbonDate) -> bool {
+    pub fn ne(&self, other: &TimeDate) -> bool {
         self.dt != other.dt
     }
 
     #[inline]
-    pub fn gt(&self, other: &CarbonDate) -> bool {
+    pub fn gt(&self, other: &TimeDate) -> bool {
         self.dt > other.dt
     }
 
     #[inline]
-    pub fn gte(&self, other: &CarbonDate) -> bool {
+    pub fn gte(&self, other: &TimeDate) -> bool {
         self.dt >= other.dt
     }
 
     #[inline]
-    pub fn lt(&self, other: &CarbonDate) -> bool {
+    pub fn lt(&self, other: &TimeDate) -> bool {
         self.dt < other.dt
     }
 
     #[inline]
-    pub fn lte(&self, other: &CarbonDate) -> bool {
+    pub fn lte(&self, other: &TimeDate) -> bool {
         self.dt <= other.dt
     }
 
-    pub fn between(&self, start: &CarbonDate, end: &CarbonDate, equal: bool) -> bool {
+    pub fn between(&self, start: &TimeDate, end: &TimeDate, equal: bool) -> bool {
         if equal {
             self.gte(start) && self.lte(end)
         } else {
@@ -1397,7 +1394,7 @@ impl CarbonDate {
     // Differences
     // =========================================================================
 
-    pub fn diff_in_seconds(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_seconds(&self, other: &TimeDate, abs: bool) -> i64 {
         let diff = self.timestamp() - other.timestamp();
         if abs {
             diff.abs()
@@ -1406,23 +1403,23 @@ impl CarbonDate {
         }
     }
 
-    pub fn diff_in_minutes(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_minutes(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_seconds(other, abs) / 60
     }
 
-    pub fn diff_in_hours(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_hours(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_seconds(other, abs) / 3600
     }
 
-    pub fn diff_in_days(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_days(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_seconds(other, abs) / 86400
     }
 
-    pub fn diff_in_weeks(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_weeks(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_days(other, abs) / 7
     }
 
-    pub fn diff_in_months(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_months(&self, other: &TimeDate, abs: bool) -> i64 {
         let diff = (self.year() as i64 - other.year() as i64) * 12
             + (self.month() as i64 - other.month() as i64);
         if abs {
@@ -1432,16 +1429,16 @@ impl CarbonDate {
         }
     }
 
-    pub fn diff_in_quarters(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_quarters(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_months(other, abs) / 3
     }
 
-    pub fn diff_in_years(&self, other: &CarbonDate, abs: bool) -> i64 {
+    pub fn diff_in_years(&self, other: &TimeDate, abs: bool) -> i64 {
         self.diff_in_months(other, abs) / 12
     }
 
     /// Human-readable time diff (`diffForHumans()`).
-    pub fn diff_for_humans(&self, other_opt: Option<&CarbonDate>) -> String {
+    pub fn diff_for_humans(&self, other_opt: Option<&TimeDate>) -> String {
         let other = match other_opt {
             Some(o) => o.clone(),
             None => Self::now(Some(&self.tz_name)),
@@ -1487,7 +1484,7 @@ impl CarbonDate {
     // VmObject Synchronization
     // =========================================================================
 
-    /// Convert `CarbonDate` into a full `VmObject` of class `"Time"`.
+    /// Convert `TimeDate` into a full `VmObject` of class `"Time"`.
     pub fn to_vm_object(&self) -> VmObject {
         let mut obj = VmObject::new("Time");
         self.sync_properties(&mut obj);
@@ -1517,12 +1514,12 @@ impl CarbonDate {
     }
 }
 
-/// Convert a `PhpValue` argument into a `CarbonDate`.
-pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
+/// Convert a `PhpValue` argument into a `TimeDate`.
+pub fn from_php_value(val: &PhpValue) -> Result<TimeDate, String> {
     match val {
         PhpValue::Object(rc) => {
             let obj = rc.borrow();
-            if obj.class_name == "Time" || obj.class_name == "Carbon" {
+            if obj.class_name == "Time" {
                 if let Some(ts_val) = obj.get_property("timestamp") {
                     let ts = ts_val.to_i64().unwrap_or(0);
                     let micro = obj.get_property("micro").and_then(|v| v.to_i64()).unwrap_or(0) as u32;
@@ -1530,24 +1527,24 @@ pub fn from_php_value(val: &PhpValue) -> Result<CarbonDate, String> {
                         .get_property("timezone")
                         .map(|v| v.to_php_string())
                         .unwrap_or_else(|| "UTC".to_string());
-                    return Ok(CarbonDate::create_from_timestamp(ts, micro, Some(&tz)));
+                    return Ok(TimeDate::create_from_timestamp(ts, micro, Some(&tz)));
                 } else if let Some(formatted) = obj.get_property("formatted") {
                     let tz = obj
                         .get_property("timezone")
                         .map(|v| v.to_php_string())
                         .unwrap_or_else(|| "UTC".to_string());
-                    return CarbonDate::parse(&formatted.to_php_string(), Some(&tz));
+                    return TimeDate::parse(&formatted.to_php_string(), Some(&tz));
                 }
             }
             Err("Expected an instance of Time".to_string())
         }
-        PhpValue::String(s) => CarbonDate::parse(s, None),
-        PhpValue::Int(n) => Ok(CarbonDate::create_from_timestamp(*n as i64, 0, None)),
+        PhpValue::String(s) => TimeDate::parse(s, None),
+        PhpValue::Int(n) => Ok(TimeDate::create_from_timestamp(*n as i64, 0, None)),
         _ => Err("Invalid value provided for Time date conversion".to_string()),
     }
 }
 
-/// Get static class constant for `Time::*` / `Carbon::*` (e.g. `Time::MONDAY`, `Time::SUNDAY`).
+/// Get static class constant for `Time::*` (e.g. `Time::MONDAY`, `Time::SUNDAY`).
 pub fn get_time_constant(name: &str) -> Option<PhpValue> {
     match name {
         "SUNDAY" => Some(PhpValue::Int(0)),
@@ -1567,10 +1564,6 @@ pub fn get_time_constant(name: &str) -> Option<PhpValue> {
         "SECONDS_PER_MINUTE" => Some(PhpValue::Int(60)),
         _ => None,
     }
-}
-
-pub fn get_carbon_constant(name: &str) -> Option<PhpValue> {
-    get_time_constant(name)
 }
 
 /// Convert standard PHP date format specifiers to chrono format specifiers.
@@ -1606,7 +1599,7 @@ fn convert_php_format_to_chrono(php_fmt: &str) -> String {
 }
 
 /// Helper to parse relative time phrases (e.g., `"+1 day"`, `"-2 weeks"`, `"+3 months"`, `"+1 year"`).
-fn parse_relative_offset(lower: &str, tz_opt: Option<&str>) -> Option<CarbonDate> {
+fn parse_relative_offset(lower: &str, tz_opt: Option<&str>) -> Option<TimeDate> {
     let trimmed = lower.trim();
     let (sign, rest) = if let Some(stripped) = trimmed.strip_prefix('+') {
         (1i64, stripped.trim())
@@ -1624,7 +1617,7 @@ fn parse_relative_offset(lower: &str, tz_opt: Option<&str>) -> Option<CarbonDate
     let qty = parts[0].parse::<i64>().ok()? * sign;
     let unit = parts[1].trim_end_matches('s');
 
-    let base = CarbonDate::now(tz_opt);
+    let base = TimeDate::now(tz_opt);
     let result = match unit {
         "day" => base.add_days(qty),
         "week" => base.add_weeks(qty),
@@ -1640,7 +1633,7 @@ fn parse_relative_offset(lower: &str, tz_opt: Option<&str>) -> Option<CarbonDate
 }
 
 /// Fallback regex parser for dates.
-fn parse_flexible_regex(raw: &str, _offset: FixedOffset, tz_name: &str) -> Option<CarbonDate> {
+fn parse_flexible_regex(raw: &str, _offset: FixedOffset, tz_name: &str) -> Option<TimeDate> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
         regex::Regex::new(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$").unwrap()
@@ -1654,7 +1647,7 @@ fn parse_flexible_regex(raw: &str, _offset: FixedOffset, tz_name: &str) -> Optio
     let min = caps.get(5).map(|v| v.as_str().parse::<u32>().unwrap_or(0)).unwrap_or(0);
     let s = caps.get(6).map(|v| v.as_str().parse::<u32>().unwrap_or(0)).unwrap_or(0);
 
-    CarbonDate::create(y, m, d, h, min, s, 0, Some(tz_name)).ok()
+    TimeDate::create(y, m, d, h, min, s, 0, Some(tz_name)).ok()
 }
 
 // =========================================================================
@@ -1677,7 +1670,6 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
         };
         register_runtime_closure_macro("Time", &name, (**closure).clone());
-        register_runtime_closure_macro("Carbon", &name, (**closure).clone());
         return Ok(PhpValue::Null);
     }
 
@@ -1706,43 +1698,43 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
         }
         "now" => {
             let tz = args.first().map(|v| v.to_php_string());
-            let c = CarbonDate::now(tz.as_deref());
+            let c = TimeDate::now(tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "date" => {
             let fmt = get_arg_str(args, 0, "Time::date")?;
             let time_obj = match args.get(1) {
-                None => CarbonDate::now(None),
-                Some(v) if v.is_null() => CarbonDate::now(None),
+                None => TimeDate::now(None),
+                Some(v) if v.is_null() => TimeDate::now(None),
                 Some(v) => {
                     let s = match v {
                         PhpValue::Int(i) => i.to_string(),
                         other => other.to_php_string(),
                     };
-                    CarbonDate::parse(&s, None).map_err(|e| RuntimeErrorKind::Custom { message: e })?
+                    TimeDate::parse(&s, None).map_err(|e| RuntimeErrorKind::Custom { message: e })?
                 }
             };
             Ok(PhpValue::string(time_obj.format(&fmt)))
         }
         "today" => {
             let tz = args.first().map(|v| v.to_php_string());
-            let c = CarbonDate::today(tz.as_deref());
+            let c = TimeDate::today(tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "yesterday" => {
             let tz = args.first().map(|v| v.to_php_string());
-            let c = CarbonDate::yesterday(tz.as_deref());
+            let c = TimeDate::yesterday(tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "tomorrow" => {
             let tz = args.first().map(|v| v.to_php_string());
-            let c = CarbonDate::tomorrow(tz.as_deref());
+            let c = TimeDate::tomorrow(tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "parse" => {
             let s = get_arg_str(args, 0, "Time::parse")?;
             let tz = args.get(1).map(|v| v.to_php_string());
-            match CarbonDate::parse(&s, tz.as_deref()) {
+            match TimeDate::parse(&s, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
                 Err(err) => Err(RuntimeErrorKind::Custom { message: err }),
             }
@@ -1755,7 +1747,7 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
             let min = args.get(4).and_then(|v| v.to_i64()).unwrap_or(0) as u32;
             let sec = args.get(5).and_then(|v| v.to_i64()).unwrap_or(0) as u32;
             let tz = args.get(6).map(|v| v.to_php_string());
-            match CarbonDate::create(year, month, day, hour, min, sec, 0, tz.as_deref()) {
+            match TimeDate::create(year, month, day, hour, min, sec, 0, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
                 Err(e) => Err(RuntimeErrorKind::Custom { message: e }),
             }
@@ -1765,7 +1757,7 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
             let month = args.get(1).and_then(|v| v.to_i64()).unwrap_or(1) as u32;
             let day = args.get(2).and_then(|v| v.to_i64()).unwrap_or(1) as u32;
             let tz = args.get(3).map(|v| v.to_php_string());
-            match CarbonDate::create(year, month, day, 0, 0, 0, 0, tz.as_deref()) {
+            match TimeDate::create(year, month, day, 0, 0, 0, 0, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
                 Err(e) => Err(RuntimeErrorKind::Custom { message: e }),
             }
@@ -1775,7 +1767,7 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
             let min = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0) as u32;
             let sec = args.get(2).and_then(|v| v.to_i64()).unwrap_or(0) as u32;
             let tz = args.get(3).map(|v| v.to_php_string());
-            let today = CarbonDate::today(tz.as_deref());
+            let today = TimeDate::today(tz.as_deref());
             match today.set_time(hour, min, sec, 0) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
                 Err(e) => Err(RuntimeErrorKind::Custom { message: e }),
@@ -1784,60 +1776,56 @@ pub fn dispatch_time(method: &str, args: &[PhpValue]) -> FacadeResult {
         "createFromTimestamp" => {
             let ts = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
             let tz = args.get(1).map(|v| v.to_php_string());
-            let c = CarbonDate::create_from_timestamp(ts, 0, tz.as_deref());
+            let c = TimeDate::create_from_timestamp(ts, 0, tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "createFromTimestampMs" => {
             let ts_ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0);
             let tz = args.get(1).map(|v| v.to_php_string());
-            let c = CarbonDate::create_from_timestamp_ms(ts_ms, tz.as_deref());
+            let c = TimeDate::create_from_timestamp_ms(ts_ms, tz.as_deref());
             Ok(PhpValue::object(c.to_vm_object()))
         }
         "createFromFormat" => {
             let fmt = get_arg_str(args, 0, "Time::createFromFormat")?;
             let time_str = get_arg_str(args, 1, "Time::createFromFormat")?;
             let tz = args.get(2).map(|v| v.to_php_string());
-            match CarbonDate::create_from_format(&fmt, &time_str, tz.as_deref()) {
+            match TimeDate::create_from_format(&fmt, &time_str, tz.as_deref()) {
                 Ok(c) => Ok(PhpValue::object(c.to_vm_object())),
                 Err(e) => Err(RuntimeErrorKind::Custom { message: e }),
             }
         }
-        "maxValue" => Ok(PhpValue::object(CarbonDate::max_value().to_vm_object())),
-        "minValue" => Ok(PhpValue::object(CarbonDate::min_value().to_vm_object())),
+        "maxValue" => Ok(PhpValue::object(TimeDate::max_value().to_vm_object())),
+        "minValue" => Ok(PhpValue::object(TimeDate::min_value().to_vm_object())),
         "setTestNow" => {
             if args.is_empty() || args[0].is_null() {
-                CarbonDate::clear_test_now();
+                TimeDate::clear_test_now();
             } else {
                 let parsed = from_php_value(&args[0])
                     .map_err(|e| RuntimeErrorKind::Custom { message: e })?;
-                CarbonDate::set_test_now(parsed);
+                TimeDate::set_test_now(parsed);
             }
             Ok(PhpValue::Null)
         }
         "getTestNow" => {
-            if let Some(tn) = CarbonDate::get_test_now() {
+            if let Some(tn) = TimeDate::get_test_now() {
                 Ok(PhpValue::object(tn.to_vm_object()))
             } else {
                 Ok(PhpValue::Null)
             }
         }
-        "hasTestNow" => Ok(PhpValue::Bool(CarbonDate::has_test_now())),
+        "hasTestNow" => Ok(PhpValue::Bool(TimeDate::has_test_now())),
         "clearTestNow" => {
-            CarbonDate::clear_test_now();
+            TimeDate::clear_test_now();
             Ok(PhpValue::Null)
         }
         // Static invocations of instance methods operate on `Time::now()`
         _ => {
-            let now = CarbonDate::now(None);
+            let now = TimeDate::now(None);
             let receiver = PhpValue::object(now.to_vm_object());
             exec_time_instance_method(&receiver, method, args, Span::new(0, 0, 0, 1, 1))
                 .map_err(|e| e.kind)
         }
     }
-}
-
-pub fn dispatch_carbon(method: &str, args: &[PhpValue]) -> FacadeResult {
-    dispatch_time(method, args)
 }
 
 // =========================================================================
@@ -2420,15 +2408,6 @@ pub fn exec_time_instance_method(
     }
 }
 
-pub fn exec_carbon_instance_method(
-    receiver: &PhpValue,
-    method: &str,
-    args: &[PhpValue],
-    span: Span,
-) -> Result<PhpValue, RuntimeError> {
-    exec_time_instance_method(receiver, method, args, span)
-}
-
 fn duration_arg(
     args: &[PhpValue],
     index: usize,
@@ -2458,7 +2437,7 @@ fn duration_arg(
     ))
 }
 
-fn parse_arg_date(args: &[PhpValue], index: usize, span: Span) -> Result<CarbonDate, RuntimeError> {
+fn parse_arg_date(args: &[PhpValue], index: usize, span: Span) -> Result<TimeDate, RuntimeError> {
     let arg = args.get(index).ok_or_else(|| {
         RuntimeError::new(
             RuntimeErrorKind::Custom {
@@ -2475,10 +2454,10 @@ fn parse_arg_date_or_now(
     index: usize,
     tz_name: &str,
     span: Span,
-) -> Result<CarbonDate, RuntimeError> {
+) -> Result<TimeDate, RuntimeError> {
     match args.get(index) {
-        None => Ok(CarbonDate::now(Some(tz_name))),
-        Some(val) if val.is_null() => Ok(CarbonDate::now(Some(tz_name))),
+        None => Ok(TimeDate::now(Some(tz_name))),
+        Some(val) if val.is_null() => Ok(TimeDate::now(Some(tz_name))),
         Some(val) => from_php_value(val)
             .map_err(|e| RuntimeError::new(RuntimeErrorKind::Custom { message: e }, span)),
     }
