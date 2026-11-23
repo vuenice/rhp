@@ -14,7 +14,7 @@ pub mod env;
 pub mod error;
 pub mod types;
 
-pub use checker::{TypeCheckResult, TypeChecker};
+pub use checker::{TypeCheckResult, TypeChecker, TypeWarning};
 pub use env::{
     resolve_builtin_fluent_method, resolve_facade_static_call, TypeEnvironment, VariableBinding,
 };

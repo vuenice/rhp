@@ -32,6 +32,7 @@ pub mod mime;
 pub mod parent_process;
 pub mod rust_loader;
 pub mod uniq;
+pub mod semaphore;
 pub mod url_helper;
 pub mod value;
 pub mod worker;

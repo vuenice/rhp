@@ -166,6 +166,20 @@ impl VmObject {
         self.shape.borrow_mut().readonly_flags.insert(name_str.clone(), is_ro);
         self.readonly_props.insert(name_str, is_ro);
     }
+
+    /// Attach a native driver, connection lease, or client resource directly to this non-shared object instance.
+    /// When this PHP object drops, the native resource Arc drops, triggering automatic RAII cleanup.
+    pub fn set_native_resource(&mut self, name: impl Into<String>, resource: Arc<dyn std::any::Any + Send + Sync>) {
+        self.set_property(name, PhpValue::Resource(resource));
+    }
+
+    /// Retrieve an attached native driver, connection lease, or client resource downcast to target type `T`.
+    pub fn get_native_resource<T: Send + Sync + 'static>(&self, name: &str) -> Option<Arc<T>> {
+        match self.get_property(name) {
+            Some(PhpValue::Resource(arc)) => arc.clone().downcast::<T>().ok(),
+            _ => None,
+        }
+    }
 }
 
 /// Thread-safe value representation for `shared class` state and concurrency primitives.
@@ -480,6 +494,17 @@ impl FutureState {
     }
 }
 
+/// Deadline guard created by `$future->timeout($ms, $fallback)`.
+///
+/// The clock starts when `timeout()` is called. `wait()` returns `$fallback`
+/// (or calls it, when it is a closure) if the inner future is still pending.
+#[derive(Clone)]
+pub struct FutureTimeout {
+    pub inner: Rc<RefCell<VmFuture>>,
+    pub deadline: std::time::Instant,
+    pub fallback: PhpValue,
+}
+
 /// Runtime asynchronous Future handle supporting non-blocking background task execution,
 /// sync resolution, timers, parallel joins, and races.
 #[derive(Clone)]
@@ -488,6 +513,12 @@ pub struct VmFuture {
     pub value: Option<PhpValue>,
     pub error: Option<String>,
     pub(crate) receiver: Option<Arc<Mutex<std::sync::mpsc::Receiver<Result<FrozenValue, String>>>>>,
+    /// Set by `cancel()`. Later `wait()` returns the cancellation error.
+    pub cancelled: bool,
+    /// Closure for `Future::defer`. The engine runs it on `wait()` or at shutdown.
+    pub lazy: Option<VmClosure>,
+    /// Present when this handle is a `timeout()` wrapper around `inner`.
+    pub timeout: Option<FutureTimeout>,
 }
 
 impl VmFuture {
@@ -497,6 +528,9 @@ impl VmFuture {
             value: Some(val),
             error: None,
             receiver: None,
+            cancelled: false,
+            lazy: None,
+            timeout: None,
         }
     }
 
@@ -506,6 +540,9 @@ impl VmFuture {
             value: None,
             error: Some(err.into()),
             receiver: None,
+            cancelled: false,
+            lazy: None,
+            timeout: None,
         }
     }
 
@@ -515,7 +552,55 @@ impl VmFuture {
             value: None,
             error: None,
             receiver: Some(Arc::new(Mutex::new(receiver))),
+            cancelled: false,
+            lazy: None,
+            timeout: None,
         }
+    }
+
+    /// Lazy future. The closure runs on the calling fiber when `wait()` is used.
+    pub fn lazy(closure: VmClosure) -> Self {
+        Self {
+            is_completed: false,
+            value: None,
+            error: None,
+            receiver: None,
+            cancelled: false,
+            lazy: Some(closure),
+            timeout: None,
+        }
+    }
+
+    /// Wrapper that fails over to `fallback` once `deadline` has passed.
+    pub fn with_timeout(inner: Rc<RefCell<VmFuture>>, deadline: std::time::Instant, fallback: PhpValue) -> Self {
+        Self {
+            is_completed: false,
+            value: None,
+            error: None,
+            receiver: None,
+            cancelled: false,
+            lazy: None,
+            timeout: Some(FutureTimeout {
+                inner,
+                deadline,
+                fallback,
+            }),
+        }
+    }
+
+    /// Drop the pending result. A later `wait()` fails with a cancellation error.
+    /// The worker thread is not killed; its result is discarded.
+    pub fn cancel(&mut self) {
+        if self.cancelled {
+            return;
+        }
+        self.cancelled = true;
+        self.receiver = None;
+        self.lazy = None;
+        self.timeout = None;
+        self.is_completed = true;
+        self.value = None;
+        self.error = Some("Future cancelled".to_string());
     }
 
     /// Return the current state of this future (`FutureState::Pending` or `FutureState::Ready`).
@@ -539,6 +624,18 @@ impl VmFuture {
 
     /// Check if background execution has completed without blocking.
     pub fn poll_completion(&mut self) -> bool {
+        if self.cancelled {
+            return true;
+        }
+        if self.lazy.is_some() {
+            return false;
+        }
+        if let Some(guard) = self.timeout.as_ref().map(|g| (g.deadline, g.inner.clone())) {
+            if guard.0 <= std::time::Instant::now() {
+                return true;
+            }
+            return guard.1.borrow_mut().poll_completion();
+        }
         if self.is_completed && self.receiver.is_none() {
             return true;
         }
@@ -582,7 +679,16 @@ impl VmFuture {
 
     /// Block until completed and return the resolved [`PhpValue`] or error message.
     pub fn wait_result(&mut self) -> Result<PhpValue, String> {
-        if self.poll_completion() && self.receiver.is_none() {
+        if self.cancelled {
+            return Err(self
+                .error
+                .clone()
+                .unwrap_or_else(|| "Future cancelled".to_string()));
+        }
+        if self.lazy.is_some() {
+            return Err("Lazy future must be waited on by the VM".to_string());
+        }
+        if self.poll_completion() && self.receiver.is_none() && self.timeout.is_none() {
             if let Some(ref err) = self.error {
                 return Err(err.clone());
             }
@@ -624,7 +730,16 @@ impl VmFuture {
 
     /// Block until completed with a maximum timeout duration.
     pub fn wait_timeout(&mut self, timeout: std::time::Duration) -> Result<PhpValue, String> {
-        if self.poll_completion() && self.receiver.is_none() {
+        if self.cancelled {
+            return Err(self
+                .error
+                .clone()
+                .unwrap_or_else(|| "Future cancelled".to_string()));
+        }
+        if self.lazy.is_some() {
+            return Err("Lazy future must be waited on by the VM".to_string());
+        }
+        if self.poll_completion() && self.receiver.is_none() && self.timeout.is_none() {
             if let Some(ref err) = self.error {
                 return Err(err.clone());
             }

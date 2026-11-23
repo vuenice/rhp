@@ -60,7 +60,7 @@ The core language stdlib is deliberately minimal, providing only the primitives 
 - **`Future` Concurrency Primitive:**
   - `Future::run(callable $fn)`: Spawns an asynchronous task.
   - `Future::defer(callable $fn)`: Registers a post-computation deferred callback.
-  - `Future::wait(array $futures)`: Awaits multiple concurrent futures with destructuring support.
+  - `Future::all(array $futures)`: Awaits multiple concurrent futures with destructuring support.
   - `Future::delayed(int $ms, callable $fn)`: Cooperative timer delay.
 
 ---

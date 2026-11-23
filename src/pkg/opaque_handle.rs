@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -26,6 +27,8 @@ pub enum HandleError {
     LockPoisoned,
     #[error("Handle {0} not found")]
     NotFound(u64),
+    #[error("Handle {0} has expired or belongs to a different request")]
+    Expired(u64),
     #[error("Type mismatch for handle {id}: expected {expected}, found {found}")]
     TypeMismatch {
         id: u64,
@@ -34,11 +37,68 @@ pub enum HandleError {
     },
 }
 
+/// Marker type for request-lifetime handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestScoped;
+
+/// Marker type for process-lifetime handles (pools and long-lived clients).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessScoped;
+
+/// Type-safe handle wrapper encoding the scope (RequestScoped or ProcessScoped).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Handle<S> {
+    id: u64,
+    _marker: PhantomData<S>,
+}
+
+impl<S> Handle<S> {
+    pub const fn new(id: u64) -> Self {
+        Self {
+            id,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl<S> Clone for Handle<S> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<S> Copy for Handle<S> {}
+
+/// An entry stored in the handle registry.
+#[derive(Clone)]
+pub struct HandleEntry {
+    pub type_name: String,
+    pub resource: Arc<dyn Any + Send + Sync>,
+    pub owner: Option<String>,
+}
+
+impl std::fmt::Debug for HandleEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandleEntry")
+            .field("type_name", &self.type_name)
+            .field("owner", &self.owner)
+            .finish()
+    }
+}
+
 /// Thread-safe registry for opaque native handles.
 #[derive(Default)]
 pub struct OpaqueHandleRegistry {
     next_id: AtomicU64,
-    handles: RwLock<HashMap<u64, (String, Arc<dyn Any + Send + Sync>)>>,
+    handles: RwLock<HashMap<u64, HandleEntry>>,
 }
 
 thread_local! {
@@ -82,14 +142,18 @@ pub fn with_request_handle_registry<R>(f: impl FnOnce(&OpaqueHandleRegistry) -> 
     }
 }
 
-/// Drop handles owned by the active fiber.
+/// Drop handles owned by the active fiber and sweep any process registry entries owned by it.
 ///
 /// With no fiber bound, this clears only the thread fallback. The process-lifetime
-/// registry from [`get_handle_registry`] is left intact.
+/// registry from [`get_handle_registry`] is left intact except for any entries tagged
+/// with the active fiber/request.
 pub fn clear_request_handles() {
     let active = ACTIVE_REGISTRY.with(|cell| cell.borrow().clone());
     if let Some(reg) = active {
         reg.clear();
+        if let Some(owner) = crate::vm::fiber::current_fiber_name() {
+            get_handle_registry().release_owned_by(&owner);
+        }
         return;
     }
     FALLBACK_REGISTRY.with(|cell| {
@@ -97,6 +161,9 @@ pub fn clear_request_handles() {
             reg.clear();
         }
     });
+    if let Some(owner) = crate::vm::fiber::current_fiber_name() {
+        get_handle_registry().release_owned_by(&owner);
+    }
 }
 
 /// Process-lifetime handle registry.
@@ -108,6 +175,56 @@ pub fn get_handle_registry() -> &'static OpaqueHandleRegistry {
         next_id: AtomicU64::new(1),
         handles: RwLock::new(HashMap::new()),
     })
+}
+
+/// Register a request-scoped handle. Always bound to the active fiber's registry.
+pub fn register_request<T: Send + Sync + 'static>(
+    type_name: impl Into<String>,
+    resource: T,
+) -> Handle<RequestScoped> {
+    let owner = crate::vm::fiber::current_fiber_name();
+    let id = with_request_handle_registry(|reg| {
+        reg.insert_with_owner(type_name, resource, owner)
+    });
+    Handle::new(id)
+}
+
+/// Register a process-lifetime handle (intended for pools and long-lived clients).
+pub fn register_process<T: Send + Sync + 'static>(
+    type_name: impl Into<String>,
+    resource: T,
+) -> Handle<ProcessScoped> {
+    let id = get_handle_registry().insert_unowned(type_name, resource);
+    Handle::new(id)
+}
+
+/// Register a process-lifetime handle with an explicit owner tag for teardown backstop.
+pub fn register_process_with_owner<T: Send + Sync + 'static>(
+    type_name: impl Into<String>,
+    resource: T,
+    owner: Option<String>,
+) -> Handle<ProcessScoped> {
+    let id = get_handle_registry().insert_with_owner(type_name, resource, owner);
+    Handle::new(id)
+}
+
+/// Retrieve a request-scoped handle, ensuring owner validation.
+pub fn get_request_handle<T: Send + Sync + 'static>(
+    handle: Handle<RequestScoped>,
+) -> Result<Arc<T>, HandleError> {
+    let owner = crate::vm::fiber::current_fiber_name();
+    with_request_handle_registry(|reg| {
+        reg.get_checked::<T>(handle.id(), owner.as_deref())
+    })
+}
+
+/// Retrieve a process-scoped handle.
+pub fn get_process_handle<T: Send + Sync + 'static>(
+    handle: Handle<ProcessScoped>,
+) -> Result<Arc<T>, HandleError> {
+    get_handle_registry()
+        .get::<T>(handle.id())
+        .ok_or(HandleError::NotFound(handle.id()))
 }
 
 impl std::fmt::Debug for OpaqueHandleRegistry {
@@ -127,47 +244,137 @@ impl OpaqueHandleRegistry {
     }
 
     /// Register a typed native resource, returning `Ok(id)` or `Err(HandleError)` if the write lock is poisoned.
+    /// If an execution fiber is active, automatically tags the handle with the fiber owner name.
     pub fn try_insert<T: Send + Sync + 'static>(
         &self,
         type_name: impl Into<String>,
         resource: T,
     ) -> Result<u64, HandleError> {
+        self.try_insert_with_owner(type_name, resource, crate::vm::fiber::current_fiber_name())
+    }
+
+    /// Register a typed native resource with an explicit owner tag.
+    pub fn try_insert_with_owner<T: Send + Sync + 'static>(
+        &self,
+        type_name: impl Into<String>,
+        resource: T,
+        owner: Option<String>,
+    ) -> Result<u64, HandleError> {
         let mut guard = self.handles.write().map_err(|_| HandleError::LockPoisoned)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        guard.insert(id, (type_name.into(), Arc::new(resource)));
+        guard.insert(
+            id,
+            HandleEntry {
+                type_name: type_name.into(),
+                resource: Arc::new(resource),
+                owner,
+            },
+        );
         Ok(id)
     }
 
     /// Register a typed native resource and return a unique opaque handle ID.
-    /// Recovers from lock poisoning if necessary, ensuring an ID is NEVER returned without being stored.
+    /// Automatically tags with active fiber owner name if executing inside a fiber.
     pub fn insert<T: Send + Sync + 'static>(&self, type_name: impl Into<String>, resource: T) -> u64 {
+        let owner = crate::vm::fiber::current_fiber_name();
+        self.insert_with_owner(type_name, resource, owner)
+    }
+
+    /// Register a process-lifetime resource without any owner tag (will never be swept by request teardown).
+    pub fn insert_unowned<T: Send + Sync + 'static>(&self, type_name: impl Into<String>, resource: T) -> u64 {
+        self.insert_with_owner(type_name, resource, None)
+    }
+
+    /// Register a typed native resource with an explicit owner tag and return a unique opaque handle ID.
+    pub fn insert_with_owner<T: Send + Sync + 'static>(
+        &self,
+        type_name: impl Into<String>,
+        resource: T,
+        owner: Option<String>,
+    ) -> u64 {
         let mut guard = match self.handles.write() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        guard.insert(id, (type_name.into(), Arc::new(resource)));
+        guard.insert(
+            id,
+            HandleEntry {
+                type_name: type_name.into(),
+                resource: Arc::new(resource),
+                owner,
+            },
+        );
         id
     }
 
     /// Retrieve an opaque resource by handle ID and downcast to target type `T`.
+    /// Rejects cross-request access if the handle is owned by a different fiber.
     pub fn get<T: Send + Sync + 'static>(&self, id: u64) -> Option<Arc<T>> {
         let guard = match self.handles.read() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let (_, arc_dyn) = guard.get(&id)?;
-        arc_dyn.clone().downcast::<T>().ok()
+        let entry = guard.get(&id)?;
+        if let Some(entry_owner) = &entry.owner {
+            if let Some(current_owner) = crate::vm::fiber::current_fiber_name() {
+                if entry_owner != &current_owner {
+                    return None;
+                }
+            }
+        }
+        entry.resource.clone().downcast::<T>().ok()
     }
 
-    /// Check if a handle exists and belongs to the expected type name.
+    /// Retrieve an opaque resource by handle ID, returning `Err(HandleError::Expired)`
+    /// if the handle is tagged with an owner that does not match `expected_owner`.
+    pub fn get_checked<T: Send + Sync + 'static>(
+        &self,
+        id: u64,
+        expected_owner: Option<&str>,
+    ) -> Result<Arc<T>, HandleError> {
+        let guard = match self.handles.read() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let entry = guard.get(&id).ok_or(HandleError::NotFound(id))?;
+        if let Some(entry_owner) = &entry.owner {
+            if let Some(expected) = expected_owner {
+                if entry_owner != expected {
+                    return Err(HandleError::Expired(id));
+                }
+            } else if let Some(current_owner) = crate::vm::fiber::current_fiber_name() {
+                if entry_owner != &current_owner {
+                    return Err(HandleError::Expired(id));
+                }
+            }
+        }
+        entry
+            .resource
+            .clone()
+            .downcast::<T>()
+            .map_err(|_| HandleError::TypeMismatch {
+                id,
+                expected: std::any::type_name::<T>().to_string(),
+                found: entry.type_name.clone(),
+            })
+    }
+
+    /// Check if a handle exists, belongs to the expected type, and is not owned by a different fiber.
     pub fn has(&self, id: u64, expected_type: &str) -> bool {
         let guard = match self.handles.read() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some((type_name, _)) = guard.get(&id) {
-            type_name == expected_type
+        if let Some(entry) = guard.get(&id) {
+            if let Some(entry_owner) = &entry.owner {
+                if let Some(current_owner) = crate::vm::fiber::current_fiber_name() {
+                    if entry_owner != &current_owner {
+                        return false;
+                    }
+                }
+            }
+            entry.type_name == expected_type
         } else {
             false
         }
@@ -180,6 +387,17 @@ impl OpaqueHandleRegistry {
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.remove(&id).is_some()
+    }
+
+    /// Sweep and remove all handles owned by a specific fiber/request name. Returns count of freed handles.
+    pub fn release_owned_by(&self, owner: &str) -> usize {
+        let mut guard = match self.handles.write() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let before = guard.len();
+        guard.retain(|_, entry| entry.owner.as_deref() != Some(owner));
+        before - guard.len()
     }
 
     /// Total number of active handles.
@@ -273,5 +491,40 @@ mod tests {
         with_request_handle_registry(|reg| {
             assert_eq!(reg.count(), 0);
         });
+    }
+
+    #[test]
+    fn test_typed_handles_and_owner_sweep() {
+        let registry = OpaqueHandleRegistry::new();
+        let h_proc = registry.insert_unowned("ProcessPool", "pg_pool".to_string());
+        let h_req = registry.insert_with_owner("Cursor", "cursor_1".to_string(), Some("req_42".to_string()));
+
+        assert_eq!(registry.count(), 2);
+        assert_eq!(registry.release_owned_by("req_42"), 1);
+        assert_eq!(registry.count(), 1);
+        assert!(registry.has(h_proc, "ProcessPool"));
+        assert!(!registry.has(h_req, "Cursor"));
+    }
+
+    #[test]
+    fn test_owner_checked_lookup() {
+        let registry = OpaqueHandleRegistry::new();
+        let id = registry.insert_with_owner("Cursor", "data".to_string(), Some("fiber_alpha".to_string()));
+
+        // Matching owner succeeds
+        assert!(registry.get_checked::<String>(id, Some("fiber_alpha")).is_ok());
+
+        // Mismatched owner fails with Expired
+        let err = registry.get_checked::<String>(id, Some("fiber_beta"));
+        assert!(matches!(err, Err(HandleError::Expired(_))));
+    }
+
+    #[test]
+    fn test_typed_handle_registration_api() {
+        let pool = register_process("MyPool", 12345u64);
+        assert_eq!(get_process_handle::<u64>(pool).unwrap(), Arc::new(12345u64));
+
+        let cur = register_request("MyCursor", "query_res".to_string());
+        assert_eq!(get_request_handle::<String>(cur).unwrap(), Arc::new("query_res".to_string()));
     }
 }

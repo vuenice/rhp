@@ -434,7 +434,7 @@ fn test_async_future_concurrent_core_and_destructuring_inference() {
             return new User();
         }
 
-        [$user, $posts] = Future::wait([
+        [$user, $posts] = Future::all([
             fn() => findUser(1),
             fn() => HTTP::get("https://api.example.com/posts?user=1")->json()
         ]);
@@ -456,7 +456,7 @@ fn test_async_future_concurrent_core_and_destructuring_inference() {
     );
     assert_eq!(
         typed.type_info.top_level_var_type("$delayedMsg"),
-        Some(&RhpType::String)
+        Some(&RhpType::Future(Box::new(RhpType::String)))
     );
     assert_eq!(
         typed.type_info.top_level_var_type("$bgFuture"),
@@ -912,6 +912,26 @@ fn test_abstract_method_without_return_type_is_void() {
         }
     "#;
     parse_and_check(source).expect("an omitted return type on an abstract method is void");
+}
+
+#[test]
+fn test_unawaited_future_emits_compiler_warning() {
+    let source = r#"
+        function runTask(): void {
+            Future::run(fn() => 123);
+        }
+    "#;
+    let typed = parse_and_check(source).expect("type check should pass with warning");
+    let warning = typed
+        .type_info
+        .warnings
+        .iter()
+        .find(|w| w.code == "unawaited-future");
+    assert!(
+        warning.is_some(),
+        "Expected unawaited-future warning, got: {:?}",
+        typed.type_info.warnings
+    );
 }
 
 

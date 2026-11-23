@@ -822,4 +822,165 @@ fn test_fiber_drop_releases_handles_without_touching_process_pool() {
     assert!(get_handle_registry().remove(process_id));
 }
 
+#[test]
+fn test_typed_scope_handles_request_vs_process() {
+    use rhp::pkg::{
+        get_process_handle, get_request_handle, register_process, register_request,
+        Handle, ProcessScoped, RequestScoped,
+    };
+    use rhp::{enter_fiber, Fiber};
+
+    let pool_handle: Handle<ProcessScoped> = register_process("PgPool", "postgres://localhost/prod".to_string());
+    assert_eq!(
+        get_process_handle::<String>(pool_handle).unwrap().as_str(),
+        "postgres://localhost/prod"
+    );
+
+    let fiber = Fiber::new("typed-test-fiber");
+    let guard = enter_fiber(fiber);
+
+    let cursor_handle: Handle<RequestScoped> = register_request("Cursor", "select * from users".to_string());
+    assert_eq!(
+        get_request_handle::<String>(cursor_handle).unwrap().as_str(),
+        "select * from users"
+    );
+
+    guard.finish(rhp::PhpValue::Null);
+
+    // After fiber finish, request handle is gone
+    assert!(get_request_handle::<String>(cursor_handle).is_err());
+    // Process handle remains
+    assert_eq!(
+        get_process_handle::<String>(pool_handle).unwrap().as_str(),
+        "postgres://localhost/prod"
+    );
+    rhp::pkg::get_handle_registry().remove(pool_handle.id());
+}
+
+#[test]
+fn test_global_registry_backstop_sweeps_rogue_driver_handles_on_fiber_exit() {
+    use rhp::pkg::get_handle_registry;
+    use rhp::{enter_fiber, Fiber};
+
+    let initial_count = get_handle_registry().count();
+
+    // 10 requests where a "rogue" driver accidentally calls get_handle_registry().insert()
+    for i in 0..10 {
+        let fiber = Fiber::new(format!("req-rogue-{}", i));
+        let guard = enter_fiber(fiber);
+
+        // Rogue driver inserts cursor into global registry!
+        let leaked_cursor_id = get_handle_registry().insert("RogueCursor", format!("cursor-{}", i));
+        assert!(get_handle_registry().has(leaked_cursor_id, "RogueCursor"));
+
+        // Fiber finishes
+        guard.finish(rhp::PhpValue::Null);
+    }
+
+    // Backstop sweep must have reclaimed every single rogue handle!
+    assert_eq!(
+        get_handle_registry().count(),
+        initial_count,
+        "Global registry length must be unchanged after requests with rogue drivers"
+    );
+}
+
+#[test]
+fn test_vmobject_direct_native_resource_raii_drop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use rhp::VmObject;
+
+    struct GuardedResource {
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for GuardedResource {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped_flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut obj = VmObject::new("CursorWrapper");
+        let res = Arc::new(GuardedResource {
+            dropped: Arc::clone(&dropped_flag),
+        });
+        obj.set_native_resource("conn_lease", res);
+
+        assert!(!dropped_flag.load(Ordering::SeqCst));
+        assert!(obj.get_native_resource::<GuardedResource>("conn_lease").is_some());
+    } // obj goes out of scope and drops
+
+    // RAII Drop executed immediately without any registry lookup or explicit remove()
+    assert!(
+        dropped_flag.load(Ordering::SeqCst),
+        "Native resource must be dropped automatically when VmObject drops"
+    );
+}
+
+#[test]
+fn test_shared_class_cross_request_handle_expired_rejection() {
+    use rhp::pkg::{register_process_with_owner, register_request, HandleError};
+    use rhp::{enter_fiber, Fiber, PhpValue, VmSharedObject};
+
+    let shared_service = VmSharedObject::new("CrossRequestService");
+
+    // Case 1: Request-scoped cursor registered and stored on shared object
+    let fiber_1 = Fiber::new("request-1");
+    let guard_1 = enter_fiber(fiber_1);
+    let cursor_1 = register_request("Cursor", "user_records_req1".to_string());
+    shared_service
+        .set_property("cursor_id", PhpValue::Int(cursor_1.id() as i64))
+        .expect("set property");
+    guard_1.finish(PhpValue::Null);
+
+    // Case 2: Global registry handle with Request 1 owner tag stored on shared object
+    let cursor_global = register_process_with_owner(
+        "GlobalCursor",
+        "global_cursor_req1".to_string(),
+        Some("request-1".to_string()),
+    );
+    shared_service
+        .set_property("global_cursor_id", PhpValue::Int(cursor_global.id() as i64))
+        .expect("set property");
+
+    // Request 2 accesses the shared object
+    let fiber_2 = Fiber::new("request-2");
+    let guard_2 = enter_fiber(fiber_2);
+
+    let retrieved_req_id = match shared_service.get_property("cursor_id") {
+        Some(PhpValue::Int(id)) => id as u64,
+        _ => panic!("Expected cursor_id property"),
+    };
+    let retrieved_global_id = match shared_service.get_property("global_cursor_id") {
+        Some(PhpValue::Int(id)) => id as u64,
+        _ => panic!("Expected global_cursor_id property"),
+    };
+
+    // 1. Request-scoped handle from request-1 is completely absent in request-2
+    let req_res = rhp::pkg::with_request_handle_registry(|reg| {
+        reg.get_checked::<String>(retrieved_req_id, rhp::current_fiber_name().as_deref())
+    });
+    assert!(
+        matches!(req_res, Err(HandleError::NotFound(_))),
+        "Request-scoped handle from request 1 must not exist in request 2"
+    );
+    assert!(rhp::pkg::with_request_handle_registry(|reg| reg.get::<String>(retrieved_req_id)).is_none());
+
+    // 2. Global handle tagged with request-1 owner is rejected with Expired when accessed by request-2
+    let glob_res = rhp::pkg::get_handle_registry().get_checked::<String>(
+        retrieved_global_id,
+        rhp::current_fiber_name().as_deref(),
+    );
+    assert!(
+        matches!(glob_res, Err(HandleError::Expired(_))),
+        "Cross-request access to owned global handle must be rejected with Expired"
+    );
+    // get() also returns None for safety
+    assert!(rhp::pkg::get_handle_registry().get::<String>(retrieved_global_id).is_none());
+
+    guard_2.finish(PhpValue::Null);
+    rhp::pkg::get_handle_registry().remove(cursor_global.id());
+}
+
 

@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn test_concurrent_future_and_closure() {
         let code = r#"
-            [$user, $posts] = Future::wait([
+            [$user, $posts] = Future::all([
                 fn() => DB::table('users')->find($id),
                 fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
             ]);
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(tokens[5].token, Token::Assign);
         assert_eq!(tokens[6].token, Token::Ident("Future"));
         assert_eq!(tokens[7].token, Token::DoubleColon);
-        assert_eq!(tokens[8].token, Token::Ident("wait"));
+        assert_eq!(tokens[8].token, Token::Ident("all"));
     }
 
     #[test]

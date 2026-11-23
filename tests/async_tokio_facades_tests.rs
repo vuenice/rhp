@@ -240,8 +240,8 @@ fn test_async_facades_concurrent_composition_with_future_wait() {
         r#"
         $path = "{test_file}";
 
-        // Concurrently run AFile, AHTTP, and ADB operations inside Future::wait
-        [$fileData, $httpResp, $dbUser] = Future::wait([
+        // Concurrently run AFile, AHTTP, and ADB operations inside Future::all
+        [$fileData, $httpResp, $dbUser] = Future::all([
             AFile::read($path),
             AHTTP::get("https://api.example.com/status"),
             ADB::table("users")->find(101)
@@ -259,7 +259,7 @@ fn test_async_facades_concurrent_composition_with_future_wait() {
         "#
     );
 
-    let result = run_source(&source).expect("Concurrent composition with Future::wait should succeed");
+    let result = run_source(&source).expect("Concurrent composition with Future::all should succeed");
     assert_eq!(
         result,
         PhpValue::list(vec![

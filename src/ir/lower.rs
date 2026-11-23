@@ -1844,6 +1844,45 @@ impl<'a> IrLowerer<'a> {
                         self.sync_ref_globals(b, args, expr.span)?;
                         return Ok(dst);
                     }
+                    if (clean_fn == "concurrent"
+                        || clean_fn == "defer"
+                        || clean_fn == "join"
+                        || clean_fn == "select"
+                        || clean_fn == "async")
+                        && !self.module.function_index.contains_key(clean_fn)
+                    {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("Future");
+                        let method = if clean_fn == "async" { "run" } else { clean_fn };
+                        let method_const = b.intern_string(method);
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
+                    if clean_fn == "task" && !self.module.function_index.contains_key(clean_fn) {
+                        let arg_count = self.evaluate_and_push_args(b, args)?;
+                        let facade_const = b.intern_string("Task");
+                        let method_const = b.intern_string("dispatch");
+                        b.emit(
+                            OpCode::FacadeCall {
+                                dst,
+                                facade: facade_const,
+                                method: method_const,
+                                arg_count,
+                            },
+                            expr.span,
+                        );
+                        self.sync_ref_globals(b, args, expr.span)?;
+                        return Ok(dst);
+                    }
                     if clean_fn.eq_ignore_ascii_case("render") && !self.module.function_index.contains_key(clean_fn) {
                         let arg_count = self.evaluate_and_push_args(b, args)?;
                         let facade_const = b.intern_string("View");
@@ -3141,7 +3180,7 @@ impl<'a> IrLowerer<'a> {
                 }
             }
 
-            // 2. Destructuring assignment (`[$user, $posts] = Future::wait(...)`)
+            // 2. Destructuring assignment (`[$user, $posts] = Future::all(...)`)
             ExprKind::List(_) | ExprKind::Array(_) => {
                 let rhs_reg = self.lower_expr(b, value, None)?;
                 self.lower_destructuring_assignment(b, target, rhs_reg, span)?;

@@ -324,7 +324,7 @@ fn test_concurrent_future_background_tasks_zero_data_races() {
         $f2 = Future::run(fn() => 20 * 20);
         $f3 = Future::run(fn() => 30 * 30);
 
-        [$r1, $r2, $r3] = Future::wait([$f1, $f2, $f3]);
+        [$r1, $r2, $r3] = Future::all([$f1, $f2, $f3]);
         return [$r1, $r2, $r3];
     "#;
 

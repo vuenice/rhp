@@ -259,7 +259,7 @@ fn test_global_helpers_legacy_phpfun_canonicalization_and_custom_helpers() {
 fn test_async_future_concurrent_core_destructuring_and_defer_hooks() {
     let source = r#"
         $id = 7;
-        [$user, $posts] = Future::wait([
+        [$user, $posts] = Future::all([
             fn() => DB::table('users')->find($id),
             fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
         ]);

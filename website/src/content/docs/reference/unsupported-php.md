@@ -301,7 +301,7 @@ return Response::stream(function(StreamWriter $stream): void {
 2. **Laravel Rocket `Http` Facade:**
    Provides an expressive, fluent API supporting authentication, headers, multipart uploads, retries with exponential backoff, JSON serialization, and request pooling (`Http::pool`).
 3. **Native Tokio Async Concurrency:**
-   Outbound HTTP requests integrate directly with RHP's Tokio fiber runtime via `AHTTP` and `Future::wait`, executing concurrent requests without blocking operating system threads.
+   Outbound HTTP requests integrate directly with RHP's Tokio fiber runtime via `AHTTP` and `Future::all`, executing concurrent requests without blocking operating system threads.
 4. **Seamless Testing & Mocking:**
    Native `Http::fake()` allows deterministic test mocking without monkey-patching socket handles or configuring external mock servers.
 5. **Rust Interop as an Escape Hatch:**
@@ -421,8 +421,8 @@ $responses = Http::pool([
 dict $billingStatus = $responses['billing']->json();
 dict $shippingRates = $responses['shipping']->json();
 
-// Or using low-level asynchronous AHTTP with Future::wait:
-list $results = Future::wait([
+// Or using low-level asynchronous AHTTP with Future::all:
+list $results = Future::all([
     AHTTP::get("https://api.billing.com/status"),
     AHTTP::get("https://api.shipping.com/rates"),
 ]);
@@ -1364,7 +1364,7 @@ rhp migrate ./app --format=json
 ### What `rhp migrate` Flags for Manual Review
 
 - **Unbalanced Buffers:** Dynamic or unbalanced `ob_start()` calls without matching `ob_get_clean()` in the same lexical scope.
-- **Complex `curl_multi` Loops:** Custom non-blocking event loops built with `curl_multi_exec()` and `curl_multi_select()`. These should be refactored into `Http::pool()` or `Future::wait([AHTTP::get(...)])`.
+- **Complex `curl_multi` Loops:** Custom non-blocking event loops built with `curl_multi_exec()` and `curl_multi_select()`. These should be refactored into `Http::pool()` or `Future::all([AHTTP::get(...)])`.
 - **Private Member Reflection:** Instances of `ReflectionProperty::setAccessible(true)` or `ReflectionMethod::invokeArgs()`. These should be refactored to explicit interfaces, public testing helpers, or `App::swap()`.
 - **Insecure `unserialize()` Calls:** Any call to `unserialize()` lacking an explicit `allowed_classes` parameter is flagged as a high-severity security risk and must specify allowed classes or be migrated to typed JSON / binary serialization.
 - **Closure Serialization:** Usages of `Opis\Closure` or `Laravel\SerializableClosure` are flagged to be refactored into named job classes or named callables with typed parameters.

@@ -159,7 +159,7 @@ Migrates legacy PHP codebases to modern RHP conventions:
 - Upgrades legacy cookie modifications (`setcookie(...)`, `setrawcookie(...)`, `$_COOKIE['key'] = $val;`) to `Cookie::set(...)`.
 - Replaces legacy `$GLOBALS['var']` and `$_GLOBAL['var']` with `$var`, and dynamic `$GLOBALS[$k]` with `$$k`.
 - Upgrades legacy procedural `curl_*` calls to fluent `Http::` facade chains (preserves original code commented out, supports Option A/B response variables, and auto-wraps unassigned requests in `Future::async(...)`).
-- Flags `curl_multi_*` loops for manual review with a direct guide link and recommendations for `Http::pool([...])` or `Future::wait([...])`.
+- Flags `curl_multi_*` loops for manual review with a direct guide link and recommendations for `Http::pool([...])` or `Future::all([...])`.
 - Detects non-UTF-8 binary strings (such as `\x80..\xFF` byte escapes, raw bytes, or bytes expressions) and traces whether they are passed into local functions or methods; automatically updates receiving parameter type hints to `byte`.
 
 ```bash

@@ -12,7 +12,7 @@ RHP adopts a **synchronous-by-default execution model**:
 - Standard I/O operations (such as `File::read()` or `DB::table()->find()`) execute sequentially on local fibers without callback hell or tedious `await` prefixes everywhere.
 - **No `await` Keyword (No Function Coloring):** RHP deliberately avoids the `await` keyword. In languages with `async/await`, functions become "colored"—calling an async function forces the caller to become async, spreading throughout the entire codebase. In RHP:
   - If you want simple linear execution, use synchronous facades directly (`File`, `DB`, `HTTP`).
-  - If you initiate non-blocking background tasks, you receive a `Future` handle and resolve it by calling `$future->wait()` or composing tasks with `Future::wait([ ... ])`.
+  - If you initiate non-blocking background tasks, you receive a `Future` handle and resolve it by calling `$future->wait()` or composing tasks with `Future::all([ ... ])`.
   - If a developer uses the `await` keyword, the parser emits a compile-time error:
     > *`Parse Error: The 'await' keyword is not supported in RHP. Use synchronous facades (File, DB, HTTP) to get results synchronously, or call '->wait()' on Future objects.`*
 
@@ -88,52 +88,143 @@ string $data = $future->wait();
 
 ---
 
-### 2. Parallel Join with `Future::wait`
-Evaluates an array of closures (or Futures) concurrently and returns an array of resolved values:
+### 2. Parallel Join with `Future::all` / `Future::join`
+Evaluates an array of closures (or Futures) concurrently and returns an array of resolved values. In alignment with Rust/Tokio conventions, `Future::join([...])` and the global `join([...])` helper are available:
 
 ```php
 // Concurrently wait for multiple asynchronous operations
-[$fileData, $httpResp, $users] = Future::wait([
-    AFile::read('report.csv'),
-    AHTTP::get('https://analytics.internal/health'),
-    ADB::table('users')->find(42)
-]);
+[$fileData, $httpResp, $users] = Future::join([
+    fn() => File::read('report.csv'),
+    fn() => HTTP::get('https://analytics.internal/health'),
+    fn() => DB::table('users')->find(42)
+])->wait();
+
+// Or using global join sugar
+[$users, $stats] = join([
+    fn() => DB::table('users')->get(),
+    fn() => DB::table('stats')->get(),
+])->wait();
 ```
 
 All tasks run concurrently on separate Tokio worker fibers. Total latency equals the duration of the slowest single task, not the sum of all tasks.
 
 ---
 
-### 3. First-to-Complete Resolution with `Future::any`
-Returns the result of whichever task finishes first:
+### 3. First-to-Complete Race with `Future::select` / `Future::any`
+Races multiple concurrent tasks and resolves immediately with the result of whichever completes first (Tokio's `select!` pattern):
 
 ```php
-$fastestMirror = Future::any([
-    AHTTP::get('https://mirror-us.cdn.org/data'),
-    AHTTP::get('https://mirror-eu.cdn.org/data')
-]);
+$winner = Future::select([
+    function() {
+        Future::sleep(500)->wait();
+        return "slow";
+    },
+    fn() => "fast",
+])->wait(); // "fast"
+
+// Global select sugar
+$fastestMirror = select([
+    fn() => HTTP::get('https://mirror-us.cdn.org/data'),
+    fn() => HTTP::get('https://mirror-eu.cdn.org/data'),
+])->wait();
 ```
 
 ---
 
-### 4. Non-Blocking Delays with `Future::delayed`
-Yields the fiber using Tokio timers (`tokio::time::sleep`) without blocking OS worker threads:
+### 4. Timeouts & Fallback with `Future::timeout`
+Guards operations against hung network requests or slow database queries by enforcing a maximum elapsed deadline in milliseconds:
 
 ```php
-$delayedResult = Future::delayed(500, fn() => 'Resumed after 500ms');
+// Static helper with fallback
+$result = Future::timeout(
+    HTTP::get('https://external-service.com/api'),
+    250, // 250ms deadline
+    ['cached' => true] // fallback value if timed out
+)->wait();
+
+// Fluent instance method
+$result = $future->timeout(500, "fallback_response")->wait();
 ```
 
 ---
 
-## Post-Response Defer Hooks: `Future::defer`
+### 5. Non-Blocking Timers with `Future::sleep`
+Yields the fiber non-blockingly using Tokio timers (`tokio::time::sleep`) without occupying OS worker threads:
+
+```php
+// Yield fiber for 100 milliseconds
+Future::sleep(100)->wait();
+```
+
+---
+
+## CPU-Heavy & Blocking Operations: `Task::blocking`
+
+Because RHP's fiber runtime relies on **cooperative scheduling**, executing a long CPU loop or blocking C library function on a request fiber starves the worker event loop.
+
+To prevent starvation, RHP provides `Task::blocking()` (equivalent to Tokio's `tokio::task::spawn_blocking`):
+
+```php
+// Offload CPU-heavy computation or blocking C tasks to a dedicated thread pool
+$hash = Task::blocking(function() use ($largePayload): string {
+    return Crypt::hash("sha256", $largePayload);
+})->wait();
+```
+
+---
+
+## Offloaded Background Workers: `Task::dispatch` & `task()`
+
+For fire-and-forget background jobs that must run independently without holding database connections or delaying the HTTP response:
+
+```php
+// Dispatch to dedicated task worker pool (returns void, non-future)
+task(fn() => DB::table('audit_logs')->insert(['event' => 'order_placed']));
+
+// Facade equivalent
+Task::dispatch(fn() => File::write('analytics.log', 'event'));
+```
+
+---
+
+## Concurrency Rate Limiting: `Semaphore`
+
+Exposing Tokio's `tokio::sync::Semaphore` directly to prevent overwhelming upstream APIs or database connection pools:
+
+```php
+// Create a permit coordinator with 5 concurrent slots
+$sem = Semaphore::create(5);
+
+// Check available permits
+Sys::print("Available: {}", $sem->available());
+
+// Scoped execution with automatic permit release
+$response = $sem->run(fn() => HTTP::get('https://rate-limited-api.com/query'));
+
+// Explicit acquire / release
+if ($sem->tryAcquire()) {
+    try {
+        doSomething();
+    } finally {
+        $sem->release();
+    }
+}
+
+// Scoped one-liner
+$data = Semaphore::with(10, fn() => DB::table('reports')->get());
+```
+
+---
+
+## Post-Response Defer Hooks: `Future::defer` & `defer()`
 
 In high-throughput web applications, user response latency must not be delayed by analytics logging, metrics collection, or cache warming.
 
-`Future::defer()` registers a hook in the request queue that executes **strictly after** the HTTP response payload has been flushed to the network socket, but **before** the request arena drops:
+`Future::defer()` (or global helper `defer()`) registers a hook in the request queue that executes **strictly after** the HTTP response payload has been flushed to the network socket, but **before** the request arena drops:
 
 ```php
 // Flush user response immediately, then run background task before arena drop
-Future::defer(function() use ($userId) {
+defer(function() use ($userId) {
     Log::info("Request served for user {$userId}");
     Analytics::recordHit("/dashboard");
 });
@@ -141,10 +232,25 @@ Future::defer(function() use ($userId) {
 
 ---
 
-## Concurrency Scope for v1
+## Compiler Safety: The `unawaited-future` Warning
 
-In line with RHP's v1 core architecture decisions:
-- **Single-request execution is strictly sequential by default:** Fine-grained concurrency inside an individual HTTP request is explicitly managed via Tokio async facades (`AFile`, `AHTTP`, `ADB`) or `Future::wait()`, keeping code free of function coloring.
-- **High-throughput request concurrency:** Concurrency is achieved at the host level, where the Rust runtime executes many concurrent HTTP requests across a thread pool against the frozen immutable boot heap (`Arc<EngineState>`).
+To prevent silent database connection pool exhaustion and dangling asynchronous operations:
+- When an expression in statement position returns a `Future` that is immediately discarded without being awaited (`await` / `->wait()`) or assigned, the compiler emits:
+  > `[unawaited-future] Statement creates a Future that is immediately discarded without being awaited or joined. Cooperative tasks will not advance as fire-and-forget; use 'await', '->wait()', 'Future::join()', or 'Task::dispatch()' instead.`
+
+---
+
+## Rust & Tokio Mental Model Alignment
+
+| Rust / Tokio Concept | RHP Equivalent | Explanation |
+|---|---|---|
+| **I/O-Bound Work** | Request fibers + Tokio Reactor | Non-blocking socket I/O suspends fibers, freeing OS threads to process other requests. |
+| **CPU-Bound Work** | `Task::blocking(fn)` | Offloads heavy CPU calculation to dedicated OS thread pools, avoiding event loop starvation. |
+| **Concurrency vs Parallelism** | Fibers (Concurrent) vs Worker Pool (Parallel) | Cooperative fiber interleaving within threads; multi-process parallel execution across cores. |
+| **Work-Stealing** | Tokio Multi-Thread Runtime | Worker threads automatically steal ready tasks to eliminate idle core imbalances. |
+| **Cooperative Yield Points** | Non-blocking I/O, `sleep`, `wait` | Fibers yield explicitly at I/O and wait points; loops without yield points starve threads. |
+| **Cancellation Safety** | `Future::timeout($fut, $ms, $fallback)` | Operations with timeouts can safely abort or return fallbacks without leaking resources. |
+| **`Send` / Thread Safety** | `FrozenValue` | Cross-thread tasks pass deeply frozen immutable data, making data races impossible. |
+
 
 
