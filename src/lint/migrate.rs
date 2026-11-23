@@ -1512,7 +1512,7 @@ pub fn upgrade_curl_calls(source: &str) -> (String, usize, usize) {
             let whitespace_len = after_session.len() - trimmed_after.len();
 
             let re_json_decode = Regex::new(&format!(
-                r#"^\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:\\)?json_decode\s*\(\s*\${}\s*(?:,\s*(?:true|false|1|0))?\s*\)\s*;"#,
+                r#"^\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:\\)?(?:json_decode|Json::decode)\s*\(\s*\${}\s*(?:,\s*(?:true|false|1|0))?\s*\)\s*;"#,
                 regex::escape(rv)
             )).unwrap();
 

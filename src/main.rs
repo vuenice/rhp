@@ -606,6 +606,7 @@ fn handle_run_lint(sub_args: &[String]) {
 fn handle_run_migrate(sub_args: &[String]) {
     let mut check_only = false;
     let mut target_path = ".".to_string();
+    let mut is_file_flag = false;
     let mut json_format = false;
     let mut php_version = 7;
 
@@ -648,7 +649,9 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "  - Rewrites PHP named arguments `name: value` to `'name' => value` and keeps their written order\n\n",
                     "OPTIONS:\n",
                     "    PATH                         Target file or directory (default: current directory '.')\n",
+                    "    --file <PATH>, -f <PATH>     Target a single file to migrate (e.g. --file=\"path/to/file.php\")\n",
                     "    --php-version <8|7>          Source PHP version: '8' (rewrite named args only) or '7' (reorder params, swap calls, warn tricky calls)\n",
+                    "    --write                      Write migrated changes directly to disk (default)\n",
                     "    --check, --dry-run           Check only without writing changes to disk\n",
                     "    --format <human|json>        Output format: 'human' (default) or 'json'\n",
                     "    --help, -h                   Show this help message\n"
@@ -679,6 +682,37 @@ fn handle_run_migrate(sub_args: &[String]) {
             }
         } else if arg == "--check" || arg == "--dry-run" {
             check_only = true;
+        } else if arg == "--write" {
+            check_only = false;
+        } else if let Some(val) = arg.strip_prefix("--file=") {
+            let clean_val = val.trim_matches(|c| c == '"' || c == '\'');
+            if clean_val.is_empty() {
+                eprintln!("Error: File path specified for '--file' is empty.");
+                process::exit(1);
+            }
+            target_path = clean_val.to_string();
+            is_file_flag = true;
+        } else if let Some(val) = arg.strip_prefix("-f=") {
+            let clean_val = val.trim_matches(|c| c == '"' || c == '\'');
+            if clean_val.is_empty() {
+                eprintln!("Error: File path specified for '-f' is empty.");
+                process::exit(1);
+            }
+            target_path = clean_val.to_string();
+            is_file_flag = true;
+        } else if arg == "--file" || arg == "-f" {
+            if let Some(next_val) = iter.next() {
+                let clean_val = next_val.trim_matches(|c| c == '"' || c == '\'');
+                if clean_val.is_empty() || clean_val.starts_with('-') {
+                    eprintln!("Error: Option '{}' requires a valid non-empty file path.", arg);
+                    process::exit(1);
+                }
+                target_path = clean_val.to_string();
+                is_file_flag = true;
+            } else {
+                eprintln!("Error: Option '{}' requires a file path argument.", arg);
+                process::exit(1);
+            }
         } else if arg == "--format=json" {
             json_format = true;
         } else if arg == "--format" {
@@ -688,13 +722,20 @@ fn handle_run_migrate(sub_args: &[String]) {
                 }
             }
         } else if !arg.starts_with('-') {
-            target_path = arg.clone();
+            if !is_file_flag {
+                target_path = arg.clone();
+            }
         }
     }
 
     let path = Path::new(&target_path);
     if !path.exists() {
         eprintln!("Error: Target path '{}' does not exist.", target_path);
+        process::exit(1);
+    }
+
+    if is_file_flag && !path.is_file() {
+        eprintln!("Error: Target path '{}' specified via '--file' is not a file.", target_path);
         process::exit(1);
     }
 

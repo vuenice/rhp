@@ -685,7 +685,7 @@ fn test_migrate_curl_option_b_json_decode() {
     // Original curl code and json_decode are commented
     assert!(res.migrated_content.contains("// $ch = curl_init();"));
     assert!(res.migrated_content.contains("// $res = curl_exec($ch);"));
-    assert!(res.migrated_content.contains("// $data = json_decode($res, true);"));
+    assert!(res.migrated_content.contains("// $data = Json::decode($res);"));
     // Option B rewrites directly to ->json()
     assert!(res.migrated_content.contains("$data = Http::timeout(10)->get(\"https://api.example.com/users\")->json();"));
 }
@@ -1618,7 +1618,7 @@ fn test_migrate_error_suppression_control_flow_and_keywords() {
         "if (unlink($file)) {\n",
         "    echo 1;\n",
         "}\n",
-        "return json_decode($json, true);\n"
+        "return Json::decode($json);\n"
     );
     assert_eq!(res.upgraded_content, expected);
 }
@@ -2892,5 +2892,94 @@ fn test_migrate_echo_json_encode_drops_flags() {
     assert!(res.warnings.iter().any(|w| w.contains("echo json_encode flags")));
 }
 
+#[test]
+fn test_cli_migrate_single_file_flag_variants() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_migrate_file_flag_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let file_a = temp_dir.join("file_a.php");
+    let file_b = temp_dir.join("file_b.php");
+
+    let legacy_code_a = concat!(
+        "<?php\n",
+        "error_reporting(E_ALL);\n",
+        "ini_set('display_errors', 1);\n",
+        "$id = (int)$_GET['id'];\n"
+    );
+    let legacy_code_b = concat!(
+        "<?php\n",
+        "error_reporting(E_ALL);\n",
+        "ini_set('display_errors', 1);\n",
+        "$name = (string)$_GET['name'];\n"
+    );
+
+    fs::write(&file_a, legacy_code_a).unwrap();
+    fs::write(&file_b, legacy_code_b).unwrap();
+
+    // 1. Dry run on file_a with --file="path"
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(format!("--file={}", file_a.display()))
+        .arg("--check")
+        .output()
+        .expect("failed to run rhp migrate --file=... --check");
+
+    assert!(dry_run.status.success());
+    let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(dry_stdout.contains("Files Scanned:  1"));
+    assert!(dry_stdout.contains("1 error_reporting(...) call(s) removed"));
+
+    // File A should not have changed yet because of --check
+    assert!(fs::read_to_string(&file_a).unwrap().contains("error_reporting(E_ALL);"));
+
+    // 2. Migrate only file_a using --file="path"
+    let run_a = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(format!("--file=\"{}\"", file_a.display()))
+        .output()
+        .expect("failed to run rhp migrate --file=...");
+
+    assert!(run_a.status.success());
+    let content_a = fs::read_to_string(&file_a).unwrap();
+    assert!(!content_a.contains("error_reporting("));
+    assert!(content_a.contains("// ini_set('display_errors', 1);"));
+    assert!(content_a.contains("int(Request::query('id'))"));
+
+    // File B must remain completely untouched!
+    let content_b = fs::read_to_string(&file_b).unwrap();
+    assert_eq!(content_b, legacy_code_b);
+
+    // 3. Migrate file_b using shorthand -f
+    let run_b = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg("-f")
+        .arg(&file_b)
+        .output()
+        .expect("failed to run rhp migrate -f");
+
+    assert!(run_b.status.success());
+    let migrated_b = fs::read_to_string(&file_b).unwrap();
+    assert!(!migrated_b.contains("error_reporting("));
+    assert!(migrated_b.contains("string(Request::query('name'))"));
+
+    // 4. Passing a directory to --file should fail with helpful error
+    let fail_dir = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(format!("--file={}", temp_dir.display()))
+        .output()
+        .expect("failed to run rhp migrate with dir for --file");
+
+    assert!(!fail_dir.status.success());
+    let err_str = String::from_utf8_lossy(&fail_dir.stderr);
+    assert!(err_str.contains("is not a file"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
 
 

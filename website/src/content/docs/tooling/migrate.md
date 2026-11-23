@@ -29,10 +29,14 @@ rhp migrate
 rhp migrate src/
 rhp migrate app/Services/PaymentService.php
 
+# Migrate a single file via the --file flag
+rhp migrate --file="app/Services/PaymentService.php"
+rhp migrate -f "includes/config.php"
+
 # Dry-run check: inspect changes without writing to disk
 rhp migrate src/ --check
 # or
-rhp migrate src/ --dry-run
+rhp migrate --file="includes/config.php" --check
 
 # Output results in machine-readable JSON format (ideal for CI/CD)
 rhp migrate src/ --format=json
@@ -46,7 +50,10 @@ rhp migrate src/ --format=human
 | Flag | Shorthand | Description | Default |
 | :--- | :--- | :--- | :--- |
 | `PATH` | | Target file or directory to migrate | `.` (current directory) |
+| `--file <PATH>` | `-f <PATH>` | Target a single file to migrate (e.g. `--file="path/to/file.php"`) | |
+| `--write` | | Write migrated changes directly to disk | Enabled by default |
 | `--check` | `--dry-run` | Inspects code and reports changes without writing modifications to disk | `false` |
+| `--php-version <8\|7>` | `--php` | Source PHP version for argument normalization | Auto-detected from `composer.json` or `7` |
 | `--format` | | Output format: `human` or `json` | `human` |
 | `--help` | `-h` | Display help and usage details | |
 
