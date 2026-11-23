@@ -150,6 +150,9 @@ pub enum StmtKind<'s> {
     /// Post-response or scope defer hook statement (`defer { ... };`).
     Defer(Box<Stmt<'s>>),
 
+    /// Top-level or namespace constant declaration (`const PI = 3.14;`, `const A = 1, B = 2;`).
+    Const(Vec<ConstDecl<'s>>),
+
     /// Empty statement (stray semicolon `;`).
     Empty,
 }
@@ -356,4 +359,14 @@ pub struct UseImport<'s> {
     pub span: Span,
     pub name: Ident<'s>,
     pub alias: Option<Ident<'s>>,
+}
+
+/// Constant declaration item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDecl<'s> {
+    pub span: Span,
+    pub visibility: Visibility,
+    pub name: Ident<'s>,
+    pub type_hint: Option<TypeHint<'s>>,
+    pub value: Expr<'s>,
 }

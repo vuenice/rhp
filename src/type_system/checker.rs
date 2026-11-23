@@ -425,6 +425,11 @@ impl TypeChecker {
                     }
                 }
             }
+            StmtKind::Const(items) => {
+                for c in items {
+                    self.collect_anon_classes_from_expr(&c.value)?;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -1926,7 +1931,7 @@ impl TypeChecker {
         ctx: Option<&CallableContext>,
     ) -> Result<bool, TypeError> {
         match &stmt.kind {
-            StmtKind::Empty | StmtKind::PackageImport { .. } | StmtKind::InterfaceDecl(_) => Ok(false),
+            StmtKind::Empty | StmtKind::PackageImport { .. } | StmtKind::InterfaceDecl(_) | StmtKind::Const(_) => Ok(false),
 
             StmtKind::Namespace { name, body } => {
                 let prev_ns = self.current_namespace.clone();
@@ -3333,13 +3338,14 @@ impl TypeChecker {
                         return Ok(self.record_expr_type(expr.span, RhpType::Future(Box::new(inner))));
                     }
 
-                    if let Some(sig) = self.result.functions.get(fn_ident.name).cloned() {
+                    let resolved_fn_name = self.use_aliases.get(fn_ident.name).cloned().unwrap_or_else(|| fn_ident.name.to_string());
+                    if let Some(sig) = self.result.functions.get(&resolved_fn_name).or_else(|| self.result.functions.get(fn_ident.name)).cloned() {
                         let param_hints: Vec<RhpType> =
                             sig.params.iter().map(|p| p.rhp_type.clone()).collect();
                         let arg_types =
                             self.infer_arguments(args, env, ctx, Some(&param_hints))?;
                         self.verify_call_arguments(
-                            fn_ident.name,
+                            &resolved_fn_name,
                             &sig,
                             args,
                             &arg_types,

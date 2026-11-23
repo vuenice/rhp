@@ -646,7 +646,7 @@ impl<'a> CasingCollector<'a> {
                 }
             }
             StmtKind::Defer(s) => self.visit_stmt(s),
-            StmtKind::Empty | StmtKind::Use(_) | StmtKind::PackageImport { .. } => {}
+            StmtKind::Empty | StmtKind::Use(_) | StmtKind::PackageImport { .. } | StmtKind::Const(_) => {}
         }
     }
 

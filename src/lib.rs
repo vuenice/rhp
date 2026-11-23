@@ -50,7 +50,7 @@ pub use diagnostic::{
 
 pub use ast::{
     walk_expr, walk_program, walk_stmt, Argument, ArrayElement, AssignOp, AstVisitor, BinaryOp,
-    ClassDecl, ClassMember, ClassMemberKind, ClassModifiers, ClosureUse, ElseIfBranch, EnumDecl,
+    ClassDecl, ClassMember, ClassMemberKind, ClassModifiers, ClosureUse, ConstDecl, ElseIfBranch, EnumDecl,
     Expr, ExprKind, FunctionDecl, Ident, InterfaceDecl, Literal, MatchArm, MethodDecl, Param,
     Program, PropertyDecl, Stmt, StmtKind, StringPart, SwitchCase, TraitDecl, TypeHint,
     TypeHintKind, UnaryOp, Variable, Visibility, ASTKind, ASTNode,

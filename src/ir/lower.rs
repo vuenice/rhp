@@ -443,6 +443,27 @@ impl<'a> IrLowerer<'a> {
                         self.compile_enum_decl(enm)?;
                     }
                 }
+                StmtKind::Const(items) => {
+                    for c in items {
+                        let qualified_name = if let Some(ref ns) = self.current_namespace {
+                            format!("{}\\{}", ns, c.name.name)
+                        } else {
+                            c.name.name.to_string()
+                        };
+                        let value_chunk = self.compile_initializer_expr(&qualified_name, &c.value)?;
+                        let compiled_const = CompiledClassConst {
+                            name: c.name.name.to_string(),
+                            visibility: c.visibility,
+                            is_final: true,
+                            value_chunk,
+                            span: c.span,
+                        };
+                        self.module.constants.insert(qualified_name.clone(), compiled_const.clone());
+                        if qualified_name != c.name.name {
+                            self.module.constants.insert(c.name.name.to_string(), compiled_const);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1074,6 +1095,8 @@ impl<'a> IrLowerer<'a> {
                 Ok(())
             }
 
+            StmtKind::Const(_) => Ok(()),
+
             StmtKind::Namespace { name, body } => {
                 let prev_ns = self.current_namespace.clone();
                 let prev_aliases = self.use_aliases.clone();
@@ -1472,6 +1495,35 @@ impl<'a> IrLowerer<'a> {
                     Some(r) => r,
                     None => b.alloc_temp(inferred_ty, expr.span)?,
                 };
+
+                let resolved_name = self.use_aliases.get(ident.name).map(|s| s.as_str()).unwrap_or(ident.name);
+                let ns_qualified = self.current_namespace.as_ref().map(|ns| format!("{}\\{}", ns, ident.name));
+                let constant_target = if self.module.constants.contains_key(resolved_name) {
+                    Some(resolved_name.to_string())
+                } else if let Some(ref nsq) = ns_qualified {
+                    if self.module.constants.contains_key(nsq) {
+                        Some(nsq.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(c_name) = constant_target {
+                    let empty_cls = b.intern_string("");
+                    let const_id = b.intern_string(&c_name);
+                    b.emit(
+                        OpCode::GetClassConst {
+                            dst,
+                            class: empty_cls,
+                            const_name: const_id,
+                        },
+                        expr.span,
+                    );
+                    return Ok(dst);
+                }
+
                 let const_id = match ident.name {
                     "E_ERROR" => b.intern_int(1),
                     "E_WARNING" => b.intern_int(2),
@@ -1901,7 +1953,8 @@ impl<'a> IrLowerer<'a> {
                     }
 
                     let arg_count = self.evaluate_and_push_args(b, args)?;
-                    let func_name_const = b.intern_string(ident.name);
+                    let target_fn = self.use_aliases.get(ident.name).map(|s| s.as_str()).unwrap_or(ident.name);
+                    let func_name_const = b.intern_string(target_fn);
                     b.emit(
                         OpCode::CallFunction {
                             dst,

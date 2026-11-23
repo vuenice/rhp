@@ -1441,6 +1441,18 @@ impl VM {
             }
         }
 
+        // 1b. Evaluate top-level / module constants
+        let module_constants = self.module.constants.clone();
+        for (name, c) in &module_constants {
+            let val = self.eval_isolated_chunk(&c.value_chunk)?;
+            self.class_constants
+                .insert(("".to_string(), name.clone()), val.clone());
+            if let Some((_ns, short)) = name.rsplit_once('\\') {
+                self.class_constants
+                    .insert(("".to_string(), short.to_string()), val);
+            }
+        }
+
         // 2. Evaluate enum cases
         let enums: Vec<_> = self.module.enums.values().cloned().collect();
         for enm in &enums {
@@ -2818,6 +2830,9 @@ impl VM {
                         .module
                         .function_index
                         .get(&fn_name)
+                        .or_else(|| {
+                            fn_name.rsplit('\\').next().and_then(|short| self.module.function_index.get(short))
+                        })
                         .copied()
                         .ok_or_else(|| {
                             self.make_error(
@@ -3898,7 +3913,10 @@ impl VM {
                                 span,
                             ));
                         }
-                    } else if let Some(val) = self.class_constants.get(&(resolved_cls.clone(), c_name.clone())) {
+                    } else if let Some(val) = self.class_constants.get(&(resolved_cls.clone(), c_name.clone()))
+                        .or_else(|| self.class_constants.get(&("".to_string(), c_name.clone())))
+                        .or_else(|| c_name.rsplit('\\').next().and_then(|short| self.class_constants.get(&("".to_string(), short.to_string()))))
+                    {
                         self.registers[base_reg + dst.index()] = val.clone();
                     } else {
                         return Err(self.make_error(

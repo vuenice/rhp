@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde::Serialize;
+
+use crate::pkg::manifest::Manifest;
 
 use crate::lexer::facade::LEGACY_PHP_FUNCTIONS;
 use crate::lexer::{Lexer, Token};
@@ -291,8 +293,8 @@ pub fn migrate_source_with_options_and_context(
     warnings.extend(ob_warnings);
     current = after_ob;
 
-    // Step 0.0006: Strip legacy include/require statements (autoload, class files)
-    let (after_includes, inc_count) = strip_legacy_includes(&current);
+    // Step 0.0006: Replace legacy include/require statements with `use` and ensure PSR-4 `namespace`
+    let (after_includes, inc_count) = replace_legacy_includes_with_use_and_namespace(&current, file_name);
     legacy_include_count += inc_count;
     current = after_includes;
 
@@ -6885,11 +6887,23 @@ pub fn migrate_simple_output_buffering(source: &str) -> (String, usize, Vec<Stri
 // Step 0.0006: Strip Legacy include / require Statements
 // =========================================================================
 
+// =========================================================================
+// Step 0.0006: Replace Legacy include / require with `use` and PSR-4 `namespace`
+// =========================================================================
+
 pub fn strip_legacy_includes(source: &str) -> (String, usize) {
+    replace_legacy_includes_with_use_and_namespace(source, "")
+}
+
+pub fn replace_legacy_includes_with_use_and_namespace(
+    source: &str,
+    file_path: &str,
+) -> (String, usize) {
     let mask = build_code_mask(source);
     let bytes = source.as_bytes();
     let n = bytes.len();
     let mut edits: Vec<TextEdit> = Vec::new();
+    let mut raw_stmts: Vec<String> = Vec::new();
     let mut count = 0;
     let mut i = 0;
 
@@ -6906,10 +6920,16 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
 
         let mut kw_len = 0;
         let mut is_kw = false;
-        if i + 12 <= n && (source[i..i + 12].eq_ignore_ascii_case("require_once") || source[i..i + 12].eq_ignore_ascii_case("include_once")) {
+        if i + 12 <= n
+            && (source[i..i + 12].eq_ignore_ascii_case("require_once")
+                || source[i..i + 12].eq_ignore_ascii_case("include_once"))
+        {
             kw_len = 12;
             is_kw = true;
-        } else if i + 7 <= n && (source[i..i + 7].eq_ignore_ascii_case("require") || source[i..i + 7].eq_ignore_ascii_case("include")) {
+        } else if i + 7 <= n
+            && (source[i..i + 7].eq_ignore_ascii_case("require")
+                || source[i..i + 7].eq_ignore_ascii_case("include"))
+        {
             kw_len = 7;
             is_kw = true;
         }
@@ -6927,7 +6947,12 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
 
         // Reject if preceded by ->, ::, or $
         let mut b_idx = i;
-        while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+        while b_idx > 0
+            && (bytes[b_idx - 1] == b' '
+                || bytes[b_idx - 1] == b'\t'
+                || bytes[b_idx - 1] == b'\r'
+                || bytes[b_idx - 1] == b'\n')
+        {
             b_idx -= 1;
         }
         if b_idx >= 2 && (&bytes[b_idx - 2..b_idx] == b"::" || &bytes[b_idx - 2..b_idx] == b"->") {
@@ -6944,7 +6969,11 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
             true
         } else {
             let prev_ch = bytes[b_idx - 1];
-            prev_ch == b';' || prev_ch == b'{' || prev_ch == b'}' || bytes[..b_idx].ends_with(b"<?php") || bytes[..b_idx].ends_with(b"<?")
+            prev_ch == b';'
+                || prev_ch == b'{'
+                || prev_ch == b'}'
+                || bytes[..b_idx].ends_with(b"<?php")
+                || bytes[..b_idx].ends_with(b"<?")
         };
 
         if !is_standalone {
@@ -6977,7 +7006,11 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
         }
 
         if let Some(semi_pos) = found_semi {
-            let after_stmt = if bytes[semi_pos] == b';' { semi_pos + 1 } else { semi_pos };
+            let after_stmt = if bytes[semi_pos] == b';' {
+                semi_pos + 1
+            } else {
+                semi_pos
+            };
 
             let line_start = get_line_start(source, i);
             let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');
@@ -6994,12 +7027,40 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
                 }
             }
 
-            let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+            let only_ws_after =
+                line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+            raw_stmts.push(source[i..semi_pos].to_string());
 
             if only_ws_before && only_ws_after {
                 let mut full_end = line_end;
-                if full_end < n && bytes[full_end] == b'\r' { full_end += 1; }
-                if full_end < n && bytes[full_end] == b'\n' { full_end += 1; }
+                if full_end < n && bytes[full_end] == b'\r' {
+                    full_end += 1;
+                }
+                if full_end < n && bytes[full_end] == b'\n' {
+                    full_end += 1;
+                }
+
+                // If surrounded by blank lines on both sides, consume one of the blank lines
+                let prev_is_blank = line_start >= 2
+                    && bytes[line_start - 1] == b'\n'
+                    && (bytes[line_start - 2] == b'\n'
+                        || (line_start >= 3
+                            && bytes[line_start - 2] == b'\r'
+                            && bytes[line_start - 3] == b'\n'));
+                let next_is_blank = full_end < n
+                    && (bytes[full_end] == b'\n'
+                        || (bytes[full_end] == b'\r'
+                            && full_end + 1 < n
+                            && bytes[full_end + 1] == b'\n'));
+                if prev_is_blank && next_is_blank {
+                    if full_end < n && bytes[full_end] == b'\r' {
+                        full_end += 1;
+                    }
+                    if full_end < n && bytes[full_end] == b'\n' {
+                        full_end += 1;
+                    }
+                }
 
                 edits.push(TextEdit {
                     start: line_start,
@@ -7022,17 +7083,787 @@ pub fn strip_legacy_includes(source: &str) -> (String, usize) {
         i = after_kw;
     }
 
-    if edits.is_empty() {
-        return (source.to_string(), 0);
+    // Step A: Strip the include statements from source
+    let mut stripped_source = source.to_string();
+    if !edits.is_empty() {
+        edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+        for edit in edits {
+            stripped_source.replace_range(edit.start..edit.end, &edit.replacement);
+        }
     }
 
-    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
-    let mut result = source.to_string();
-    for edit in edits {
-        result.replace_range(edit.start..edit.end, &edit.replacement);
+    let path_obj = Path::new(file_path);
+    let (project_root, psr4_mappings) = find_project_root_and_psr4(path_obj);
+
+    // Step B: Determine current file's namespace
+    let new_mask = build_code_mask(&stripped_source);
+    let existing_ns_info = find_existing_namespace(&stripped_source, &new_mask);
+    let mut current_ns = existing_ns_info.as_ref().map(|(ns, _, _)| ns.clone());
+    let mut need_namespace_decl = None;
+
+    if current_ns.is_none() && !file_path.is_empty() {
+        let has_decls = has_class_or_function_declaration(&stripped_source, &new_mask);
+        let has_meaningful_code = has_decls || !raw_stmts.is_empty();
+        if has_meaningful_code {
+            if let Some(inferred_ns) =
+                resolve_file_psr4_namespace(path_obj, &project_root, &psr4_mappings)
+            {
+                current_ns = Some(inferred_ns.clone());
+                need_namespace_decl = Some(inferred_ns);
+            }
+        }
     }
 
-    (result, count)
+    // Step C: Scan declared classes & existing use statements in current file
+    let declared_classes = scan_declared_classes(&stripped_source, &new_mask);
+    let (existing_uses, mut imported_short_names) =
+        scan_existing_uses(&stripped_source, &new_mask);
+
+    // Step D: Resolve targets from raw_stmts
+    let cur_file_dir = if path_obj.is_file() {
+        path_obj.parent().unwrap_or(Path::new(""))
+    } else if !file_path.is_empty() {
+        path_obj.parent().unwrap_or(Path::new(""))
+    } else {
+        Path::new("")
+    };
+
+    let mut new_uses = Vec::new();
+
+    for raw_stmt in &raw_stmts {
+        if let Some(raw_path) = extract_path_from_include_statement(raw_stmt) {
+            if let Some(target) =
+                resolve_target_class_info(&raw_path, cur_file_dir, &project_root, &psr4_mappings)
+            {
+                // If in same namespace, class is already in scope (PSR-4)
+                if current_ns.as_deref() == Some(&target.namespace) {
+                    continue;
+                }
+
+                // Check collision
+                let collides_with_declared = declared_classes.contains(&target.class_name);
+                let collides_with_import = imported_short_names
+                    .get(&target.class_name)
+                    .map_or(false, |existing_fqcn| existing_fqcn != &target.fqcn);
+
+                let use_stmt = if collides_with_declared || collides_with_import {
+                    let alias = generate_alias_for_class(&target.namespace, &target.class_name);
+                    imported_short_names.insert(alias.clone(), target.fqcn.clone());
+                    format!("use {} as {};", target.fqcn, alias)
+                } else {
+                    imported_short_names.insert(target.class_name.clone(), target.fqcn.clone());
+                    format!("use {};", target.fqcn)
+                };
+
+                if !existing_uses.contains(&use_stmt) && !new_uses.contains(&use_stmt) {
+                    new_uses.push(use_stmt);
+                }
+            }
+        }
+    }
+
+    // If nothing to add (no namespace to insert, no new use statements), return
+    if need_namespace_decl.is_none() && new_uses.is_empty() {
+        return (stripped_source, count);
+    }
+
+    new_uses.sort();
+
+    // Step E: Insert namespace and use statements
+    let mut final_result = stripped_source;
+
+    if let Some(ns) = need_namespace_decl {
+        // Insert `namespace <ns>;\n\n` and any new use statements
+        let mut header = format!("namespace {};\n\n", ns);
+        if !new_uses.is_empty() {
+            for u in &new_uses {
+                header.push_str(u);
+                header.push('\n');
+            }
+            header.push('\n');
+        }
+
+        let insert_idx = find_top_level_code_start(&final_result);
+        let body = final_result[insert_idx..].trim_start_matches(|c| c == '\r' || c == '\n');
+        final_result = format!("{}{}{}", &final_result[..insert_idx], header, body);
+    } else if !new_uses.is_empty() {
+        let mut use_block = String::new();
+        for u in &new_uses {
+            use_block.push_str(u);
+            use_block.push('\n');
+        }
+
+        let cur_mask = build_code_mask(&final_result);
+        if let Some((_, _, actual_ns_end)) = find_existing_namespace(&final_result, &cur_mask) {
+            let mut check_idx = actual_ns_end;
+            while check_idx < final_result.len()
+                && (final_result.as_bytes()[check_idx] == b' '
+                    || final_result.as_bytes()[check_idx] == b'\t'
+                    || final_result.as_bytes()[check_idx] == b'\r'
+                    || final_result.as_bytes()[check_idx] == b'\n')
+            {
+                check_idx += 1;
+            }
+
+            if check_idx + 4 <= final_result.len()
+                && final_result[check_idx..check_idx + 4].eq_ignore_ascii_case("use ")
+            {
+                final_result.insert_str(check_idx, &use_block);
+            } else {
+                let body = final_result[actual_ns_end..].trim_start_matches(|c| c == '\r' || c == '\n');
+                final_result = format!("{}\n{}\n{}", &final_result[..actual_ns_end], use_block, body);
+            }
+        } else {
+            // Root file without namespace
+            let insert_idx = find_top_level_code_start(&final_result);
+            let body = final_result[insert_idx..].trim_start_matches(|c| c == '\r' || c == '\n');
+            final_result = format!("{}{}\n{}", &final_result[..insert_idx], use_block, body);
+        }
+    }
+
+    (final_result, count)
+}
+
+/// Find project root containing `rhp.toml` (or `composer.json`), and extract PSR-4 mappings.
+pub fn find_project_root_and_psr4(start_path: &Path) -> (PathBuf, Vec<(String, String)>) {
+    let is_file_path = start_path.is_file() || start_path.extension().is_some();
+    let start_dir = if is_file_path {
+        start_path.parent().unwrap_or(Path::new("."))
+    } else {
+        start_path
+    };
+
+    let mut curr = Some(start_dir.to_path_buf());
+
+    while let Some(dir) = curr {
+        let rhp_toml = dir.join("rhp.toml");
+        let rpm_toml = dir.join("rpm.toml");
+        let manifest_path = if rhp_toml.exists() {
+            Some(rhp_toml)
+        } else if rpm_toml.exists() {
+            Some(rpm_toml)
+        } else {
+            None
+        };
+
+        if let Some(mp) = manifest_path {
+            if let Ok(manifest) = Manifest::load_from_file(&mp) {
+                let effective = manifest.effective_autoload();
+                let mut mappings: Vec<(String, String)> =
+                    effective.psr4.into_iter().collect();
+                if mappings.is_empty() {
+                    mappings = vec![
+                        ("App\\".to_string(), "app/".to_string()),
+                        ("Database\\Factories\\".to_string(), "database/factories/".to_string()),
+                        ("Database\\Seeders\\".to_string(), "database/seeders/".to_string()),
+                        ("Tests\\".to_string(), "tests/".to_string()),
+                    ];
+                }
+                return (dir, mappings);
+            }
+        }
+
+        // Also check composer.json for PSR-4 autoloading
+        let composer_json = dir.join("composer.json");
+        if composer_json.exists() {
+            if let Ok(content) = fs::read_to_string(&composer_json) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(psr4) = val
+                        .get("autoload")
+                        .and_then(|a| a.get("psr-4"))
+                        .and_then(|p| p.as_object())
+                    {
+                        let mut mappings = Vec::new();
+                        for (k, v) in psr4 {
+                            if let Some(dir_str) = v.as_str() {
+                                mappings.push((k.clone(), dir_str.to_string()));
+                            }
+                        }
+                        if !mappings.is_empty() {
+                            return (dir, mappings);
+                        }
+                    }
+                }
+            }
+        }
+
+        if dir.as_os_str().is_empty() || dir == Path::new(".") {
+            break;
+        }
+
+        curr = dir.parent().map(|p| p.to_path_buf());
+    }
+
+    // Default fallback if no manifest found
+    let fallback_root = if start_path.is_relative() {
+        PathBuf::from(".")
+    } else {
+        start_dir.to_path_buf()
+    };
+
+    (
+        fallback_root,
+        vec![
+            ("App\\".to_string(), "app/".to_string()),
+            ("Database\\Factories\\".to_string(), "database/factories/".to_string()),
+            ("Database\\Seeders\\".to_string(), "database/seeders/".to_string()),
+            ("Tests\\".to_string(), "tests/".to_string()),
+        ],
+    )
+}
+
+/// Resolve PSR-4 namespace for a file given project root and mappings.
+pub fn resolve_file_psr4_namespace(
+    file_path: &Path,
+    project_root: &Path,
+    psr4_mappings: &[(String, String)],
+) -> Option<String> {
+    let rel_path = if let Ok(stripped) = file_path.strip_prefix(project_root) {
+        stripped
+    } else {
+        file_path
+    };
+
+    let parent_dir = rel_path.parent()?;
+    let parent_str = parent_dir.to_str()?.replace('\\', "/");
+    let trimmed_parent = parent_str.trim_matches('/');
+    if trimmed_parent.is_empty() || trimmed_parent == "." {
+        return None;
+    }
+
+    // Match against PSR-4 prefixes
+    for (ns_prefix, dir_prefix) in psr4_mappings {
+        let clean_dir = dir_prefix.trim_matches('/').replace('\\', "/");
+        let clean_ns = ns_prefix.trim_end_matches('\\');
+
+        if trimmed_parent == clean_dir {
+            return Some(clean_ns.to_string());
+        }
+
+        let prefix_with_slash = format!("{}/", clean_dir);
+        if trimmed_parent.starts_with(&prefix_with_slash) {
+            let remainder = &trimmed_parent[prefix_with_slash.len()..];
+            let sub_segments: Vec<&str> = remainder.split('/').filter(|s| !s.is_empty()).collect();
+            let mut ns = clean_ns.to_string();
+            for seg in sub_segments {
+                ns.push('\\');
+                ns.push_str(seg);
+            }
+            return Some(ns);
+        }
+    }
+
+    // If no PSR-4 mapping matched, derive namespace from relative path segments (PascalCase)
+    let segments: Vec<String> = trimmed_parent
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .map(to_pascal_case)
+        .collect();
+
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments.join("\\"))
+    }
+}
+
+pub fn to_pascal_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+    for c in s.chars() {
+        if c == '_' || c == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(c.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+pub fn extract_path_from_include_statement(stmt: &str) -> Option<String> {
+    let bytes = stmt.as_bytes();
+    let n = bytes.len();
+    let mut parts = Vec::new();
+    let mut i = 0;
+
+    while i < n {
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let quote = bytes[i];
+            let start = i + 1;
+            let mut end = start;
+            while end < n && bytes[end] != quote {
+                if bytes[end] == b'\\' && end + 1 < n {
+                    end += 2;
+                } else {
+                    end += 1;
+                }
+            }
+            if end < n {
+                parts.push(&stmt[start..end]);
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(""))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TargetClassInfo {
+    pub fqcn: String,
+    pub namespace: String,
+    pub class_name: String,
+}
+
+fn resolve_target_class_info(
+    raw_path: &str,
+    cur_file_dir: &Path,
+    project_root: &Path,
+    psr4_mappings: &[(String, String)],
+) -> Option<TargetClassInfo> {
+    if raw_path.contains("vendor/autoload")
+        || raw_path.ends_with("autoload.php")
+        || raw_path.ends_with("autoload.rhp")
+    {
+        return None;
+    }
+
+    let clean_path = raw_path
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"')
+        .replace('\\', "/");
+    let trimmed = clean_path.trim_start_matches("./").trim_start_matches('/');
+
+    let without_ext = if let Some(stripped) = trimmed.strip_suffix(".php") {
+        stripped
+    } else if let Some(stripped) = trimmed.strip_suffix(".rhp") {
+        stripped
+    } else {
+        trimmed
+    };
+
+    let segments: Vec<&str> = without_ext.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return None;
+    }
+
+    let raw_class_candidate = *segments.last().unwrap();
+    if raw_class_candidate == ".." || raw_class_candidate == "." {
+        return None;
+    }
+
+    let normalized_cur = normalize_path(cur_file_dir);
+    let target_path_relative = normalized_cur.join(trimmed);
+    let normalized_target = normalize_path(&target_path_relative);
+
+    let candidate_paths = [
+        normalized_target.clone(),
+        normalize_path(&project_root.join(trimmed)),
+        normalize_path(&project_root.join("app").join(trimmed)),
+        normalize_path(&project_root.join("src").join(trimmed)),
+    ];
+
+    let mut found_file = None;
+    for cp in &candidate_paths {
+        if cp.is_file() {
+            found_file = Some(cp.clone());
+            break;
+        }
+    }
+
+    let mut declared_class = None;
+    let mut declared_ns = None;
+
+    if let Some(ref fp) = found_file {
+        if let Ok(content) = fs::read_to_string(fp) {
+            let mask = build_code_mask(&content);
+            if let Some((ns, _, _)) = find_existing_namespace(&content, &mask) {
+                declared_ns = Some(ns);
+            }
+            let classes = scan_declared_classes(&content, &mask);
+            if !classes.is_empty() {
+                if classes.contains(raw_class_candidate) {
+                    declared_class = Some(raw_class_candidate.to_string());
+                } else {
+                    declared_class = classes.into_iter().next();
+                }
+            }
+        }
+    }
+
+    if found_file.is_some()
+        && declared_class.is_none()
+        && raw_class_candidate
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_lowercase())
+    {
+        return None;
+    }
+
+    if found_file.is_none()
+        && raw_class_candidate
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_lowercase())
+    {
+        return None;
+    }
+
+    let class_name = declared_class.unwrap_or_else(|| raw_class_candidate.to_string());
+
+    let namespace = if let Some(ns) = declared_ns {
+        ns
+    } else if let Some(ref fp) = found_file {
+        resolve_file_psr4_namespace(fp, project_root, psr4_mappings)
+            .unwrap_or_else(|| {
+                let rel = if let Ok(s) = fp.strip_prefix(project_root) {
+                    s.to_string_lossy().to_string()
+                } else {
+                    trimmed.to_string()
+                };
+                derive_namespace_from_relative_path(&rel, project_root, psr4_mappings)
+            })
+    } else {
+        let rel_trimmed = if let Ok(s) = normalized_target.strip_prefix(project_root) {
+            s.to_string_lossy().to_string()
+        } else {
+            trimmed.to_string()
+        };
+        derive_namespace_from_relative_path(&rel_trimmed, project_root, psr4_mappings)
+    };
+
+    let fqcn = if namespace.is_empty() {
+        class_name.clone()
+    } else {
+        format!("{}\\{}", namespace, class_name)
+    };
+
+    Some(TargetClassInfo {
+        fqcn,
+        namespace,
+        class_name,
+    })
+}
+
+pub fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if let Some(std::path::Component::Normal(_)) = components.last() {
+                    components.pop();
+                } else {
+                    components.push(comp);
+                }
+            }
+            _ => components.push(comp),
+        }
+    }
+    components.into_iter().collect()
+}
+
+fn derive_namespace_from_relative_path(
+    rel_path_str: &str,
+    _project_root: &Path,
+    psr4_mappings: &[(String, String)],
+) -> String {
+    let clean = rel_path_str.replace('\\', "/");
+    let norm = normalize_path(Path::new(&clean));
+    let norm_str = norm.to_string_lossy().replace('\\', "/");
+    let mut parts: Vec<&str> = norm_str
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .collect();
+    if parts.is_empty() {
+        return "App".to_string();
+    }
+    // Remove last component (the file itself)
+    parts.pop();
+
+    if parts.is_empty() {
+        return "App".to_string();
+    }
+
+    if parts[0] == "app" {
+        parts.remove(0);
+        let mut ns_parts = vec!["App".to_string()];
+        for p in parts {
+            ns_parts.push(to_pascal_case(p));
+        }
+        return ns_parts.join("\\");
+    }
+
+    let joined_dir = parts.join("/");
+    for (ns_prefix, dir_prefix) in psr4_mappings {
+        let clean_dir = dir_prefix.trim_matches('/').replace('\\', "/");
+        let clean_ns = ns_prefix.trim_end_matches('\\');
+        if joined_dir == clean_dir {
+            return clean_ns.to_string();
+        }
+        let prefix_with_slash = format!("{}/", clean_dir);
+        if joined_dir.starts_with(&prefix_with_slash) {
+            let rem = &joined_dir[prefix_with_slash.len()..];
+            let sub_parts: Vec<String> = rem.split('/').map(to_pascal_case).collect();
+            return format!("{}\\{}", clean_ns, sub_parts.join("\\"));
+        }
+    }
+
+    let is_app_psr4 = psr4_mappings.iter().any(|(ns, _)| ns.starts_with("App"));
+    if is_app_psr4
+        && (parts[0] == "Models"
+            || parts[0] == "Services"
+            || parts[0] == "Http"
+            || parts[0] == "Controllers")
+    {
+        let mut ns_parts = vec!["App".to_string()];
+        for p in parts {
+            ns_parts.push(to_pascal_case(p));
+        }
+        return ns_parts.join("\\");
+    }
+
+    parts
+        .into_iter()
+        .map(to_pascal_case)
+        .collect::<Vec<String>>()
+        .join("\\")
+}
+
+pub fn generate_alias_for_class(namespace: &str, class_name: &str) -> String {
+    if namespace.ends_with("Models") || namespace.ends_with("Model") {
+        format!("{}Model", class_name)
+    } else if namespace.ends_with("Services") || namespace.ends_with("Service") {
+        format!("{}Service", class_name)
+    } else if let Some(last_seg) = namespace.rsplit('\\').next() {
+        if !last_seg.is_empty() && last_seg != class_name {
+            format!("{}{}", last_seg, class_name)
+        } else {
+            format!("{}Alias", class_name)
+        }
+    } else {
+        format!("{}Alias", class_name)
+    }
+}
+
+fn scan_declared_classes(source: &str, mask: &[bool]) -> HashSet<String> {
+    let mut declared = HashSet::new();
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        let mut is_decl = false;
+        let mut kw_len = 0;
+        if i + 6 <= n && source[i..i + 6].eq_ignore_ascii_case("class ") {
+            kw_len = 5;
+            is_decl = true;
+        } else if i + 10 <= n && source[i..i + 10].eq_ignore_ascii_case("interface ") {
+            kw_len = 9;
+            is_decl = true;
+        } else if i + 6 <= n && source[i..i + 6].eq_ignore_ascii_case("trait ") {
+            kw_len = 5;
+            is_decl = true;
+        } else if i + 5 <= n && source[i..i + 5].eq_ignore_ascii_case("enum ") {
+            kw_len = 4;
+            is_decl = true;
+        }
+
+        if is_decl {
+            if i == 0 || !is_migrate_word_byte(bytes[i - 1]) {
+                let mut cur = i + kw_len;
+                while cur < n
+                    && (bytes[cur] == b' '
+                        || bytes[cur] == b'\t'
+                        || bytes[cur] == b'\r'
+                        || bytes[cur] == b'\n')
+                {
+                    cur += 1;
+                }
+                let name_start = cur;
+                while cur < n && is_migrate_word_byte(bytes[cur]) {
+                    cur += 1;
+                }
+                if cur > name_start {
+                    let name = &source[name_start..cur];
+                    if !name.is_empty() {
+                        declared.insert(name.to_string());
+                    }
+                }
+                i = cur;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    declared
+}
+
+fn scan_existing_uses(
+    source: &str,
+    mask: &[bool],
+) -> (HashSet<String>, HashMap<String, String>) {
+    let mut use_lines = HashSet::new();
+    let mut imported_short_names = HashMap::new();
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if i + 4 <= n
+            && source[i..i + 4].eq_ignore_ascii_case("use ")
+            && (i == 0 || !is_migrate_word_byte(bytes[i - 1]))
+        {
+            let mut b_idx = i;
+            while b_idx > 0
+                && (bytes[b_idx - 1] == b' '
+                    || bytes[b_idx - 1] == b'\t'
+                    || bytes[b_idx - 1] == b'\r'
+                    || bytes[b_idx - 1] == b'\n')
+            {
+                b_idx -= 1;
+            }
+            if b_idx > 0 && bytes[b_idx - 1] == b')' {
+                i += 4;
+                continue;
+            }
+
+            let mut cur = i + 4;
+            while cur < n && bytes[cur] != b';' && bytes[cur] != b'\n' {
+                cur += 1;
+            }
+            if cur < n && bytes[cur] == b';' {
+                let stmt = source[i..=cur].trim();
+                use_lines.insert(stmt.to_string());
+
+                let inner = source[i + 4..cur].trim();
+                if let Some(as_pos) = inner.find(" as ") {
+                    let fqcn = inner[..as_pos].trim().trim_start_matches('\\');
+                    let alias = inner[as_pos + 4..].trim();
+                    imported_short_names.insert(alias.to_string(), fqcn.to_string());
+                } else {
+                    let fqcn = inner.trim().trim_start_matches('\\');
+                    let short_name = fqcn.rsplit('\\').next().unwrap_or(fqcn);
+                    imported_short_names.insert(short_name.to_string(), fqcn.to_string());
+                }
+                i = cur + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    (use_lines, imported_short_names)
+}
+
+fn find_existing_namespace(source: &str, mask: &[bool]) -> Option<(String, usize, usize)> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if i + 10 <= n
+            && source[i..i + 10].eq_ignore_ascii_case("namespace ")
+            && (i == 0 || !is_migrate_word_byte(bytes[i - 1]))
+        {
+            let start = i;
+            let mut cur = i + 10;
+            while cur < n && bytes[cur] != b';' && bytes[cur] != b'{' && bytes[cur] != b'\n' {
+                cur += 1;
+            }
+            if cur < n && bytes[cur] == b';' {
+                let ns_name = source[i + 10..cur].trim().trim_matches('\\').to_string();
+                let mut end = cur + 1;
+                while end < n && (bytes[end] == b' ' || bytes[end] == b'\t') {
+                    end += 1;
+                }
+                if end < n && bytes[end] == b'\r' {
+                    end += 1;
+                }
+                if end < n && bytes[end] == b'\n' {
+                    end += 1;
+                }
+                return Some((ns_name, start, end));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn has_class_or_function_declaration(source: &str, mask: &[bool]) -> bool {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if i == 0 || !is_migrate_word_byte(bytes[i - 1]) {
+            if i + 6 <= n && source[i..i + 6].eq_ignore_ascii_case("class ") {
+                return true;
+            }
+            if i + 10 <= n && source[i..i + 10].eq_ignore_ascii_case("interface ") {
+                return true;
+            }
+            if i + 6 <= n && source[i..i + 6].eq_ignore_ascii_case("trait ") {
+                return true;
+            }
+            if i + 5 <= n && source[i..i + 5].eq_ignore_ascii_case("enum ") {
+                return true;
+            }
+            if i + 9 <= n && source[i..i + 9].eq_ignore_ascii_case("function ") {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn find_top_level_code_start(source: &str) -> usize {
+    let trimmed = source.trim_start();
+    let leading_ws = source.len() - trimmed.len();
+    if trimmed.starts_with("declare") {
+        if let Some(semi) = trimmed.find(';') {
+            let mut after = leading_ws + semi + 1;
+            while after < source.len()
+                && (source.as_bytes()[after] == b' ' || source.as_bytes()[after] == b'\t')
+            {
+                after += 1;
+            }
+            if after < source.len() && source.as_bytes()[after] == b'\r' {
+                after += 1;
+            }
+            if after < source.len() && source.as_bytes()[after] == b'\n' {
+                after += 1;
+            }
+            if after < source.len() && source.as_bytes()[after] == b'\n' {
+                after += 1;
+            }
+            return after;
+        }
+    }
+    0
 }
 
 // =========================================================================

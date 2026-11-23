@@ -2982,4 +2982,113 @@ fn test_cli_migrate_single_file_flag_variants() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_migrate_require_to_use_simple() {
+    let input = concat!(
+        "<?php\n",
+        "require_once __DIR__ . '/../Models/User.php';\n\n",
+        "class PaymentService {\n",
+        "    public function pay(User $user) {}\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "app/Services/PaymentService.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 1);
+    assert!(!res.migrated_content.contains("require_once"));
+    assert!(res.migrated_content.contains("namespace App\\Services;\n\nuse App\\Models\\User;\n\nclass PaymentService"));
+}
+
+#[test]
+fn test_migrate_require_to_use_with_alias_on_collision() {
+    let input = concat!(
+        "<?php\n",
+        "require_once __DIR__ . '/../Models/User.php';\n\n",
+        "class User {\n",
+        "    public string $name;\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "app/Services/OrderService.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 1);
+    assert!(!res.migrated_content.contains("require_once"));
+    assert!(res.migrated_content.contains("namespace App\\Services;\n\nuse App\\Models\\User as UserModel;\n\nclass User"));
+}
+
+#[test]
+fn test_migrate_require_with_existing_namespace_and_use() {
+    let input = concat!(
+        "<?php\n",
+        "namespace App\\Services;\n\n",
+        "use Str;\n\n",
+        "require_once 'Models/User.php';\n\n",
+        "class AuthService {}\n"
+    );
+    let res = migrate_source(input, "app/Services/AuthService.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 1);
+    assert!(!res.migrated_content.contains("require_once"));
+    assert!(res.migrated_content.contains("namespace App\\Services;\n\nuse App\\Models\\User;\nuse Str;\n\nclass AuthService"));
+}
+
+#[test]
+fn test_migrate_require_same_namespace_omits_use() {
+    let input = concat!(
+        "<?php\n",
+        "namespace App\\Models;\n\n",
+        "require_once 'Models/User.php';\n\n",
+        "class Order {}\n"
+    );
+    let res = migrate_source(input, "app/Models/Order.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 1);
+    assert!(!res.migrated_content.contains("require_once"));
+    assert!(!res.migrated_content.contains("use App\\Models\\User;"));
+    assert!(res.migrated_content.contains("namespace App\\Models;\n\nclass Order"));
+}
+
+#[test]
+fn test_migrate_injects_namespace_for_classes_lacking_namespace() {
+    let input = concat!(
+        "<?php\n",
+        "class User {\n",
+        "    public string $name;\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "app/Models/User.php");
+    assert!(res.modified);
+    assert!(res.migrated_content.contains("namespace App\\Models;\n\nclass User"));
+}
+
+#[test]
+fn test_migrate_psr4_resolution_with_rhp_toml() {
+    let temp_dir = std::env::temp_dir().join(format!("rhp_test_psr4_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(temp_dir.join("src/Billing")).unwrap();
+    fs::create_dir_all(temp_dir.join("src/Auth")).unwrap();
+
+    let rhp_toml = r#"[package]
+name = "acme-test"
+version = "0.1.0"
+
+[autoload]
+psr-4 = { "Acme\\Core\\" = "src/" }
+"#;
+    fs::write(temp_dir.join("rhp.toml"), rhp_toml).unwrap();
+
+    let auth_file = temp_dir.join("src/Auth/User.php");
+    fs::write(&auth_file, "<?php\nclass User {}\n").unwrap();
+
+    let billing_file = temp_dir.join("src/Billing/Invoice.php");
+    fs::write(&billing_file, "<?php\nrequire_once __DIR__ . '/../Auth/User.php';\nclass Invoice {}\n").unwrap();
+
+    let res = rhp::migrate::migrate_file(&billing_file, rhp::migrate::MigrateOptions::default()).unwrap();
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 1);
+    let content = fs::read_to_string(&billing_file).unwrap();
+    assert!(!content.contains("require_once"));
+    assert!(content.contains("namespace Acme\\Core\\Billing;\n\nuse Acme\\Core\\Auth\\User;\n\nclass Invoice"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+
 

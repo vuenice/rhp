@@ -1,12 +1,12 @@
 use crate::ast::{
     expr::{Expr, ExprKind},
     stmt::{
-        Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind,
+        Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind, ConstDecl,
         ElseIfBranch, EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, PropertyDecl,
         Stmt, StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf,
         TraitUseDecl, UseImport,
     },
-    types::{ClassModifiers, Visibility},
+    types::{ClassModifiers, Ident, Visibility},
 };
 use crate::lexer::{
     facade::{is_static_facade, is_static_only, register_tier3_facade},
@@ -571,21 +571,227 @@ impl<'s> CombinatorStream<'s> {
                 }
             }
 
-            let imports = self.separated_by(
-                |s| {
-                    let imp_start = s.current_span();
-                    let name = s.expect_qualified_ident()?;
-                    let alias = if s.matches(&Token::As) {
-                        Some(s.expect_ident()?)
+            // Optional `function` or `const` prefix right after `use`:
+            let _ = self.matches(&Token::Function) || self.matches(&Token::Const);
+
+            let mut imports = Vec::new();
+
+            loop {
+                // Check for wildcard import at top level: `use *;` or `use App\*`
+                if self.check(&Token::Star) {
+                    let err_span = self.advance().unwrap().span;
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: "Wildcard imports ('*') are not supported in RHP. Import symbols explicitly for deterministic static analysis and tree-shaking.".to_string(),
+                        },
+                        err_span,
+                    ));
+                }
+
+                // Parse base path segments
+                let (has_leading_backslash, leading_span) = if self.matches(&Token::Backslash) {
+                    (true, Some(self.current_span()))
+                } else {
+                    (false, None)
+                };
+
+                let first_ident = self.expect_ident()?;
+                let mut prefix_span = leading_span.map(|s| s.merge(first_ident.span)).unwrap_or(first_ident.span);
+                let mut segments: Vec<&'s str> = vec![first_ident.name];
+
+                // Loop while next separator is `\` or `/`, UNLESS followed immediately by `{`
+                loop {
+                    let is_backslash = self.check(&Token::Backslash);
+                    let is_slash = self.check(&Token::Slash);
+                    if is_backslash || is_slash {
+                        if self.peek_nth(1).map(|t| &t.token) == Some(&Token::OpenBrace) {
+                            break;
+                        }
+                        self.advance(); // consume `\` or `/`
+                        if self.check(&Token::Star) {
+                            let err_sp = self.advance().unwrap().span;
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: "Wildcard imports ('*') are not supported in RHP. Import symbols explicitly for deterministic static analysis and tree-shaking.".to_string(),
+                                },
+                                err_sp,
+                            ));
+                        }
+                        let next_ident = self.expect_ident()?;
+                        prefix_span = prefix_span.merge(next_ident.span);
+                        segments.push(next_ident.name);
+                    } else {
+                        break;
+                    }
+                }
+
+                let mut prefix_str = String::new();
+                if has_leading_backslash {
+                    prefix_str.push('\\');
+                }
+                prefix_str.push_str(&segments.join("\\"));
+
+                // Check if followed by wildcard: `\*`, `/*`, or `::*`
+                if (self.check(&Token::Backslash) || self.check(&Token::Slash) || self.check(&Token::DoubleColon))
+                    && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Star)
+                {
+                    self.advance(); // consume separator
+                    let err_sp = self.advance().unwrap().span;
+                    return Err(ParseError::new(
+                        ParseErrorKind::Custom {
+                            message: "Wildcard imports ('*') are not supported in RHP. Import symbols explicitly for deterministic static analysis and tree-shaking.".to_string(),
+                        },
+                        err_sp,
+                    ));
+                }
+
+                // Check for group import: `::{`, `\{`, `/{`, or `{`
+                let is_group = if self.check(&Token::DoubleColon) && self.peek_nth(1).map(|t| &t.token) == Some(&Token::OpenBrace) {
+                    self.advance(); // consume `::`
+                    self.advance(); // consume `{`
+                    true
+                } else if (self.check(&Token::Backslash) || self.check(&Token::Slash)) && self.peek_nth(1).map(|t| &t.token) == Some(&Token::OpenBrace) {
+                    self.advance(); // consume `\` or `/`
+                    self.advance(); // consume `{`
+                    true
+                } else if self.matches(&Token::OpenBrace) {
+                    true
+                } else {
+                    false
+                };
+
+                if is_group {
+                    struct RawGroupItem<'a> {
+                        is_self: bool,
+                        ident: Option<Ident<'a>>,
+                        alias: Option<Ident<'a>>,
+                        span: Span,
+                    }
+
+                    let mut raw_items: Vec<RawGroupItem<'s>> = Vec::new();
+
+                    // Parse comma-separated group items until `}`
+                    while !self.check(&Token::CloseBrace) && !self.is_eof() {
+                        let item_start = self.current_span();
+                        if self.check(&Token::Star) {
+                            let err_sp = self.advance().unwrap().span;
+                            return Err(ParseError::new(
+                                ParseErrorKind::Custom {
+                                    message: "Wildcard imports ('*') are not supported in RHP. Import symbols explicitly for deterministic static analysis and tree-shaking.".to_string(),
+                                },
+                                err_sp,
+                            ));
+                        }
+
+                        // Optional `function` or `const` prefix inside group
+                        let _ = self.matches(&Token::Function) || self.matches(&Token::Const);
+
+                        // Check for `self` or `Self`
+                        let is_self = matches!(self.peek().map(|t| &t.token), Some(Token::Ident(s)) if s.eq_ignore_ascii_case("self"));
+                        if is_self {
+                            let self_token = self.advance().unwrap();
+                            let alias = if self.matches(&Token::As) {
+                                Some(self.expect_ident()?)
+                            } else {
+                                None
+                            };
+                            let span = item_start.merge(alias.as_ref().map(|a| a.span).unwrap_or(self_token.span));
+                            raw_items.push(RawGroupItem {
+                                is_self: true,
+                                ident: None,
+                                alias,
+                                span,
+                            });
+                        } else {
+                            let item_ident = self.expect_ident()?;
+                            let alias = if self.matches(&Token::As) {
+                                Some(self.expect_ident()?)
+                            } else {
+                                None
+                            };
+                            let span = item_start.merge(alias.as_ref().map(|a| a.span).unwrap_or(item_ident.span));
+                            raw_items.push(RawGroupItem {
+                                is_self: false,
+                                ident: Some(item_ident),
+                                alias,
+                                span,
+                            });
+                        }
+
+                        if !self.matches(&Token::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(Token::CloseBrace)?;
+
+                    let (parent_ns, stem) = match prefix_str.rsplit_once('\\') {
+                        Some((p, s)) => (Some(p), s),
+                        None => (None, prefix_str.as_str()),
+                    };
+
+                    let has_self_or_stem = raw_items.iter().any(|item| {
+                        item.is_self || (parent_ns.is_some() && item.ident.as_ref().map(|id| id.name) == Some(stem))
+                    });
+
+                    for item in raw_items {
+                        if item.is_self || (has_self_or_stem && item.ident.as_ref().map(|id| id.name) == Some(stem)) {
+                            let leaked_name: &'s str = Box::leak(prefix_str.clone().into_boxed_str());
+                            if let Some(ref a) = item.alias {
+                                self.register_user_function(a.name);
+                            } else {
+                                self.register_user_function(stem);
+                            }
+                            imports.push(UseImport {
+                                span: item.span,
+                                name: Ident::new(leaked_name, prefix_span),
+                                alias: item.alias,
+                            });
+                        } else {
+                            let item_ident = item.ident.unwrap();
+                            let base = if has_self_or_stem {
+                                parent_ns.unwrap_or(&prefix_str)
+                            } else {
+                                &prefix_str
+                            };
+                            let full_target = format!("{}\\{}", base, item_ident.name);
+                            let leaked_name: &'s str = Box::leak(full_target.into_boxed_str());
+                            if let Some(ref a) = item.alias {
+                                self.register_user_function(a.name);
+                            } else {
+                                self.register_user_function(item_ident.name);
+                            }
+                            imports.push(UseImport {
+                                span: item.span,
+                                name: Ident::new(leaked_name, item_ident.span),
+                                alias: item.alias,
+                            });
+                        }
+                    }
+                } else {
+                    // Single import
+                    let alias = if self.matches(&Token::As) {
+                        Some(self.expect_ident()?)
                     } else {
                         None
                     };
-                    let span = imp_start.merge(alias.as_ref().map(|a| a.span).unwrap_or(name.span));
-                    Ok(UseImport { span, name, alias })
-                },
-                Token::Comma,
-                &Token::SemiColon,
-            )?;
+                    let span = prefix_span.merge(alias.as_ref().map(|a| a.span).unwrap_or(prefix_span));
+                    let short_name = alias.as_ref().map(|a| a.name).unwrap_or_else(|| {
+                        prefix_str.rsplit('\\').next().unwrap_or(&prefix_str)
+                    });
+                    self.register_user_function(short_name);
+                    let leaked_name: &'s str = Box::leak(prefix_str.into_boxed_str());
+                    imports.push(UseImport {
+                        span,
+                        name: Ident::new(leaked_name, prefix_span),
+                        alias,
+                    });
+                }
+
+                if !self.matches(&Token::Comma) {
+                    break;
+                }
+            }
+
             self.expect_statement_terminator()?;
             let span = start_span.merge(self.current_span());
             return Ok(Stmt::new(StmtKind::Use(imports), span));
@@ -688,6 +894,46 @@ impl<'s> CombinatorStream<'s> {
             let body = self.parse_stmt()?;
             let span = start_span.merge(body.span);
             return Ok(Stmt::new(StmtKind::Defer(Box::new(body)), span));
+        }
+
+        // 18b. Constant declaration (`const PI = 3.14;`, `const PI: float = 3.14;`, `private const ...`, `public const ...`)
+        let is_const_start = self.check(&Token::Const)
+            || ((self.check(&Token::Private) || self.check(&Token::Public))
+                && self.peek_nth(1).map(|t| &t.token) == Some(&Token::Const));
+        if is_const_start {
+            let visibility = if self.matches(&Token::Private) {
+                Visibility::Private
+            } else {
+                let _ = self.matches(&Token::Public);
+                Visibility::Public
+            };
+            self.expect(Token::Const)?;
+            let consts = self.separated_by(
+                |s| {
+                    let start_sp = s.current_span();
+                    let name = s.expect_ident()?;
+                    let type_hint = if s.matches(&Token::Colon) {
+                        Some(s.parse_type_hint()?)
+                    } else {
+                        None
+                    };
+                    s.expect(Token::Assign)?;
+                    let value = s.parse_expr_lowest()?;
+                    let span = start_sp.merge(value.span);
+                    Ok(ConstDecl {
+                        span,
+                        visibility,
+                        name,
+                        type_hint,
+                        value,
+                    })
+                },
+                Token::Comma,
+                &Token::SemiColon,
+            )?;
+            self.expect_statement_terminator()?;
+            let span = start_span.merge(self.current_span());
+            return Ok(Stmt::new(StmtKind::Const(consts), span));
         }
 
         // 19. Declarations: Function, Class, Interface, Trait, Enum

@@ -8,7 +8,7 @@ pub use expr::{
     StringPart, UnaryOp,
 };
 pub use stmt::{
-    Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind, ElseIfBranch,
+    Attribute, CatchClause, ClassConstDecl, ClassDecl, ClassMember, ClassMemberKind, ConstDecl, ElseIfBranch,
     EnumCase, EnumDecl, FunctionDecl, InterfaceDecl, MethodDecl, Param, PropertyDecl, Stmt,
     StmtKind, SwitchCase, TraitAdaptation, TraitAlias, TraitDecl, TraitInsteadOf, TraitUseDecl,
     UseImport,

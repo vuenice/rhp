@@ -544,5 +544,167 @@ fn test_namespaced_dnf_types_with_fully_qualified_and_aliased_interfaces() {
     assert_eq!(vm.get_main_variable("$isExportedEntity"), Some(&PhpValue::Bool(true)));
 }
 
+#[test]
+fn test_group_use_functions_and_constants() {
+    let source = r#"
+        namespace App\Helper {
+            const myArr = [10, 20, 30];
+            const myConst = 42;
 
+            function myFun($x: int): int {
+                return $x * 2;
+            }
+        }
 
+        namespace App\Consumer {
+            use App\Helper\{ myArr, myConst, myFun };
+
+            $res = myFun(21);
+            $c = myConst;
+            $arr = myArr;
+        }
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Group use execution should succeed");
+    assert_eq!(vm.get_main_variable("$res"), Some(&PhpValue::Int(42)));
+    assert_eq!(vm.get_main_variable("$c"), Some(&PhpValue::Int(42)));
+    let arr_val = vm.get_main_variable("$arr").unwrap();
+    assert_eq!(
+        arr_val,
+        &PhpValue::list(vec![PhpValue::Int(10), PhpValue::Int(20), PhpValue::Int(30)])
+    );
+}
+
+#[test]
+fn test_group_use_with_alias_and_double_colon() {
+    let source = r#"
+        namespace App\Math {
+            const PI: float = 3.14;
+
+            function add($a: int, $b: int): int {
+                return $a + $b;
+            }
+        }
+
+        namespace App\Main {
+            use App\Math::{ PI as MathPi, add as mathAdd };
+
+            $sum = mathAdd(10, 20);
+            $pi = MathPi;
+        }
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Group use with alias should succeed");
+    assert_eq!(vm.get_main_variable("$sum"), Some(&PhpValue::Int(30)));
+    assert_eq!(vm.get_main_variable("$pi"), Some(&PhpValue::Float(3.14)));
+}
+
+#[test]
+fn test_group_use_with_slash_separator() {
+    let source = r#"
+        namespace App\Utilities {
+            const GREETING = "Hello from Utilities";
+
+            function shout($msg: string): string {
+                return $msg + "!";
+            }
+        }
+
+        namespace App\Caller {
+            use App/Utilities/{ GREETING, shout };
+
+            $g = GREETING;
+            $s = shout("rhp");
+        }
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Slash separator in group use should succeed");
+    assert_eq!(vm.get_main_variable("$g"), Some(&PhpValue::String("Hello from Utilities".into())));
+    assert_eq!(vm.get_main_variable("$s"), Some(&PhpValue::String("rhp!".into())));
+}
+
+#[test]
+fn test_group_use_with_self_and_auxiliary_classes() {
+    let source = r#"
+        namespace App\Models {
+            enum UserStatus: string {
+                case Active = "active";
+                case Suspended = "suspended";
+            }
+
+            class UserRole {
+                public function title(): string {
+                    return "Administrator";
+                }
+            }
+
+            class User {
+                public $name: string = "Alice";
+                public function getName(): string {
+                    return $this->name;
+                }
+            }
+
+            function defaultUser(): User {
+                return new User();
+            }
+        }
+
+        namespace App\Service {
+            use App\Models\User::{ self, UserStatus, UserRole, defaultUser };
+
+            $u = new User();
+            $name = $u->getName();
+
+            $role = new UserRole();
+            $title = $role->title();
+
+            $status = UserStatus::Active;
+            $statusName = $status->name;
+
+            $u2 = defaultUser();
+            $name2 = $u2->getName();
+        }
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Self and auxiliary classes in group use should succeed");
+    assert_eq!(vm.get_main_variable("$name"), Some(&PhpValue::String("Alice".into())));
+    assert_eq!(vm.get_main_variable("$title"), Some(&PhpValue::String("Administrator".into())));
+    assert_eq!(vm.get_main_variable("$statusName"), Some(&PhpValue::String("Active".into())));
+    assert_eq!(vm.get_main_variable("$name2"), Some(&PhpValue::String("Alice".into())));
+}
+
+#[test]
+fn test_top_level_const_declaration_and_access() {
+    let source = r#"
+        const APP_VERSION: string = "1.0.0";
+        const MAX_RETRIES: int = 3;
+        const CONFIG_FLAGS = [1, 2];
+
+        $v = APP_VERSION;
+        $r = MAX_RETRIES;
+    "#;
+
+    let (vm, _) = run_source_with_vm(source).expect("Top-level const declarations must succeed");
+    assert_eq!(vm.get_main_variable("$v"), Some(&PhpValue::String("1.0.0".into())));
+    assert_eq!(vm.get_main_variable("$r"), Some(&PhpValue::Int(3)));
+}
+
+#[test]
+fn test_wildcard_use_import_rejected() {
+    let source = r#"
+        use App\Helper::*;
+    "#;
+    let res = run_source_with_vm(source);
+    assert!(res.is_err(), "Wildcard use import must be rejected at compile time");
+    let err_str = format!("{:?}", res.err());
+    assert!(err_str.contains("Wildcard imports ('*') are not supported in RHP"));
+
+    let source2 = r#"
+        use App\Helper::{*};
+    "#;
+    let res2 = run_source_with_vm(source2);
+    assert!(res2.is_err(), "Group wildcard use import must be rejected at compile time");
+    let err_str2 = format!("{:?}", res2.err());
+    assert!(err_str2.contains("Wildcard imports ('*') are not supported in RHP"));
+}

@@ -27,6 +27,7 @@ pub use migrate::{
     remove_error_suppression, remove_php_tags, replace_get_array_access, replace_list_destructuring,
     replace_post_array_access, replace_type_casts, replace_var_dump_and_export,
     strip_declare_statements, strip_error_reporting, strip_legacy_includes,
+    replace_legacy_includes_with_use_and_namespace, resolve_file_psr4_namespace, find_project_root_and_psr4,
     migrate_simple_output_buffering, migrate_controller_echo, transpile_php_template_to_rade,
     swap_positional_calls_and_warn_tricky,
     upgrade_php_file, upgrade_php_path, upgrade_php_source, MigrateFileResult, MigrateOptions,

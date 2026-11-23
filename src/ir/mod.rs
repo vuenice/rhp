@@ -245,6 +245,8 @@ pub struct IrModule {
     pub interfaces: HashMap<String, CompiledInterface>,
     /// Compiled enums by name.
     pub enums: HashMap<String, CompiledEnum>,
+    /// Compiled top-level or module-level constants.
+    pub constants: HashMap<String, CompiledClassConst>,
     /// Global runtime class table with flattened vtables and prop layouts.
     pub class_table: ClassTable,
     /// Read-only static metadata table emitted by the compiler (Reflection alternative).

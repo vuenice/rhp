@@ -201,6 +201,11 @@ pub fn walk_stmt<'s, V: AstVisitor<'s> + ?Sized>(visitor: &mut V, stmt: &Stmt<'s
             }
         }
         StmtKind::Use(_) | StmtKind::PackageImport { .. } | StmtKind::Global(_) => {}
+        StmtKind::Const(items) => {
+            for item in items {
+                visitor.visit_expr(&item.value);
+            }
+        }
         StmtKind::Echo(exprs) | StmtKind::Unset(exprs) => {
             for e in exprs {
                 visitor.visit_expr(e);
