@@ -585,7 +585,7 @@ System environment, execution delays, and process intrinsics:
   - `Future::delayed(int $milliseconds, callable $fn = null)`: Non-blocking yield/delay using Tokio timers (`tokio::time::sleep`). If a closure is provided, executes and returns its result after the delay.
   - `Future::value(mixed $value)`: Immediately wraps a value into a completed `Future` instance synchronously.
   - `Future::error(mixed $error)`: Immediately returns a rejected/failed `Future` wrapping an error or exception.
-  - `Future::wait(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns an array of resolved values without requiring an explicit `->wait()` chain.
+  - `Future::all(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns an array of resolved values without requiring an explicit `->wait()` chain.
   - `Future::any(array $tasks)`: Concurrently runs an array of closures (or Futures) and directly evaluates and returns the result of whichever task completes first without requiring an explicit `->wait()` chain.
   - `Future::defer(callable $fn)`: Registers a post-response callback in the request queue executed after the HTTP response payload is flushed to the client (replacing stand-alone `defer()`).
 
@@ -606,7 +606,7 @@ System environment, execution delays, and process intrinsics:
 - **Strict Elimination of the `await` Keyword (No Function Coloring):**
   - RHP eliminates function coloring by avoiding the `await` keyword completely.
   - For synchronous, straightforward blocking execution, developers use `File`, `DB`, and `HTTP`.
-  - For asynchronous execution, developers use `AFile`, `ADB`, `AHTTP`, or `Future::run()`, and synchronize values with `$future->wait()` or `Future::wait([ ... ])`.
+  - For asynchronous execution, developers use `AFile`, `ADB`, `AHTTP`, or `Future::run()`, and synchronize values with `$future->wait()` or `Future::all([ ... ])`.
   - Typing `await` triggers a compile error directing developers to synchronous facades or `->wait()`.
 
 - **Formatted Output Intrinsics (`echo` & `print`):**
@@ -622,34 +622,79 @@ System environment, execution delays, and process intrinsics:
     - `{:b}`: Binary formatting (`Sys::print("{:b}", 5)` -> `101`)
   - **No `Sys::println`:** There is no function like `Sys::println` in RHP. Only `echo` and `print` exist. Invoking `Sys::println(...)` fails with `UndefinedFacadeMethod`.
 
-#### Concurrent execution using `Future::wait()`:
+#### Concurrent execution using `Future::join()` / `Future::all()`:
 
 ```php
-[$user, $posts] = Future::wait([
-    ADB::table('users')->find($id),
-    AHTTP::get("https://api.example.com/posts?user={$id}")->json()
-]);
+[$user, $posts] = Future::join([
+    fn() => DB::table('users')->find($id),
+    fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
+])->wait();
+
+// Global join sugar
+[$users, $stats] = join([
+    fn() => DB::table('users')->get(),
+    fn() => DB::table('stats')->get(),
+])->wait();
 ```
 
-#### First-to-complete resolution using `Future::any()`:
+#### First-to-complete resolution using `Future::select()` / `Future::any()`:
 
 ```php
-$fastestResponse = Future::any([
-    AHTTP::get('https://primary-mirror.com/data')->json(),
-    AHTTP::get('https://secondary-mirror.com/data')->json()
-]);
+$fastestResponse = Future::select([
+    fn() => HTTP::get('https://primary-mirror.com/data')->json(),
+    fn() => HTTP::get('https://secondary-mirror.com/data')->json()
+])->wait();
+
+// Global select sugar
+$fastest = select([$f1, $f2])->wait();
 ```
 
-#### Non-blocking delay using `Future::delayed()`:
+#### Timeouts & Fallbacks with `Future::timeout()`:
 
 ```php
+// Enforce 250ms deadline with fallback
+$result = Future::timeout(
+    HTTP::get('https://external-service.com/api'),
+    250,
+    ['cached' => true]
+)->wait();
+
+// Fluent instance method
+$result = $future->timeout(500, "fallback_response")->wait();
+```
+
+#### Non-blocking delay using `Future::sleep()` / `Future::delayed()`:
+
+```php
+Future::sleep(500)->wait(); // Non-blocking timer
 $delayedResult = Future::delayed(500, fn() => 'Execution resumed after 500ms');
 ```
 
-#### Register post-response hook with `Future::defer()`:
+#### CPU-heavy / Blocking C Work: `Task::blocking()`:
 
 ```php
-Future::defer(fn() => Log::info('Request processed successfully'));
+// Offload CPU-bound hashing or blocking C tasks off the request fiber
+$hash = Task::blocking(fn() => Crypt::hash("sha256", $largePayload))->wait();
+```
+
+#### Offloaded Background Work: `Task::dispatch()` & `task()`:
+
+```php
+// Fire-and-forget dispatch to isolated task worker pool (returns void, non-future)
+task(fn() => DB::table('audit_logs')->insert(['event' => 'user_signup']));
+```
+
+#### Concurrency Rate Limiting with `Semaphore`:
+
+```php
+$sem = Semaphore::create(5);
+$result = $sem->run(fn() => HTTP::get('https://rate-limited-api.com'));
+```
+
+#### Register post-response hook with `Future::defer()` / `defer()`:
+
+```php
+defer(fn() => Log::info('Request processed successfully'));
 ```
 
 ---
@@ -759,7 +804,7 @@ pub fn eval_expr(node: &ASTNode, env: &mut Environment) -> Result<Value, Runtime
 16. **Synchronous-by-Default Execution Model**: Design local execution fibers to run standard helpers and I/O calls (`File::read()`, `DB::table()`) sequentially and blocking by default for predictable, linear developer ergonomics.
 17. **Standardized Central Logging & Swappable Handlers**: Expose a unified RFC 5424 `Log` call-site interface with trait-backed swappable backends (`LogHandler`), dedicated channel routes (`Log::channel("security")`), zero-config pretty/JSON stdout handlers, automatic fiber/request/trace context propagation, sub-nanosecond lazy level evaluation, and leak-free test isolation (`Log::fake()`).
 18. **Post-Response Defer Execution Hooks (`Future::defer`)**: Implement `Future::defer()` to register post-response callbacks in a dedicated request queue executed strictly *after* the HTTP response payload has been flushed to the client, preventing background tasks from impacting request latency.
-19. **Dart-Style Future Concurrency Core (`Future` Facade)**: Provide non-blocking background task execution via the `Future` class (`Future::run`, `Future::delayed`, `Future::wait`, `Future::any`) which accepts closures directly to evaluate parallel task joins and races cleanly without redundant `->wait()` chains.
+19. **Dart-Style Future Concurrency Core (`Future` Facade)**: Provide non-blocking background task execution via the `Future` class (`Future::run`, `Future::delayed`, `Future::all`, `Future::any`) which accepts closures directly to evaluate parallel task joins and races cleanly without redundant `->wait()` chains.
 20. **Memory Ownership & Safety Enforcement**: Leverage Rust’s compile-time borrow checker and ownership model (`Send + Sync`) to guarantee absolute memory safety and eliminate data races across concurrent worker threads without relying on a traditional tracing garbage collector.
 
 ### Deep Dive: Memory Ownership & Safety Enforcement (Technical Point #20)

@@ -1317,7 +1317,7 @@ fn build_http_chain(opts: &ParsedCurlSession) -> String {
 /// - Unassigned `curl_exec`: automatically wraps in `Future::async(fn() => Http::...);`
 /// - Flags `curl_multi_*` loops for manual review with guide link:
 ///   `https://rhp.dev/docs/reference/unsupported-php#curl-extension`
-///   and comments: "You can use Http::pool([...]) / Future::wait([...])"
+///   and comments: "You can use Http::pool([...]) / Future::all([...])"
 pub fn upgrade_curl_calls(source: &str) -> (String, usize, usize) {
     let mask = build_code_mask(source);
     let mut curl_migrated_count = 0;
@@ -1401,7 +1401,7 @@ pub fn upgrade_curl_calls(source: &str) -> (String, usize, usize) {
                 indent
             ));
             replacement.push_str(&format!(
-                "{}// You can use Http::pool([...]) / Future::wait([...])\n",
+                "{}// You can use Http::pool([...]) / Future::all([...])\n",
                 indent
             ));
 

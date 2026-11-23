@@ -52,6 +52,16 @@ impl FacadeInfo {
         }
     }
 
+    pub const fn native_instantiable(name: &'static str, description: &'static str) -> Self {
+        Self {
+            name: Cow::Borrowed(name),
+            tier: FacadeTier::Tier1Native,
+            is_static_only: false,
+            supports_macros: true,
+            description: Cow::Borrowed(description),
+        }
+    }
+
     pub fn new(
         name: impl Into<Cow<'static, str>>,
         tier: FacadeTier,
@@ -270,6 +280,14 @@ pub static NATIVE_FACADES: &[FacadeInfo] = &[
     FacadeInfo::native(
         "Ws",
         "Canonical alias for WebSocket facade",
+    ),
+    FacadeInfo::native(
+        "Task",
+        "Tokio-aligned background task execution facade (dispatch, blocking)",
+    ),
+    FacadeInfo::native_instantiable(
+        "Semaphore",
+        "Concurrency permit coordinator facade (create, with, run, available)",
     ),
 ];
 
@@ -1735,6 +1753,7 @@ impl FacadeRegistry {
             "binary" => "Binary",
             "view" => "View",
             "rade" => "Rade",
+            "task" => "Task",
             _ => return false,
         };
         self.get_facade(normalized)
@@ -1796,7 +1815,7 @@ pub fn is_native_or_plugin_facade(name: &str) -> bool {
         "bool" | "boolean" | "int" | "float" | "str" | "string" | "arr" | "array" | "future" | "log" | "db"
             | "file" | "http" | "sys" | "glob" | "session" | "cookie" | "request" | "response" | "image" | "url" | "phpfun"
             | "adb" | "afile" | "ahttp" | "crypt" | "html" | "validate" | "csv" | "uniq" | "debug"
-            | "time" | "duration" | "path" | "socket" | "binary" | "view" | "rade"
+            | "time" | "duration" | "path" | "socket" | "binary" | "view" | "rade" | "task" | "semaphore"
     )
 }
 

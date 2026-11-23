@@ -87,7 +87,7 @@ pub use type_system::{
     parse_and_check_with_hierarchy, parse_and_check_with_path, ClassTypeInfo, CollectionSubtype, EnumTypeInfo, FrontendError,
     FunctionSignature, InterfaceTypeInfo, ParamSignature, PropertyTypeInfo, RhpType,
     TypeCheckResult, TypeChecker, TypeEnvironment, TypeError, TypeErrorKind,
-    TypeHierarchy, TypedProgram, VariableBinding,
+    TypeHierarchy, TypedProgram, TypeWarning, VariableBinding,
 };
 pub use jit::{
     CompiledFunctionFn, CompiledLoopFn, JitCompiler, JitConfig, JitEngine, JitError, NativeFrame,
@@ -142,6 +142,11 @@ pub use telemetry::{
 };
 
 pub use runtime::*;
+pub use pkg::{
+    clear_request_handles, get_handle_registry, get_process_handle, get_request_handle,
+    register_process, register_process_with_owner, register_request, with_request_handle_registry,
+    Handle, HandleEntry, HandleError, OpaqueHandleRegistry, ProcessScoped, RequestScoped,
+};
 
 /// Standard HTTP/1.1 status reason phrases.
 pub fn http_status_reason(code: u16) -> &'static str {

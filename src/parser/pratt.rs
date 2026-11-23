@@ -663,7 +663,7 @@ impl<'s> CombinatorStream<'s> {
                     spanned.span,
                 ))
             }
-            Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap | Token::Echo => Ok(Expr::new(
+            Token::TypeList | Token::TypeDict | Token::TypeSet | Token::TypeHashMap | Token::Echo | Token::Defer | Token::Async => Ok(Expr::new(
                 ExprKind::Ident(Ident::new(spanned.token.as_str(), spanned.span)),
                 spanned.span,
             )),
@@ -1516,6 +1516,18 @@ impl<'s> CombinatorStream<'s> {
                             callee_name
                         };
                         return Ok(Expr::static_call("Arr", method, args, callee_span, span));
+                    }
+
+                    if matches!(
+                        callee_name,
+                        "concurrent" | "defer" | "join" | "select" | "async"
+                    ) && !self.is_user_defined_function(callee_name)
+                    {
+                        return Ok(Expr::static_call("Future", callee_name, args, callee_span, span));
+                    }
+
+                    if callee_name == "task" && !self.is_user_defined_function(callee_name) {
+                        return Ok(Expr::static_call("Task", "dispatch", args, callee_span, span));
                     }
 
                     let call_node = if is_reserved_intrinsic(callee_name) {

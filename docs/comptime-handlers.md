@@ -180,6 +180,6 @@ RHP features two execution environments:
 
 ### 6.2 Mitigation Strategy: Restricted Comptime Subset
 RHP enforces a strict **Comptime Pure Subset** during macro execution:
-- Async primitives (`Future::run`, `Future::wait`, `defer`) are forbidden at comptime.
+- Async primitives (`Future::run`, `Future::all`, `defer`) are forbidden at comptime.
 - Raw FFI and native pointer calls are forbidden.
 - Arithmetic strictly adheres to language boundary contracts.

@@ -31,8 +31,9 @@ pub use manifest::{
     ALT_MANIFEST_FILENAME, MANIFEST_FILENAME,
 };
 pub use opaque_handle::{
-    clear_request_handles, get_handle_registry, with_request_handle_registry, HandleError,
-    OpaqueHandleRegistry,
+    clear_request_handles, get_handle_registry, get_process_handle, get_request_handle,
+    register_process, register_process_with_owner, register_request, with_request_handle_registry,
+    Handle, HandleEntry, HandleError, OpaqueHandleRegistry, ProcessScoped, RequestScoped,
 };
 pub use resolver::{
     add_package, init_project, install, install_all, install_package, remove_package,

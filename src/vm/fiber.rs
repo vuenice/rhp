@@ -370,9 +370,12 @@ impl Fiber {
         }
     }
 
-    /// Drop every cursor and leased handle stored on this fiber.
+    /// Drop every cursor and leased handle stored on this fiber, and sweep any
+    /// process-registry handles tagged with this fiber's identity as a backstop.
     pub fn release_handles(&self) {
         self.handles.clear();
+        crate::pkg::opaque_handle::get_handle_registry().release_owned_by(&self.name);
+        crate::pkg::opaque_handle::get_handle_registry().release_owned_by(&self.id.to_string());
     }
 
     /// Set an explicit [`FiberId`].

@@ -323,7 +323,7 @@ pub enum OpCode {
         arg_count: u16,
     },
 
-    /// Invoke a static facade method (`Str::slug`, `Arr::merge`, `Future::wait`, `Sys::print`, etc.).
+    /// Invoke a static facade method (`Str::slug`, `Arr::merge`, `Future::all`, `Sys::print`, etc.).
     FacadeCall {
         dst: Reg,
         facade: ConstantId,

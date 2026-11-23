@@ -148,7 +148,7 @@ pub fn parse_expr(&mut self, min_bp: u8) -> Result<Expr<'s>, ParseError> {
   * Chained assignment: `$a = $b = 10` parses as `$a = ($b = 10)`.
   * Null-coalesce: `$a ?? $b ?? $c` parses as `$a ?? ($b ?? $c)`.
 * **Fluent Chaining & Scope Resolution:** High binding power (`100`) binds collection expressions and variables, chaining subsequent `->map(...)` and `->filter(...)` calls cleanly without parentheses.
-* **Array Destructuring:** Prefix `[` detects lvalue target lists (`[$user, $posts] = Future::wait([...])`).
+* **Array Destructuring:** Prefix `[` detects lvalue target lists (`[$user, $posts] = Future::all([...])`).
 * **Double-Quoted String Interpolation:** `"user={$id}"` is tokenized and decomposed into `Literal::InterpolatedString` with discrete `StringPart::Literal` and `StringPart::Expr` chunks.
 * **Static Facade Protection:** Instantiating static facades (`new Int()`, `new Arr()`, `new Str()`) triggers an immediate compile-time `ParseErrorKind::StaticFacadeInstantiationForbidden` error:
   ```text

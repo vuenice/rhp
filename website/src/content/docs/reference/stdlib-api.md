@@ -590,25 +590,77 @@ Float::bccomp('0.3', '0.30');  // 0 (or bccomp('0.3', '0.30'))
 
 ## `Future` Facade & Instance API
 
-```php
-// Static Methods
-Future::run(callable $fn): Future;
-Future::wait(array $tasks): array;
-Future::any(array $tasks): mixed;
-Future::delayed(int $milliseconds, callable $fn = null): mixed;
-Future::defer(callable $fn);
-Future::value(mixed $value): Future;
-Future::error(mixed $error): Future;
+`wait` is an instance method. `Future::all` joins a list immediately. `Future::concurrent` and `Future::join` return a `Future` of that list.
 
-// Instance Properties & State Inspection (Matches Rust Poll::Pending / Poll::Ready)
-$future->state;                 // string: "Pending" | "Ready"
-$future->status;                // string: "Pending" | "Ready"
-$future->getState(): string;    // "Pending" | "Ready"
-$future->isPending(): bool;     // true if background Tokio task is running
-$future->isReady(): bool;       // true if completed
-$future->isCompleted(): bool;   // true if completed
-$future->poll(): mixed;         // Non-blocking poll: returns null if pending, or resolved value
-$future->wait(): mixed;         // Synchronously waits for completion and returns resolved value
+```php
+// Static methods
+Future::run(callable $fn): Future;
+Future::async(callable $fn): Future;                 // alias of run
+async(callable $fn): Future;                        // global alias
+Future::concurrent(array $tasks): Future;           // all must succeed; resolves to a list
+concurrent(array $tasks): Future;                    // global alias
+Future::join(array $tasks): Future;                 // Tokio-aligned concurrent join; resolves to a list
+join(array $tasks): Future;                          // global alias
+Future::all(array $tasks): array;                    // eager join, same list as concurrent()->wait()
+Future::allSettled(array $tasks): Future;           // every task, success or error
+Future::any(array $tasks): mixed;                    // first success; errors are skipped
+Future::select(array $tasks): Future;               // Tokio-aligned race combinator; resolves to first success
+select(array $tasks): Future;                        // global alias
+Future::race(array $tasks): mixed;                   // first settlement, success or error
+Future::timeout(Future $fut, int $ms, mixed $fallback = null): Future; // wraps future with deadline & fallback
+Future::delay(int $milliseconds): Future;           // timer, resolves to null
+Future::delayed(int $milliseconds, callable $fn = null): Future;
+Future::sleep(int $milliseconds): Future;           // non-blocking Tokio sleep timer
+Future::defer(callable $fn): Future;                 // run on wait(), or after the response
+defer(callable $fn): Future;                         // global alias
+Future::value(mixed $value): Future;                // immediately resolved future
+Future::error(mixed $error): Future;                // immediately rejected future
+
+// Instance methods
+$future->wait(int? $timeoutMs = null): mixed;
+$future->timeout(int $ms, mixed $fallback = null): Future; // fluent deadline with fallback
+$future->then(callable $fn): Future;
+$future->catch(callable $fn): Future;               // error recovery alias: catchError
+$future->isReady(): bool;
+$future->isPending(): bool;
+$future->isCompleted(): bool;
+$future->hasError(): bool;
+$future->value(): mixed;                            // non-blocking inspection of resolved value
+$future->error(): ?string;                          // non-blocking inspection of error
+$future->cancel(): void;
+$future->state;                                     // string: "Pending" | "Ready"
+$future->status;                                    // string: "Pending" | "Ready"
+$future->getState(): string;
+$future->poll(): dict;                              // non-blocking probe returning state/value/error
+```
+
+---
+
+## `Task` Facade API (Tokio Worker & Blocking Thread Offloading)
+
+```php
+// Static methods
+Task::blocking(callable $fn): Future;               // Tokio spawn_blocking pool for CPU-bound or blocking C calls
+Task::dispatch(callable $fn): void;                 // Fire-and-forget dispatch to Task Worker Process Pool (strictly void)
+task(callable $fn): void;                            // Global alias for Task::dispatch
+```
+
+---
+
+## `Semaphore` Facade & Instance API (Tokio Concurrency Permit Coordinator)
+
+```php
+// Static factory & scoped execution
+Semaphore::create(int $permits = 1): Semaphore;     // Create permit coordinator backed by tokio::sync::Semaphore
+Semaphore::with(int $permits, callable $fn): mixed; // Scoped execution acquiring and releasing permits automatically
+
+// Instance methods
+$sem->acquire(): void;                              // Acquire 1 permit (waits if none available)
+$sem->tryAcquire(): bool;                           // Non-blocking try-acquire; returns false if full
+$sem->release(): void;                              // Release 1 permit back to coordinator
+$sem->available(): int;                             // Available permits remaining
+$sem->permits(): int;                               // Configured total permits
+$sem->run(callable $fn): mixed;                     // Scoped execution with automatic permit release
 ```
 
 ---

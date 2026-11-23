@@ -680,8 +680,11 @@ impl<'s> CombinatorStream<'s> {
             return Ok(Stmt::new(StmtKind::Echo(exprs), span));
         }
 
-        // 18. Defer statement
-        if self.matches(&Token::Defer) {
+        // 18. Defer statement. `defer(...)` is the Future::defer call, not a statement.
+        if self.check(&Token::Defer)
+            && self.peek_nth(1).map(|t| &t.token) != Some(&Token::OpenParen)
+        {
+            self.advance();
             let body = self.parse_stmt()?;
             let span = start_span.merge(body.span);
             return Ok(Stmt::new(StmtKind::Defer(Box::new(body)), span));
