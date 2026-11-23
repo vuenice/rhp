@@ -51,7 +51,7 @@ Welcome to the initial public release of RHP!
 - **Native Facade Standard Library:**
   - `Arr`: Explicit subtyped collections (`list`, `dict`, `set`, `hashMap`) backed by Rust `Vec`, `IndexMap`, and `HashSet`.
   - `Str`: Binary-safe raw byte storage with 23-byte small string optimization (SSO) and UTF-8 safety checks.
-  - `Future`: Tokio fiber concurrency with `Future::run`, `Future::wait`, `Future::any`, and post-response `Future::defer`.
+  - `Future`: Tokio fiber concurrency with `Future::run`, `Future::all`, `Future::any`, and post-response `Future::defer`.
   - `Memory`: 100% GC-free deterministic destruction, bump request arena, and cycle prevention.
   - `Sys`: System intrinsics (`env`, `print`, `dd`, `version`).
 - **Tooling:**

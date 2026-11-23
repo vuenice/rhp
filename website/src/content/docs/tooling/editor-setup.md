@@ -17,7 +17,7 @@ code --install-extension vuenice.rhp-vscode
 - Custom TextMate syntax highlighting for `.rhp` and `.php` files.
 - Real-time diagnostic error squiggles from `rhp run lint`.
 - Format on Save integration.
-- Snippets for `list`, `dict`, `set`, `Future::wait`, and `shared class`.
+- Snippets for `list`, `dict`, `set`, `Future::all`, and `shared class`.
 
 ---
 

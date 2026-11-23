@@ -112,7 +112,7 @@ $orders = $ordersFut->wait();
 ```
 
 ### 2.3 `Future::concurrent()` (Parallel Task Join Barrier)
-Replaces `Future::all()` and `Future::wait()`:
+Replaces `Future::all()` and `Future::all()`:
 
 ```php
 $future = Future::concurrent(array $tasks): Future;
@@ -260,7 +260,7 @@ Token::Await => {
     Ok(Expr::new(ExprKind::Await(Box::new(inner)), span))
 }
 ```
-`ExprKind::Await` lowers directly to `OpCode::Await { dst, future }`, which in turn delegates to the fiber scheduler or `VmFuture::wait_result()`.
+`ExprKind::Await` lowers directly to `OpCode::Await { dst, future }`, which in turn delegates to the fiber scheduler or `VmFuture::all_result()`.
 
 ### 5.3 Statement-Level Future Discard Detection (Lint & Safety)
 To permanently eliminate the silent connection leak bug:
@@ -295,6 +295,98 @@ To ensure backward compatibility while completing the unification:
 |---|---|:---:|---|---|:---:|
 | **Standard I/O** | `DB::find(...)` | `mixed` | Suspends fiber until I/O ready | Local worker event loop (Tokio epoll) | No |
 | **Async Spawn** | `async(fn() => ...)` | `Future<T>` | Returns future immediately | Local worker sub-fiber | No (RequestArena) |
-| **Concurrent Join**| `Future::concurrent([...])` | `Future<list>`| Suspends until all tasks ready | Local worker sub-fibers | No (RequestArena) |
+| **Concurrent Join**| `Future::concurrent([...])` / `join([...])` | `Future<list>`| Suspends until all tasks ready | Local worker sub-fibers | No (RequestArena) |
+| **Race/Select** | `Future::select([...])` / `select([...])` | `Future<mixed>`| Races tasks; resolves to first completion | Local worker sub-fibers | No (RequestArena) |
+| **Timeout Guard** | `Future::timeout($fut, $ms, $fallback)` | `Future<mixed>`| Resolves to value or fallback on deadline | Local worker timer | No |
+| **Async Sleep** | `Future::sleep($ms)` | `Future<void>` | Suspends fiber non-blockingly | Local worker timer | No |
 | **Future Await** | `$fut->wait()` / `await $fut` | `T` | Suspends until future completes | Local worker event loop | No |
-| **Task Dispatch** | `task(fn() => ...)` | `void` | Never suspends ($O(1)$ IPC push) | Task Worker Process Pool | Yes (`FrozenValue`) |
+| **Blocking Task** | `Task::blocking(fn() => ...)` | `Future<T>` | Offloads CPU/C-blocking work to thread pool | Tokio `spawn_blocking` pool | Yes (`FrozenValue`) |
+| **Task Dispatch** | `task(fn() => ...)` / `Task::dispatch(...)` | `void` | Never suspends ($O(1)$ IPC push) | Task Worker Process Pool | Yes (`FrozenValue`) |
+| **Semaphore Rate Limit** | `Semaphore::create($n)` / `Semaphore::with($n, $fn)` | `Semaphore` / `mixed` | Guards concurrency permits | Thread-safe permit coordinator | No |
+
+---
+
+## 8. Rust & Tokio Async Alignment & Mental Model
+
+RHP’s concurrency runtime is built on top of **Rust and Tokio**, deliberately adopting Rust’s mental models while shielding script developers from raw low-level mechanics like manual wakers and self-referential pinned pointers.
+
+### 8.1 Foundational Concepts: Workloads, Concurrency, and Threads
+
+* **I/O-Bound Work:** Operations that spend most of their elapsed time awaiting external systems (network responses, database queries, disk operations). RHP handles these via non-blocking cooperative fibers on Tokio, suspending fibers rather than OS threads.
+* **CPU-Bound Work:** Operations that saturate processor compute (cryptographic hashing, image manipulation, large dataset transformations). Running long CPU computations directly inside request fibers starves the event loop. In RHP:
+  * Offload to background worker processes via `task(fn() => ...)`.
+  * Or offload to dedicated blocking threads via `Task::blocking(fn() => ...)` (Tokio's `spawn_blocking` equivalent).
+* **Concurrency vs. Parallelism:**
+  * *Concurrency* means multiple tasks are in progress over overlapping periods, interleaving cooperatively (e.g., `Future::concurrent` or `Future::select` running on a worker thread).
+  * *Parallelism* means multiple tasks execute at the exact same physical instant on separate CPU cores (e.g., multi-process worker cluster + Tokio thread pool).
+
+### 8.2 Rust vs. RHP Async Models: Lazy vs. Eager
+
+| Concept | Rust (`std::future::Future`) | RHP (`Future` / `corosensei`) |
+|---|---|---|
+| **Execution Model** | **Lazy:** Futures do nothing until explicitly polled (`.await`). | **Eager / Task-Driven:** `Future::run()` / `async()` starts executing immediately upon invocation. |
+| **Mechanics** | State machine polled via `poll(Pin<&mut Context>) -> Poll<T>`. | Stackful fiber / coroutine suspended and resumed via Tokio event wakers. |
+| **Stack Allocation** | Stackless: State machines pack into generated compiler structs. | Stackful: Fibers allocate lightweight coroutine stacks with zero heap copying. |
+| **Wakers / Pinning** | Developers manage `Pin<&mut Self>` and `Waker` contracts. | Entirely internal to RHP's Rust engine; hidden from script developers. |
+
+### 8.3 The Reactor / Executor Architecture
+
+RHP mirrors Tokio's two-part runtime architecture:
+1. **The Reactor:** Integrates directly with OS-level event notification facilities (`epoll` on Linux, `kqueue` on macOS, `IOCP` on Windows). When an RHP script calls `DB::query()` or `HTTP::get()`, the socket handle is registered with the reactor.
+2. **The Executor:** A multi-threaded work-stealing scheduler that drives fibers and tasks to completion. When the reactor notifies that an I/O handle is readable/writable, the executor wakes the associated fiber.
+
+### 8.4 Work-Stealing Scheduling
+
+Each OS worker thread maintains its own local run-queue of ready tasks. When a thread drains its local queue, it **steals** half the tasks from the back of another thread's queue. This maximizes CPU cache locality while preventing idle worker cores during bursty traffic.
+
+### 8.5 Cooperative Scheduling & The Invariant of Yield Points
+
+RHP fibers are **cooperative**:
+* An executing fiber retains its thread until it reaches a **yield point** (such as non-blocking I/O, `Future::sleep($ms)`, `await`, or `$fut->wait()`).
+* **Yield Point Pitfall:** If an RHP script executes an infinite CPU loop (`while (true) {}`) or invokes a blocking C extension directly, it starves that worker thread.
+* **Mitigation:** Wrap CPU-intensive or blocking operations in `Task::blocking(fn() => ...)` to shift execution off the cooperative event loop to dedicated OS threads.
+
+### 8.6 Cancellation Safety & Timeout Recovery
+
+In async systems, cancelling or timing out a task can leave external systems in inconsistent states if aborted mid-operation:
+* **Cancellation Safe Operations:** Read queries, idempotent HTTP requests (`GET`, `PUT`), and state-less calculations can be cancelled at any yield point without side effects.
+* **Non-Cancellation Safe Operations:** Multi-step transactions or non-idempotent operations where yielding midway could leave half-written database records or locked resources.
+* **RHP Guard:** `Future::timeout($fut, $ms, $fallback)` provides deterministic fallback. If a task exceeds its deadline, the fallback is returned and the underlying future handle is cancelled safely without corrupting shared engine state.
+
+### 8.7 Thread Safety & Data Isolation: `FrozenValue` as Rust's `Send`
+
+Rust enforces memory safety via `Send` (safe to transfer between threads) and `Sync` (safe to reference across threads concurrently).
+* In-request fibers run on a single request context with isolated `RequestArena` (Zero-GC, thread-confined).
+* Cross-thread / Cross-process tasks (`Task::dispatch`, `Task::blocking`) enforce complete data isolation via **`FrozenValue`**:
+  * Values passed to background workers are deep-frozen into immutable snapshots.
+  * Mutable shared state is impossible across threads, eliminating data races without developer-facing mutex gymnastics.
+
+### 8.8 Concurrency Rate Limiting: `Semaphore`
+
+Directly exposing Tokio's `tokio::sync::Semaphore` to RHP userland:
+```php
+// Create a semaphore with 5 permits
+$sem = Semaphore::create(5);
+
+// Acquire and release explicitly
+if ($sem->tryAcquire()) {
+    try {
+        $data = HTTP::get('https://api.upstream.com/data');
+    } finally {
+        $sem->release();
+    }
+}
+
+// Or execute with automatic scoped permit guard
+$result = $sem->run(fn() => HTTP::get('https://api.upstream.com/data'));
+
+// Scoped one-liner:
+$res = Semaphore::with(10, fn() => DB::table('reports')->get());
+```
+
+### 8.9 The `unawaited-future` Compiler Warning
+
+To prevent the dreaded **"Fire-and-Forget Connection Pool Exhaustion"** bug common in async languages:
+* If a statement produces a `Future` that is neither assigned (`$f = ...`) nor awaited (`await ...` / `->wait()`), the RHP compiler emits:
+  > `[unawaited-future] Statement creates a Future that is immediately discarded without being awaited or joined. Cooperative tasks will not advance as fire-and-forget; use 'await', '->wait()', 'Future::join()', or 'Task::dispatch()' instead.`
+

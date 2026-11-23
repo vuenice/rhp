@@ -178,6 +178,35 @@ fn normalize_var_name(name: String) -> String {
 }
 
 /// Resolve the return type and validate arguments for a built-in native static facade call (`Facade::method(args)`).
+fn callback_return(ty: &RhpType) -> Option<RhpType> {
+    match ty {
+        RhpType::Callable {
+            return_type: Some(ret),
+            ..
+        } => Some((**ret).clone()),
+        _ => None,
+    }
+}
+
+fn joined_task_list(arg_types: &[RhpType]) -> RhpType {
+    if let Some(RhpType::Tuple(items)) = arg_types.first() {
+        let resolved: Vec<RhpType> = items
+            .iter()
+            .map(|item| match item {
+                RhpType::Callable {
+                    return_type: Some(ret),
+                    ..
+                } => (**ret).clone(),
+                RhpType::Future(inner) => (**inner).clone(),
+                other => other.clone(),
+            })
+            .collect();
+        RhpType::Tuple(resolved)
+    } else {
+        RhpType::Array(Box::new(RhpType::Mixed))
+    }
+}
+
 pub fn resolve_facade_static_call(
     facade: &str,
     method: &str,
@@ -562,40 +591,70 @@ pub fn resolve_facade_static_call(
                 )?;
                 let ret = arg_types
                     .get(1)
-                    .and_then(|t| match t {
-                        RhpType::Callable {
-                            return_type: Some(r),
-                            ..
-                        } => Some((**r).clone()),
-                        _ => None,
-                    })
+                    .and_then(callback_return)
                     .unwrap_or(RhpType::Void);
-                Ok(ret)
+                Ok(RhpType::Future(Box::new(ret)))
+            }
+            "delay" | "sleep" => {
+                check_arg_type(
+                    "Future::delay",
+                    "$milliseconds",
+                    1,
+                    arg_types.first(),
+                    &RhpType::Int,
+                    call_span,
+                    hierarchy,
+                )?;
+                Ok(RhpType::Future(Box::new(RhpType::Null)))
+            }
+            "timeout" => {
+                let inner = arg_types.first().and_then(|t| match t {
+                    RhpType::Future(inner) => Some((**inner).clone()),
+                    RhpType::Callable { return_type: Some(r), .. } => Some((**r).clone()),
+                    _ => None,
+                }).unwrap_or(RhpType::Mixed);
+                Ok(RhpType::Future(Box::new(inner)))
             }
             "value" => {
                 let inner = arg_types.first().cloned().unwrap_or(RhpType::Mixed);
                 Ok(RhpType::Future(Box::new(inner)))
             }
             "error" => Ok(RhpType::Future(Box::new(RhpType::Never))),
-            "wait" => {
-                // If passed a tuple of callables/futures `[fn() => T1, fn() => T2]`, resolve to `[T1, T2]`!
+            "wait" => Err(TypeError::new(
+                TypeErrorKind::Custom {
+                    message: "Future::wait() is an instance method. Use Future::all([...]) to join tasks, or $future->wait() to read one future.".to_string(),
+                },
+                call_span,
+            )),
+            "all" => Ok(joined_task_list(arg_types)),
+            "concurrent" | "join" => Ok(RhpType::Future(Box::new(joined_task_list(arg_types)))),
+            "select" => {
                 if let Some(RhpType::Tuple(items)) = arg_types.first() {
-                    let resolved: Vec<RhpType> = items
-                        .iter()
-                        .map(|item| match item {
+                    let mut acc: Option<RhpType> = None;
+                    for item in items {
+                        let resolved = match item {
                             RhpType::Callable {
                                 return_type: Some(r),
                                 ..
                             } => (**r).clone(),
                             RhpType::Future(inner) => (**inner).clone(),
                             other => other.clone(),
-                        })
-                        .collect();
-                    return Ok(RhpType::Tuple(resolved));
+                        };
+                        acc = Some(match acc {
+                            None => resolved,
+                            Some(prev) => RhpType::unify(&prev, &resolved),
+                        });
+                    }
+                    if let Some(unified) = acc {
+                        return Ok(RhpType::Future(Box::new(unified)));
+                    }
                 }
-                Ok(RhpType::Array(Box::new(RhpType::Mixed)))
+                Ok(RhpType::Future(Box::new(RhpType::Mixed)))
             }
-            "any" => {
+            "allSettled" => Ok(RhpType::Future(Box::new(RhpType::Array(Box::new(
+                RhpType::Mixed,
+            ))))),
+            "any" | "race" => {
                 if let Some(RhpType::Tuple(items)) = arg_types.first() {
                     let mut acc: Option<RhpType> = None;
                     for item in items {
@@ -618,8 +677,36 @@ pub fn resolve_facade_static_call(
                 }
                 Ok(RhpType::Mixed)
             }
-            "defer" => Ok(RhpType::Void),
+            "defer" => {
+                let inner = arg_types
+                    .first()
+                    .and_then(callback_return)
+                    .unwrap_or(RhpType::Mixed);
+                Ok(RhpType::Future(Box::new(inner)))
+            }
             _ => Ok(RhpType::Future(Box::new(RhpType::Mixed))),
+        },
+
+        "Task" => match method {
+            "dispatch" => Ok(RhpType::Void),
+            "blocking" => {
+                let inner_ret = arg_types
+                    .first()
+                    .and_then(callback_return)
+                    .unwrap_or(RhpType::Mixed);
+                Ok(RhpType::Future(Box::new(inner_ret)))
+            }
+            _ => Ok(RhpType::Mixed),
+        },
+
+        "Semaphore" => match method {
+            "create" | "new" => Ok(RhpType::Class("Semaphore".to_string())),
+            "with" | "run" | "acquire" => {
+                let ret = arg_types.get(1).and_then(callback_return).unwrap_or(RhpType::Mixed);
+                Ok(ret)
+            }
+            "available" | "availablePermits" => Ok(RhpType::Int),
+            _ => Ok(RhpType::Mixed),
         },
 
         "HTTP" | "Http" => match method {
@@ -1168,12 +1255,20 @@ pub fn resolve_builtin_fluent_method(
             "hasError" => Some(RhpType::Bool),
             "value" => Some((**inner).clone()),
             "error" => Some(RhpType::String),
-            "timeout" => Some((**inner).clone()),
+            "timeout" => Some(RhpType::Future(inner.clone())),
+            "cancel" => Some(RhpType::Void),
             _ => Some(RhpType::Dynamic),
         },
 
         // Built-in fluent facade return objects (`HTTPResponse`, `ImageInstance`, `QueryBuilder`)
         RhpType::Class(name) => match name.as_str() {
+            "Semaphore" => match method {
+                "acquire" | "tryAcquire" => Some(RhpType::Bool),
+                "release" => Some(RhpType::Void),
+                "available" | "availablePermits" | "permits" => Some(RhpType::Int),
+                "run" | "with" => Some(RhpType::Mixed),
+                _ => Some(RhpType::Dynamic),
+            },
             "Response" => match method {
                 "header" | "withHeaders" | "status" | "setStatusCode" | "content" | "setContent" | "cookie" | "withCookie" | "send" | "sendHeaders" => {
                     Some(RhpType::Class("Response".to_string()))

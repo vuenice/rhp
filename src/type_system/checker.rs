@@ -1987,6 +1987,13 @@ impl TypeChecker {
 
             StmtKind::Expr(expr) => {
                 let ty = self.infer_expr(expr, env, ctx, None)?;
+                if matches!(ty, RhpType::Future(_)) {
+                    self.result.warnings.push(TypeWarning {
+                        code: "unawaited-future",
+                        message: "Statement creates a Future that is immediately discarded without being awaited or joined. Cooperative tasks will not advance as fire-and-forget; use 'await', '->wait()', 'Future::join()', or 'Task::dispatch()' instead.".to_string(),
+                        span: expr.span,
+                    });
+                }
                 Ok(matches!(ty, RhpType::Never))
             }
 
@@ -3304,6 +3311,22 @@ impl TypeChecker {
 
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Ident(ref fn_ident) = callee.kind {
+                    if matches!(fn_ident.name, "concurrent" | "defer" | "task" | "join" | "select") {
+                        let arg_types = self.infer_arguments(args, env, ctx, None)?;
+                        let ty = if fn_ident.name == "task" {
+                            RhpType::Void
+                        } else {
+                            resolve_facade_static_call(
+                                "Future",
+                                fn_ident.name,
+                                &arg_types,
+                                expr.span,
+                                Some(&self.result.hierarchy),
+                            )?
+                        };
+                        return Ok(self.record_expr_type(expr.span, ty));
+                    }
+
                     if fn_ident.name == "async" {
                         let arg_types = self.infer_arguments(args, env, ctx, None)?;
                         let inner = arg_types.into_iter().next().unwrap_or(RhpType::Mixed);
@@ -4051,7 +4074,7 @@ impl TypeChecker {
                 )
             },
 
-            // 2. Array / Tuple destructuring `[$user, $posts] = Future::wait([...])`
+            // 2. Array / Tuple destructuring `[$user, $posts] = Future::all([...])`
             ExprKind::Array(elements) => {
                 for (idx, el) in elements.iter().enumerate() {
                     let elem_ty = match &effective_rhs_ty {

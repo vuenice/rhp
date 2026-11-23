@@ -619,6 +619,8 @@ pub fn dispatch_facade_call(
         "Binary" => dispatch_binary(method, args),
         "WebSocket" | "Ws" => dispatch_websocket(method, args),
         "View" | "Rade" => dispatch_view(method, args),
+        "Task" => dispatch_task(method, args),
+        "Semaphore" => crate::vm::semaphore::dispatch_semaphore(method, args),
         _ => {
             if let Some((in_proc_fn, is_blocking)) =
                 crate::vm::rust_loader::get_in_process_native_function(facade, method)
@@ -3073,7 +3075,7 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
                 VmFuture::resolved(val),
             ))))
         }
-        "wait" | "all" => {
+        "all" | "concurrent" | "join" => {
             // Eagerly resolve array of tasks/values
             let mut resolved = Vec::new();
             if let Some(first) = args.first() {
@@ -3089,7 +3091,7 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
             }
             Ok(PhpValue::list(resolved))
         }
-        "any" => {
+        "any" | "race" | "select" => {
             // Resolve first available value
             let first_val = if let Some(first) = args.first() {
                 extract_array_elements(first).into_iter().next().unwrap_or(PhpValue::Null)
@@ -3104,6 +3106,24 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
                 other => Ok(other),
             }
         }
+        "timeout" => {
+            let target = args.first().cloned().unwrap_or(PhpValue::Null);
+            let ms = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
+            let fallback = args.get(2).cloned().unwrap_or(PhpValue::Null);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+            let fut = match target {
+                PhpValue::Future(f) => f,
+                other => std::rc::Rc::new(std::cell::RefCell::new(VmFuture::resolved(other))),
+            };
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::with_timeout(fut, deadline, fallback),
+            ))))
+        }
+        "delay" | "sleep" => {
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::resolved(PhpValue::Null),
+            ))))
+        }
         "run" | "async" => {
             let task = args.first().cloned().unwrap_or(PhpValue::Null);
             Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
@@ -3111,11 +3131,31 @@ fn dispatch_future(method: &str, args: &[PhpValue]) -> FacadeResult {
             ))))
         }
         "defer" => {
-            // Registered post-response hook
-            Ok(PhpValue::Null)
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::resolved(PhpValue::Null),
+            ))))
         }
         _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
             facade: "Future".to_string(),
+            method: method.to_string(),
+        }),
+    }
+}
+
+pub fn dispatch_task(method: &str, args: &[PhpValue]) -> FacadeResult {
+    match method {
+        "dispatch" => {
+            // Task::dispatch(callable $fn, ...$args): void
+            Ok(PhpValue::Null)
+        }
+        "blocking" => {
+            let task = args.first().cloned().unwrap_or(PhpValue::Null);
+            Ok(PhpValue::Future(std::rc::Rc::new(std::cell::RefCell::new(
+                VmFuture::resolved(task),
+            ))))
+        }
+        _ => Err(RuntimeErrorKind::UndefinedFacadeMethod {
+            facade: "Task".to_string(),
             method: method.to_string(),
         }),
     }

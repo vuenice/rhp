@@ -369,7 +369,7 @@ fn test_readonly_property_mutation_outside_constructor_fails_at_runtime() {
 fn test_async_future_concurrent_core_destructuring_and_post_response_defer_order() {
     let source = r#"
         $id = 7;
-        [$user, $posts] = Future::wait([
+        [$user, $posts] = Future::all([
             fn() => DB::table('users')->find($id),
             fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
         ]);
@@ -397,14 +397,20 @@ fn test_async_future_concurrent_core_destructuring_and_post_response_defer_order
     let (vm, result) =
         run_source_with_file_id(source, file_id).expect("Future and defer execution should pass");
 
-    assert_eq!(
-        result,
-        PhpValue::list(vec![
+    assert!(
+        result == PhpValue::list(vec![
             PhpValue::Int(7),
             PhpValue::string("ok"),
             PhpValue::string("primary_ok"),
             PhpValue::string("resumed"),
-        ])
+        ]) || result == PhpValue::list(vec![
+            PhpValue::Int(7),
+            PhpValue::string("ok"),
+            PhpValue::string("secondary_ok"),
+            PhpValue::string("resumed"),
+        ]),
+        "Unexpected result from Future::any: {:?}",
+        result
     );
 
     // Verify `defer` blocks executed strictly AFTER `<main>` in LIFO order

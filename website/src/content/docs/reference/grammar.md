@@ -160,7 +160,7 @@ $bad = new Int();
 Arrays can be unpacked directly into variables on the left side of an assignment:
 
 ```php
-[$user, $posts] = Future::wait([
+[$user, $posts] = Future::all([
     fn() => DB::table('users')->find($id),
     fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
 ]);

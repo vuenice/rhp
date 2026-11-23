@@ -12,8 +12,8 @@ use crate::ir::opcode::{
 use crate::ir::IrModule;
 use crate::jit::{JitConfig, JitEngine};
 use crate::lexer::facade::{
-    has_custom_helper, is_legacy_php_function, is_reserved_intrinsic, is_static_facade,
-    is_static_only, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
+    has_custom_helper, is_legacy_php_function, is_native_or_plugin_facade, is_reserved_intrinsic,
+    is_static_facade, is_static_only, LEGACY_PHP_FUNCTIONS, NATIVE_FACADES, RESERVED_INTRINSICS,
 };
 use crate::lexer::span::Span;
 use crate::type_system::types::{RhpType, TypeHierarchy};
@@ -32,6 +32,162 @@ use crate::vm::value::{PhpValue, VmClosure, VmFuture, VmObject};
 
 /// Default maximum call stack depth before throwing `StackOverflowError`.
 pub const DEFAULT_MAX_CALL_DEPTH: usize = 512;
+
+/// Work registered for the post-response phase.
+enum DeferredHook {
+    /// `defer { ... }` statement, compiled as its own function.
+    Func(FunctionId),
+    /// `Future::defer(fn)` handle. Skipped at shutdown once `wait()` has run it.
+    Lazy(Rc<RefCell<VmFuture>>),
+}
+
+#[derive(Clone, Copy)]
+enum JoinKind {
+    Concurrent,
+    AllSettled,
+    Any,
+    Race,
+}
+
+struct TaskSlot {
+    immediate: Option<Result<FrozenValue, String>>,
+    receiver: Option<std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<Result<FrozenValue, String>>>>>,
+}
+
+fn fulfilled(value: FrozenValue) -> FrozenValue {
+    FrozenValue::Dict(vec![
+        ("status".to_string(), FrozenValue::String("fulfilled".to_string())),
+        ("value".to_string(), value),
+    ])
+}
+
+fn rejected_slot(error: String) -> FrozenValue {
+    FrozenValue::Dict(vec![
+        ("status".to_string(), FrozenValue::String("rejected".to_string())),
+        ("error".to_string(), FrozenValue::String(error)),
+    ])
+}
+
+fn recv_slot(
+    rx: &std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<Result<FrozenValue, String>>>>,
+) -> Result<FrozenValue, String> {
+    if let Ok(guard) = rx.lock() {
+        match guard.recv() {
+            Ok(res) => res,
+            Err(_) => Err("Background future worker thread disconnected".to_string()),
+        }
+    } else {
+        Err("Future mutex poisoned".to_string())
+    }
+}
+
+fn coordinate_join(
+    slots: Vec<TaskSlot>,
+    kind: JoinKind,
+) -> std::sync::mpsc::Receiver<Result<FrozenValue, String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("rhp-future-join".to_string())
+        .spawn(move || {
+            let outcome = run_join(slots, kind);
+            let _ = tx.send(outcome);
+        })
+        .expect("Failed to spawn future join thread");
+    rx
+}
+
+fn run_join(slots: Vec<TaskSlot>, kind: JoinKind) -> Result<FrozenValue, String> {
+    let n = slots.len();
+    if n == 0 {
+        return match kind {
+            JoinKind::Any | JoinKind::Race => Ok(FrozenValue::Null),
+            JoinKind::Concurrent | JoinKind::AllSettled => Ok(FrozenValue::List(Vec::new())),
+        };
+    }
+
+    let mut results: Vec<Option<FrozenValue>> = vec![None; n];
+    let mut failures: Vec<String> = Vec::new();
+    let mut pending = Vec::new();
+
+    for (i, slot) in slots.into_iter().enumerate() {
+        if let Some(immediate) = slot.immediate {
+            match immediate {
+                Ok(value) => match kind {
+                    JoinKind::Any | JoinKind::Race => return Ok(value),
+                    JoinKind::Concurrent => results[i] = Some(value),
+                    JoinKind::AllSettled => results[i] = Some(fulfilled(value)),
+                },
+                Err(error) => match kind {
+                    JoinKind::Race | JoinKind::Concurrent => return Err(error),
+                    JoinKind::Any => failures.push(error),
+                    JoinKind::AllSettled => results[i] = Some(rejected_slot(error)),
+                },
+            }
+        } else if let Some(receiver) = slot.receiver {
+            pending.push((i, receiver));
+        }
+    }
+
+    if pending.is_empty() {
+        return match kind {
+            JoinKind::Any => Err(failures
+                .pop()
+                .unwrap_or_else(|| "All futures failed".to_string())),
+            JoinKind::Race => Ok(FrozenValue::Null),
+            JoinKind::Concurrent | JoinKind::AllSettled => Ok(FrozenValue::List(
+                results
+                    .into_iter()
+                    .map(|value| value.unwrap_or(FrozenValue::Null))
+                    .collect(),
+            )),
+        };
+    }
+
+    let (slot_tx, slot_rx) = std::sync::mpsc::channel();
+    let pending_count = pending.len();
+    for (index, receiver) in pending {
+        let slot_tx = slot_tx.clone();
+        std::thread::spawn(move || {
+            let result = recv_slot(&receiver);
+            let _ = slot_tx.send((index, result));
+        });
+    }
+    drop(slot_tx);
+
+    let mut left = pending_count;
+    while left > 0 {
+        let (index, result) = match slot_rx.recv() {
+            Ok(pair) => pair,
+            Err(_) => return Err("Background future worker thread disconnected".to_string()),
+        };
+        left -= 1;
+        match result {
+            Ok(value) => match kind {
+                JoinKind::Any | JoinKind::Race => return Ok(value),
+                JoinKind::Concurrent => results[index] = Some(value),
+                JoinKind::AllSettled => results[index] = Some(fulfilled(value)),
+            },
+            Err(error) => match kind {
+                JoinKind::Race | JoinKind::Concurrent => return Err(error),
+                JoinKind::Any => failures.push(error),
+                JoinKind::AllSettled => results[index] = Some(rejected_slot(error)),
+            },
+        }
+    }
+
+    match kind {
+        JoinKind::Any => Err(failures
+            .pop()
+            .unwrap_or_else(|| "All futures failed".to_string())),
+        JoinKind::Race => Err("Future race finished without a result".to_string()),
+        JoinKind::Concurrent | JoinKind::AllSettled => Ok(FrozenValue::List(
+            results
+                .into_iter()
+                .map(|value| value.unwrap_or(FrozenValue::Null))
+                .collect(),
+        )),
+    }
+}
 
 /// Staged argument pushed onto the VM argument stack by `OpCode::PushArg`.
 #[derive(Debug, Clone)]
@@ -184,8 +340,8 @@ pub struct VM {
     class_constants: HashMap<(String, String), PhpValue>,
     /// Captured standard output from `echo`, `print()`, and `Sys::print()`.
     output_buffer: String,
-    /// Post-response / post-execution deferred function hooks (`OpCode::Defer`).
-    defer_queue: Vec<FunctionId>,
+    /// Post-response / post-execution deferred function hooks (`OpCode::Defer`, `Future::defer`).
+    defer_queue: Vec<DeferredHook>,
     /// Registered shutdown function callbacks (`register_shutdown_function`).
     pub shutdown_hooks: Vec<ShutdownHook>,
     /// Active error handler callbacks stack (`set_error_handler` / `restore_error_handler`).
@@ -763,8 +919,15 @@ impl VM {
         }
 
         let deferred = std::mem::take(&mut self.defer_queue);
-        for func_id in deferred.into_iter().rev() {
-            let _ = self.invoke_compiled_function_sync(func_id, Vec::new(), Span::default());
+        for hook in deferred.into_iter().rev() {
+            match hook {
+                DeferredHook::Func(func_id) => {
+                    let _ = self.invoke_compiled_function_sync(func_id, Vec::new(), Span::default());
+                }
+                DeferredHook::Lazy(fut) => {
+                    let _ = self.settle_lazy_future(&fut, Span::default());
+                }
+            }
         }
     }
 
@@ -2642,6 +2805,15 @@ impl VM {
                         }
                     }
 
+                    if clean_fn == "task" && !self.module.function_index.contains_key(&fn_name) {
+                        if let Some(PhpValue::Closure(c)) = staged.first().map(|a| a.value.clone()) {
+                            let rx = self.spawn_closure_future(&c);
+                            drop(rx);
+                        }
+                        self.registers[base_reg + dst.index()] = PhpValue::Null;
+                        continue;
+                    }
+
                     let target_id = self
                         .module
                         .function_index
@@ -3054,7 +3226,18 @@ impl VM {
                             continue;
                         }
 
-                        // 5. UndefinedMethod error
+                        // 5. Native facade dispatch fallback
+                        if is_native_or_plugin_facade(&class_name) {
+                            match self.exec_facade_call(&class_name, &method_name, &flat_args, span) {
+                                Ok(res) => {
+                                    self.registers[base_reg + dst.index()] = res;
+                                    continue;
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        }
+
+                        // 6. UndefinedMethod error
                         return Err(self.make_error(
                             RuntimeErrorKind::UndefinedMethod {
                                 class: class_name.clone(),
@@ -3812,26 +3995,13 @@ impl VM {
                 }
 
                 OpCode::Defer { func_id: def_id } => {
-                    self.defer_queue.push(def_id);
+                    self.defer_queue.push(DeferredHook::Func(def_id));
                 }
 
                 OpCode::Await { dst, future } => {
                     let fut_val = self.registers[base_reg + future.index()].clone();
                     let resolved = match fut_val {
-                        PhpValue::Future(f_rc) => {
-                            let mut b = f_rc.borrow_mut();
-                            match b.wait_result() {
-                                Ok(val) => val,
-                                Err(err_msg) => {
-                                    return Err(self.make_error(
-                                        RuntimeErrorKind::Custom {
-                                            message: err_msg,
-                                        },
-                                        span,
-                                    ));
-                                }
-                            }
-                        }
+                        PhpValue::Future(f_rc) => self.wait_future_handle(f_rc, None, span)?,
                         other => other,
                     };
                     self.registers[base_reg + dst.index()] = resolved;
@@ -4160,7 +4330,7 @@ impl VM {
     }
 
     /// Invoke a compiled function/closure synchronously and return its evaluated `PhpValue`
-    /// (used by higher-order collection helpers `map`, `filter`, `reduce`, `Future::wait`, and `defer`).
+    /// (used by higher-order collection helpers `map`, `filter`, `reduce`, `Future::all`, and `defer`).
     pub fn invoke_compiled_function_sync(
         &mut self,
         func_id: FunctionId,
@@ -4728,6 +4898,208 @@ impl VM {
         rx
     }
 
+    /// Run a `Future::defer` closure on this fiber and remember the result.
+    fn settle_lazy_future(
+        &mut self,
+        fut: &Rc<RefCell<VmFuture>>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let taken = {
+            let mut b = fut.borrow_mut();
+            if b.cancelled {
+                let message = b
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Future cancelled".to_string());
+                return Err(self.make_error(RuntimeErrorKind::Custom { message }, span));
+            }
+            if b.lazy.is_none() {
+                return match b.wait_result() {
+                    Ok(val) => Ok(val),
+                    Err(message) => Err(self.make_error(RuntimeErrorKind::Custom { message }, span)),
+                };
+            }
+            b.lazy.take()
+        };
+        let Some(closure) = taken else {
+            return Ok(PhpValue::Null);
+        };
+        match self.invoke_closure_sync(&closure, Vec::new(), span) {
+            Ok(val) => {
+                let mut b = fut.borrow_mut();
+                b.value = Some(val.clone());
+                b.error = None;
+                b.is_completed = true;
+                Ok(val)
+            }
+            Err(err) => {
+                let mut b = fut.borrow_mut();
+                b.error = Some(err.to_string());
+                b.is_completed = true;
+                b.value = None;
+                Err(err)
+            }
+        }
+    }
+
+    fn store_future_ok(&self, fut: &Rc<RefCell<VmFuture>>, val: PhpValue) {
+        let mut b = fut.borrow_mut();
+        b.value = Some(val);
+        b.error = None;
+        b.is_completed = true;
+        b.lazy = None;
+        b.timeout = None;
+        b.receiver = None;
+    }
+
+    fn timeout_fallback_value(
+        &mut self,
+        fallback: PhpValue,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        if let PhpValue::Closure(cb) = fallback {
+            self.invoke_closure_sync(&cb, Vec::new(), span)
+        } else {
+            Ok(fallback)
+        }
+    }
+
+    /// Block on one future. Honors lazy defer, timeout wrappers, and an optional wait budget.
+    fn wait_future_handle(
+        &mut self,
+        fut: Rc<RefCell<VmFuture>>,
+        timeout_ms: Option<i64>,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let guard = {
+            let b = fut.borrow();
+            b.timeout
+                .as_ref()
+                .map(|g| (g.inner.clone(), g.deadline, g.fallback.clone()))
+        };
+        if let Some((inner, deadline, fallback)) = guard {
+            let now = std::time::Instant::now();
+            if deadline <= now {
+                let val = self.timeout_fallback_value(fallback, span)?;
+                self.store_future_ok(&fut, val.clone());
+                return Ok(val);
+            }
+            let guard_remaining = deadline.saturating_duration_since(now);
+            let caller_budget = timeout_ms.map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
+            let (budget, hit_guard) = match caller_budget {
+                Some(caller) if caller < guard_remaining => (caller, false),
+                _ => (guard_remaining, true),
+            };
+            let budget_ms = budget.as_millis().min(i64::MAX as u128) as i64;
+            match self.wait_future_handle(inner, Some(budget_ms), span) {
+                Ok(val) => {
+                    self.store_future_ok(&fut, val.clone());
+                    Ok(val)
+                }
+                Err(err) => {
+                    if hit_guard && err.to_string().contains("timed out") {
+                        let val = self.timeout_fallback_value(fallback, span)?;
+                        self.store_future_ok(&fut, val.clone());
+                        Ok(val)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        } else if fut.borrow().lazy.is_some() {
+            self.settle_lazy_future(&fut, span)
+        } else {
+            let mut b = fut.borrow_mut();
+            let res = if let Some(ms) = timeout_ms {
+                b.wait_timeout(std::time::Duration::from_millis(ms.max(0) as u64))
+            } else {
+                b.wait_result()
+            };
+            res.map_err(|message| self.make_error(RuntimeErrorKind::Custom { message }, span))
+        }
+    }
+
+    fn task_slot(&self, task: PhpValue) -> TaskSlot {
+        match task {
+            PhpValue::Closure(c) => {
+                let rx = self.spawn_closure_future(&c);
+                TaskSlot {
+                    immediate: None,
+                    receiver: Some(std::sync::Arc::new(std::sync::Mutex::new(rx))),
+                }
+            }
+            PhpValue::Future(f) => {
+                let mut b = f.borrow_mut();
+                if b.cancelled {
+                    return TaskSlot {
+                        immediate: Some(Err(b
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "Future cancelled".to_string()))),
+                        receiver: None,
+                    };
+                }
+                if let Some(closure) = b.lazy.clone() {
+                    drop(b);
+                    let rx = self.spawn_closure_future(&closure);
+                    return TaskSlot {
+                        immediate: None,
+                        receiver: Some(std::sync::Arc::new(std::sync::Mutex::new(rx))),
+                    };
+                }
+                if b.poll_completion() && b.receiver.is_none() && b.timeout.is_none() {
+                    if let Some(err) = b.error.clone() {
+                        TaskSlot {
+                            immediate: Some(Err(err)),
+                            receiver: None,
+                        }
+                    } else {
+                        let val = b.value.clone().unwrap_or(PhpValue::Null);
+                        TaskSlot {
+                            immediate: Some(Ok(FrozenValue::from_php_value(&val))),
+                            receiver: None,
+                        }
+                    }
+                } else if let Some(rx) = b.receiver.clone() {
+                    TaskSlot {
+                        immediate: None,
+                        receiver: Some(rx),
+                    }
+                } else {
+                    TaskSlot {
+                        immediate: Some(Ok(FrozenValue::Null)),
+                        receiver: None,
+                    }
+                }
+            }
+            other => TaskSlot {
+                immediate: Some(Ok(FrozenValue::from_php_value(&other))),
+                receiver: None,
+            },
+        }
+    }
+
+    fn join_future(&self, items: Vec<PhpValue>, kind: JoinKind) -> PhpValue {
+        let slots: Vec<TaskSlot> = items.into_iter().map(|task| self.task_slot(task)).collect();
+        let rx = coordinate_join(slots, kind);
+        PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx))))
+    }
+
+    fn join_now(
+        &self,
+        items: Vec<PhpValue>,
+        kind: JoinKind,
+        span: Span,
+    ) -> Result<PhpValue, RuntimeError> {
+        let slots: Vec<TaskSlot> = items.into_iter().map(|task| self.task_slot(task)).collect();
+        let rx = coordinate_join(slots, kind);
+        match rx.recv() {
+            Ok(Ok(frozen)) => Ok(frozen.to_php_value()),
+            Ok(Err(message)) => Err(self.make_error(RuntimeErrorKind::Custom { message }, span)),
+            Err(_) => Ok(PhpValue::Null),
+        }
+    }
+
     // =========================================================================
     // Facade & Fluent Method Execution
     // =========================================================================
@@ -4981,7 +5353,7 @@ impl VM {
                         }
                     }
                 }
-                "wait" | "all" => {
+                "all" => {
                     let mut handles: Vec<Rc<RefCell<VmFuture>>> = Vec::new();
                     if let Some(first) = args.first() {
                         for task in Self::extract_items(first) {
@@ -5021,152 +5393,73 @@ impl VM {
                     } else {
                         Vec::new()
                     };
-
-                    if items.is_empty() {
-                        return Ok(PhpValue::Null);
+                    return self.join_now(items, JoinKind::Any, span);
+                }
+                "race" => {
+                    let items = if let Some(first) = args.first() {
+                        Self::extract_items(first)
+                    } else {
+                        Vec::new()
+                    };
+                    return self.join_now(items, JoinKind::Race, span);
+                }
+                "select" => {
+                    let items = if let Some(first) = args.first() {
+                        Self::extract_items(first)
+                    } else {
+                        Vec::new()
+                    };
+                    return Ok(self.join_future(items, JoinKind::Race));
+                }
+                "concurrent" | "join" => {
+                    let items = if let Some(first) = args.first() {
+                        Self::extract_items(first)
+                    } else {
+                        Vec::new()
+                    };
+                    return Ok(self.join_future(items, JoinKind::Concurrent));
+                }
+                "allSettled" => {
+                    let items = if let Some(first) = args.first() {
+                        Self::extract_items(first)
+                    } else {
+                        Vec::new()
+                    };
+                    return Ok(self.join_future(items, JoinKind::AllSettled));
+                }
+                "timeout" => {
+                    let target = args.first().cloned().unwrap_or(PhpValue::Null);
+                    let ms = args.get(1).and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
+                    let fallback = args.get(2).cloned().unwrap_or(PhpValue::Null);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+                    let fut = match target {
+                        PhpValue::Future(f) => f,
+                        PhpValue::Closure(c) => {
+                            let rx = self.spawn_closure_future(&c);
+                            Rc::new(RefCell::new(VmFuture::pending(rx)))
+                        }
+                        other => Rc::new(RefCell::new(VmFuture::resolved(other))),
+                    };
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(
+                        VmFuture::with_timeout(fut, deadline, fallback),
+                    ))));
+                }
+                "delay" | "sleep" => {
+                    let ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
+                    crate::vm::fiber::record_fiber_io_start(crate::vm::fiber::IoKind::Timer { milliseconds: ms });
+                    crate::vm::fiber::record_fiber_yield();
+                    crate::vm::fiber::record_fiber_io_finish();
+                    if ms == 0 {
+                        return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                            PhpValue::Null,
+                        )))));
                     }
-
                     let (tx, rx) = std::sync::mpsc::channel();
-                    let mut immediate_result: Option<PhpValue> = None;
-
-                    for (idx, task) in items.into_iter().enumerate() {
-                        match task {
-                            PhpValue::Closure(c) => {
-                                let tx_clone = tx.clone();
-                                let module = self.module.clone();
-                                let func_id = c.func_id;
-                                let name = c.name.clone();
-                                let is_static = c.is_static;
-                                let category = c.category;
-                                let frozen_upvalues: Vec<FrozenValue> = c
-                                    .upvalues
-                                    .iter()
-                                    .map(FrozenValue::from_php_value)
-                                    .collect();
-                                let static_props: HashMap<(String, String), FrozenValue> = self
-                                    .static_properties
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
-                                    .collect();
-                                let class_consts: HashMap<(String, String), FrozenValue> = self
-                                    .class_constants
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), FrozenValue::from_php_value(v)))
-                                    .collect();
-                                let hierarchy = self.type_hierarchy.clone();
-
-                                std::thread::Builder::new()
-                                    .name(format!("rhp-any-race-{}", idx))
-                                    .spawn(move || {
-                                        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                            let mut child_vm = VM::new(module, false);
-                                            for ((cls, prop), val) in static_props {
-                                                child_vm.static_properties.insert((cls, prop), val.to_php_value());
-                                            }
-                                            for ((cls, cst), val) in class_consts {
-                                                child_vm.class_constants.insert((cls, cst), val.to_php_value());
-                                            }
-                                            if let Some(h) = hierarchy {
-                                                child_vm = child_vm.with_type_hierarchy(h);
-                                            }
-                                            let upvalues: Vec<PhpValue> = frozen_upvalues
-                                                .into_iter()
-                                                .map(|f| f.to_php_value())
-                                                .collect();
-                                            let vm_closure = VmClosure {
-                                                func_id,
-                                                name,
-                                                upvalues,
-                                                is_static,
-                                                category,
-                                            };
-                                            child_vm.invoke_closure_sync(&vm_closure, Vec::new(), Span::default())
-                                        }));
-
-                                        let res = match outcome {
-                                            Ok(Ok(val)) => Ok(FrozenValue::from_php_value(&val)),
-                                            Ok(Err(e)) => Err(e.to_string()),
-                                            Err(p) => Err(crate::vm::worker::extract_panic_message(&p)),
-                                        };
-                                        let _ = tx_clone.send((idx, res));
-                                    })
-                                    .expect("Failed to spawn race thread");
-                            }
-                            PhpValue::Future(f) => {
-                                let rx_opt = {
-                                    let mut b = f.borrow_mut();
-                                    b.poll_completion();
-                                    if b.is_completed && b.receiver.is_none() {
-                                        if immediate_result.is_none() {
-                                            if let Some(ref err) = b.error {
-                                                return Err(self.make_error(
-                                                    RuntimeErrorKind::Custom { message: err.clone() },
-                                                    span,
-                                                ));
-                                            }
-                                            immediate_result = Some(b.value.clone().unwrap_or(PhpValue::Null));
-                                        }
-                                        None
-                                    } else {
-                                        b.receiver.clone()
-                                    }
-                                };
-
-                                if let Some(rx_arc) = rx_opt {
-                                    let tx_clone = tx.clone();
-                                    std::thread::Builder::new()
-                                        .name(format!("rhp-any-wait-{}", idx))
-                                        .spawn(move || {
-                                            let res = if let Ok(rx) = rx_arc.lock() {
-                                                match rx.recv() {
-                                                    Ok(frozen_res) => frozen_res,
-                                                    Err(_) => Err("Background future thread disconnected".to_string()),
-                                                }
-                                            } else {
-                                                Err("Future mutex poisoned".to_string())
-                                            };
-                                            let _ = tx_clone.send((idx, res));
-                                        })
-                                        .expect("Failed to spawn race waiter thread");
-                                }
-                            }
-                            other => {
-                                if immediate_result.is_none() {
-                                    immediate_result = Some(other);
-                                }
-                            }
-                        }
-                    }
-                    drop(tx);
-
-                    if let Some(res) = immediate_result {
-                        return Ok(res);
-                    }
-
-                    let (_winner_idx, outcome) = match rx.recv() {
-                        Ok(first) => {
-                            let mut best = first;
-                            // Settle window: if another task finishes in the same microsecond quantum,
-                            // tie-break by submission order (lower index wins).
-                            std::thread::yield_now();
-                            std::thread::sleep(std::time::Duration::from_millis(1));
-                            while let Ok(candidate) = rx.try_recv() {
-                                if candidate.0 < best.0 {
-                                    best = candidate;
-                                }
-                            }
-                            best
-                        }
-                        Err(_) => return Ok(PhpValue::Null),
-                    };
-
-                    return match outcome {
-                        Ok(frozen) => Ok(frozen.to_php_value()),
-                        Err(err) => Err(self.make_error(
-                            RuntimeErrorKind::Custom { message: err },
-                            span,
-                        )),
-                    };
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                        let _ = tx.send(Ok(FrozenValue::Null));
+                    });
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
                 }
                 "value" => {
                     let val = args.first().cloned().unwrap_or(PhpValue::Null);
@@ -5185,9 +5478,72 @@ impl VM {
                 }
                 "defer" => {
                     if let Some(PhpValue::Closure(c)) = args.first() {
-                        self.defer_queue.push(c.func_id);
+                        let fut = Rc::new(RefCell::new(VmFuture::lazy((**c).clone())));
+                        self.defer_queue.push(DeferredHook::Lazy(fut.clone()));
+                        return Ok(PhpValue::Future(fut));
+                    }
+                    return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                        PhpValue::Null,
+                    )))));
+                }
+                _ => {}
+            }
+        }
+
+        if facade == "Task" {
+            match method {
+                "dispatch" => {
+                    if let Some(first) = args.first() {
+                        if let PhpValue::Closure(c) = first {
+                            let rx = self.spawn_closure_future(c);
+                            drop(rx);
+                        }
                     }
                     return Ok(PhpValue::Null);
+                }
+                "blocking" => {
+                    if let Some(PhpValue::Closure(c)) = args.first() {
+                        let rx = self.spawn_closure_future(c);
+                        return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::pending(rx)))));
+                    } else {
+                        let val = args.first().cloned().unwrap_or(PhpValue::Null);
+                        return Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(val)))));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if facade == "Semaphore" {
+            match method {
+                "create" | "new" => {
+                    let permits = args
+                        .first()
+                        .and_then(|v| v.to_i64())
+                        .unwrap_or(1)
+                        .max(1) as usize;
+                    return Ok(crate::vm::semaphore::create_semaphore_object(permits));
+                }
+                "with" | "run" | "acquire" => {
+                    let permits = args
+                        .first()
+                        .and_then(|v| v.to_i64())
+                        .unwrap_or(1)
+                        .max(1) as usize;
+                    if let Some(PhpValue::Closure(cb)) = args.get(1) {
+                        let (id, _sem) = crate::vm::semaphore::register_semaphore(permits);
+                        let _ = crate::vm::semaphore::acquire_permit(id, None);
+                        let res = self.invoke_closure_sync(cb, Vec::new(), span);
+                        crate::vm::semaphore::release_permit(id);
+                        return res;
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                "available" | "availablePermits" => {
+                    if let Some(id) = args.first().and_then(|v| v.to_i64()) {
+                        return Ok(PhpValue::Int(crate::vm::semaphore::available_permits(id as u64) as i64));
+                    }
+                    return Ok(PhpValue::Int(0));
                 }
                 _ => {}
             }
@@ -8433,27 +8789,11 @@ impl VM {
             // 4. Future fluent methods (`->wait()`, `->then()`, `->catch()`, `->isCompleted()`, etc.)
             PhpValue::Future(fut_rc) => match method {
                 "wait" => {
-                    let mut b = fut_rc.borrow_mut();
-                    match b.wait_result() {
-                        Ok(val) => Ok(val),
-                        Err(err) => Err(self.make_error(
-                            RuntimeErrorKind::Custom { message: err },
-                            span,
-                        )),
-                    }
+                    let timeout_ms = args.first().and_then(|v| v.to_i64());
+                    self.wait_future_handle(fut_rc.clone(), timeout_ms, span)
                 }
                 "then" => {
-                    let mut b = fut_rc.borrow_mut();
-                    let val = match b.wait_result() {
-                        Ok(v) => v,
-                        Err(err) => {
-                            return Err(self.make_error(
-                                RuntimeErrorKind::Custom { message: err },
-                                span,
-                            ));
-                        }
-                    };
-                    drop(b);
+                    let val = self.wait_future_handle(fut_rc.clone(), None, span)?;
                     if let Some(PhpValue::Closure(cb)) = args.first() {
                         let mapped = self.invoke_closure_sync(cb, vec![val], span)?;
                         Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
@@ -8464,17 +8804,24 @@ impl VM {
                     }
                 }
                 "catch" | "catchError" => {
-                    let mut b = fut_rc.borrow_mut();
-                    let outcome = b.wait_result();
-                    drop(b);
-                    match outcome {
+                    match self.wait_future_handle(fut_rc.clone(), None, span) {
                         Ok(_) => Ok(receiver.clone()),
-                        Err(err_msg) => {
+                        Err(err) => {
                             if let Some(PhpValue::Closure(cb)) = args.first() {
-                                let recovered = self.invoke_closure_sync(cb, vec![PhpValue::string(err_msg)], span)?;
-                                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(recovered)))))
+                                let message = match &err.kind {
+                                    RuntimeErrorKind::Custom { message } => message.clone(),
+                                    other => other.to_string(),
+                                };
+                                let recovered = self.invoke_closure_sync(
+                                    cb,
+                                    vec![PhpValue::string(message)],
+                                    span,
+                                )?;
+                                Ok(PhpValue::Future(Rc::new(RefCell::new(VmFuture::resolved(
+                                    recovered,
+                                )))))
                             } else {
-                                Ok(receiver.clone())
+                                Err(err)
                             }
                         }
                     }
@@ -8533,23 +8880,14 @@ impl VM {
                 }
                 "timeout" => {
                     let ms = args.first().and_then(|v| v.to_i64()).unwrap_or(0).max(0) as u64;
-                    let duration = std::time::Duration::from_millis(ms);
-                    let mut b = fut_rc.borrow_mut();
-                    let res = b.wait_timeout(duration);
-                    drop(b);
-                    match res {
-                        Ok(val) => Ok(val),
-                        Err(err) => {
-                            if let Some(PhpValue::Closure(on_timeout)) = args.get(1) {
-                                self.invoke_closure_sync(on_timeout, Vec::new(), span)
-                            } else {
-                                Err(self.make_error(
-                                    RuntimeErrorKind::Custom { message: err },
-                                    span,
-                                ))
-                            }
-                        }
-                    }
+                    let fallback = args.get(1).cloned().unwrap_or(PhpValue::Null);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+                    let wrapper = VmFuture::with_timeout(fut_rc.clone(), deadline, fallback);
+                    Ok(PhpValue::Future(Rc::new(RefCell::new(wrapper))))
+                }
+                "cancel" => {
+                    fut_rc.borrow_mut().cancel();
+                    Ok(PhpValue::Null)
                 }
                 other => Err(self.make_error(
                     RuntimeErrorKind::UndefinedMethod {
@@ -9384,6 +9722,50 @@ impl VM {
         }
         if class_name == "Duration" {
             return crate::vm::duration::exec_duration_instance_method(receiver, method, args, span);
+        }
+        if class_name == "Semaphore" {
+            let id = if let PhpValue::Object(rc) = receiver {
+                rc.borrow().properties.get("id").and_then(|v| v.to_i64()).unwrap_or(0) as u64
+            } else {
+                0
+            };
+            match method {
+                "acquire" => {
+                    let timeout_ms = args.first().and_then(|v| v.to_i64());
+                    let timeout = timeout_ms.map(|ms| std::time::Duration::from_millis(ms.max(0) as u64));
+                    let res = crate::vm::semaphore::acquire_permit(id, timeout)
+                        .map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e }, span))?;
+                    return Ok(PhpValue::Bool(res));
+                }
+                "tryAcquire" => {
+                    return Ok(PhpValue::Bool(crate::vm::semaphore::try_acquire_permit(id)));
+                }
+                "release" => {
+                    crate::vm::semaphore::release_permit(id);
+                    return Ok(PhpValue::Null);
+                }
+                "available" | "availablePermits" => {
+                    return Ok(PhpValue::Int(crate::vm::semaphore::available_permits(id) as i64));
+                }
+                "permits" => {
+                    if let PhpValue::Object(rc) = receiver {
+                        let p = rc.borrow().properties.get("permits").cloned().unwrap_or(PhpValue::Int(0));
+                        return Ok(p);
+                    }
+                    return Ok(PhpValue::Int(0));
+                }
+                "run" | "with" => {
+                    if let Some(PhpValue::Closure(cb)) = args.first() {
+                        let _ = crate::vm::semaphore::acquire_permit(id, None)
+                            .map_err(|e| self.make_error(RuntimeErrorKind::Custom { message: e }, span))?;
+                        let res = self.invoke_closure_sync(cb, Vec::new(), span);
+                        crate::vm::semaphore::release_permit(id);
+                        return res;
+                    }
+                    return Ok(PhpValue::Null);
+                }
+                _ => {}
+            }
         }
 
         if class_name == "Application" || class_name == "Container"

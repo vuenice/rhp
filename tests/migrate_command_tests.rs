@@ -722,7 +722,7 @@ fn test_migrate_curl_multi_flagged_for_review() {
     assert!(res.curl_multi_count > 0);
     // Flags with guide link and recommendation
     assert!(res.migrated_content.contains("// NOTICE: curl_multi_* requires manual review. See https://rhp.dev/docs/reference/unsupported-php#curl-extension"));
-    assert!(res.migrated_content.contains("// You can use Http::pool([...]) / Future::wait([...])"));
+    assert!(res.migrated_content.contains("// You can use Http::pool([...]) / Future::all([...])"));
     // Comments old code
     assert!(res.migrated_content.contains("// $mh = curl_multi_init();"));
     assert!(res.migrated_content.contains("// curl_multi_exec($mh, $active);"));

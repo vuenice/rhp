@@ -201,7 +201,7 @@ $total = $numbers->reduce(fn(int $acc, int $n): int => $acc + $n, 0);
 
 By eliminating reference variables and mutable closure upvalues:
 1. Cyclic reference graphs between closures and local stack frames are mathematically impossible.
-2. Closures can safely cross Tokio worker thread boundaries (`Future::wait`, `Future::any`) without requiring thread-local GC synchronization or global mutex locking.
+2. Closures can safely cross Tokio worker thread boundaries (`Future::all`, `Future::any`) without requiring thread-local GC synchronization or global mutex locking.
 
 ---
 

@@ -111,7 +111,7 @@ rhp-play
 By default, the playground operates as a lightweight scratchpad. Use it to:
 - Test RHP language syntax and operators without project scaffolding.
 - Experiment with native Rust collections (`list`, `dict`, `set`) and fluent arrow methods (`$x->map()`, `$x->filter()`).
-- Verify concurrent Tokio fibers with `Future::wait` and `Future::defer`.
+- Verify concurrent Tokio fibers with `Future::all` and `Future::defer`.
 - Inspect zero-GC performance and bump arena allocation behaviors.
 
 ### Connected Application Mode (TweakPHP Style)

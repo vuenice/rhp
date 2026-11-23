@@ -296,7 +296,7 @@ fn test_spec_static_facade_instantiation_forbidden() {
 #[test]
 fn test_spec_async_concurrent_core_and_destructuring() {
     let source = r#"
-        [$user, $posts] = Future::wait([
+        [$user, $posts] = Future::all([
             fn() => DB::table('users')->find($id),
             fn() => HTTP::get("https://api.example.com/posts?user={$id}")->json()
         ]);
@@ -330,7 +330,7 @@ fn test_spec_async_concurrent_core_and_destructuring() {
                 match &value.kind {
                     ExprKind::StaticCall { target: t, method: m, args: a } => {
                         assert!(matches!(t.kind, ExprKind::Ident(ref id) if id.name == "Future"));
-                        assert_eq!(m.name, "wait");
+                        assert_eq!(m.name, "all");
                         assert_eq!(a.len(), 1);
                         // Check string interpolation inside second closure
                         match &a[0].value.kind {
@@ -340,7 +340,7 @@ fn test_spec_async_concurrent_core_and_destructuring() {
                             _ => panic!("Expected array of tasks"),
                         }
                     }
-                    _ => panic!("Expected Future::wait StaticCall"),
+                    _ => panic!("Expected Future::all StaticCall"),
                 }
             }
             _ => panic!("Expected assignment"),
