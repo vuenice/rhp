@@ -70,6 +70,7 @@ pub struct MigrateFileResult {
     pub ob_rewritten_count: usize,
     pub echo_response_count: usize,
     pub rade_directive_count: usize,
+    pub pdo_migrated_count: usize,
     pub warnings: Vec<String>,
     #[serde(skip)]
     pub original_content: String,
@@ -177,6 +178,9 @@ impl MigrateReport {
                     if res.rade_directive_count > 0 {
                         out.push_str(&format!("      ~ {} PHP template tag(s) transpiled to Rade directives\n", res.rade_directive_count));
                     }
+                    if res.pdo_migrated_count > 0 {
+                        out.push_str(&format!("      ~ {} PDO query sequence(s) migrated to DB::select()\n", res.pdo_migrated_count));
+                    }
                     for w in &res.warnings {
                         out.push_str(&format!("      ⚠ {}\n", w));
                     }
@@ -282,6 +286,7 @@ pub fn migrate_source_with_options_and_context(
     let mut ob_rewritten_count = 0;
     let mut echo_response_count = 0;
     let mut rade_directive_count = 0;
+    let mut pdo_migrated_count = 0;
     let mut warnings = Vec::new();
 
     // Step -0.1: Transpile PHP template tags (<?=, <?php if (...): ?>, <?php foreach (...): ?>) to Rade directives
@@ -387,6 +392,11 @@ pub fn migrate_source_with_options_and_context(
     curl_multi_count += c_multi;
     current = after_curl;
 
+    // Step 0.52: Migrate legacy PDO prepared queries to DB::select(...)
+    let (after_pdo, pdo_count) = migrate_pdo_queries(&current);
+    pdo_migrated_count += pdo_count;
+    current = after_pdo;
+
     // Step 1: Replace $_GLOBAL and $GLOBALS with original global values
     let (after_globals, g_count) = replace_globals(&current);
     global_replace_count += g_count;
@@ -484,6 +494,7 @@ pub fn migrate_source_with_options_and_context(
         ob_rewritten_count,
         echo_response_count,
         rade_directive_count,
+        pdo_migrated_count,
         warnings,
         original_content: source.to_string(),
         migrated_content: current.clone(),
@@ -612,6 +623,7 @@ pub fn migrate_project_in_stages(
         ob_rewritten_count: usize,
         echo_response_count: usize,
         rade_directive_count: usize,
+        pdo_migrated_count: usize,
         warnings: Vec<String>,
     }
 
@@ -653,6 +665,7 @@ pub fn migrate_project_in_stages(
                     ob_rewritten_count: 0,
                     echo_response_count: 0,
                     rade_directive_count: 0,
+                    pdo_migrated_count: 0,
                     warnings: Vec::new(),
                 });
             }
@@ -752,6 +765,11 @@ pub fn migrate_project_in_stages(
         item.curl_migrated_count += c_migrated;
         item.curl_multi_count += c_multi;
         item.current_content = after_curl;
+
+        // PDO prepared queries -> DB::select
+        let (after_pdo, pdo_c) = migrate_pdo_queries(&item.current_content);
+        item.pdo_migrated_count += pdo_c;
+        item.current_content = after_pdo;
 
         // var_dump / var_export -> dd()
         let (after_dump, vd_count) = replace_var_dump_and_export(&item.current_content);
@@ -898,6 +916,7 @@ pub fn migrate_project_in_stages(
             ob_rewritten_count: item.ob_rewritten_count,
             echo_response_count: item.echo_response_count,
             rade_directive_count: item.rade_directive_count,
+            pdo_migrated_count: item.pdo_migrated_count,
             warnings: item.warnings,
             original_content: item.original_content,
             migrated_content: item.current_content.clone(),
@@ -2502,6 +2521,300 @@ fn find_insertion_point(source: &str) -> usize {
 
         idx
     }
+}
+
+// =========================================================================
+// Step 0.52: Migrate legacy PDO prepared query sequences to DB::select(...)
+// =========================================================================
+
+fn skip_whitespace_and_comments_at(source: &str, mask: &[bool], mut pos: usize) -> usize {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    while pos < n {
+        if bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        } else if !mask[pos] {
+            let mut start_of_run = pos;
+            while start_of_run > 0 && !mask[start_of_run - 1] {
+                start_of_run -= 1;
+            }
+            let is_comment = (bytes[start_of_run] == b'/' && start_of_run + 1 < n && (bytes[start_of_run + 1] == b'/' || bytes[start_of_run + 1] == b'*'))
+                || bytes[start_of_run] == b'#';
+            if is_comment {
+                while pos < n && !mask[pos] {
+                    pos += 1;
+                }
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    pos
+}
+
+fn find_semicolon_at(source: &str, mask: &[bool], mut pos: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    while pos < n {
+        if mask[pos] && bytes[pos] == b';' {
+            return Some(pos);
+        } else if mask[pos] && !bytes[pos].is_ascii_whitespace() {
+            return None;
+        }
+        pos += 1;
+    }
+    None
+}
+
+/// Migrates legacy PDO prepared query sequences to `DB::select(...)`.
+///
+/// Converts patterns like:
+/// ```php
+/// $stmt = $pdo->prepare('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC');
+/// $stmt->execute([$userId]);
+/// $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+/// ```
+/// Into:
+/// ```php
+/// $orders = DB::select('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC', [$userId]);
+/// ```
+pub fn migrate_pdo_queries(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+
+    // Pattern 1: $stmt = $pdo->prepare(...) / $pdo->query(...) followed by execute & fetch
+    let re_prep = Regex::new(
+        r#"(?m)\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:DB::connection\(\)|(?:\$[a-zA-Z_][a-zA-Z0-9_]*(?:\s*->\s*[a-zA-Z_][a-zA-Z0-9_]*)*))\s*->\s*(prepare|query)\s*\("#
+    ).unwrap();
+
+    let mut last_end = 0;
+
+    for caps in re_prep.captures_iter(source) {
+        let mat = caps.get(0).unwrap();
+        if mat.start() < last_end || !mask[mat.start()] {
+            continue;
+        }
+
+        let stmt_var = caps.get(1).unwrap().as_str();
+        let method = caps.get(2).unwrap().as_str();
+
+        let open_paren_1 = mat.end() - 1;
+        let Some(close_paren_1) = find_matching_paren(source, &mask, open_paren_1) else {
+            continue;
+        };
+        let sql_arg = source[open_paren_1 + 1..close_paren_1].trim();
+
+        let Some(semi1_pos) = find_semicolon_at(source, &mask, close_paren_1 + 1) else {
+            continue;
+        };
+
+        let mut next_pos = semi1_pos + 1;
+        let mut execute_args = String::new();
+        let mut bound_values = Vec::new();
+
+        if method == "prepare" {
+            // Optional zero or more $stmt->bindValue / $stmt->bindParam calls
+            loop {
+                let p = skip_whitespace_and_comments_at(source, &mask, next_pos);
+                if p >= n {
+                    break;
+                }
+                let rem = &source[p..];
+                let re_bind = Regex::new(&format!(
+                    r#"^\${}\s*->\s*bind(?:Value|Param)\s*\("#,
+                    regex::escape(stmt_var)
+                )).unwrap();
+                if let Some(m_bind) = re_bind.find(rem) {
+                    let bind_open = p + m_bind.end() - 1;
+                    if let Some(bind_close) = find_matching_paren(source, &mask, bind_open) {
+                        if let Some(semi_bind) = find_semicolon_at(source, &mask, bind_close + 1) {
+                            let bind_args_str = &source[bind_open + 1..bind_close];
+                            let parts = split_top_level_args(bind_args_str);
+                            if parts.len() >= 2 {
+                                let key = parts[0].trim();
+                                let val = parts[1].trim();
+                                bound_values.push((key.to_string(), val.to_string()));
+                            }
+                            next_pos = semi_bind + 1;
+                            continue;
+                        }
+                    }
+                }
+                break;
+            }
+
+            // $stmt->execute(...) call
+            let p = skip_whitespace_and_comments_at(source, &mask, next_pos);
+            if p >= n {
+                continue;
+            }
+            let rem = &source[p..];
+            let re_exec = Regex::new(&format!(
+                r#"^\${}\s*->\s*execute\s*\("#,
+                regex::escape(stmt_var)
+            )).unwrap();
+            if let Some(m_exec) = re_exec.find(rem) {
+                let exec_open = p + m_exec.end() - 1;
+                let Some(exec_close) = find_matching_paren(source, &mask, exec_open) else {
+                    continue;
+                };
+                let Some(semi_exec) = find_semicolon_at(source, &mask, exec_close + 1) else {
+                    continue;
+                };
+                execute_args = source[exec_open + 1..exec_close].trim().to_string();
+                next_pos = semi_exec + 1;
+            } else {
+                continue;
+            }
+
+            if (execute_args.is_empty() || execute_args == "[]" || execute_args == "array()") && !bound_values.is_empty() {
+                let all_numeric = bound_values.iter().all(|(k, _)| k.parse::<usize>().is_ok());
+                if all_numeric {
+                    let vals: Vec<String> = bound_values.iter().map(|(_, v)| v.clone()).collect();
+                    execute_args = format!("[{}]", vals.join(", "));
+                } else {
+                    let pairs: Vec<String> = bound_values.iter().map(|(k, v)| format!("{} => {}", k, v)).collect();
+                    execute_args = format!("[{}]", pairs.join(", "));
+                }
+            }
+        }
+
+        // Fetch statement
+        let p = skip_whitespace_and_comments_at(source, &mask, next_pos);
+        if p >= n {
+            continue;
+        }
+        let rem = &source[p..];
+        let re_fetch = Regex::new(&format!(
+            r#"^(?:(?:\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*)|(return\s+))?\${}\s*->\s*(fetchAll|fetch|fetchColumn)\s*\("#,
+            regex::escape(stmt_var)
+        )).unwrap();
+        let Some(caps_fetch) = re_fetch.captures(rem) else {
+            continue;
+        };
+        let m_fetch = caps_fetch.get(0).unwrap();
+        let fetch_open = p + m_fetch.end() - 1;
+        let Some(fetch_close) = find_matching_paren(source, &mask, fetch_open) else {
+            continue;
+        };
+        let Some(semi_fetch) = find_semicolon_at(source, &mask, fetch_close + 1) else {
+            continue;
+        };
+        let block_end = semi_fetch + 1;
+
+        let res_var = caps_fetch.get(1).map(|m| m.as_str());
+        let is_return = caps_fetch.get(2).is_some();
+        let fetch_method = caps_fetch.get(3).unwrap().as_str();
+        let is_single = fetch_method == "fetch" || fetch_method == "fetchColumn";
+
+        let select_call = if execute_args.is_empty() || execute_args == "[]" || execute_args == "array()" {
+            format!("DB::select({})", sql_arg)
+        } else {
+            format!("DB::select({}, {})", sql_arg, execute_args)
+        };
+
+        let val_expr = if is_single {
+            format!("{}[0] ?? null", select_call)
+        } else {
+            select_call
+        };
+
+        let replacement = if is_return {
+            format!("return {};", val_expr)
+        } else if let Some(rv) = res_var {
+            format!("${} = {};", rv, val_expr)
+        } else {
+            format!("{};", val_expr)
+        };
+
+        edits.push(TextEdit {
+            start: mat.start(),
+            end: block_end,
+            replacement,
+        });
+        last_end = block_end;
+        count += 1;
+    }
+
+    // Pattern 2: Chained $orders = $pdo->query($sql)->fetchAll(...)
+    let mut chained_edits = Vec::new();
+    let re_chained = Regex::new(
+        r#"(?m)(?:(?:\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*)|(return\s+))?(?:\$[a-zA-Z_][a-zA-Z0-9_]*(?:\s*->\s*[a-zA-Z_][a-zA-Z0-9_]*)*)\s*->\s*query\s*\("#
+    ).unwrap();
+
+    for caps in re_chained.captures_iter(source) {
+        let mat = caps.get(0).unwrap();
+        if !mask[mat.start()] {
+            continue;
+        }
+
+        if edits.iter().any(|e| mat.start() >= e.start && mat.start() < e.end) {
+            continue;
+        }
+
+        let open_paren = mat.end() - 1;
+        let Some(close_paren) = find_matching_paren(source, &mask, open_paren) else {
+            continue;
+        };
+        let sql_arg = source[open_paren + 1..close_paren].trim();
+
+        let after_close = close_paren + 1;
+        let rem = &source[after_close..];
+        let re_chained_fetch = Regex::new(r#"^\s*->\s*(fetchAll|fetch|fetchColumn)\s*\("#).unwrap();
+        let Some(caps_f) = re_chained_fetch.captures(rem) else {
+            continue;
+        };
+        let m_cf = caps_f.get(0).unwrap();
+        let fetch_open = after_close + m_cf.end() - 1;
+        let Some(fetch_close) = find_matching_paren(source, &mask, fetch_open) else {
+            continue;
+        };
+        let Some(semi) = find_semicolon_at(source, &mask, fetch_close + 1) else {
+            continue;
+        };
+
+        let res_var = caps.get(1).map(|m| m.as_str());
+        let is_return = caps.get(2).is_some();
+        let fetch_method = caps_f.get(1).unwrap().as_str();
+        let is_single = fetch_method == "fetch" || fetch_method == "fetchColumn";
+
+        let select_call = format!("DB::select({})", sql_arg);
+        let val_expr = if is_single {
+            format!("{}[0] ?? null", select_call)
+        } else {
+            select_call
+        };
+
+        let replacement = if is_return {
+            format!("return {};", val_expr)
+        } else if let Some(rv) = res_var {
+            format!("${} = {};", rv, val_expr)
+        } else {
+            format!("{};", val_expr)
+        };
+
+        chained_edits.push(TextEdit {
+            start: mat.start(),
+            end: semi + 1,
+            replacement,
+        });
+        count += 1;
+    }
+
+    edits.extend(chained_edits);
+    edits.sort_by(|a, b| b.start.cmp(&a.start));
+
+    let mut current = source.to_string();
+    for edit in edits {
+        current.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (current, count)
 }
 
 // =========================================================================

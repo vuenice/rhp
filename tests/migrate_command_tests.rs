@@ -3272,5 +3272,123 @@ fn test_project_wide_non_blocking_unsupported_features() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_migrate_pdo_prepared_query_with_parameters() {
+    let input = concat!(
+        "<?php\n",
+        "$stmt = $pdo->prepare('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC');\n",
+        "$stmt->execute([$userId]);\n",
+        "$orders = $stmt->fetchAll(PDO::FETCH_ASSOC);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$orders = DB::select('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC', [$userId]);\n"
+    );
+}
+
+#[test]
+fn test_migrate_pdo_prepared_query_empty_execute() {
+    let input = concat!(
+        "<?php\n",
+        "$stmt = $pdo->prepare('SELECT * FROM orders');\n",
+        "$stmt->execute();\n",
+        "$orders = $stmt->fetchAll(PDO::FETCH_ASSOC);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$orders = DB::select('SELECT * FROM orders');\n"
+    );
+}
+
+#[test]
+fn test_migrate_pdo_prepared_query_inside_function_with_indentation() {
+    let input = concat!(
+        "<?php\n",
+        "function getOrders($pdo, $userId) {\n",
+        "    $stmt = $pdo->prepare('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC');\n",
+        "    $stmt->execute([$userId]);\n",
+        "    $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);\n",
+        "    return $orders;\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert!(res.migrated_content.contains("    $orders = DB::select('SELECT id, total_amount, status FROM orders WHERE user_id = ? ORDER BY id DESC', [$userId]);"));
+    assert!(res.migrated_content.contains("    return $orders;"));
+}
+
+#[test]
+fn test_migrate_pdo_prepared_query_with_return() {
+    let input = concat!(
+        "<?php\n",
+        "function fetchAllUsers($pdo) {\n",
+        "    $stmt = $pdo->prepare('SELECT * FROM users');\n",
+        "    $stmt->execute();\n",
+        "    return $stmt->fetchAll(PDO::FETCH_ASSOC);\n",
+        "}\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert!(res.migrated_content.contains("    return DB::select('SELECT * FROM users');"));
+}
+
+#[test]
+fn test_migrate_pdo_prepared_query_fetch_single_row() {
+    let input = concat!(
+        "<?php\n",
+        "$stmt = $pdo->prepare('SELECT * FROM users WHERE id = ?');\n",
+        "$stmt->execute([$id]);\n",
+        "$user = $stmt->fetch(PDO::FETCH_ASSOC);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$user = DB::select('SELECT * FROM users WHERE id = ?', [$id])[0] ?? null;\n"
+    );
+}
+
+#[test]
+fn test_migrate_pdo_prepared_query_bind_value() {
+    let input = concat!(
+        "<?php\n",
+        "$stmt = $pdo->prepare('SELECT * FROM users WHERE email = :email');\n",
+        "$stmt->bindValue(':email', $email);\n",
+        "$stmt->execute();\n",
+        "$users = $stmt->fetchAll(PDO::FETCH_ASSOC);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$users = DB::select('SELECT * FROM users WHERE email = :email', [':email' => $email]);\n"
+    );
+}
+
+#[test]
+fn test_migrate_pdo_query_chained() {
+    let input = concat!(
+        "<?php\n",
+        "$orders = $pdo->query('SELECT * FROM orders')->fetchAll(PDO::FETCH_ASSOC);\n"
+    );
+    let res = migrate_source(input, "test.php");
+    assert!(res.modified);
+    assert_eq!(res.pdo_migrated_count, 1);
+    assert_eq!(
+        res.migrated_content,
+        "$orders = DB::select('SELECT * FROM orders');\n"
+    );
+}
+
 
 
