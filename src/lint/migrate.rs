@@ -20,6 +20,10 @@ pub struct MigrateOptions {
     pub fix: bool,
     /// Target PHP version migrating from (e.g. 7 or 8). Default is 7.
     pub php_version: u32,
+    /// Whether to comment out error_reporting(...) calls (true) or strip them (false). Default is true.
+    pub comment_error_reporting: bool,
+    /// Whether to automatically initialize rhp.toml if missing when migrating a project. Default is true.
+    pub init_manifest: bool,
 }
 
 impl Default for MigrateOptions {
@@ -27,6 +31,8 @@ impl Default for MigrateOptions {
         Self {
             fix: true,
             php_version: 7,
+            comment_error_reporting: true,
+            init_manifest: true,
         }
     }
 }
@@ -115,7 +121,7 @@ impl MigrateReport {
                         out.push_str(&format!("      ~ {} declare() directive(s) removed\n", res.declare_count));
                     }
                     if res.error_reporting_count > 0 {
-                        out.push_str(&format!("      ~ {} error_reporting(...) call(s) removed\n", res.error_reporting_count));
+                        out.push_str(&format!("      ~ {} error_reporting(...) call(s) commented out\n", res.error_reporting_count));
                     }
                     if res.ini_set_count > 0 {
                         out.push_str(&format!("      ~ {} ini_set(...) call(s) commented out\n", res.ini_set_count));
@@ -320,8 +326,12 @@ pub fn migrate_source_with_options_and_context(
     declare_count += d_count;
     current = after_declares;
 
-    // Step 0.02: Strip legacy error_reporting(...) calls
-    let (after_reporting, er_count) = strip_error_reporting(&current);
+    // Step 0.02: Comment or strip legacy error_reporting(...) calls
+    let (after_reporting, er_count) = if options.comment_error_reporting {
+        comment_error_reporting_calls(&current)
+    } else {
+        strip_error_reporting(&current)
+    };
     error_reporting_count += er_count;
     current = after_reporting;
 
@@ -439,6 +449,7 @@ pub fn migrate_source_with_options_and_context(
     current = after_void;
 
     warnings.extend(check_rune_and_ctype_usage(&current));
+    warnings.extend(scan_for_unsupported_php_features(&current, file_name));
 
     let modified = current != source;
 
@@ -520,26 +531,405 @@ pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<Migrat
     }
 
     if target.is_dir() {
-        let mut signatures = HashMap::new();
-        let _ = collect_signatures_recursive(target, &mut signatures);
-        migrate_directory_recursive(target, options, &signatures, &mut report)?;
+        migrate_project_in_stages(target, options, &mut report)?;
     }
 
     Ok(report)
 }
 
-fn migrate_directory_recursive(
+/// Migrate an entire project directory using a fast, multi-stage, in-memory pipeline:
+///
+/// 1. Auto-initializes `rhp.toml` manifest with PSR-4 autoloading if missing.
+/// 2. Discovers and loads all PHP/RHP files into memory.
+/// 3. Stage 1: Changes all function & method parameter signatures and orders across
+///    the whole project upfront and builds a complete project-wide signature registry.
+/// 4. Stage 2: Rewrites function call patterns (positional argument swapping, PHP 8 named
+///    arguments, stdlib/facades like Http, Json, dd) using the global signature registry.
+/// 5. Stage 3: Rewrites typecasting patterns (`(int)$x` -> `int($x)`), array destructuring,
+///    equality operators, foreach loops, dot concatenations, and superglobals.
+/// 6. Stage 4: Comments legacy `ini_set(...)` and `error_reporting(...)` calls (`// error_reporting(...);`).
+/// 7. Stage 5: Resilient disk write: skips/warns on unsupported syntax or I/O errors without
+///    halting execution across remaining files.
+pub fn migrate_project_in_stages(
     dir: &Path,
     options: MigrateOptions,
-    signatures: &HashMap<String, Vec<String>>,
     report: &mut MigrateReport,
 ) -> io::Result<()> {
-    if !dir.is_dir() {
+    // Phase 0: Manifest auto-initialization for new projects
+    if options.init_manifest {
+        match ensure_project_manifest(dir, options.fix) {
+            Ok((created, Some(msg))) => {
+                if created {
+                    report.warnings.push(msg);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                report.warnings.push(format!("[Manifest Warning] Failed to initialize rhp.toml: {}. Continuing.", e));
+            }
+        }
+    }
+
+    // Phase 1: Collect all files to migrate
+    let mut file_paths = Vec::new();
+    collect_project_files_recursive(dir, &mut file_paths, report);
+
+    if file_paths.is_empty() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    // Phase 2: In-memory file loading (non-blocking on individual read errors)
+    struct ProjectItem {
+        path: PathBuf,
+        file_name: String,
+        original_content: String,
+        current_content: String,
+        added_lines: Vec<String>,
+        cookie_set_count: usize,
+        global_replace_count: usize,
+        dot_concat_count: usize,
+        php_tag_removed: bool,
+        curl_migrated_count: usize,
+        curl_multi_count: usize,
+        heredoc_count: usize,
+        declare_count: usize,
+        error_reporting_count: usize,
+        ini_set_count: usize,
+        cast_count: usize,
+        list_destructure_count: usize,
+        foreach_count: usize,
+        get_replace_count: usize,
+        post_replace_count: usize,
+        error_suppress_count: usize,
+        var_dump_count: usize,
+        strict_eq_count: usize,
+        byte_param_count: usize,
+        param_type_count: usize,
+        named_arg_count: usize,
+        param_order_count: usize,
+        void_return_count: usize,
+        legacy_include_count: usize,
+        ob_rewritten_count: usize,
+        echo_response_count: usize,
+        rade_directive_count: usize,
+        warnings: Vec<String>,
+    }
+
+    let mut items: Vec<ProjectItem> = Vec::with_capacity(file_paths.len());
+    for p in file_paths {
+        match fs::read_to_string(&p) {
+            Ok(content) => {
+                let file_name = p.display().to_string();
+                items.push(ProjectItem {
+                    path: p,
+                    file_name,
+                    original_content: content.clone(),
+                    current_content: content,
+                    added_lines: Vec::new(),
+                    cookie_set_count: 0,
+                    global_replace_count: 0,
+                    dot_concat_count: 0,
+                    php_tag_removed: false,
+                    curl_migrated_count: 0,
+                    curl_multi_count: 0,
+                    heredoc_count: 0,
+                    declare_count: 0,
+                    error_reporting_count: 0,
+                    ini_set_count: 0,
+                    cast_count: 0,
+                    list_destructure_count: 0,
+                    foreach_count: 0,
+                    get_replace_count: 0,
+                    post_replace_count: 0,
+                    error_suppress_count: 0,
+                    var_dump_count: 0,
+                    strict_eq_count: 0,
+                    byte_param_count: 0,
+                    param_type_count: 0,
+                    named_arg_count: 0,
+                    param_order_count: 0,
+                    void_return_count: 0,
+                    legacy_include_count: 0,
+                    ob_rewritten_count: 0,
+                    echo_response_count: 0,
+                    rade_directive_count: 0,
+                    warnings: Vec::new(),
+                });
+            }
+            Err(e) => {
+                report.warnings.push(format!("[I/O Error] Could not read file '{}': {}. Skipping.", p.display(), e));
+            }
+        }
+    }
+
+    // Phase 3: Stage 1 - Change ALL function signatures at once in starting across the entire project
+    let mut global_signatures: HashMap<String, Vec<String>> = HashMap::new();
+    let mut global_reordered_fns: Vec<ReorderedFunctionInfo> = Vec::new();
+
+    for item in &mut items {
+        // Transpile template tags
+        let (after_rade, r_count) = transpile_php_template_to_rade(&item.current_content);
+        item.rade_directive_count += r_count;
+        item.current_content = after_rade;
+
+        // Remove PHP tags
+        let (after_tags, tags_removed) = remove_php_tags(&item.current_content);
+        item.php_tag_removed = tags_removed;
+        item.current_content = after_tags;
+
+        // Parameter & property types ($x: Type)
+        let (after_params, p_type_count) = migrate_php_parameter_and_property_types(&item.current_content);
+        item.param_type_count += p_type_count;
+        item.current_content = after_params;
+
+        // Postfix nullable (?int -> int?)
+        item.current_content = rewrite_postfix_nullable(&item.current_content);
+
+        // Binary string parameter hints (byte)
+        let (after_bytes, byte_c) = upgrade_binary_string_arguments(&item.current_content);
+        item.byte_param_count += byte_c;
+        item.current_content = after_bytes;
+
+        // Reorder function parameters (required before optional)
+        if options.php_version < 8 {
+            let (after_order, p_count, reordered_fns) = fix_parameter_order_detailed(&item.current_content, true);
+            item.param_order_count += p_count;
+            item.current_content = after_order;
+            global_reordered_fns.extend(reordered_fns);
+        }
+
+        // Void return removal
+        let (after_void, v_count) = remove_explicit_void_returns(&item.current_content);
+        item.void_return_count += v_count;
+        item.current_content = after_void;
+
+        // Extract normalized function and method signatures for project-wide registry
+        let sigs = extract_function_signatures(&item.current_content);
+        global_signatures.extend(sigs);
+    }
+
+    // Phase 4: Stage 2 - Function Call Patterns & Built-in Facades across ALL files
+    for item in &mut items {
+        // Swap positional arguments at call sites matching global reordered functions
+        if options.php_version < 8 {
+            let (after_pos, p_warnings, _swapped_c) =
+                swap_positional_calls_and_warn_tricky(&item.current_content, &global_reordered_fns);
+            item.current_content = after_pos;
+            item.warnings.extend(p_warnings);
+        }
+
+        // Migrate named arguments using the global signatures
+        let (after_named, n_count) =
+            migrate_named_arguments_with_context(&item.current_content, &global_signatures);
+        item.named_arg_count += n_count;
+        item.current_content = after_named;
+
+        // Simple output buffering
+        let (after_ob, ob_count, ob_warnings) = migrate_simple_output_buffering(&item.current_content);
+        item.ob_rewritten_count += ob_count;
+        item.warnings.extend(ob_warnings);
+        item.current_content = after_ob;
+
+        // Legacy includes to use & namespace
+        let (after_inc, inc_count) =
+            replace_legacy_includes_with_use_and_namespace(&item.current_content, &item.file_name);
+        item.legacy_include_count += inc_count;
+        item.current_content = after_inc;
+
+        // Controller echo
+        let (after_resp, echo_c, echo_w) = migrate_controller_echo(&item.current_content);
+        item.echo_response_count += echo_c;
+        item.warnings.extend(echo_w);
+        item.current_content = after_resp;
+
+        // Json calls
+        let (after_json, json_w) = migrate_json_calls(&item.current_content);
+        item.warnings.extend(json_w);
+        item.current_content = after_json;
+
+        // cURL calls
+        let (after_curl, c_migrated, c_multi) = upgrade_curl_calls(&item.current_content);
+        item.curl_migrated_count += c_migrated;
+        item.curl_multi_count += c_multi;
+        item.current_content = after_curl;
+
+        // var_dump / var_export -> dd()
+        let (after_dump, vd_count) = replace_var_dump_and_export(&item.current_content);
+        item.var_dump_count += vd_count;
+        item.current_content = after_dump;
+    }
+
+    // Phase 5: Stage 3 - Typecasting Pattern & Syntax Transformations across ALL files
+    for item in &mut items {
+        // Strict equality (=== / !== -> == / !=)
+        let after_eq = super::replace_strict_equality_operators(&item.current_content);
+        item.strict_eq_count += item.current_content.len() - after_eq.len();
+        item.current_content = after_eq;
+
+        // Strip redundant declares
+        let (after_dec, d_count) = strip_declare_statements(&item.current_content);
+        item.declare_count += d_count;
+        item.current_content = after_dec;
+
+        // Type casts ((int)$x -> int($x))
+        let (after_casts, cast_c) = replace_type_casts(&item.current_content);
+        item.cast_count += cast_c;
+        item.current_content = after_casts;
+
+        // List destructuring
+        let (after_list, l_count) = replace_list_destructuring(&item.current_content);
+        item.list_destructure_count += l_count;
+        item.current_content = after_list;
+
+        // Foreach to for-in
+        let (after_fe, fe_count) = replace_foreach_with_for_in(&item.current_content);
+        item.foreach_count += fe_count;
+        item.current_content = after_fe;
+
+        // Remove error suppression @
+        let (after_supp, s_count) = remove_error_suppression(&item.current_content);
+        item.error_suppress_count += s_count;
+        item.current_content = after_supp;
+
+        // Superglobals access
+        let (after_get, g_count) = replace_get_array_access(&item.current_content);
+        item.get_replace_count += g_count;
+        item.current_content = after_get;
+
+        let (after_post, p_count) = replace_post_array_access(&item.current_content);
+        item.post_replace_count += p_count;
+        item.current_content = after_post;
+
+        // Globals replacement
+        let (after_glob, glob_c) = replace_globals(&item.current_content);
+        item.global_replace_count += glob_c;
+        item.current_content = after_glob;
+
+        // Cookie sets
+        let (after_cook, cook_c) = upgrade_cookie_sets(&item.current_content);
+        item.cookie_set_count += cook_c;
+        item.current_content = after_cook;
+
+        // Dot concatenation
+        let (after_dots, dot_c) = replace_dot_operators(&item.current_content);
+        item.dot_concat_count += dot_c;
+        item.current_content = after_dots;
+
+        // Add superglobal declarations
+        let (after_lines, added_lines) = add_superglobal_declarations(&item.current_content);
+        item.added_lines = added_lines;
+        item.current_content = after_lines;
+
+        // Heredocs
+        let (after_hd, hd_c) = upgrade_heredoc_blocks(&item.current_content);
+        item.heredoc_count += hd_c;
+        item.current_content = after_hd;
+
+        // Rune and ctype checks
+        item.warnings.extend(check_rune_and_ctype_usage(&item.current_content));
+
+        // Scan for unsupported PHP features (non-blocking)
+        item.warnings.extend(scan_for_unsupported_php_features(&item.current_content, &item.file_name));
+    }
+
+    // Phase 6: Stage 4 - Commenting error_reporting & ini_set
+    for item in &mut items {
+        // Comment ini_set calls
+        let (after_ini, ini_c) = comment_ini_set_calls(&item.current_content);
+        item.ini_set_count += ini_c;
+        item.current_content = after_ini;
+
+        // Comment or strip error_reporting calls
+        if options.comment_error_reporting {
+            let (after_rep, rep_c) = comment_error_reporting_calls(&item.current_content);
+            item.error_reporting_count += rep_c;
+            item.current_content = after_rep;
+        } else {
+            let (after_rep, rep_c) = strip_error_reporting(&item.current_content);
+            item.error_reporting_count += rep_c;
+            item.current_content = after_rep;
+        }
+    }
+
+    // Phase 7: Stage 5 - Resilient Disk Write & Results Aggregation
+    for item in items {
+        let modified = item.current_content != item.original_content;
+        report.files_scanned += 1;
+        if modified {
+            report.files_modified += 1;
+            if options.fix {
+                if let Err(e) = fs::write(&item.path, &item.current_content) {
+                    report.warnings.push(format!("[I/O Error] Could not write '{}': {}. Skipping save.", item.path.display(), e));
+                }
+            }
+        }
+        for w in &item.warnings {
+            report.warnings.push(w.clone());
+        }
+
+        let file_res = MigrateFileResult {
+            file_path: item.file_name,
+            modified,
+            added_lines: item.added_lines,
+            cookie_set_count: item.cookie_set_count,
+            global_replace_count: item.global_replace_count,
+            dot_concat_count: item.dot_concat_count,
+            php_tag_removed: item.php_tag_removed,
+            curl_migrated_count: item.curl_migrated_count,
+            curl_multi_count: item.curl_multi_count,
+            heredoc_count: item.heredoc_count,
+            declare_count: item.declare_count,
+            error_reporting_count: item.error_reporting_count,
+            ini_set_count: item.ini_set_count,
+            cast_count: item.cast_count,
+            list_destructure_count: item.list_destructure_count,
+            foreach_count: item.foreach_count,
+            get_replace_count: item.get_replace_count,
+            post_replace_count: item.post_replace_count,
+            error_suppress_count: item.error_suppress_count,
+            var_dump_count: item.var_dump_count,
+            strict_eq_count: item.strict_eq_count,
+            byte_param_count: item.byte_param_count,
+            param_type_count: item.param_type_count,
+            named_arg_count: item.named_arg_count,
+            param_order_count: item.param_order_count,
+            void_return_count: item.void_return_count,
+            legacy_include_count: item.legacy_include_count,
+            ob_rewritten_count: item.ob_rewritten_count,
+            echo_response_count: item.echo_response_count,
+            rade_directive_count: item.rade_directive_count,
+            warnings: item.warnings,
+            original_content: item.original_content,
+            migrated_content: item.current_content.clone(),
+            upgraded_content: item.current_content,
+        };
+        report.results.push(file_res);
+    }
+
+    Ok(())
+}
+
+fn collect_project_files_recursive(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    report: &mut MigrateReport,
+) {
+    let read_dir = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            report.warnings.push(format!("[I/O Warning] Cannot read directory '{}': {}. Skipping.", dir.display(), e));
+            return;
+        }
+    };
+
+    for entry in read_dir {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                report.warnings.push(format!("[I/O Warning] Failed to inspect entry in '{}': {}. Skipping.", dir.display(), e));
+                continue;
+            }
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
@@ -547,21 +937,20 @@ fn migrate_directory_recursive(
             if name == "target" || name == ".git" || name == "vendor" || name == "node_modules" {
                 continue;
             }
-            migrate_directory_recursive(&path, options, signatures, report)?;
+            collect_project_files_recursive(&path, files, report);
         } else if is_php_or_rhp_file(&path) {
-            let res = migrate_file_with_signatures(&path, options, signatures)?;
-            report.files_scanned += 1;
-            if res.modified {
-                report.files_modified += 1;
-            }
-            for w in &res.warnings {
-                report.warnings.push(w.clone());
-            }
-            report.results.push(res);
+            files.push(path);
         }
     }
+}
 
-    Ok(())
+pub fn migrate_directory_recursive(
+    dir: &Path,
+    options: MigrateOptions,
+    _signatures: &HashMap<String, Vec<String>>,
+    report: &mut MigrateReport,
+) -> io::Result<()> {
+    migrate_project_in_stages(dir, options, report)
 }
 
 fn is_php_or_rhp_file(path: &Path) -> bool {
@@ -3009,6 +3398,252 @@ pub fn comment_ini_set_calls(source: &str) -> (String, usize) {
                         } else if before_text.ends_with("<?php") || before_text.ends_with("<?=") || before_text.ends_with("<?") {
                             edits.push(TextEdit {
                                 start: prefix_start,
+                                end: after_stmt,
+                                replacement: format!("\n// {}", stmt_code),
+                            });
+                        } else {
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: after_stmt,
+                                replacement: format!("\n// {}", stmt_code),
+                            });
+                        }
+                    }
+
+                    count += 1;
+                    i = after_stmt;
+                    continue;
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
+/// Comment out legacy `error_reporting(...)` calls (`// error_reporting(...);`).
+///
+/// Handles:
+/// - `@error_reporting(...)` and `\error_reporting(...)`
+/// - Multi-line calls: comments out all lines of the call
+/// - Standalone calls and statements with inline comments
+/// - Preserves string literals, comments, method calls ($obj->error_reporting()),
+///   static calls (Config::error_reporting()), and function definitions.
+pub fn comment_error_reporting_calls(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0;
+    let mut i = 0;
+
+    let has_php_tags = source.contains("<?php")
+        || source.contains("<?=")
+        || source.contains("<? ")
+        || source.contains("<?\n")
+        || source.contains("<?\r");
+
+    let mut in_php = !has_php_tags;
+
+    while i < n {
+        if has_php_tags {
+            if !in_php {
+                if bytes[i..].starts_with(b"<?php") {
+                    in_php = true;
+                    i += 5;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?=") {
+                    in_php = true;
+                    i += 3;
+                    continue;
+                } else if bytes[i..].starts_with(b"<?") && (i + 2 == n || bytes[i + 2] == b' ' || bytes[i + 2] == b'\t' || bytes[i + 2] == b'\r' || bytes[i + 2] == b'\n') {
+                    in_php = true;
+                    i += 2;
+                    continue;
+                }
+            } else if mask[i] && bytes[i..].starts_with(b"?>") {
+                in_php = false;
+                i += 2;
+                continue;
+            }
+        }
+
+        if !in_php || !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Optional leading prefix: '@', '\', or '@\'
+        let prefix_start = i;
+        let mut p_start = i;
+        if bytes[p_start] == b'@' {
+            p_start += 1;
+            while p_start < n && (bytes[p_start] == b' ' || bytes[p_start] == b'\t') {
+                p_start += 1;
+            }
+        }
+        if p_start < n && bytes[p_start] == b'\\' {
+            p_start += 1;
+        }
+
+        // Word boundary check before start
+        if prefix_start > 0 {
+            let prev = bytes[prefix_start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
+                i += 1;
+                continue;
+            }
+        }
+
+        // Match "error_reporting" case-insensitively (15 bytes)
+        let word = "error_reporting";
+        if p_start + word.len() <= n && source[p_start..p_start + word.len()].eq_ignore_ascii_case(word) {
+            let after_word = p_start + word.len();
+
+            // Word boundary check after
+            if after_word < n && (bytes[after_word].is_ascii_alphanumeric() || bytes[after_word] == b'_' || bytes[after_word] >= 0x80) {
+                i = after_word;
+                continue;
+            }
+
+            // Check what precedes (skipping whitespace backwards before prefix_start)
+            let mut b_idx = prefix_start;
+            while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
+                b_idx -= 1;
+            }
+
+            // Reject method calls, static calls, nullsafe calls, variable calls
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"::" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 2 && &bytes[b_idx - 2..b_idx] == b"->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 3 && &bytes[b_idx - 3..b_idx] == b"?->" {
+                i = after_word;
+                continue;
+            }
+            if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+                i = after_word;
+                continue;
+            }
+
+            // Reject function definition: function error_reporting(...)
+            let before_trimmed = source[..b_idx].trim_end();
+            if before_trimmed.ends_with("function") {
+                let prefix_len = before_trimmed.len() - "function".len();
+                if prefix_len == 0 || (!source.as_bytes()[prefix_len - 1].is_ascii_alphanumeric() && source.as_bytes()[prefix_len - 1] != b'_') {
+                    i = after_word;
+                    continue;
+                }
+            }
+
+            // Skip whitespace up to '('
+            let mut p = after_word;
+            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                p += 1;
+            }
+
+            if p < n && bytes[p] == b'(' && mask[p] {
+                // Find matching ')'
+                let mut depth = 0;
+                let mut close_paren = None;
+                let mut cur = p;
+                while cur < n {
+                    if mask[cur] {
+                        if bytes[cur] == b'(' {
+                            depth += 1;
+                        } else if bytes[cur] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                close_paren = Some(cur);
+                                break;
+                            }
+                        }
+                    }
+                    cur += 1;
+                }
+
+                if let Some(cp) = close_paren {
+                    let mut after_cp = cp + 1;
+                    while after_cp < n && (bytes[after_cp] == b' ' || bytes[after_cp] == b'\t' || bytes[after_cp] == b'\r' || bytes[after_cp] == b'\n') {
+                        after_cp += 1;
+                    }
+
+                    // Check if followed by ';'
+                    let has_semi = after_cp < n && bytes[after_cp] == b';';
+                    let after_stmt = if has_semi {
+                        after_cp + 1
+                    } else {
+                        cp + 1
+                    };
+
+                    // Check whitespace before prefix_start on the current line
+                    let mut line_start = prefix_start;
+                    while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                        line_start -= 1;
+                    }
+                    let only_ws_before = bytes[line_start..prefix_start].iter().all(|&b| b == b' ' || b == b'\t');
+
+                    // Check trailing content on the same line after after_stmt
+                    let mut line_end = after_stmt;
+                    while line_end < n && (bytes[line_end] == b' ' || bytes[line_end] == b'\t') {
+                        line_end += 1;
+                    }
+                    if (line_end + 1 < n && bytes[line_end] == b'/' && bytes[line_end + 1] == b'/')
+                        || (line_end < n && bytes[line_end] == b'#')
+                    {
+                        while line_end < n && bytes[line_end] != b'\n' {
+                            line_end += 1;
+                        }
+                    }
+                    let only_ws_after = line_end == n || bytes[line_end] == b'\r' || bytes[line_end] == b'\n';
+
+                    let stmt_code = &source[p_start..after_stmt];
+                    let commented_lines: Vec<String> = stmt_code
+                        .lines()
+                        .map(|l| format!("// {}", l))
+                        .collect();
+                    let replacement_text = commented_lines.join("\n");
+
+                    if only_ws_before {
+                        if only_ws_after {
+                            // Standalone line: replace from prefix_start to after_stmt
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: after_stmt,
+                                replacement: replacement_text,
+                            });
+                        } else {
+                            // Code follows on the same line: error_reporting(...); $x = 1;
+                            edits.push(TextEdit {
+                                start: prefix_start,
+                                end: line_end,
+                                replacement: format!("{}\n", replacement_text),
+                            });
+                        }
+                    } else {
+                        // Preceded by something on the line: e.g. <?php error_reporting(...)
+                        let before_text = &source[line_start..prefix_start];
+                        if before_text.ends_with("<?php ") || before_text.ends_with("<?php\t") {
+                            let start_edit = line_start + 5;
+                            edits.push(TextEdit {
+                                start: start_edit,
                                 end: after_stmt,
                                 replacement: format!("\n// {}", stmt_code),
                             });
@@ -8387,6 +9022,145 @@ fn json_options_dict(
     } else {
         format!(", [{}]", pairs.join(", "))
     }
+}
+
+/// Ensure an `rhp.toml` manifest exists in `project_root`. If not, initialize it
+/// using metadata from `composer.json` (if available) or the directory name.
+pub fn ensure_project_manifest(project_root: &Path, fix: bool) -> io::Result<(bool, Option<String>)> {
+    let rhp_toml = project_root.join("rhp.toml");
+    let rpm_toml = project_root.join("rpm.toml");
+    if rhp_toml.exists() || rpm_toml.exists() {
+        return Ok((false, None));
+    }
+
+    if !fix {
+        return Ok((true, Some("Would initialize rhp.toml manifest with PSR-4 autoloading".to_string())));
+    }
+
+    // Try reading composer.json
+    let composer_json = project_root.join("composer.json");
+    let mut pkg_name = project_root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "rhp-project".to_string());
+    if let Some((_, last)) = pkg_name.split_once('/') {
+        pkg_name = last.to_string();
+    }
+    let mut pkg_desc = Some("Migrated RHP project".to_string());
+    let mut psr4_map: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+
+    if composer_json.exists() {
+        if let Ok(content) = fs::read_to_string(&composer_json) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(n) = val.get("name").and_then(|v| v.as_str()) {
+                    let cleaned = if let Some((_, r)) = n.split_once('/') {
+                        r
+                    } else {
+                        n
+                    };
+                    pkg_name = cleaned.to_string();
+                }
+                if let Some(d) = val.get("description").and_then(|v| v.as_str()) {
+                    pkg_desc = Some(d.to_string());
+                }
+                if let Some(psr4) = val
+                    .get("autoload")
+                    .and_then(|a| a.get("psr-4"))
+                    .and_then(|p| p.as_object())
+                {
+                    for (k, v) in psr4 {
+                        if let Some(dir_str) = v.as_str() {
+                            psr4_map.insert(k.clone(), dir_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if psr4_map.is_empty() {
+        if project_root.join("app").is_dir() {
+            psr4_map.insert("App\\".to_string(), "app/".to_string());
+        } else if project_root.join("src").is_dir() {
+            psr4_map.insert("App\\".to_string(), "src/".to_string());
+        } else {
+            psr4_map.insert("App\\".to_string(), "./".to_string());
+        }
+    }
+
+    let mut manifest = Manifest::new(pkg_name);
+    manifest.package.description = pkg_desc;
+    manifest.autoload.psr4 = psr4_map;
+
+    if let Err(e) = manifest.save_to_file(&rhp_toml) {
+        return Err(io::Error::new(io::ErrorKind::Other, format!("Failed to create rhp.toml: {}", e)));
+    }
+
+    Ok((true, Some(format!("Initialized rhp.toml manifest in {}", project_root.display()))))
+}
+
+/// Scans source code for unsupported PHP features (outside comments and strings)
+/// and returns diagnostic warning messages without failing or halting migration.
+pub fn scan_for_unsupported_php_features(source: &str, file_name: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        // Variable variable: $$
+        if bytes[i] == b'$' && i + 1 < n && bytes[i + 1] == b'$' {
+            let line_num = source[..i].chars().filter(|&c| c == '\n').count() + 1;
+            warnings.push(format!(
+                "In '{}':{} - Dynamic variable variable '$$' is unsupported in RHP. Please replace with an explicit array or map.",
+                file_name, line_num
+            ));
+            i += 2;
+            continue;
+        }
+
+        // eval(...)
+        if (i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_'))
+            && bytes[i..].starts_with(b"eval")
+        {
+            let after = i + 4;
+            if after < n && (bytes[after] == b' ' || bytes[after] == b'\t' || bytes[after] == b'(') {
+                let line_num = source[..i].chars().filter(|&c| c == '\n').count() + 1;
+                warnings.push(format!(
+                    "In '{}':{} - 'eval()' is unsupported in RHP. Code execution cannot be evaluated dynamically at runtime.",
+                    file_name, line_num
+                ));
+                i = after;
+                continue;
+            }
+        }
+
+        // goto <label>
+        if (i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_'))
+            && bytes[i..].starts_with(b"goto")
+        {
+            let after = i + 4;
+            if after < n && (bytes[after] == b' ' || bytes[after] == b'\t') {
+                let line_num = source[..i].chars().filter(|&c| c == '\n').count() + 1;
+                warnings.push(format!(
+                    "In '{}':{} - 'goto' statement is unsupported in RHP. Please restructure control flow using loops or functions.",
+                    file_name, line_num
+                ));
+                i = after;
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+
+    warnings
 }
 
 

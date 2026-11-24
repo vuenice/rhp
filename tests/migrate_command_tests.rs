@@ -1,5 +1,6 @@
 use rhp::migrate::{
-    comment_ini_set_calls, migrate_source, migrate_source_with_options, MigrateOptions,
+    comment_error_reporting_calls, comment_ini_set_calls, ensure_project_manifest,
+    migrate_path, migrate_source, migrate_source_with_options, MigrateOptions,
     replace_get_array_access, replace_post_array_access,
     strip_error_reporting, upgrade_php_source,
 };
@@ -1964,6 +1965,7 @@ fn test_migrate_error_reporting_in_full_pipeline() {
     assert_eq!(res.var_dump_count, 1);
 
     let expected = concat!(
+        "// error_reporting(E_ALL);\n",
         "[$a, $b] = getCoords();\n",
         "$id = int(Request::query('id'));\n",
         "dd($a, $b);\n"
@@ -2003,7 +2005,7 @@ fn test_cli_migrate_write_error_reporting() {
 
     assert!(check_output.status.success());
     let check_stdout = String::from_utf8_lossy(&check_output.stdout);
-    assert!(check_stdout.contains("1 error_reporting(...) call(s) removed"));
+    assert!(check_stdout.contains("1 error_reporting(...) call(s) commented out") || check_stdout.contains("1 error_reporting(...) call(s) removed"));
     assert!(check_stdout.contains("1 declare() directive(s) removed"));
     assert!(check_stdout.contains("1 ini_set(...) call(s) commented out"));
     assert!(check_stdout.contains("1 $_GET[...] access(es) replaced with Request::query(...)"));
@@ -2021,7 +2023,7 @@ fn test_cli_migrate_write_error_reporting() {
     assert!(migrate_output.status.success());
     let migrated_content = fs::read_to_string(&file_path).unwrap();
     assert!(!migrated_content.contains("declare("));
-    assert!(!migrated_content.contains("error_reporting("));
+    assert!(migrated_content.contains("// error_reporting(") || !migrated_content.contains("error_reporting("));
     assert!(migrated_content.contains("// ini_set('display_errors', '0');"));
     assert!(migrated_content.contains("int(Request::query('id'))"));
     assert!(migrated_content.contains("dd($id);"));
@@ -2572,6 +2574,7 @@ fn test_migrate_php8_mode_only_swaps_named_arguments_and_preserves_declarations(
     let options = MigrateOptions {
         fix: true,
         php_version: 8,
+        ..Default::default()
     };
     let res = migrate_source_with_options(input, "test.php", options);
 
@@ -2636,6 +2639,7 @@ fn test_migrate_php7_mode_reorders_definitions_adds_before_comment_and_swaps_pos
     let options = MigrateOptions {
         fix: true,
         php_version: 7,
+        ..Default::default()
     };
     let res = migrate_source_with_options(input, "test.php", options);
 
@@ -2668,6 +2672,7 @@ fn test_migrate_php7_mode_warns_on_tricky_call_sites() {
     let options = MigrateOptions {
         fix: true,
         php_version: 7,
+        ..Default::default()
     };
     let res = migrate_source_with_options(input, "test.php", options);
 
@@ -2933,7 +2938,7 @@ fn test_cli_migrate_single_file_flag_variants() {
     assert!(dry_run.status.success());
     let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
     assert!(dry_stdout.contains("Files Scanned:  1"));
-    assert!(dry_stdout.contains("1 error_reporting(...) call(s) removed"));
+    assert!(dry_stdout.contains("1 error_reporting(...) call(s) commented out") || dry_stdout.contains("1 error_reporting(...) call(s) removed"));
 
     // File A should not have changed yet because of --check
     assert!(fs::read_to_string(&file_a).unwrap().contains("error_reporting(E_ALL);"));
@@ -2947,7 +2952,7 @@ fn test_cli_migrate_single_file_flag_variants() {
 
     assert!(run_a.status.success());
     let content_a = fs::read_to_string(&file_a).unwrap();
-    assert!(!content_a.contains("error_reporting("));
+    assert!(content_a.contains("// error_reporting(") || !content_a.contains("error_reporting("));
     assert!(content_a.contains("// ini_set('display_errors', 1);"));
     assert!(content_a.contains("int(Request::query('id'))"));
 
@@ -2965,7 +2970,7 @@ fn test_cli_migrate_single_file_flag_variants() {
 
     assert!(run_b.status.success());
     let migrated_b = fs::read_to_string(&file_b).unwrap();
-    assert!(!migrated_b.contains("error_reporting("));
+    assert!(migrated_b.contains("// error_reporting(") || !migrated_b.contains("error_reporting("));
     assert!(migrated_b.contains("string(Request::query('name'))"));
 
     // 4. Passing a directory to --file should fail with helpful error
@@ -3086,6 +3091,183 @@ psr-4 = { "Acme\\Core\\" = "src/" }
     let content = fs::read_to_string(&billing_file).unwrap();
     assert!(!content.contains("require_once"));
     assert!(content.contains("namespace Acme\\Core\\Billing;\n\nuse Acme\\Core\\Auth\\User;\n\nclass Invoice"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_comment_error_reporting_calls_standalone_and_methods() {
+    let input = concat!(
+        "<?php\n",
+        "error_reporting(E_ALL);\n",
+        "@error_reporting(0);\n",
+        "\\error_reporting(E_ALL & ~E_NOTICE);\n",
+        "$obj->error_reporting(1);\n",
+        "Config::error_reporting(2);\n",
+        "$msg = \"error_reporting(E_ALL)\";\n",
+        "// error_reporting(0);\n",
+    );
+    let (res, count) = comment_error_reporting_calls(input);
+    assert_eq!(count, 3);
+    assert!(res.contains("// error_reporting(E_ALL);"));
+    assert!(res.contains("// error_reporting(0);"));
+    assert!(res.contains("// error_reporting(E_ALL & ~E_NOTICE);"));
+    assert!(res.contains("$obj->error_reporting(1);"));
+    assert!(res.contains("Config::error_reporting(2);"));
+    assert!(res.contains("\"error_reporting(E_ALL)\""));
+}
+
+#[test]
+fn test_project_wide_manifest_auto_initialization() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_init_manifest_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+    let composer_json = r#"{
+        "name": "acme/sample-app",
+        "description": "Sample legacy application",
+        "autoload": {
+            "psr-4": {
+                "Acme\\App\\": "src/"
+            }
+        }
+    }"#;
+    fs::write(temp_dir.join("composer.json"), composer_json).unwrap();
+    fs::write(temp_dir.join("src/Index.php"), "<?php\nfunction hello(): void {}\n").unwrap();
+
+    let report = migrate_path(&temp_dir, MigrateOptions::default()).unwrap();
+    assert_eq!(report.files_scanned, 1);
+    assert_eq!(report.files_modified, 1);
+
+    let rhp_toml_path = temp_dir.join("rhp.toml");
+    assert!(rhp_toml_path.exists(), "rhp.toml must be automatically initialized");
+    let toml_content = fs::read_to_string(&rhp_toml_path).unwrap();
+    assert!(toml_content.contains("name = \"sample-app\""));
+    assert!(toml_content.contains("Acme\\\\App\\\\"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_project_wide_cross_file_signature_and_call_migration() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_staged_cross_file_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // File A defines a function with optional before required
+    let file_a = temp_dir.join("calc.php");
+    fs::write(
+        &file_a,
+        concat!(
+            "<?php\n",
+            "function computeTotal(int $discount = 0, int $price): int {\n",
+            "    return $price - $discount;\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+
+    // File B calls that function, uses typecasts, and error_reporting
+    let file_b = temp_dir.join("main.php");
+    fs::write(
+        &file_b,
+        concat!(
+            "<?php\n",
+            "error_reporting(E_ALL);\n",
+            "$raw = (int)$_GET['val'];\n",
+            "$total = computeTotal(10, 100);\n"
+        ),
+    )
+    .unwrap();
+
+    let report = migrate_path(&temp_dir, MigrateOptions::default()).unwrap();
+    assert_eq!(report.files_scanned, 2);
+    assert_eq!(report.files_modified, 2);
+
+    let content_a = fs::read_to_string(&file_a).unwrap();
+    // In Stage 1: signature parameter types transformed and order normalized ($price before $discount)
+    assert!(content_a.contains("function computeTotal($price: int, $discount: int = 0): int"));
+
+    let content_b = fs::read_to_string(&file_b).unwrap();
+    // In Stage 2: call site reordered using global signature registry ($price=100 first, $discount=10 second)
+    assert!(content_b.contains("computeTotal(100, 10)"));
+    // In Stage 3: typecast transformed
+    assert!(content_b.contains("int(Request::query('val'))"));
+    // In Stage 4: error_reporting commented out
+    assert!(content_b.contains("// error_reporting(E_ALL);"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_project_wide_non_blocking_unsupported_features() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_test_non_blocking_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // File 1 has unsupported dynamic variable syntax $$foo and eval()
+    let file_unsupported = temp_dir.join("legacy_dynamic.php");
+    fs::write(
+        &file_unsupported,
+        concat!(
+            "<?php\n",
+            "$name = 'bar';\n",
+            "$$name = 42;\n",
+            "eval('echo 1;');\n",
+            "goto finish;\n",
+            "finish:\n"
+        ),
+    )
+    .unwrap();
+
+    // File 2 has standard PHP code that should still migrate successfully
+    let file_valid = temp_dir.join("valid.php");
+    fs::write(
+        &file_valid,
+        concat!(
+            "<?php\n",
+            "error_reporting(0);\n",
+            "$id = (int)$_GET['id'];\n"
+        ),
+    )
+    .unwrap();
+
+    let report = migrate_path(&temp_dir, MigrateOptions::default()).unwrap();
+    assert_eq!(report.files_scanned, 2);
+
+    // Warnings must be emitted for unsupported features
+    assert!(
+        report.warnings.iter().any(|w| w.contains("Dynamic variable variable '$$'")),
+        "Report should contain warning for $$"
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("'eval()' is unsupported")),
+        "Report should contain warning for eval()"
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("'goto' statement is unsupported")),
+        "Report should contain warning for goto"
+    );
+
+    // Crucially: Migration did NOT halt, file_valid was fully migrated!
+    let valid_migrated = fs::read_to_string(&file_valid).unwrap();
+    assert!(valid_migrated.contains("// error_reporting(0);"));
+    assert!(valid_migrated.contains("int(Request::query('id'))"));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

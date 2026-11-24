@@ -609,6 +609,8 @@ fn handle_run_migrate(sub_args: &[String]) {
     let mut is_file_flag = false;
     let mut json_format = false;
     let mut php_version = 7;
+    let mut comment_error_reporting = true;
+    let mut init_manifest = true;
 
     let mut iter = sub_args.iter().peekable();
     while let Some(arg) = iter.next() {
@@ -617,6 +619,9 @@ fn handle_run_migrate(sub_args: &[String]) {
                 concat!(
                     "rhp migrate [PATH] [OPTIONS]\n\n",
                     "Migrates legacy PHP scripts to modern RHP conventions:\n",
+                    "  - Automatically initializes rhp.toml manifest with PSR-4 autoloading for new projects\n",
+                    "  - Multi-stage project migration: normalizes all signatures upfront, rewrites call sites, converts typecasts, comments directives\n",
+                    "  - Non-blocking execution: logs warnings for unsupported PHP syntax without halting migration\n",
                     "  - Removes opening '<?php' and closing '?>' tags from start and end of files\n",
                     "  - Strips redundant declare() directive statements:\n",
                     "      declare(strict_types=1);\n",
@@ -626,7 +631,7 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "  - Converts classic list(...) destructuring (list($a, $b) = $x) to modern array destructuring ([$a, $b] = $x)\n",
                     "  - Removes legacy error suppression '@' operators (@unlink() -> unlink(), @$arr['key'] -> $arr['key'])\n",
                     "  - Replaces var_dump(...) and var_export(...) debugging calls with dd(...)\n",
-                    "  - Strips legacy error_reporting(...) calls (error_reporting(E_ALL);)\n",
+                    "  - Comments out legacy error_reporting(...) calls (// error_reporting(...);)\n",
                     "  - Comments out legacy ini_set(...) configuration calls (// ini_set(...);)\n",
                     "  - Replaces $_GET[...] query lookups with Request::query(...)\n",
                     "  - Replaces $_POST[...] body lookups with Request::body(...)\n",
@@ -721,6 +726,12 @@ fn handle_run_migrate(sub_args: &[String]) {
                     json_format = true;
                 }
             }
+        } else if arg == "--comment-error-reporting" {
+            comment_error_reporting = true;
+        } else if arg == "--strip-error-reporting" {
+            comment_error_reporting = false;
+        } else if arg == "--no-init" || arg == "--no-init-manifest" {
+            init_manifest = false;
         } else if !arg.starts_with('-') {
             if !is_file_flag {
                 target_path = arg.clone();
@@ -759,6 +770,8 @@ fn handle_run_migrate(sub_args: &[String]) {
     let options = rhp::migrate::MigrateOptions {
         fix: !check_only,
         php_version,
+        comment_error_reporting,
+        init_manifest,
     };
 
     match rhp::migrate::migrate_path(path, options) {
