@@ -96,6 +96,7 @@ function badOrder($opt: int = 10, $req: int): int {
         LintOptions {
             fix: false,
             case_change: true,
+            stream: false,
         },
     );
     assert!(

@@ -1,5 +1,6 @@
 use std::fs;
 use std::process::Command;
+use serde_json::Value;
 
 use rhp::lint::{add_variable_types, format_source, lint_source};
 
@@ -439,6 +440,7 @@ class my_controller {
     let opts = rhp::lint::LintOptions {
         fix: false,
         case_change: true,
+        stream: false,
     };
     let res = rhp::lint::lint_source_with_options(unformatted_code, "controller.rhp", opts);
 
@@ -471,6 +473,7 @@ class my_service {
     let opts = rhp::lint::LintOptions {
         fix: true,
         case_change: false,
+        stream: false,
     };
     let res = rhp::lint::lint_source_with_options(code, "service.rhp", opts);
 
@@ -1075,3 +1078,237 @@ $ternary = $cond ? $x : $y;
     assert!(formatted.contains("$ternary = $cond ? $x : $y;"), "got:\n{}", formatted);
 }
 
+#[test]
+fn test_cli_lint_stream_multi_file_and_dependency_order() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_lint_stream_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let base_file = temp_dir.join("BaseService.rhp");
+    fs::write(
+        &base_file,
+        concat!(
+            "class BaseService {\n",
+            "    public function baseValue(): int {\n",
+            "        return 42;\n",
+            "    }\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+
+    let child_file = temp_dir.join("ChildService.rhp");
+    fs::write(
+        &child_file,
+        concat!(
+            "class ChildService extends BaseService {\n",
+            "    public function calculate(): int {\n",
+            "        $total = 100;\n",
+            "        return $total;\n",
+            "    }\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+
+    let view_file = temp_dir.join("index.blade.php");
+    fs::write(
+        &view_file,
+        concat!(
+            "$s = new ChildService();\n",
+            "echo $s->calculate();\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("lint")
+        .arg(&temp_dir)
+        .arg("--stream")
+        .output()
+        .expect("failed to run rhp lint --stream");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(!lines.is_empty(), "expected NDJSON stream output");
+
+    let events: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).expect("each line must be valid JSON"))
+        .collect();
+
+    // Check Phase 1 start
+    assert_eq!(events[0]["phase"], "project_regex");
+    assert_eq!(events[0]["event"], "start");
+    assert_eq!(events[0]["total_files"], 3);
+
+    // Find Phase 1 complete
+    let p1_complete_idx = events
+        .iter()
+        .position(|e| e["phase"] == "project_regex" && e["event"] == "complete")
+        .expect("must emit project_regex complete event");
+    assert!(p1_complete_idx > 0);
+
+    // Verify Phase 2 order: BaseService must start verify before ChildService
+    let mut base_verify_idx = None;
+    let mut child_verify_idx = None;
+
+    for (i, e) in events.iter().enumerate() {
+        if e["phase"] == "file_verify" && e["event"] == "file_start" {
+            let file = e["file"].as_str().unwrap_or("");
+            if file.contains("BaseService.rhp") {
+                base_verify_idx = Some(i);
+            } else if file.contains("ChildService.rhp") {
+                child_verify_idx = Some(i);
+            }
+        }
+    }
+
+    assert!(
+        base_verify_idx.is_some() && child_verify_idx.is_some(),
+        "both BaseService and ChildService must be verified"
+    );
+    assert!(
+        base_verify_idx.unwrap() < child_verify_idx.unwrap(),
+        "BaseService (dependency) must be verified before ChildService (dependent)"
+    );
+
+    // Check final complete event
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["event"], "complete");
+    assert_eq!(final_event["summary"]["migrated"], 3);
+    assert_eq!(final_event["summary"]["warnings"], 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cli_lint_format_ndjson_flag_and_diagnostics() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_lint_ndjson_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let ok_file = temp_dir.join("ok.rhp");
+    fs::write(
+        &ok_file,
+        concat!(
+            "function ping(): string {\n",
+            "    return 'pong';\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+
+    let broken_file = temp_dir.join("broken.rhp");
+    fs::write(
+        &broken_file,
+        concat!(
+            "function broken( {\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("run")
+        .arg("lint")
+        .arg(&temp_dir)
+        .arg("--format=ndjson")
+        .output()
+        .expect("failed to run rhp run lint --format=ndjson");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let events: Vec<Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<Value>(l).expect("valid JSON"))
+        .collect();
+
+    assert!(events.iter().any(|e| e["phase"] == "project_regex" && e["event"] == "start"));
+
+    // Check for diagnostic event on broken.rhp
+    let diag_event = events
+        .iter()
+        .find(|e| e["phase"] == "file_verify" && e["event"] == "diagnostic");
+    assert!(diag_event.is_some(), "expected diagnostic event for syntax error");
+    let diag = diag_event.unwrap();
+    assert_eq!(diag["level"], "error");
+    assert!(diag["file"].as_str().unwrap().contains("broken.rhp"));
+
+    // Check broken.rhp file_complete has status "warning"
+    let broken_complete = events.iter().find(|e| {
+        e["phase"] == "file_verify"
+            && e["event"] == "file_complete"
+            && e["file"].as_str().unwrap_or("").contains("broken.rhp")
+    });
+    assert!(broken_complete.is_some());
+    assert_eq!(broken_complete.unwrap()["status"], "warning");
+
+    // Final summary has 1 warning and 1 migrated
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["summary"]["warnings"], 1);
+    assert_eq!(final_event["summary"]["migrated"], 1);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cli_lint_single_file_stream() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_lint_single_stream_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let single_file = temp_dir.join("single.rhp");
+    fs::write(
+        &single_file,
+        concat!(
+            "$int_val = 10;\n",
+            "echo $int_val;\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("lint")
+        .arg(&single_file)
+        .arg("--stream")
+        .output()
+        .expect("failed to run rhp lint single file --stream");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let events: Vec<Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<Value>(l).expect("valid JSON"))
+        .collect();
+
+    assert_eq!(events[0]["phase"], "project_regex");
+    assert_eq!(events[0]["event"], "start");
+    assert_eq!(events[0]["total_files"], 1);
+
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["summary"]["migrated"], 1);
+    assert_eq!(final_event["summary"]["warnings"], 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

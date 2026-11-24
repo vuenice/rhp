@@ -1,11 +1,12 @@
 use rhp::migrate::{
-    comment_error_reporting_calls, comment_ini_set_calls, ensure_project_manifest,
+    comment_error_reporting_calls, comment_ini_set_calls,
     migrate_path, migrate_source, migrate_source_with_options, MigrateOptions,
     replace_get_array_access, replace_post_array_access,
     strip_error_reporting, upgrade_php_source,
 };
 use std::fs;
 use std::process::Command;
+use serde_json::Value;
 
 #[test]
 fn test_migrate_replaces_strict_equality() {
@@ -3390,5 +3391,252 @@ fn test_migrate_pdo_query_chained() {
     );
 }
 
+#[test]
+fn test_cli_migrate_stream_multi_file_and_dependency_order() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_stream_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
 
+    // Create 3 files: BaseModel, User (extends BaseModel), and template.blade.php
+    let base_file = temp_dir.join("BaseModel.php");
+    fs::write(
+        &base_file,
+        concat!(
+            "<?php\n",
+            "class BaseModel {\n",
+            "    public function id(): int {\n",
+            "        return 1;\n",
+            "    }\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
 
+    let user_file = temp_dir.join("User.php");
+    fs::write(
+        &user_file,
+        concat!(
+            "<?php\n",
+            "class User extends BaseModel {\n",
+            "    public function greet(): string {\n",
+            "        $user = 'World';\n",
+            "        return 'Hello ' . $user;\n",
+            "    }\n",
+            "}\n"
+        ),
+    )
+    .unwrap();
+
+    let view_file = temp_dir.join("index.blade.php");
+    fs::write(
+        &view_file,
+        concat!(
+            "<?php\n",
+            "$u = new User();\n",
+            "echo $u->greet();\n"
+        ),
+    )
+    .unwrap();
+
+    // Run rhp migrate --stream
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--stream")
+        .output()
+        .expect("failed to run rhp migrate --stream");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(!lines.is_empty(), "expected NDJSON stream output");
+
+    let events: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).expect("each line must be valid JSON"))
+        .collect();
+
+    // Check Phase 1 start
+    assert_eq!(events[0]["phase"], "project_regex");
+    assert_eq!(events[0]["event"], "start");
+    assert_eq!(events[0]["total_files"], 3);
+
+    // Find Phase 1 complete
+    let p1_complete_idx = events
+        .iter()
+        .position(|e| e["phase"] == "project_regex" && e["event"] == "complete")
+        .expect("must emit project_regex complete event");
+    assert!(events[p1_complete_idx]["modified_count"].as_u64().unwrap() >= 1);
+
+    // Verify Phase 2 order: BaseModel must start verify before User
+    let mut base_verify_idx = None;
+    let mut user_verify_idx = None;
+
+    for (i, e) in events.iter().enumerate() {
+        if e["phase"] == "file_verify" && e["event"] == "file_start" {
+            let file = e["file"].as_str().unwrap_or("");
+            if file.contains("BaseModel.php") {
+                base_verify_idx = Some(i);
+            } else if file.contains("User.php") {
+                user_verify_idx = Some(i);
+            }
+        }
+    }
+
+    assert!(
+        base_verify_idx.is_some() && user_verify_idx.is_some(),
+        "both BaseModel and User must be verified"
+    );
+    assert!(
+        base_verify_idx.unwrap() < user_verify_idx.unwrap(),
+        "BaseModel (dependency) must be verified before User (dependent)"
+    );
+
+    // Check final complete event
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["event"], "complete");
+    assert_eq!(final_event["summary"]["migrated"], 3);
+    assert_eq!(final_event["summary"]["warnings"], 0);
+
+    // Verify files on disk had tags stripped and changes applied
+    let base_content = fs::read_to_string(&base_file).unwrap();
+    assert!(!base_content.contains("<?php"));
+
+    let user_content = fs::read_to_string(&user_file).unwrap();
+    assert!(!user_content.contains("<?php"));
+    assert!(user_content.contains("+"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cli_migrate_format_ndjson_flag_and_diagnostics() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_ndjson_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let ok_file = temp_dir.join("ok.phtml");
+    fs::write(
+        &ok_file,
+        concat!(
+            "<?php\n",
+            "$title = $_GET['title'];\n",
+            "echo $title;\n"
+        ),
+    )
+    .unwrap();
+
+    let broken_file = temp_dir.join("broken.php");
+    fs::write(
+        &broken_file,
+        concat!(
+            "<?php\n",
+            "function broken( {\n"
+        ),
+    )
+    .unwrap();
+
+    // Test with --format=ndjson
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--format=ndjson")
+        .output()
+        .expect("failed to run rhp migrate --format=ndjson");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let events: Vec<Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<Value>(l).expect("valid JSON"))
+        .collect();
+
+    assert!(events.iter().any(|e| e["phase"] == "project_regex" && e["event"] == "start"));
+
+    // Check for diagnostic event on broken.php
+    let diag_event = events
+        .iter()
+        .find(|e| e["phase"] == "file_verify" && e["event"] == "diagnostic");
+    assert!(diag_event.is_some(), "expected diagnostic event for syntax error");
+    let diag = diag_event.unwrap();
+    assert_eq!(diag["level"], "error");
+    assert!(diag["file"].as_str().unwrap().contains("broken.php"));
+
+    // Check broken.php file_complete has status "warning"
+    let broken_complete = events.iter().find(|e| {
+        e["phase"] == "file_verify"
+            && e["event"] == "file_complete"
+            && e["file"].as_str().unwrap_or("").contains("broken.php")
+    });
+    assert!(broken_complete.is_some());
+    assert_eq!(broken_complete.unwrap()["status"], "warning");
+
+    // Final summary has 1 warning and 1 migrated
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["summary"]["warnings"], 1);
+    assert_eq!(final_event["summary"]["migrated"], 1);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cli_migrate_single_file_stream() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_single_stream_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let single_file = temp_dir.join("single.rade.rhp");
+    fs::write(
+        &single_file,
+        concat!(
+            "<?php\n",
+            "$v = $_POST['item'];\n",
+            "echo $v;\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&single_file)
+        .arg("--stream")
+        .output()
+        .expect("failed to run rhp migrate single file --stream");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let events: Vec<Value> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<Value>(l).expect("valid JSON"))
+        .collect();
+
+    assert_eq!(events[0]["phase"], "project_regex");
+    assert_eq!(events[0]["event"], "start");
+    assert_eq!(events[0]["total_files"], 1);
+
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event["phase"], "all_done");
+    assert_eq!(final_event["summary"]["migrated"], 1);
+    assert_eq!(final_event["summary"]["warnings"], 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

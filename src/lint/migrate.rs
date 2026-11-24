@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde::Serialize;
 
+use crate::diagnostic::{check_source, DEFAULT_MAX_ERRORS_PER_FILE};
 use crate::pkg::manifest::Manifest;
 
 use crate::lexer::facade::LEGACY_PHP_FUNCTIONS;
@@ -24,6 +25,8 @@ pub struct MigrateOptions {
     pub comment_error_reporting: bool,
     /// Whether to automatically initialize rhp.toml if missing when migrating a project. Default is true.
     pub init_manifest: bool,
+    /// Whether to emit real-time NDJSON stream events to stdout. Default is false.
+    pub stream: bool,
 }
 
 impl Default for MigrateOptions {
@@ -33,6 +36,7 @@ impl Default for MigrateOptions {
             php_version: 7,
             comment_error_reporting: true,
             init_manifest: true,
+            stream: false,
         }
     }
 }
@@ -78,6 +82,44 @@ pub struct MigrateFileResult {
     pub migrated_content: String,
     #[serde(skip)]
     pub upgraded_content: String,
+}
+
+impl MigrateFileResult {
+    pub fn changes_count(&self) -> usize {
+        let count = (if self.php_tag_removed { 1 } else { 0 })
+            + self.added_lines.len()
+            + self.cookie_set_count
+            + self.global_replace_count
+            + self.dot_concat_count
+            + self.curl_migrated_count
+            + self.heredoc_count
+            + self.declare_count
+            + self.error_reporting_count
+            + self.ini_set_count
+            + self.cast_count
+            + self.list_destructure_count
+            + self.foreach_count
+            + self.get_replace_count
+            + self.post_replace_count
+            + self.error_suppress_count
+            + self.var_dump_count
+            + self.strict_eq_count
+            + self.byte_param_count
+            + self.param_type_count
+            + self.named_arg_count
+            + self.param_order_count
+            + self.void_return_count
+            + self.legacy_include_count
+            + self.ob_rewritten_count
+            + self.echo_response_count
+            + self.rade_directive_count
+            + self.pdo_migrated_count;
+        if self.modified && count == 0 {
+            1
+        } else {
+            count
+        }
+    }
 }
 
 /// Aggregated report of migrating multiple files.
@@ -402,10 +444,14 @@ pub fn migrate_source_with_options_and_context(
     global_replace_count += g_count;
     current = after_globals;
 
-    // Step 2: Upgrade cookie sets to Cookie::set(...)
+    // Step 2: Upgrade cookie sets to Cookie::set(...) and session sets to Session::set(...)
     let (after_cookies, c_count) = upgrade_cookie_sets(&current);
     cookie_set_count += c_count;
     current = after_cookies;
+
+    let (after_sessions, s_count) = upgrade_session_sets(&current);
+    cookie_set_count += s_count;
+    current = after_sessions;
 
     // Step 3: Replace dot concatenation (. and .=) with + and +=
     let (after_dots, d_count) = replace_dot_operators(&current);
@@ -524,11 +570,380 @@ pub fn migrate_file(path: &Path, options: MigrateOptions) -> io::Result<MigrateF
     migrate_file_with_signatures(path, options, &HashMap::new())
 }
 
+/// Emit single-line unbuffered NDJSON event to stdout and flush.
+pub fn emit_stream_event<T: Serialize>(event: &T) {
+    if let Ok(json_str) = serde_json::to_string(event) {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        let _ = writeln!(handle, "{}", json_str);
+        let _ = handle.flush();
+    }
+}
+
+/// Format relative path cleanly (e.g. content/about-us.phtml).
+pub fn format_relative_file_path(path: &Path, base: &Path) -> String {
+    let s = if let Ok(stripped) = path.strip_prefix(base) {
+        stripped.to_string_lossy().to_string()
+    } else if let Ok(abs_base) = fs::canonicalize(base) {
+        if let Ok(abs_path) = fs::canonicalize(path) {
+            if let Ok(stripped) = abs_path.strip_prefix(&abs_base) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                path.to_string_lossy().to_string()
+            }
+        } else {
+            path.to_string_lossy().to_string()
+        }
+    } else {
+        path.to_string_lossy().to_string()
+    };
+
+    let norm = s.replace('\\', "/");
+    let trimmed = norm.strip_prefix("./").unwrap_or(&norm);
+    trimmed.to_string()
+}
+
+/// Item tracked during project migration.
+#[derive(Debug, Clone)]
+pub struct ProjectItem {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub original_content: String,
+    pub current_content: String,
+    pub added_lines: Vec<String>,
+    pub cookie_set_count: usize,
+    pub global_replace_count: usize,
+    pub dot_concat_count: usize,
+    pub php_tag_removed: bool,
+    pub curl_migrated_count: usize,
+    pub curl_multi_count: usize,
+    pub heredoc_count: usize,
+    pub declare_count: usize,
+    pub error_reporting_count: usize,
+    pub ini_set_count: usize,
+    pub cast_count: usize,
+    pub list_destructure_count: usize,
+    pub foreach_count: usize,
+    pub get_replace_count: usize,
+    pub post_replace_count: usize,
+    pub error_suppress_count: usize,
+    pub var_dump_count: usize,
+    pub strict_eq_count: usize,
+    pub byte_param_count: usize,
+    pub param_type_count: usize,
+    pub named_arg_count: usize,
+    pub param_order_count: usize,
+    pub void_return_count: usize,
+    pub legacy_include_count: usize,
+    pub ob_rewritten_count: usize,
+    pub echo_response_count: usize,
+    pub rade_directive_count: usize,
+    pub pdo_migrated_count: usize,
+    pub warnings: Vec<String>,
+}
+
+impl ProjectItem {
+    pub fn changes_count(&self) -> usize {
+        let count = (if self.php_tag_removed { 1 } else { 0 })
+            + self.added_lines.len()
+            + self.cookie_set_count
+            + self.global_replace_count
+            + self.dot_concat_count
+            + self.curl_migrated_count
+            + self.heredoc_count
+            + self.declare_count
+            + self.error_reporting_count
+            + self.ini_set_count
+            + self.cast_count
+            + self.list_destructure_count
+            + self.foreach_count
+            + self.get_replace_count
+            + self.post_replace_count
+            + self.error_suppress_count
+            + self.var_dump_count
+            + self.strict_eq_count
+            + self.byte_param_count
+            + self.param_type_count
+            + self.named_arg_count
+            + self.param_order_count
+            + self.void_return_count
+            + self.legacy_include_count
+            + self.ob_rewritten_count
+            + self.echo_response_count
+            + self.rade_directive_count
+            + self.pdo_migrated_count;
+        if self.current_content != self.original_content && count == 0 {
+            1
+        } else {
+            count
+        }
+    }
+}
+
+/// Compute dependency order of files from their paths and contents for Phase 2 compiler verification.
+pub fn compute_dependency_order_from_paths_and_content(
+    files: &[(&Path, &str)],
+    base_dir: &Path,
+) -> Vec<usize> {
+    let n = files.len();
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    let mut item_required: Vec<HashSet<String>> = Vec::with_capacity(n);
+    let mut symbol_to_providers: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (idx, &(path, content)) in files.iter().enumerate() {
+        let (provided, required) = extract_provided_and_required_symbols(content, path, base_dir);
+        for sym in provided {
+            symbol_to_providers.entry(sym).or_default().push(idx);
+        }
+        item_required.push(required);
+    }
+
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    let mut in_degree: Vec<usize> = vec![0; n];
+
+    for (idx, reqs) in item_required.iter().enumerate() {
+        for req in reqs {
+            if let Some(providers) = symbol_to_providers.get(req) {
+                for &provider_idx in providers {
+                    if provider_idx != idx {
+                        if adj[provider_idx].insert(idx) {
+                            in_degree[idx] += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ready: Vec<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    ready.sort_by_key(|&i| format_relative_file_path(files[i].0, base_dir));
+
+    let mut order = Vec::with_capacity(n);
+    while !ready.is_empty() {
+        let u = ready.remove(0);
+        order.push(u);
+        for &v in &adj[u] {
+            in_degree[v] = in_degree[v].saturating_sub(1);
+            if in_degree[v] == 0 {
+                ready.push(v);
+                ready.sort_by_key(|&idx| format_relative_file_path(files[idx].0, base_dir));
+            }
+        }
+    }
+
+    if order.len() < n {
+        let mut remaining: Vec<usize> = (0..n).filter(|i| !order.contains(i)).collect();
+        remaining.sort_by_key(|&i| format_relative_file_path(files[i].0, base_dir));
+        order.extend(remaining);
+    }
+
+    order
+}
+
+/// Compute dependency order of items for Phase 2 compiler verification.
+pub fn compute_file_dependency_order(items: &[ProjectItem], base_dir: &Path) -> Vec<usize> {
+    let files: Vec<(&Path, &str)> = items
+        .iter()
+        .map(|it| (it.path.as_path(), it.current_content.as_str()))
+        .collect();
+    compute_dependency_order_from_paths_and_content(&files, base_dir)
+}
+
+fn extract_provided_and_required_symbols(
+    content: &str,
+    path: &Path,
+    base_dir: &Path,
+) -> (HashSet<String>, HashSet<String>) {
+    let mut provided = HashSet::new();
+    let mut required = HashSet::new();
+
+    let rel_path = format_relative_file_path(path, base_dir);
+    provided.insert(rel_path.clone());
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        provided.insert(stem.to_string());
+    }
+    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+        provided.insert(name.to_string());
+    }
+
+    let mask = build_code_mask(content);
+
+    let re_ns = Regex::new(r"(?:\b|^)namespace\s+([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff\\]*)\s*;").unwrap();
+    let mut current_ns = String::new();
+    for caps in re_ns.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                current_ns = caps.get(1).unwrap().as_str().trim_matches('\\').to_string();
+                break;
+            }
+        }
+    }
+
+    let re_decl = Regex::new(r"(?:\b|^)(?:abstract\s+|final\s+)?(?:class|interface|trait|enum)\s+([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*)").unwrap();
+    for caps in re_decl.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let name = caps.get(1).unwrap().as_str();
+                provided.insert(name.to_string());
+                if !current_ns.is_empty() {
+                    let fq = format!("{}\\{}", current_ns, name);
+                    provided.insert(fq.clone());
+                    provided.insert(format!("\\{}", fq));
+                }
+            }
+        }
+    }
+
+    let re_use = Regex::new(r"(?:\b|^)use\s+([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff\\]+)\s*;").unwrap();
+    for caps in re_use.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let full = caps.get(1).unwrap().as_str().trim_matches('\\');
+                required.insert(full.to_string());
+                if let Some(short) = full.split('\\').last() {
+                    required.insert(short.to_string());
+                }
+            }
+        }
+    }
+
+    let re_extends = Regex::new(r"\bextends\s+([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff\\]*)").unwrap();
+    for caps in re_extends.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let parent = caps.get(1).unwrap().as_str().trim_matches('\\');
+                required.insert(parent.to_string());
+                if let Some(short) = parent.split('\\').last() {
+                    required.insert(short.to_string());
+                }
+            }
+        }
+    }
+
+    let re_implements = Regex::new(r"\bimplements\s+([^;{]+)").unwrap();
+    for caps in re_implements.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let list = caps.get(1).unwrap().as_str();
+                for iface in list.split(',') {
+                    let clean = iface.trim().trim_matches('\\');
+                    if !clean.is_empty() {
+                        required.insert(clean.to_string());
+                        if let Some(short) = clean.split('\\').last() {
+                            required.insert(short.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let re_include = Regex::new(r#"\b(?:include|require|include_once|require_once)\s*\(?\s*['"]([^'"]+)['"]"#).unwrap();
+    for caps in re_include.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let file = caps.get(1).unwrap().as_str();
+                required.insert(file.to_string());
+                if let Some(stem) = Path::new(file).file_stem().and_then(|s| s.to_str()) {
+                    required.insert(stem.to_string());
+                }
+                if let Some(name) = Path::new(file).file_name().and_then(|s| s.to_str()) {
+                    required.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    let re_new = Regex::new(r"\bnew\s+([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff\\]*)\b").unwrap();
+    for caps in re_new.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let cls = caps.get(1).unwrap().as_str().trim_matches('\\');
+                if !is_builtin_or_ignored(cls) {
+                    required.insert(cls.to_string());
+                    if let Some(short) = cls.split('\\').last() {
+                        required.insert(short.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let re_static = Regex::new(r"\b([a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff\\]*)::").unwrap();
+    for caps in re_static.captures_iter(content) {
+        if let Some(mat) = caps.get(0) {
+            if mask[mat.start()] {
+                let cls = caps.get(1).unwrap().as_str().trim_matches('\\');
+                if !is_builtin_or_ignored(cls) {
+                    required.insert(cls.to_string());
+                    if let Some(short) = cls.split('\\').last() {
+                        required.insert(short.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    (provided, required)
+}
+
+fn is_builtin_or_ignored(name: &str) -> bool {
+    matches!(
+        name,
+        "self"
+            | "static"
+            | "parent"
+            | "Request"
+            | "Response"
+            | "Cookie"
+            | "Session"
+            | "DB"
+            | "ADB"
+            | "Http"
+            | "HTTP"
+            | "AHttp"
+            | "AHTTP"
+            | "Log"
+            | "File"
+            | "AFile"
+            | "Json"
+            | "Sys"
+            | "phpFun"
+            | "Weak"
+            | "Duration"
+            | "Time"
+            | "Uniq"
+            | "Crypt"
+            | "Html"
+            | "Regex"
+            | "Glob"
+            | "Reflect"
+            | "Memory"
+            | "Fiber"
+            | "Trace"
+            | "Telemetry"
+            | "PDO"
+            | "Exception"
+            | "Error"
+    )
+}
+
 /// Migrate a path (either a single file or a directory recursively).
 pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<MigrateReport> {
     let mut report = MigrateReport::new();
 
     if target.is_file() {
+        if options.stream {
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "start",
+                "total_files": 1
+            }));
+        }
+
         let res = migrate_file(target, options)?;
         report.files_scanned += 1;
         if res.modified {
@@ -537,6 +952,74 @@ pub fn migrate_path(target: &Path, options: MigrateOptions) -> io::Result<Migrat
         for w in &res.warnings {
             report.warnings.push(w.clone());
         }
+
+        if options.stream {
+            let rel_path = format_relative_file_path(target, target.parent().unwrap_or(Path::new(".")));
+            if res.modified {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "project_regex",
+                    "event": "file_modified",
+                    "file": rel_path,
+                    "changes_count": res.changes_count()
+                }));
+            }
+            let modified_count = if res.modified { 1 } else { 0 };
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "complete",
+                "files_modified": modified_count,
+                "modified_count": modified_count
+            }));
+
+            // Phase 2
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_start",
+                "file": rel_path,
+                "index": 1,
+                "total": 1
+            }));
+
+            let diags = check_source(&res.migrated_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE);
+
+            for diag in &diags {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "file_verify",
+                    "event": "diagnostic",
+                    "file": rel_path,
+                    "level": diag.level.as_str(),
+                    "code": diag.code,
+                    "message": diag.message,
+                    "line": diag.span.start.line,
+                    "col": diag.span.start.col,
+                    "diagnostic": diag
+                }));
+            }
+
+            let status = if diags.is_empty() && res.warnings.is_empty() {
+                "migrated"
+            } else {
+                "warning"
+            };
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_complete",
+                "file": rel_path,
+                "status": status,
+                "diagnostics": diags
+            }));
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "all_done",
+                "event": "complete",
+                "summary": {
+                    "migrated": if status == "migrated" { 1 } else { 0 },
+                    "warnings": if status == "warning" { 1 } else { 0 }
+                }
+            }));
+        }
+
         report.results.push(res);
         return Ok(report);
     }
@@ -586,47 +1069,38 @@ pub fn migrate_project_in_stages(
     collect_project_files_recursive(dir, &mut file_paths, report);
 
     if file_paths.is_empty() {
+        if options.stream {
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "start",
+                "total_files": 0
+            }));
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "complete",
+                "files_modified": 0
+            }));
+            emit_stream_event(&serde_json::json!({
+                "phase": "all_done",
+                "event": "complete",
+                "summary": {
+                    "migrated": 0,
+                    "warnings": 0
+                }
+            }));
+        }
         return Ok(());
     }
 
-    // Phase 2: In-memory file loading (non-blocking on individual read errors)
-    struct ProjectItem {
-        path: PathBuf,
-        file_name: String,
-        original_content: String,
-        current_content: String,
-        added_lines: Vec<String>,
-        cookie_set_count: usize,
-        global_replace_count: usize,
-        dot_concat_count: usize,
-        php_tag_removed: bool,
-        curl_migrated_count: usize,
-        curl_multi_count: usize,
-        heredoc_count: usize,
-        declare_count: usize,
-        error_reporting_count: usize,
-        ini_set_count: usize,
-        cast_count: usize,
-        list_destructure_count: usize,
-        foreach_count: usize,
-        get_replace_count: usize,
-        post_replace_count: usize,
-        error_suppress_count: usize,
-        var_dump_count: usize,
-        strict_eq_count: usize,
-        byte_param_count: usize,
-        param_type_count: usize,
-        named_arg_count: usize,
-        param_order_count: usize,
-        void_return_count: usize,
-        legacy_include_count: usize,
-        ob_rewritten_count: usize,
-        echo_response_count: usize,
-        rade_directive_count: usize,
-        pdo_migrated_count: usize,
-        warnings: Vec<String>,
+    if options.stream {
+        emit_stream_event(&serde_json::json!({
+            "phase": "project_regex",
+            "event": "start",
+            "total_files": file_paths.len()
+        }));
     }
 
+    // Phase 2: In-memory file loading (non-blocking on individual read errors)
     let mut items: Vec<ProjectItem> = Vec::with_capacity(file_paths.len());
     for p in file_paths {
         match fs::read_to_string(&p) {
@@ -823,10 +1297,14 @@ pub fn migrate_project_in_stages(
         item.global_replace_count += glob_c;
         item.current_content = after_glob;
 
-        // Cookie sets
+        // Cookie sets and session sets
         let (after_cook, cook_c) = upgrade_cookie_sets(&item.current_content);
         item.cookie_set_count += cook_c;
         item.current_content = after_cook;
+
+        let (after_sess, sess_c) = upgrade_session_sets(&item.current_content);
+        item.cookie_set_count += sess_c;
+        item.current_content = after_sess;
 
         // Dot concatenation
         let (after_dots, dot_c) = replace_dot_operators(&item.current_content);
@@ -870,7 +1348,7 @@ pub fn migrate_project_in_stages(
     }
 
     // Phase 7: Stage 5 - Resilient Disk Write & Results Aggregation
-    for item in items {
+    for item in &items {
         let modified = item.current_content != item.original_content;
         report.files_scanned += 1;
         if modified {
@@ -880,15 +1358,24 @@ pub fn migrate_project_in_stages(
                     report.warnings.push(format!("[I/O Error] Could not write '{}': {}. Skipping save.", item.path.display(), e));
                 }
             }
+            if options.stream {
+                let rel_path = format_relative_file_path(&item.path, dir);
+                emit_stream_event(&serde_json::json!({
+                    "phase": "project_regex",
+                    "event": "file_modified",
+                    "file": rel_path,
+                    "changes_count": item.changes_count()
+                }));
+            }
         }
         for w in &item.warnings {
             report.warnings.push(w.clone());
         }
 
         let file_res = MigrateFileResult {
-            file_path: item.file_name,
+            file_path: item.file_name.clone(),
             modified,
-            added_lines: item.added_lines,
+            added_lines: item.added_lines.clone(),
             cookie_set_count: item.cookie_set_count,
             global_replace_count: item.global_replace_count,
             dot_concat_count: item.dot_concat_count,
@@ -917,12 +1404,82 @@ pub fn migrate_project_in_stages(
             echo_response_count: item.echo_response_count,
             rade_directive_count: item.rade_directive_count,
             pdo_migrated_count: item.pdo_migrated_count,
-            warnings: item.warnings,
-            original_content: item.original_content,
+            warnings: item.warnings.clone(),
+            original_content: item.original_content.clone(),
             migrated_content: item.current_content.clone(),
-            upgraded_content: item.current_content,
+            upgraded_content: item.current_content.clone(),
         };
         report.results.push(file_res);
+    }
+
+    if options.stream {
+        emit_stream_event(&serde_json::json!({
+            "phase": "project_regex",
+            "event": "complete",
+            "files_modified": report.files_modified,
+            "modified_count": report.files_modified
+        }));
+
+        // Phase 2: File-by-File Type Resolution & Compiler Verification in Dependency Order
+        let order = compute_file_dependency_order(&items, dir);
+        let total = items.len();
+        let mut migrated_count = 0;
+        let mut warning_count = 0;
+
+        for (idx, &item_idx) in order.iter().enumerate() {
+            let item = &items[item_idx];
+            let index = idx + 1;
+            let rel_path = format_relative_file_path(&item.path, dir);
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_start",
+                "file": rel_path,
+                "index": index,
+                "total": total
+            }));
+
+            let diags = check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE);
+
+            for diag in &diags {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "file_verify",
+                    "event": "diagnostic",
+                    "file": rel_path,
+                    "level": diag.level.as_str(),
+                    "code": diag.code,
+                    "message": diag.message,
+                    "line": diag.span.start.line,
+                    "col": diag.span.start.col,
+                    "diagnostic": diag
+                }));
+            }
+
+            let status = if diags.is_empty() && item.warnings.is_empty() {
+                migrated_count += 1;
+                "migrated"
+            } else {
+                warning_count += 1;
+                "warning"
+            };
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_complete",
+                "file": rel_path,
+                "status": status,
+                "diagnostics": diags
+            }));
+        }
+
+        emit_stream_event(&serde_json::json!({
+            "phase": "all_done",
+            "event": "complete",
+            "summary": {
+                "migrated": migrated_count,
+                "warnings": warning_count
+            }
+        }));
     }
 
     Ok(())
@@ -972,9 +1529,13 @@ pub fn migrate_directory_recursive(
     migrate_project_in_stages(dir, options, report)
 }
 
-fn is_php_or_rhp_file(path: &Path) -> bool {
+pub fn is_php_or_rhp_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.ends_with(".blade.php") || path_str.ends_with(".rade.rhp") {
+        return true;
+    }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        ext == "php" || ext == "rhp"
+        matches!(ext, "php" | "rhp" | "phtml" | "blade" | "rade")
     } else {
         false
     }
@@ -2172,6 +2733,40 @@ fn upgrade_cookie_sets(source: &str) -> (String, usize) {
     (result, count)
 }
 
+/// Upgrades:
+/// - `$_SESSION['key'] = $val;` -> `Session::set('key', $val);`
+fn upgrade_session_sets(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let mut edits: Vec<TextEdit> = Vec::new();
+
+    let re_session_assign = Regex::new(
+        r#"\$_SESSION\s*\[\s*(['"][^'"]+['"]|\$[a-zA-Z_][a-zA-Z0-9_]*)\s*\]\s*=\s*([^;]+);"#
+    ).unwrap();
+
+    for caps in re_session_assign.captures_iter(source) {
+        let mat = caps.get(0).unwrap();
+        if mask[mat.start()] {
+            let key = caps.get(1).unwrap().as_str();
+            let val = caps.get(2).unwrap().as_str().trim();
+            edits.push(TextEdit {
+                start: mat.start(),
+                end: mat.end(),
+                replacement: format!("Session::set({}, {});", key, val),
+            });
+        }
+    }
+
+    edits.sort_by(|a, b| b.start.cmp(&a.start));
+    let count = edits.len();
+
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+
+    (result, count)
+}
+
 // =========================================================================
 // Step 3: Replace dot concatenation (. and .=) with + and +=
 // =========================================================================
@@ -2334,6 +2929,7 @@ fn add_superglobal_declarations(source: &str) -> (String, Vec<String>) {
     let re_has_server_host_init = Regex::new(r#"\$_SERVER\s*\[\s*['"]HTTP_HOST['"]\s*\]\s*=\s*Request::host\s*\(\s*\)\s*;"#).unwrap();
     let re_has_files_init = Regex::new(r"\$_FILES\s*=\s*Request::files\s*\(\s*\)\s*;").unwrap();
     let re_has_cookie_init = Regex::new(r"\$_COOKIE\s*=\s*Cookie::get\s*\(\s*\)\s*;").unwrap();
+    let re_has_session_init = Regex::new(r"\$_SESSION\s*=\s*(?:Request::session|Session::get|Session::all)\s*\(\s*\)\s*;").unwrap();
 
     let has_get_init = has_code_match(&re_has_get_init);
     let has_post_init = has_code_match(&re_has_post_init);
@@ -2342,6 +2938,7 @@ fn add_superglobal_declarations(source: &str) -> (String, Vec<String>) {
     let has_server_host_init = has_code_match(&re_has_server_host_init);
     let has_files_init = has_code_match(&re_has_files_init);
     let has_cookie_init = has_code_match(&re_has_cookie_init);
+    let has_session_init = has_code_match(&re_has_session_init);
 
     // Check if variables are used outside of the initialization statements themselves
     let is_var_used = |re_var: &Regex, re_init: &Regex| -> bool {
@@ -2366,6 +2963,7 @@ fn add_superglobal_declarations(source: &str) -> (String, Vec<String>) {
     let re_server_host = Regex::new(r#"\$_SERVER\s*\[\s*['"]HTTP_HOST['"]\s*\]"#).unwrap();
     let re_files = Regex::new(r"\$_FILES\b").unwrap();
     let re_cookie = Regex::new(r"\$_COOKIE\b").unwrap();
+    let re_session = Regex::new(r"\$_SESSION\b").unwrap();
 
     let used_get = is_var_used(&re_get, &re_has_get_init);
     let used_post = is_var_used(&re_post, &re_has_post_init);
@@ -2374,6 +2972,7 @@ fn add_superglobal_declarations(source: &str) -> (String, Vec<String>) {
     let used_server_host = is_var_used(&re_server_host, &re_has_server_host_init);
     let used_files = is_var_used(&re_files, &re_has_files_init);
     let used_cookie = is_var_used(&re_cookie, &re_has_cookie_init);
+    let used_session = is_var_used(&re_session, &re_has_session_init);
 
     let mut extra_lines = Vec::new();
 
@@ -2397,6 +2996,9 @@ fn add_superglobal_declarations(source: &str) -> (String, Vec<String>) {
     }
     if used_cookie && !has_cookie_init {
         extra_lines.push("$_COOKIE = Cookie::get();".to_string());
+    }
+    if used_session && !has_session_init {
+        extra_lines.push("$_SESSION = Request::session();".to_string());
     }
 
     if extra_lines.is_empty() {

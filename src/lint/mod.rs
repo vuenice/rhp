@@ -11,7 +11,12 @@ pub mod reporter;
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::diagnostic::{check_source, DEFAULT_MAX_ERRORS_PER_FILE};
+use crate::lint::migrate::{
+    compute_dependency_order_from_paths_and_content, emit_stream_event, format_relative_file_path,
+};
 
 pub use auto_assign::auto_assign_collection_calls;
 pub use autotype::add_variable_types;
@@ -48,6 +53,8 @@ pub struct LintOptions {
     /// Whether to perform casing conversions (snake_case variables, PascalCase classes, camelCase functions).
     /// When false (--no-case-change), skips identifier renaming and casing diagnostics.
     pub case_change: bool,
+    /// Whether to emit real-time NDJSON stream events to stdout. Default is false.
+    pub stream: bool,
 }
 
 impl Default for LintOptions {
@@ -55,6 +62,7 @@ impl Default for LintOptions {
         Self {
             fix: true,
             case_change: true,
+            stream: false,
         }
     }
 }
@@ -179,22 +187,297 @@ pub fn lint_path(target: &Path, options: LintOptions) -> io::Result<LintReport> 
     let mut report = LintReport::new();
 
     if target.is_file() {
+        if options.stream {
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "start",
+                "total_files": 1
+            }));
+        }
+
         let res = lint_file(target, options)?;
         report.files_scanned += 1;
         if res.modified {
             report.files_modified += 1;
         }
-        for issue in res.issues {
-            report.add_issue(issue);
+        for issue in &res.issues {
+            report.add_issue(issue.clone());
         }
+
+        if options.stream {
+            let rel_path = format_relative_file_path(target, target.parent().unwrap_or(Path::new(".")));
+            if res.modified {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "project_regex",
+                    "event": "file_modified",
+                    "file": rel_path,
+                    "changes_count": 1
+                }));
+            }
+            let modified_count = if res.modified { 1 } else { 0 };
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "complete",
+                "files_modified": modified_count,
+                "modified_count": modified_count
+            }));
+
+            // Phase 2
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_start",
+                "file": rel_path,
+                "index": 1,
+                "total": 1
+            }));
+
+            let diags = check_source(&res.formatted_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE);
+
+            for diag in &diags {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "file_verify",
+                    "event": "diagnostic",
+                    "file": rel_path,
+                    "level": diag.level.as_str(),
+                    "code": diag.code,
+                    "message": diag.message,
+                    "line": diag.span.start.line,
+                    "col": diag.span.start.col,
+                    "diagnostic": diag
+                }));
+            }
+
+            if diags.is_empty() {
+                for issue in &res.issues {
+                    emit_stream_event(&serde_json::json!({
+                        "phase": "file_verify",
+                        "event": "diagnostic",
+                        "file": rel_path,
+                        "level": issue.level.as_str(),
+                        "code": issue.code,
+                        "message": issue.message,
+                        "line": issue.line,
+                        "col": issue.column
+                    }));
+                }
+            }
+
+            let has_warnings = !diags.is_empty()
+                || (!options.fix && !res.issues.is_empty())
+                || res.issues.iter().any(|i| i.level == IssueLevel::Error);
+            let status = if has_warnings { "warning" } else { "migrated" };
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "file_complete",
+                "file": rel_path,
+                "index": 1,
+                "total": 1,
+                "status": status,
+                "diagnostics": diags
+            }));
+
+            emit_stream_event(&serde_json::json!({
+                "phase": "all_done",
+                "event": "complete",
+                "summary": {
+                    "migrated": if status == "migrated" { 1 } else { 0 },
+                    "warnings": if status == "warning" { 1 } else { 0 }
+                }
+            }));
+        }
+
         return Ok(report);
     }
 
     if target.is_dir() {
-        lint_directory_recursive(target, options, &mut report)?;
+        if options.stream {
+            lint_project_stream(target, options, &mut report)?;
+        } else {
+            lint_directory_recursive(target, options, &mut report)?;
+        }
     }
 
     Ok(report)
+}
+
+struct LintItem {
+    path: PathBuf,
+    rel_path: String,
+    formatted_content: String,
+    issues: Vec<Issue>,
+}
+
+fn collect_lint_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if path.is_dir() {
+            if name == "target" || name == ".git" || name == "vendor" || name == "node_modules" {
+                continue;
+            }
+            collect_lint_files_recursive(&path, files)?;
+        } else if is_rhp_or_php_file(&path) {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn lint_project_stream(dir: &Path, options: LintOptions, report: &mut LintReport) -> io::Result<()> {
+    let mut file_paths = Vec::new();
+    collect_lint_files_recursive(dir, &mut file_paths)?;
+    file_paths.sort();
+
+    let total_files = file_paths.len();
+    emit_stream_event(&serde_json::json!({
+        "phase": "project_regex",
+        "event": "start",
+        "total_files": total_files
+    }));
+
+    let mut items: Vec<LintItem> = Vec::with_capacity(total_files);
+
+    for path in file_paths {
+        let rel_path = format_relative_file_path(&path, dir);
+        let original_content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("[I/O Error] Could not read '{}': {}. Skipping.", path.display(), e);
+                continue;
+            }
+        };
+
+        let file_name = path.display().to_string();
+        let res = lint_source_with_options(&original_content, &file_name, options);
+
+        report.files_scanned += 1;
+        if res.modified {
+            report.files_modified += 1;
+            if options.fix {
+                if let Err(e) = fs::write(&path, &res.formatted_content) {
+                    eprintln!("[I/O Error] Could not write '{}': {}. Skipping save.", path.display(), e);
+                }
+            }
+            emit_stream_event(&serde_json::json!({
+                "phase": "project_regex",
+                "event": "file_modified",
+                "file": rel_path,
+                "changes_count": 1
+            }));
+        }
+
+        for issue in &res.issues {
+            report.add_issue(issue.clone());
+        }
+
+        items.push(LintItem {
+            path,
+            rel_path,
+            formatted_content: res.formatted_content,
+            issues: res.issues,
+        });
+    }
+
+    emit_stream_event(&serde_json::json!({
+        "phase": "project_regex",
+        "event": "complete",
+        "files_modified": report.files_modified,
+        "modified_count": report.files_modified
+    }));
+
+    // Phase 2: File-by-File Type Resolution & Compiler Verification in Dependency Order
+    let file_refs: Vec<(&Path, &str)> = items
+        .iter()
+        .map(|it| (it.path.as_path(), it.formatted_content.as_str()))
+        .collect();
+    let order = compute_dependency_order_from_paths_and_content(&file_refs, dir);
+
+    let total = items.len();
+    let mut migrated_count = 0;
+    let mut warning_count = 0;
+
+    for (idx, &item_idx) in order.iter().enumerate() {
+        let item = &items[item_idx];
+        let index = idx + 1;
+
+        emit_stream_event(&serde_json::json!({
+            "phase": "file_verify",
+            "event": "file_start",
+            "file": item.rel_path,
+            "index": index,
+            "total": total
+        }));
+
+        let diags = check_source(&item.formatted_content, &item.rel_path, DEFAULT_MAX_ERRORS_PER_FILE);
+
+        for diag in &diags {
+            emit_stream_event(&serde_json::json!({
+                "phase": "file_verify",
+                "event": "diagnostic",
+                "file": item.rel_path,
+                "level": diag.level.as_str(),
+                "code": diag.code,
+                "message": diag.message,
+                "line": diag.span.start.line,
+                "col": diag.span.start.col,
+                "diagnostic": diag
+            }));
+        }
+
+        if diags.is_empty() {
+            for issue in &item.issues {
+                emit_stream_event(&serde_json::json!({
+                    "phase": "file_verify",
+                    "event": "diagnostic",
+                    "file": item.rel_path,
+                    "level": issue.level.as_str(),
+                    "code": issue.code,
+                    "message": issue.message,
+                    "line": issue.line,
+                    "col": issue.column
+                }));
+            }
+        }
+
+        let has_issues = !diags.is_empty()
+            || (!options.fix && !item.issues.is_empty())
+            || item.issues.iter().any(|i| i.level == IssueLevel::Error);
+
+        let status = if has_issues {
+            warning_count += 1;
+            "warning"
+        } else {
+            migrated_count += 1;
+            "migrated"
+        };
+
+        emit_stream_event(&serde_json::json!({
+            "phase": "file_verify",
+            "event": "file_complete",
+            "file": item.rel_path,
+            "index": index,
+            "total": total,
+            "status": status,
+            "diagnostics": diags
+        }));
+    }
+
+    emit_stream_event(&serde_json::json!({
+        "phase": "all_done",
+        "event": "complete",
+        "summary": {
+            "migrated": migrated_count,
+            "warnings": warning_count
+        }
+    }));
+
+    Ok(())
 }
 
 fn lint_directory_recursive(dir: &Path, options: LintOptions, report: &mut LintReport) -> io::Result<()> {
@@ -229,8 +512,12 @@ fn lint_directory_recursive(dir: &Path, options: LintOptions, report: &mut LintR
 }
 
 fn is_rhp_or_php_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.ends_with(".blade.php") || path_str.ends_with(".rade.rhp") {
+        return true;
+    }
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        ext == "rhp" || ext == "php"
+        matches!(ext, "rhp" | "php" | "phtml" | "blade" | "rade")
     } else {
         false
     }

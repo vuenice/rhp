@@ -6294,6 +6294,12 @@ fn dispatch_request(method: &str, args: &[PhpValue]) -> FacadeResult {
         "cookies" => {
             dispatch_cookie("all", args)
         }
+        "session" => {
+            dispatch_session("get", args)
+        }
+        "hasSession" => {
+            dispatch_session("has", args)
+        }
         "bearerToken" => {
             REQUEST_HEADERS.with(|cell| {
                 let map = cell.borrow();

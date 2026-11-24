@@ -19,8 +19,8 @@ fn print_help() {
             "    dev [OPTIONS]                    Execute in Development Mode (e.g. 'rhp dev --file=\"server.rhp\"')\n",
             "    build [OPTIONS]                  Execute in Production Mode (e.g. 'rhp build --file=\"server.rhp\"')\n",
             "    serve [OPTIONS]                  Start HTTP server for RHP web apps (defaults to 'examples/todo/app.rhp')\n",
-            "    migrate [PATH] [OPTIONS]         Migrate PHP code to RHP (removes tags/declare/casts/list/@, orders params & args, replaces $_GET/$_POST, modernizes cURL)\n",
-            "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing, and output JSON issues\n",
+            "    migrate [PATH] [OPTIONS]         Migrate PHP code to RHP (supports --stream / --format=ndjson)\n",
+            "    lint [PATH] [OPTIONS]            Lint, auto-format, auto-type variables, enforce casing (supports --stream / --format=ndjson)\n",
             "    check [PATH] [OPTIONS]           Check syntax and type boundary contracts (supports --format=json)\n",
             "    explain <CODE> [OPTIONS]         Explain a compiler diagnostic code (e.g. 'rhp explain RHP0102')\n\n",
             "PROCESS SUPERVISION (RHPM / PM2-STYLE):\n",
@@ -539,27 +539,32 @@ fn handle_run_explain(sub_args: &[String]) {
     }
 }
 
-/// Handle `rhp run lint [PATH] [--check] [--no-fix] [--no-case-change]`
+/// Handle `rhp run lint [PATH] [--check] [--no-fix] [--no-case-change] [--stream] [--format=<human|json|ndjson>]`
 fn handle_run_lint(sub_args: &[String]) {
     let mut check_only = false;
     let mut no_fix = false;
     let mut no_case_change = false;
+    let mut stream_format = false;
+    let mut _json_format = false;
     let mut target_path = ".".to_string();
 
-    for arg in sub_args {
+    let mut iter = sub_args.iter();
+    while let Some(arg) = iter.next() {
         if arg == "--help" || arg == "-h" {
             println!(
                 concat!(
-                    "rhp run lint [PATH] [--check] [--no-fix] [--no-case-change]\n\n",
+                    "rhp run lint [PATH] [OPTIONS]\n\n",
                     "Auto-formats code (4 spaces, operator spacing, brace normalization),\n",
                     "enforces naming conventions (snake_case variables, PascalCase classes, camelCase functions/test_ in snake_case),\n",
                     "infers and inserts types for variables, array literals (list, dict, hashMap), and parameters,\n",
                     "preserves existing user types, and outputs typecheck & lint issues in JSON format.\n\n",
                     "OPTIONS:\n",
-                    "    PATH               Target file or directory (default: current directory '.')\n",
-                    "    --check, --no-fix  Check only without writing changes to disk\n",
-                    "    --no-case-change   Do not change identifier casing or report casing issues\n",
-                    "    --help             Show this help message\n"
+                    "    PATH                         Target file or directory (default: current directory '.')\n",
+                    "    --check, --no-fix            Check only without writing changes to disk\n",
+                    "    --no-case-change             Do not change identifier casing or report casing issues\n",
+                    "    --stream                     Stream linting events in real-time as NDJSON to stdout\n",
+                    "    --format <human|json|ndjson> Output format: 'json' (default for CLI), or 'ndjson' / 'stream'\n",
+                    "    --help                       Show this help message\n"
                 )
             );
             process::exit(0);
@@ -569,6 +574,32 @@ fn handle_run_lint(sub_args: &[String]) {
             no_fix = true;
         } else if arg == "--no-case-change" {
             no_case_change = true;
+        } else if arg == "--stream" {
+            stream_format = true;
+        } else if arg == "--format=ndjson" || arg == "--format=stream" {
+            stream_format = true;
+        } else if arg == "--format=json" {
+            _json_format = true;
+        } else if arg == "--format" {
+            if let Some(next_val) = iter.next() {
+                if next_val == "json" {
+                    _json_format = true;
+                } else if next_val == "ndjson" || next_val == "stream" {
+                    stream_format = true;
+                }
+            }
+        } else if let Some(val) = arg.strip_prefix("--format=") {
+            if val == "json" {
+                _json_format = true;
+            } else if val == "ndjson" || val == "stream" {
+                stream_format = true;
+            }
+        } else if let Some(val) = arg.strip_prefix("--file=") {
+            target_path = val.trim_matches('"').trim_matches('\'').to_string();
+        } else if arg == "--file" || arg == "-f" {
+            if let Some(next_val) = iter.next() {
+                target_path = next_val.clone();
+            }
         } else if !arg.starts_with("--") {
             target_path = arg.clone();
         }
@@ -583,16 +614,22 @@ fn handle_run_lint(sub_args: &[String]) {
     let options = rhp::lint::LintOptions {
         fix: !check_only && !no_fix,
         case_change: !no_case_change,
+        stream: stream_format,
     };
 
     match lint_path(path, options) {
         Ok(report) => {
-            // Output issues and stats in JSON format
-            println!("{}", report.to_json());
-            if report.errors_count() > 0 || (!options.fix && report.total_issues() > 0) {
-                process::exit(1);
-            } else {
+            if stream_format {
+                // Real-time NDJSON events were already emitted to stdout
                 process::exit(0);
+            } else {
+                // Output issues and stats in JSON format
+                println!("{}", report.to_json());
+                if report.errors_count() > 0 || (!options.fix && report.total_issues() > 0) {
+                    process::exit(1);
+                } else {
+                    process::exit(0);
+                }
             }
         }
         Err(e) => {
@@ -608,6 +645,7 @@ fn handle_run_migrate(sub_args: &[String]) {
     let mut target_path = ".".to_string();
     let mut is_file_flag = false;
     let mut json_format = false;
+    let mut stream_format = false;
     let mut php_version = 7;
     let mut comment_error_reporting = true;
     let mut init_manifest = true;
@@ -645,6 +683,7 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "      $_SERVER['HTTP_HOST'] = Request::host();\n",
                     "      $_FILES = Request::files();\n",
                     "      $_COOKIE = Cookie::get();\n",
+                    "      $_SESSION = Request::session();\n",
                     "  - Upgrades cookie setting (setcookie / $_COOKIE[...] = ...) to Cookie::set(...)\n",
                     "  - Replaces $_GLOBAL and $GLOBALS access with original global values\n",
                     "  - Upgrades legacy cURL calls to Http facade (comments original code, handles Option A/B, Future::async)\n",
@@ -658,7 +697,8 @@ fn handle_run_migrate(sub_args: &[String]) {
                     "    --php-version <8|7>          Source PHP version: '8' (rewrite named args only) or '7' (reorder params, swap calls, warn tricky calls)\n",
                     "    --write                      Write migrated changes directly to disk (default)\n",
                     "    --check, --dry-run           Check only without writing changes to disk\n",
-                    "    --format <human|json>        Output format: 'human' (default) or 'json'\n",
+                    "    --stream                     Stream migration events in real-time as NDJSON to stdout\n",
+                    "    --format <human|json|ndjson> Output format: 'human' (default), 'json', or 'ndjson'\n",
                     "    --help, -h                   Show this help message\n"
                 )
             );
@@ -718,13 +758,25 @@ fn handle_run_migrate(sub_args: &[String]) {
                 eprintln!("Error: Option '{}' requires a file path argument.", arg);
                 process::exit(1);
             }
+        } else if arg == "--stream" {
+            stream_format = true;
+        } else if arg == "--format=ndjson" || arg == "--format=stream" {
+            stream_format = true;
         } else if arg == "--format=json" {
             json_format = true;
         } else if arg == "--format" {
             if let Some(next_val) = iter.next() {
                 if next_val == "json" {
                     json_format = true;
+                } else if next_val == "ndjson" || next_val == "stream" {
+                    stream_format = true;
                 }
+            }
+        } else if let Some(val) = arg.strip_prefix("--format=") {
+            if val == "json" {
+                json_format = true;
+            } else if val == "ndjson" || val == "stream" {
+                stream_format = true;
             }
         } else if arg == "--comment-error-reporting" {
             comment_error_reporting = true;
@@ -772,11 +824,14 @@ fn handle_run_migrate(sub_args: &[String]) {
         php_version,
         comment_error_reporting,
         init_manifest,
+        stream: stream_format,
     };
 
     match rhp::migrate::migrate_path(path, options) {
         Ok(report) => {
-            if json_format {
+            if stream_format {
+                // Real-time NDJSON events were already emitted to stdout
+            } else if json_format {
                 println!("{}", report.to_json());
             } else {
                 print!("{}", report.to_human(check_only));
