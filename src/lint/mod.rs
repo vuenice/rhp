@@ -34,6 +34,7 @@ pub use migrate::{
     strip_declare_statements, strip_error_reporting, strip_legacy_includes,
     replace_legacy_includes_with_use_and_namespace, resolve_file_psr4_namespace, find_project_root_and_psr4,
     migrate_simple_output_buffering, migrate_controller_echo, transpile_php_template_to_rade,
+    transpile_php_template_to_rade_with_file, is_view_include_statement,
     swap_positional_calls_and_warn_tricky, migrate_pdo_queries,
     upgrade_php_file, upgrade_php_path, upgrade_php_source, MigrateFileResult, MigrateOptions,
     MigrateReport, UpgradeFileResult, UpgradeOptions, UpgradeReport,

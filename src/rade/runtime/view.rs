@@ -581,19 +581,21 @@ impl ViewEngine {
     /// as well as direct relative and absolute filenames, with `.rade.rhp`, `.rade`, `.blade.rhp`, and `.rhp` extensions.
     pub fn resolve_view_path(&self, view: &str) -> Result<PathBuf, ViewError> {
         let mut candidates = Vec::new();
-        let path_with_dots = view.replace('.', "/");
+        let clean_view = view.strip_prefix("./").unwrap_or(view);
+        let path_with_dots = clean_view.replace('.', "/");
 
         let mut add_candidates = |base: &Path| {
             candidates.push(base.join(view));
+            candidates.push(base.join(clean_view));
             candidates.push(base.join(format!("{path_with_dots}.rade.rhp")));
             candidates.push(base.join(format!("{path_with_dots}.rade")));
             candidates.push(base.join(format!("{path_with_dots}.blade.rhp")));
             candidates.push(base.join(format!("{path_with_dots}.rhp")));
             if !view.ends_with(".rade.rhp") && !view.ends_with(".rade") && !view.ends_with(".blade.rhp") && !view.ends_with(".rhp") {
-                candidates.push(base.join(format!("{view}.rade.rhp")));
-                candidates.push(base.join(format!("{view}.rade")));
-                candidates.push(base.join(format!("{view}.blade.rhp")));
-                candidates.push(base.join(format!("{view}.rhp")));
+                candidates.push(base.join(format!("{clean_view}.rade.rhp")));
+                candidates.push(base.join(format!("{clean_view}.rade")));
+                candidates.push(base.join(format!("{clean_view}.blade.rhp")));
+                candidates.push(base.join(format!("{clean_view}.rhp")));
             }
         };
 
@@ -612,12 +614,16 @@ impl ViewEngine {
 
         // 3. Direct filesystem path outside views_dir
         candidates.push(PathBuf::from(view));
+        candidates.push(PathBuf::from(clean_view));
         if !view.ends_with(".rade.rhp") && !view.ends_with(".rade") && !view.ends_with(".blade.rhp") && !view.ends_with(".rhp") {
             candidates.push(PathBuf::from(format!("{view}.rade.rhp")));
+            candidates.push(PathBuf::from(format!("{clean_view}.rade.rhp")));
             candidates.push(PathBuf::from(format!("{view}.rade")));
+            candidates.push(PathBuf::from(format!("{clean_view}.rade")));
             candidates.push(PathBuf::from(format!("{path_with_dots}.rade.rhp")));
             candidates.push(PathBuf::from(format!("{path_with_dots}.rade")));
             candidates.push(PathBuf::from(format!("{view}.blade.rhp")));
+            candidates.push(PathBuf::from(format!("{clean_view}.blade.rhp")));
             candidates.push(PathBuf::from(format!("{path_with_dots}.blade.rhp")));
         }
 

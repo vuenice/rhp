@@ -45,6 +45,8 @@ impl Default for MigrateOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrateFileResult {
     pub file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_file_path: Option<String>,
     pub modified: bool,
     pub added_lines: Vec<String>,
     pub cookie_set_count: usize,
@@ -87,6 +89,7 @@ pub struct MigrateFileResult {
 impl MigrateFileResult {
     pub fn changes_count(&self) -> usize {
         let count = (if self.php_tag_removed { 1 } else { 0 })
+            + (if self.target_file_path.is_some() { 1 } else { 0 })
             + self.added_lines.len()
             + self.cookie_set_count
             + self.global_replace_count
@@ -217,6 +220,9 @@ impl MigrateReport {
                     if res.echo_response_count > 0 {
                         out.push_str(&format!("      ~ {} echo statement(s) converted to Response returns\n", res.echo_response_count));
                     }
+                    if let Some(target) = &res.target_file_path {
+                        out.push_str(&format!("      ~ template file migrated to {}\n", target));
+                    }
                     if res.rade_directive_count > 0 {
                         out.push_str(&format!("      ~ {} PHP template tag(s) transpiled to Rade directives\n", res.rade_directive_count));
                     }
@@ -332,7 +338,7 @@ pub fn migrate_source_with_options_and_context(
     let mut warnings = Vec::new();
 
     // Step -0.1: Transpile PHP template tags (<?=, <?php if (...): ?>, <?php foreach (...): ?>) to Rade directives
-    let (after_rade, r_count) = transpile_php_template_to_rade(&current);
+    let (after_rade, r_count) = transpile_php_template_to_rade_with_file(&current, file_name);
     rade_directive_count += r_count;
     current = after_rade;
 
@@ -507,10 +513,17 @@ pub fn migrate_source_with_options_and_context(
     warnings.extend(check_rune_and_ctype_usage(&current));
     warnings.extend(scan_for_unsupported_php_features(&current, file_name));
 
-    let modified = current != source;
+    let target_file_path = if file_name.ends_with(".phtml") {
+        Some(Path::new(file_name).with_extension("rade.rhp").display().to_string())
+    } else {
+        None
+    };
+
+    let modified = current != source || target_file_path.is_some();
 
     MigrateFileResult {
         file_path: file_name.to_string(),
+        target_file_path,
         modified,
         added_lines,
         cookie_set_count,
@@ -559,7 +572,13 @@ pub fn migrate_file_with_signatures(
     let result = migrate_source_with_options_and_context(&source, &file_path, options, signatures);
 
     if result.modified && options.fix {
-        fs::write(path, &result.migrated_content)?;
+        if path.to_string_lossy().ends_with(".phtml") {
+            let target_path = path.with_extension("rade.rhp");
+            fs::write(&target_path, &result.migrated_content)?;
+            let _ = fs::remove_file(path);
+        } else {
+            fs::write(path, &result.migrated_content)?;
+        }
     }
 
     Ok(result)
@@ -640,11 +659,13 @@ pub struct ProjectItem {
     pub rade_directive_count: usize,
     pub pdo_migrated_count: usize,
     pub warnings: Vec<String>,
+    pub target_path: Option<PathBuf>,
 }
 
 impl ProjectItem {
     pub fn changes_count(&self) -> usize {
         let count = (if self.php_tag_removed { 1 } else { 0 })
+            + (if self.target_path.is_some() { 1 } else { 0 })
             + self.added_lines.len()
             + self.cookie_set_count
             + self.global_replace_count
@@ -1106,6 +1127,12 @@ pub fn migrate_project_in_stages(
         match fs::read_to_string(&p) {
             Ok(content) => {
                 let file_name = p.display().to_string();
+                let is_phtml = file_name.ends_with(".phtml");
+                let target_path = if is_phtml {
+                    Some(p.with_extension("rade.rhp"))
+                } else {
+                    None
+                };
                 items.push(ProjectItem {
                     path: p,
                     file_name,
@@ -1141,6 +1168,7 @@ pub fn migrate_project_in_stages(
                     rade_directive_count: 0,
                     pdo_migrated_count: 0,
                     warnings: Vec::new(),
+                    target_path,
                 });
             }
             Err(e) => {
@@ -1155,7 +1183,7 @@ pub fn migrate_project_in_stages(
 
     for item in &mut items {
         // Transpile template tags
-        let (after_rade, r_count) = transpile_php_template_to_rade(&item.current_content);
+        let (after_rade, r_count) = transpile_php_template_to_rade_with_file(&item.current_content, &item.file_name);
         item.rade_directive_count += r_count;
         item.current_content = after_rade;
 
@@ -1349,21 +1377,30 @@ pub fn migrate_project_in_stages(
 
     // Phase 7: Stage 5 - Resilient Disk Write & Results Aggregation
     for item in &items {
-        let modified = item.current_content != item.original_content;
+        let is_phtml = item.path.to_string_lossy().ends_with(".phtml");
+        let modified = item.current_content != item.original_content || is_phtml;
         report.files_scanned += 1;
         if modified {
             report.files_modified += 1;
             if options.fix {
-                if let Err(e) = fs::write(&item.path, &item.current_content) {
+                if let Some(target) = &item.target_path {
+                    if let Err(e) = fs::write(target, &item.current_content) {
+                        report.warnings.push(format!("[I/O Error] Could not write '{}': {}. Skipping save.", target.display(), e));
+                    } else {
+                        let _ = fs::remove_file(&item.path);
+                    }
+                } else if let Err(e) = fs::write(&item.path, &item.current_content) {
                     report.warnings.push(format!("[I/O Error] Could not write '{}': {}. Skipping save.", item.path.display(), e));
                 }
             }
             if options.stream {
                 let rel_path = format_relative_file_path(&item.path, dir);
+                let target_file = item.target_path.as_ref().map(|p| format_relative_file_path(p, dir));
                 emit_stream_event(&serde_json::json!({
                     "phase": "project_regex",
                     "event": "file_modified",
                     "file": rel_path,
+                    "target_file": target_file,
                     "changes_count": item.changes_count()
                 }));
             }
@@ -1374,6 +1411,7 @@ pub fn migrate_project_in_stages(
 
         let file_res = MigrateFileResult {
             file_path: item.file_name.clone(),
+            target_file_path: item.target_path.as_ref().map(|p| p.display().to_string()),
             modified,
             added_lines: item.added_lines.clone(),
             cookie_set_count: item.cookie_set_count,
@@ -1439,7 +1477,19 @@ pub fn migrate_project_in_stages(
                 "total": total
             }));
 
-            let diags = check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE);
+            let is_template = rel_path.ends_with(".rade.rhp")
+                || rel_path.ends_with(".blade.php")
+                || rel_path.ends_with(".rade")
+                || rel_path.ends_with(".phtml");
+
+            let diags = if is_template {
+                match crate::rade::compile(&item.current_content) {
+                    Ok(_) => Vec::new(),
+                    Err(_) => check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE),
+                }
+            } else {
+                check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE)
+            };
 
             for diag in &diags {
                 emit_stream_event(&serde_json::json!({
@@ -5413,6 +5463,7 @@ fn is_blade_directive(name: &str) -> bool {
             | "inject" | "component" | "endcomponent" | "slot" | "endslot"
             | "props" | "aware"
             | "vite" | "livewire" | "csrf" | "method" | "dd" | "dump"
+            | "rhp" | "endrhp" | "php" | "endphp"
     )
 }
 
@@ -7811,47 +7862,22 @@ fn is_template_source(source: &str) -> bool {
 
         if bytes[i..].starts_with(b"<?php") {
             let after = i + 5;
-            let mut p = after;
-            while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
-                p += 1;
-            }
-            if p + 2 <= n && &bytes[p..p + 2] == b"if" {
-                if let Some(tag_end) = source[p..].find("?>") {
-                    let inside = source[p..p + tag_end].trim();
-                    if inside.ends_with(':') {
-                        return true;
-                    }
-                }
-            } else if p + 7 <= n && &bytes[p..p + 7] == b"foreach" {
-                if let Some(tag_end) = source[p..].find("?>") {
-                    let inside = source[p..p + tag_end].trim();
-                    if inside.ends_with(':') {
-                        return true;
-                    }
-                }
-            } else if p + 3 <= n && &bytes[p..p + 3] == b"for" {
-                if let Some(tag_end) = source[p..].find("?>") {
-                    let inside = source[p..p + tag_end].trim();
-                    if inside.ends_with(':') {
-                        return true;
-                    }
-                }
-            } else if p + 5 <= n && (&bytes[p..p + 5] == b"endif" || &bytes[p..p + 5] == b"while") {
-                if &bytes[p..p + 5] == b"endif" {
+            if let Some(tag_end) = source[after..].find("?>") {
+                let inside = source[after..after + tag_end].trim();
+                if inside.ends_with(':')
+                    || inside.starts_with("endif")
+                    || inside.starts_with("endforeach")
+                    || inside.starts_with("endfor")
+                    || inside.starts_with("endwhile")
+                    || inside.starts_with("elseif")
+                    || inside.starts_with("else if")
+                    || inside == "else:"
+                    || inside.starts_with("} elseif")
+                    || inside.starts_with("} else if")
+                    || inside.starts_with("} else")
+                {
                     return true;
                 }
-                if let Some(tag_end) = source[p..].find("?>") {
-                    let inside = source[p..p + tag_end].trim();
-                    if inside.ends_with(':') {
-                        return true;
-                    }
-                }
-            } else if p + 10 <= n && &bytes[p..p + 10] == b"endforeach" {
-                return true;
-            } else if p + 6 <= n && (&bytes[p..p + 6] == b"endfor" || &bytes[p..p + 6] == b"elseif") {
-                return true;
-            } else if p + 8 <= n && &bytes[p..p + 8] == b"endwhile" {
-                return true;
             }
         }
 
@@ -7861,24 +7887,36 @@ fn is_template_source(source: &str) -> bool {
     false
 }
 
+pub fn is_template_file_or_source(source: &str, file_path: &str) -> bool {
+    let p_lower = file_path.to_ascii_lowercase();
+    if p_lower.ends_with(".phtml")
+        || p_lower.ends_with(".blade.php")
+        || p_lower.ends_with(".blade.rhp")
+        || p_lower.ends_with(".rade.rhp")
+        || p_lower.ends_with(".rade")
+    {
+        return true;
+    }
+    is_template_source(source)
+}
+
 pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
-    if !is_template_source(source) {
+    transpile_php_template_to_rade_with_file(source, "")
+}
+
+pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -> (String, usize) {
+    if !is_template_file_or_source(source, file_path) {
         return (source.to_string(), 0);
     }
 
-    let mask = build_code_mask(source);
     let bytes = source.as_bytes();
     let n = bytes.len();
     let mut edits: Vec<TextEdit> = Vec::new();
+    let mut block_stack: Vec<&'static str> = Vec::new();
     let mut count = 0;
     let mut i = 0;
 
     while i < n {
-        if !mask[i] {
-            i += 1;
-            continue;
-        }
-
         // Match <?= ... ?> short echo tag
         if bytes[i..].starts_with(b"<?=") {
             let tag_start = i;
@@ -7940,8 +7978,25 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
             if let Some(tag_end) = close_tag {
                 let inner = source[after_open..tag_end].trim();
 
-                // 1) echo in template: <?php echo ...; ?>
-                if inner.starts_with("echo") && (inner.len() == 4 || inner.as_bytes()[4].is_ascii_whitespace()) {
+                // 1) Comments: <?php /* ... */ ?> or <?php // ... ?>
+                if (inner.starts_with("/*") && inner.ends_with("*/")) || inner.starts_with("//") {
+                    let comment_text = if inner.starts_with("/*") && inner.ends_with("*/") {
+                        inner[2..inner.len() - 2].trim()
+                    } else {
+                        inner[2..].trim()
+                    };
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: format!("{{{{-- {} --}}}}", comment_text),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                // 2) echo in template: <?php echo ...; ?>
+                if inner.starts_with("echo") && (inner.len() == 4 || inner.as_bytes()[4].is_ascii_whitespace() || inner.as_bytes()[4] == b'(') {
                     let rest = inner[4..].trim();
                     let expr = extract_escaped_expr(rest);
                     edits.push(TextEdit {
@@ -7954,11 +8009,12 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
-                // 2) Control flow directives with ':'
+                // 3) Control flow: if
                 if inner.starts_with("if") && (inner.len() == 2 || inner.as_bytes()[2] == b' ' || inner.as_bytes()[2] == b'(') {
                     let rest = inner[2..].trim();
-                    if rest.starts_with('(') && rest.ends_with(':') {
+                    if (rest.starts_with('(') && rest.ends_with(':')) || (rest.starts_with('(') && rest.ends_with('{')) {
                         let cond = rest[..rest.len() - 1].trim();
+                        block_stack.push("if");
                         edits.push(TextEdit {
                             start: tag_start,
                             end: tag_end + 2,
@@ -7970,9 +8026,19 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     }
                 }
 
-                if inner.starts_with("elseif") && (inner.len() == 6 || inner.as_bytes()[6] == b' ' || inner.as_bytes()[6] == b'(') {
-                    let rest = inner[6..].trim();
-                    if rest.starts_with('(') && rest.ends_with(':') {
+                // 4) Control flow: elseif / else if
+                if inner.starts_with("elseif") || inner.starts_with("} elseif") || inner.starts_with("} else if") || inner.starts_with("else if") {
+                    let prefix_len = if inner.starts_with("} elseif") {
+                        8
+                    } else if inner.starts_with("} else if") {
+                        9
+                    } else if inner.starts_with("else if") {
+                        7
+                    } else {
+                        6
+                    };
+                    let rest = inner[prefix_len..].trim();
+                    if (rest.starts_with('(') && rest.ends_with(':')) || (rest.starts_with('(') && rest.ends_with('{')) {
                         let cond = rest[..rest.len() - 1].trim();
                         edits.push(TextEdit {
                             start: tag_start,
@@ -7985,7 +8051,8 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     }
                 }
 
-                if inner == "else:" || inner == "else :" {
+                // 5) Control flow: else
+                if inner == "else:" || inner == "else :" || inner == "} else {" || inner == "} else" || inner == "else {" {
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
@@ -7996,7 +8063,9 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
+                // 6) Control flow: endif
                 if inner == "endif;" || inner == "endif ;" || inner == "endif:" || inner == "endif" {
+                    let _ = block_stack.pop();
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
@@ -8007,14 +8076,16 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
+                // 7) Control flow: foreach
                 if inner.starts_with("foreach") && (inner.len() == 7 || inner.as_bytes()[7] == b' ' || inner.as_bytes()[7] == b'(') {
                     let rest = inner[7..].trim();
-                    if rest.starts_with('(') && rest.ends_with(':') {
-                        let loop_hdr = rest[1..rest.len() - 2].trim();
+                    if (rest.starts_with('(') && rest.ends_with(':')) || (rest.starts_with('(') && rest.ends_with('{')) {
+                        let cond = rest[..rest.len() - 1].trim();
+                        block_stack.push("foreach");
                         edits.push(TextEdit {
                             start: tag_start,
                             end: tag_end + 2,
-                            replacement: format!("@foreach ({})", loop_hdr),
+                            replacement: format!("@foreach {}", cond),
                         });
                         count += 1;
                         i = tag_end + 2;
@@ -8022,7 +8093,9 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     }
                 }
 
+                // 8) Control flow: endforeach
                 if inner == "endforeach;" || inner == "endforeach ;" || inner == "endforeach:" || inner == "endforeach" {
+                    let _ = block_stack.pop();
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
@@ -8033,14 +8106,16 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
+                // 9) Control flow: for
                 if inner.starts_with("for") && (inner.len() == 3 || inner.as_bytes()[3] == b' ' || inner.as_bytes()[3] == b'(') {
                     let rest = inner[3..].trim();
-                    if rest.starts_with('(') && rest.ends_with(':') {
-                        let loop_hdr = rest[1..rest.len() - 2].trim();
+                    if (rest.starts_with('(') && rest.ends_with(':')) || (rest.starts_with('(') && rest.ends_with('{')) {
+                        let cond = rest[..rest.len() - 1].trim();
+                        block_stack.push("for");
                         edits.push(TextEdit {
                             start: tag_start,
                             end: tag_end + 2,
-                            replacement: format!("@for ({})", loop_hdr),
+                            replacement: format!("@for {}", cond),
                         });
                         count += 1;
                         i = tag_end + 2;
@@ -8048,7 +8123,9 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     }
                 }
 
+                // 10) Control flow: endfor
                 if inner == "endfor;" || inner == "endfor ;" || inner == "endfor:" || inner == "endfor" {
+                    let _ = block_stack.pop();
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
@@ -8059,10 +8136,12 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
+                // 11) Control flow: while
                 if inner.starts_with("while") && (inner.len() == 5 || inner.as_bytes()[5] == b' ' || inner.as_bytes()[5] == b'(') {
                     let rest = inner[5..].trim();
-                    if rest.starts_with('(') && rest.ends_with(':') {
+                    if (rest.starts_with('(') && rest.ends_with(':')) || (rest.starts_with('(') && rest.ends_with('{')) {
                         let cond = rest[..rest.len() - 1].trim();
+                        block_stack.push("while");
                         edits.push(TextEdit {
                             start: tag_start,
                             end: tag_end + 2,
@@ -8074,7 +8153,9 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     }
                 }
 
+                // 12) Control flow: endwhile
                 if inner == "endwhile;" || inner == "endwhile ;" || inner == "endwhile:" || inner == "endwhile" {
+                    let _ = block_stack.pop();
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
@@ -8085,8 +8166,30 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                     continue;
                 }
 
-                // 3) include in template: <?php include 'path/to/view.php'; ?>
-                if inner.starts_with("include") && (inner.len() == 7 || inner.as_bytes()[7].is_ascii_whitespace() || inner.as_bytes()[7] == b'(') {
+                // 13) Braced closing: } or };
+                if inner == "}" || inner == "};" {
+                    let closing = match block_stack.pop() {
+                        Some("foreach") => "@endforeach",
+                        Some("for") => "@endfor",
+                        Some("while") => "@endwhile",
+                        _ => "@endif",
+                    };
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: closing.to_string(),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
+                }
+
+                // 14) includes in template: include, require, include_once, require_once
+                let is_inc = inner.starts_with("include")
+                    || inner.starts_with("require")
+                    || inner.starts_with("include_once")
+                    || inner.starts_with("require_once");
+                if is_inc {
                     if let Some(path) = extract_string_literal(inner) {
                         let view_name = sanitize_view_name(&path);
                         edits.push(TextEdit {
@@ -8098,6 +8201,18 @@ pub fn transpile_php_template_to_rade(source: &str) -> (String, usize) {
                         i = tag_end + 2;
                         continue;
                     }
+                }
+
+                // 15) Arbitrary PHP code block in template: wrap in @rhp ... @endrhp
+                if is_template_file_or_source(source, file_path) && !inner.is_empty() {
+                    edits.push(TextEdit {
+                        start: tag_start,
+                        end: tag_end + 2,
+                        replacement: format!("@rhp\n{}\n@endrhp", inner),
+                    });
+                    count += 1;
+                    i = tag_end + 2;
+                    continue;
                 }
             }
         }
@@ -8137,13 +8252,66 @@ fn sanitize_view_name(path: &str) -> String {
     } else if s.starts_with("views/") {
         s = &s["views/".len()..];
     }
-    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".php", ".html"] {
+    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".php", ".html", ".phtml"] {
         if s.ends_with(ext) {
             s = &s[..s.len() - ext.len()];
             break;
         }
     }
     s.replace('/', ".")
+}
+
+pub fn is_view_include_statement(stmt: &str) -> Option<String> {
+    let literal = extract_string_literal(stmt)?;
+    let trimmed = literal.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    let is_view = lower.ends_with(".phtml")
+        || lower.ends_with(".rade.rhp")
+        || lower.ends_with(".blade.php")
+        || lower.ends_with(".blade.rhp")
+        || lower.ends_with(".rade")
+        || lower.ends_with(".html")
+        || lower.contains("views/")
+        || lower.contains("/views/")
+        || lower.contains("templates/")
+        || lower.contains("/templates/")
+        || lower.contains("partials/")
+        || lower.contains("/partials/");
+
+    if !is_view {
+        return None;
+    }
+
+    // If it ends with .php, ensure it's not a PascalCase class file like views/User.php
+    let basename = Path::new(trimmed).file_name().and_then(|f| f.to_str()).unwrap_or("");
+    if lower.ends_with(".php") && !lower.ends_with(".blade.php") {
+        if let Some(first_char) = basename.chars().next() {
+            if first_char.is_ascii_uppercase() {
+                return None;
+            }
+        }
+    }
+
+    // Strip template extensions
+    let mut clean = trimmed.to_string();
+    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".phtml", ".rade", ".html", ".php"] {
+        if clean.to_ascii_lowercase().ends_with(ext) {
+            clean.truncate(clean.len() - ext.len());
+            break;
+        }
+    }
+
+    // Normalize path to "./views/..."
+    if clean.starts_with("/../") {
+        clean = clean[1..].to_string();
+    } else if clean.starts_with('/') {
+        clean = format!(".{}", clean);
+    } else if !clean.starts_with("./") && !clean.starts_with("../") {
+        clean = format!("./{}", clean);
+    }
+
+    Some(clean)
 }
 
 fn parse_echo_expressions(body: &str) -> Option<Vec<String>> {
@@ -8522,6 +8690,7 @@ pub fn replace_legacy_includes_with_use_and_namespace(
             prev_ch == b';'
                 || prev_ch == b'{'
                 || prev_ch == b'}'
+                || prev_ch == b':'
                 || bytes[..b_idx].ends_with(b"<?php")
                 || bytes[..b_idx].ends_with(b"<?")
         };
@@ -8561,6 +8730,18 @@ pub fn replace_legacy_includes_with_use_and_namespace(
             } else {
                 semi_pos
             };
+
+            let raw_stmt = &source[i..semi_pos];
+            if let Some(view_path) = is_view_include_statement(raw_stmt) {
+                edits.push(TextEdit {
+                    start: i,
+                    end: after_stmt,
+                    replacement: format!("View::render('{}');", view_path),
+                });
+                count += 1;
+                i = after_stmt;
+                continue;
+            }
 
             let line_start = get_line_start(source, i);
             let only_ws_before = bytes[line_start..i].iter().all(|&b| b == b' ' || b == b'\t');

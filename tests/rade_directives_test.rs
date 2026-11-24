@@ -497,7 +497,9 @@ fn test_individual_directive_compiler_functions() {
     assert!(is_builtin_directive("endif"));
     assert!(is_builtin_directive("for"));
     assert!(is_builtin_directive("endfor"));
-    assert!(!is_builtin_directive("foreach"));
+    assert!(is_builtin_directive("foreach"));
+    assert!(is_builtin_directive("endforeach"));
+    assert!(is_builtin_directive("include"));
     assert!(!is_builtin_directive("custom"));
 }
 
@@ -606,4 +608,29 @@ fn test_compiler_struct_and_compile_tokens() {
     let endif_compiled = compile_directive("endif", None, 2, 1, &mut stack).unwrap();
     assert_eq!(endif_compiled, "}");
     assert!(stack.finish().is_ok());
+}
+
+#[test]
+fn test_foreach_directive() {
+    let input = "@foreach($users as $user)\n  <li>{{ $user.name }}</li>\n@endforeach";
+    let output = compile(input).unwrap();
+    assert_eq!(
+        output,
+        "for ($user in $users) {\n  <li>{{ $user.name }}</li>\n}"
+    );
+
+    let input_keyed = "@foreach($items as $key => $item)\n  <li>{{ $key }}: {{ $item }}</li>\n@endforeach";
+    let output_keyed = compile(input_keyed).unwrap();
+    assert_eq!(
+        output_keyed,
+        "for ($key => $item in $items) {\n  <li>{{ $key }}: {{ $item }}</li>\n}"
+    );
+}
+
+#[test]
+fn test_include_directive() {
+    use rhp::rade::compile_to_rhp;
+    let input = "<div>\n@include('partials.header')\n</div>";
+    let output = compile_to_rhp(input).unwrap();
+    assert!(output.contains("$__out += View::render('partials.header');"));
 }

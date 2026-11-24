@@ -7,6 +7,7 @@ use crate::rade::compiler::CompileError;
 pub enum DirectiveKind {
     If,
     For,
+    Foreach,
 }
 
 impl fmt::Display for DirectiveKind {
@@ -14,6 +15,7 @@ impl fmt::Display for DirectiveKind {
         match self {
             DirectiveKind::If => write!(f, "if"),
             DirectiveKind::For => write!(f, "for"),
+            DirectiveKind::Foreach => write!(f, "foreach"),
         }
     }
 }
@@ -178,6 +180,34 @@ impl DirectiveStack {
         }
     }
 
+    /// Handles a `@foreach` directive by pushing a `Foreach` block onto the stack.
+    pub fn handle_foreach(&mut self, line: usize, column: usize) {
+        self.push(DirectiveKind::Foreach, line, column);
+    }
+
+    /// Validates and closes a `@foreach` block upon encountering `@endforeach`.
+    pub fn handle_endforeach(&mut self, line: usize, column: usize) -> Result<(), CompileError> {
+        match self.stack.last() {
+            None => Err(CompileError::UnexpectedClosingDirective {
+                directive: "endforeach".to_string(),
+                line,
+                column,
+            }),
+            Some(entry) if entry.kind != DirectiveKind::Foreach => {
+                Err(CompileError::MismatchedClosingDirective {
+                    expected: format!("end{}", entry.kind),
+                    found: "endforeach".to_string(),
+                    line,
+                    column,
+                })
+            }
+            Some(_) => {
+                self.stack.pop();
+                Ok(())
+            }
+        }
+    }
+
     /// Validates that all opened blocks were closed when EOF is reached.
     pub fn finish(&self) -> Result<(), CompileError> {
         if let Some(entry) = self.stack.last() {
@@ -194,7 +224,10 @@ impl DirectiveStack {
 
 /// Returns true if the directive name is a known built-in control flow directive.
 pub fn is_builtin_directive(name: &str) -> bool {
-    matches!(name, "if" | "elseif" | "else" | "endif" | "for" | "endfor")
+    matches!(
+        name,
+        "if" | "elseif" | "else" | "endif" | "for" | "endfor" | "foreach" | "endforeach" | "include"
+    )
 }
 
 /// Compiles `@if($condition)` to `if ($condition) {`.
@@ -225,6 +258,33 @@ pub fn compile_for(args: &str) -> String {
 /// Compiles `@endfor` to `}`.
 pub fn compile_endfor() -> &'static str {
     "}"
+}
+
+/// Compiles `@foreach($items as $item)` or `@foreach($items as $key => $item)` to RHP `for-in` loop syntax.
+pub fn compile_foreach(args: &str) -> String {
+    let trimmed = args.trim();
+    let inner = if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        trimmed[1..trimmed.len() - 1].trim()
+    } else {
+        trimmed
+    };
+    if let Some((iter, binding)) = inner.split_once(" as ") {
+        format!("for ({} in {}) {{", binding.trim(), iter.trim())
+    } else if let Some((binding, iter)) = inner.split_once(" in ") {
+        format!("for ({} in {}) {{", binding.trim(), iter.trim())
+    } else {
+        format!("foreach ({}) {{", inner)
+    }
+}
+
+/// Compiles `@endforeach` to `}`.
+pub fn compile_endforeach() -> &'static str {
+    "}"
+}
+
+/// Compiles `@include('view.name')` to `$__out += View::render('view.name', $__data);`.
+pub fn compile_include(args: &str) -> String {
+    format!("$__out += View::render({});", args.trim())
 }
 
 /// Processes and compiles a directive token using the provided registry (and falling back to the global registry),
@@ -312,6 +372,42 @@ pub fn compile_directive_with_registry(
             }
             stack.handle_endfor(line, column)?;
             Ok(compile_endfor().to_string())
+        }
+        "foreach" => {
+            let foreach_args = args
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| CompileError::MissingDirectiveArgs {
+                    directive: "foreach".to_string(),
+                    line,
+                    column,
+                })?;
+            stack.handle_foreach(line, column);
+            Ok(compile_foreach(foreach_args))
+        }
+        "endforeach" => {
+            if let Some(arg) = args {
+                if !arg.trim().is_empty() {
+                    return Err(CompileError::UnexpectedDirectiveArgs {
+                        directive: "endforeach".to_string(),
+                        line,
+                        column,
+                    });
+                }
+            }
+            stack.handle_endforeach(line, column)?;
+            Ok(compile_endforeach().to_string())
+        }
+        "include" => {
+            let include_args = args
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| CompileError::MissingDirectiveArgs {
+                    directive: "include".to_string(),
+                    line,
+                    column,
+                })?;
+            Ok(compile_include(include_args))
         }
         _ => {
             // Check custom registry (local first, then global)

@@ -3640,3 +3640,131 @@ fn test_cli_migrate_single_file_stream() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_migrate_view_includes_top_level_and_inside_function() {
+    let input = concat!(
+        "<?php\n",
+        "require __DIR__ . '/views/header.phtml';\n",
+        "include __DIR__ . '/views/orders-list.phtml';\n",
+        "require_once __DIR__ . '/views/footer.phtml';\n",
+        "include_once __DIR__ . '/views/footer.phtml';\n",
+        "\n",
+        "function renderOrderPage() {\n",
+        "    require __DIR__ . '/views/header.phtml';\n",
+        "    include __DIR__ . '/views/orders-list.phtml';\n",
+        "    require_once __DIR__ . '/views/footer.phtml';\n",
+        "    include_once __DIR__ . '/views/footer.phtml';\n",
+        "}\n"
+    );
+
+    let res = migrate_source(input, "order_controller.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 8);
+
+    let expected = concat!(
+        "View::render('./views/header');\n",
+        "View::render('./views/orders-list');\n",
+        "View::render('./views/footer');\n",
+        "View::render('./views/footer');\n",
+        "\n",
+        "function renderOrderPage() {\n",
+        "    View::render('./views/header');\n",
+        "    View::render('./views/orders-list');\n",
+        "    View::render('./views/footer');\n",
+        "    View::render('./views/footer');\n",
+        "}\n"
+    );
+
+    assert_eq!(res.migrated_content, expected);
+}
+
+#[test]
+fn test_transpile_phtml_braced_syntax_to_rade() {
+    let input = concat!(
+        "<div class=\"dashboard\">\n",
+        "    <?php /* Header banner */ ?>\n",
+        "    <?php require __DIR__ . '/views/header.phtml'; ?>\n",
+        "    <?php if ($user['is_admin']) { ?>\n",
+        "        <h1>Admin Panel: <?= htmlspecialchars($user['name']) ?></h1>\n",
+        "        <?php $debug_info = true; ?>\n",
+        "    <?php } else { ?>\n",
+        "        <h1>Welcome <?= $user['name'] ?></h1>\n",
+        "    <?php } ?>\n",
+        "    <ul>\n",
+        "    <?php foreach ($orders as $order) { ?>\n",
+        "        <li>Order #<?= $order['id'] ?></li>\n",
+        "    <?php } ?>\n",
+        "    </ul>\n",
+        "    <?php include_once __DIR__ . '/views/footer.phtml'; ?>\n",
+        "</div>\n"
+    );
+
+    let res = migrate_source(input, "dashboard.phtml");
+    assert!(res.modified);
+    assert!(res.migrated_content.contains("{{-- Header banner --}}"));
+    assert!(res.migrated_content.contains("@include('header')"));
+    assert!(res.migrated_content.contains("@if ($user['is_admin'])"));
+    assert!(res.migrated_content.contains("<h1>Admin Panel: {{ $user['name'] }}</h1>"));
+    assert!(res.migrated_content.contains("@rhp\n$debug_info = true;\n@endrhp"));
+    assert!(res.migrated_content.contains("@else"));
+    assert!(res.migrated_content.contains("<h1>Welcome {{ $user['name'] }}</h1>"));
+    assert!(res.migrated_content.contains("@endif"));
+    assert!(res.migrated_content.contains("@foreach ($orders as $order)"));
+    assert!(res.migrated_content.contains("<li>Order #{{ $order['id'] }}</li>"));
+    assert!(res.migrated_content.contains("@endforeach"));
+    assert!(res.migrated_content.contains("@include('footer')"));
+    assert_eq!(res.target_file_path.as_deref(), Some("dashboard.rade.rhp"));
+}
+
+#[test]
+fn test_phtml_file_migrated_and_renamed_to_rade_rhp_on_disk() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_phtml_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let phtml_file = temp_dir.join("order-details.phtml");
+    fs::write(
+        &phtml_file,
+        concat!(
+            "<div class=\"order\">\n",
+            "    <?php /* Order info */ ?>\n",
+            "    <h3>Order #<?= $order_id ?></h3>\n",
+            "    <?php foreach ($items as $item) { ?>\n",
+            "        <p><?= $item['name'] ?></p>\n",
+            "    <?php } ?>\n",
+            "</div>\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+    assert!(output.status.success());
+
+    // Old .phtml should be deleted
+    assert!(!phtml_file.exists(), "Old .phtml file should have been removed");
+
+    // New .rade.rhp should exist
+    let target_file = temp_dir.join("order-details.rade.rhp");
+    assert!(target_file.exists(), "New .rade.rhp file should exist on disk");
+
+    let contents = fs::read_to_string(&target_file).unwrap();
+    assert!(contents.contains("{{-- Order info --}}"));
+    assert!(contents.contains("<h3>Order #{{ $order_id }}</h3>"));
+    assert!(contents.contains("@foreach ($items as $item)"));
+    assert!(contents.contains("<p>{{ $item['name'] }}</p>"));
+    assert!(contents.contains("@endforeach"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+

@@ -1,6 +1,6 @@
 use crate::rade::compiler::directives::{
-    compile_else, compile_elseif, compile_endfor, compile_endif, compile_for, compile_if,
-    compile_directive_with_registry, DirectiveStack,
+    compile_else, compile_elseif, compile_endfor, compile_endforeach, compile_endif, compile_for,
+    compile_foreach, compile_if, compile_include, compile_directive_with_registry, DirectiveStack,
 };
 use crate::rade::compiler::registry::DirectiveRegistry;
 use crate::rade::compiler::CompileError;
@@ -202,7 +202,7 @@ impl CodeGenerator {
                     // Check if this directive is unregistered and parameterless:
                     // in Blade, unregistered directives without parentheses are treated as literal text
                     let is_custom = registry.contains(name) || DirectiveRegistry::global().contains(name);
-                    let is_builtin = matches!(name.as_str(), "if" | "elseif" | "else" | "endif" | "for" | "endfor");
+                    let is_builtin = matches!(name.as_str(), "if" | "elseif" | "else" | "endif" | "for" | "endfor" | "foreach" | "endforeach" | "include");
 
                     if !is_builtin && !is_custom && args.is_none() {
                         // Unregistered without parentheses -> treat as literal text
@@ -319,6 +319,53 @@ impl CodeGenerator {
                             }
                             let level = base_indent + current_block_indent;
                             lines.push(format!("{}{}", indent_str(level), code));
+                        }
+                        "foreach" => {
+                            let for_args = args
+                                .as_deref()
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                                .ok_or_else(|| CompileError::MissingDirectiveArgs {
+                                    directive: "foreach".to_string(),
+                                    line: spanned.line,
+                                    column: spanned.column,
+                                })?;
+                            stack.handle_foreach(spanned.line, spanned.column);
+                            let code = compile_foreach(for_args);
+                            let level = base_indent + current_block_indent;
+                            lines.push(format!("{}{}", indent_str(level), code));
+                            current_block_indent += 1;
+                        }
+                        "endforeach" => {
+                            if let Some(arg) = args {
+                                if !arg.trim().is_empty() {
+                                    return Err(CompileError::UnexpectedDirectiveArgs {
+                                        directive: "endforeach".to_string(),
+                                        line: spanned.line,
+                                        column: spanned.column,
+                                    });
+                                }
+                            }
+                            stack.handle_endforeach(spanned.line, spanned.column)?;
+                            let code = compile_endforeach();
+                            if current_block_indent > 0 {
+                                current_block_indent -= 1;
+                            }
+                            let level = base_indent + current_block_indent;
+                            lines.push(format!("{}{}", indent_str(level), code));
+                        }
+                        "include" => {
+                            let inc_args = args
+                                .as_deref()
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                                .ok_or_else(|| CompileError::MissingDirectiveArgs {
+                                    directive: "include".to_string(),
+                                    line: spanned.line,
+                                    column: spanned.column,
+                                })?;
+                            let level = base_indent + current_block_indent;
+                            lines.push(format!("{}{}", indent_str(level), compile_include(inc_args)));
                         }
                         _ => {
                             // Custom directive or error
