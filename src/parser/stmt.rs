@@ -440,7 +440,10 @@ impl<'s> CombinatorStream<'s> {
 
         // 14. Namespace statement
         if self.matches(&Token::Namespace) {
-            let name = if !self.check(&Token::SemiColon) && !self.check(&Token::OpenBrace) {
+            let name = if self.matches(&Token::Tilde) {
+                // Support `namespace ~;` as explicit global namespace indicator
+                None
+            } else if !self.check(&Token::SemiColon) && !self.check(&Token::OpenBrace) {
                 Some(self.expect_qualified_ident()?)
             } else {
                 None

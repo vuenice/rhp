@@ -513,8 +513,11 @@ pub fn migrate_source_with_options_and_context(
     warnings.extend(check_rune_and_ctype_usage(&current));
     warnings.extend(scan_for_unsupported_php_features(&current, file_name));
 
-    let target_file_path = if file_name.ends_with(".phtml") {
-        Some(Path::new(file_name).with_extension("rade.rhp").display().to_string())
+    let is_template_target = file_name.ends_with(".phtml")
+        || file_name.ends_with(".blade.php")
+        || (file_name.ends_with(".php") && (is_php_view_template(source, file_name) || is_php_view_template(&current, file_name)));
+    let target_file_path = if is_template_target {
+        Some(compute_target_template_path(Path::new(file_name)).display().to_string())
     } else {
         None
     };
@@ -572,9 +575,9 @@ pub fn migrate_file_with_signatures(
     let result = migrate_source_with_options_and_context(&source, &file_path, options, signatures);
 
     if result.modified && options.fix {
-        if path.to_string_lossy().ends_with(".phtml") {
-            let target_path = path.with_extension("rade.rhp");
-            fs::write(&target_path, &result.migrated_content)?;
+        if let Some(target_path_str) = &result.target_file_path {
+            let target_path = Path::new(target_path_str);
+            fs::write(target_path, &result.migrated_content)?;
             let _ = fs::remove_file(path);
         } else {
             fs::write(path, &result.migrated_content)?;
@@ -1127,9 +1130,11 @@ pub fn migrate_project_in_stages(
         match fs::read_to_string(&p) {
             Ok(content) => {
                 let file_name = p.display().to_string();
-                let is_phtml = file_name.ends_with(".phtml");
-                let target_path = if is_phtml {
-                    Some(p.with_extension("rade.rhp"))
+                let is_template_target = file_name.ends_with(".phtml")
+                    || file_name.ends_with(".blade.php")
+                    || (file_name.ends_with(".php") && is_php_view_template(&content, &file_name));
+                let target_path = if is_template_target {
+                    Some(compute_target_template_path(&p))
                 } else {
                     None
                 };
@@ -1377,8 +1382,8 @@ pub fn migrate_project_in_stages(
 
     // Phase 7: Stage 5 - Resilient Disk Write & Results Aggregation
     for item in &items {
-        let is_phtml = item.path.to_string_lossy().ends_with(".phtml");
-        let modified = item.current_content != item.original_content || is_phtml;
+        let is_target_rename = item.target_path.is_some();
+        let modified = item.current_content != item.original_content || is_target_rename;
         report.files_scanned += 1;
         if modified {
             report.files_modified += 1;
@@ -1480,7 +1485,8 @@ pub fn migrate_project_in_stages(
             let is_template = rel_path.ends_with(".rade.rhp")
                 || rel_path.ends_with(".blade.php")
                 || rel_path.ends_with(".rade")
-                || rel_path.ends_with(".phtml");
+                || rel_path.ends_with(".phtml")
+                || item.target_path.is_some();
 
             let diags = if is_template {
                 match crate::rade::compile(&item.current_content) {
@@ -7887,6 +7893,345 @@ fn is_template_source(source: &str) -> bool {
     false
 }
 
+pub fn compute_target_template_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.ends_with(".blade.php") {
+        PathBuf::from(format!("{}.rade.rhp", &s[..s.len() - ".blade.php".len()]))
+    } else {
+        path.with_extension("rade.rhp")
+    }
+}
+
+pub fn has_top_level_type_declaration(source: &str) -> bool {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+
+        let prev_ok = i == 0
+            || (!bytes[i - 1].is_ascii_alphanumeric()
+                && bytes[i - 1] != b'_'
+                && bytes[i - 1] != b':'
+                && bytes[i - 1] != b'>');
+        if prev_ok {
+            for (kw, len) in [
+                ("class", 5),
+                ("interface", 9),
+                ("trait", 5),
+                ("enum", 4),
+                ("namespace", 9),
+            ] {
+                if source[i..].starts_with(kw)
+                    && (i + len == n || !bytes[i + len].is_ascii_alphanumeric() && bytes[i + len] != b'_')
+                {
+                    if kw == "class" {
+                        let mut back = i;
+                        while back > 0
+                            && (bytes[back - 1] == b' '
+                                || bytes[back - 1] == b'\t'
+                                || bytes[back - 1] == b'\r'
+                                || bytes[back - 1] == b'\n')
+                        {
+                            back -= 1;
+                        }
+                        if back >= 3
+                            && &source[back - 3..back] == "new"
+                            && (back == 3
+                                || !bytes[back - 4].is_ascii_alphanumeric() && bytes[back - 4] != b'_')
+                        {
+                            continue;
+                        }
+                    }
+                    let mut p = i + len;
+                    while p < n
+                        && (bytes[p] == b' '
+                            || bytes[p] == b'\t'
+                            || bytes[p] == b'\r'
+                            || bytes[p] == b'\n')
+                    {
+                        p += 1;
+                    }
+                    if p < n && (bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'\\') {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    false
+}
+
+fn is_common_html_tag(tag: &str) -> bool {
+    let lower = tag.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "html" | "head" | "body" | "title" | "meta" | "link" | "style" | "script"
+            | "div" | "span" | "p" | "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+            | "ul" | "ol" | "li" | "dl" | "dt" | "dd"
+            | "table" | "thead" | "tbody" | "tfoot" | "tr" | "th" | "td"
+            | "form" | "input" | "button" | "select" | "option" | "textarea" | "label"
+            | "header" | "footer" | "nav" | "section" | "article" | "aside" | "main"
+            | "img" | "svg" | "path" | "canvas" | "video" | "audio" | "iframe" | "picture" | "source"
+            | "i" | "b" | "strong" | "em" | "small" | "br" | "hr" | "pre" | "code"
+            | "blockquote" | "figure" | "figcaption" | "details" | "summary" | "dialog"
+    )
+}
+
+pub fn contains_html_markup(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+
+    while i < n {
+        if bytes[i] == b'<' && i + 1 < n {
+            let next = bytes[i + 1];
+            // 1. <!DOCTYPE ... or <!-- ... --> or <![CDATA[ ...
+            if next == b'!' {
+                if i + 9 <= n && s[i..i + 9].eq_ignore_ascii_case("<!doctype") {
+                    return true;
+                }
+                if bytes[i..].starts_with(b"<!--") {
+                    return true;
+                }
+            }
+            // 2. Closing tag: </tag>
+            if next == b'/' && i + 2 < n && bytes[i + 2].is_ascii_alphabetic() {
+                let mut p = i + 3;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'-' || bytes[p] == b'_' || bytes[p] == b':') {
+                    p += 1;
+                }
+                while p < n && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+                    p += 1;
+                }
+                if p < n && bytes[p] == b'>' {
+                    return true;
+                }
+            }
+            // 3. Opening or self-closing tag: <tag ...>
+            if next.is_ascii_alphabetic() {
+                let mut p = i + 2;
+                while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'-' || bytes[p] == b'_' || bytes[p] == b':') {
+                    p += 1;
+                }
+                let tag_name = &s[i + 1..p];
+                if is_common_html_tag(tag_name) {
+                    return true;
+                }
+                let mut closed = false;
+                while p < n {
+                    if bytes[p] == b'>' {
+                        closed = true;
+                        break;
+                    }
+                    p += 1;
+                }
+                if closed {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    false
+}
+
+pub fn starts_with_html_tag(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("<!doctype") || lower.starts_with("<html") || lower.starts_with("<!--") {
+        return true;
+    }
+    if trimmed.starts_with('<') && trimmed.len() > 2 {
+        let next = trimmed.as_bytes()[1];
+        if next.is_ascii_alphabetic() {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn ends_with_html_closing_tag(s: &str) -> bool {
+    let trimmed = s.trim_end();
+    if !trimmed.ends_with('>') {
+        return false;
+    }
+    if let Some(pos) = trimmed.rfind("</") {
+        let inside = trimmed[pos + 2..trimmed.len() - 1].trim();
+        return !inside.is_empty()
+            && inside
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':');
+    }
+    false
+}
+
+fn strip_shebang(s: &str) -> &str {
+    let trimmed = s.trim_start();
+    if trimmed.starts_with("#!") {
+        if let Some(pos) = trimmed.find('\n') {
+            return trimmed[pos + 1..].trim();
+        }
+        return "";
+    }
+    trimmed
+}
+
+fn find_php_blocks(source: &str) -> Vec<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut blocks = Vec::new();
+    let mut i = 0;
+
+    while i < n {
+        if bytes[i..].starts_with(b"<?") {
+            let (is_php, tag_len) = if bytes[i..].starts_with(b"<?=") {
+                (true, 3)
+            } else if bytes[i..].starts_with(b"<?php") {
+                let after = i + 5;
+                if after == n || bytes[after].is_ascii_whitespace() || bytes[after..].starts_with(b"?>") {
+                    (true, 5)
+                } else {
+                    (false, 0)
+                }
+            } else {
+                (false, 0)
+            };
+
+            if is_php {
+                let tag_start = i;
+                let mut p = i + tag_len;
+                let mut in_single = false;
+                let mut in_double = false;
+                let mut close_tag = None;
+
+                while p < n {
+                    let b = bytes[p];
+                    if b == b'\\' && (in_single || in_double) && p + 1 < n {
+                        p += 2;
+                        continue;
+                    }
+                    if b == b'\'' && !in_double {
+                        in_single = !in_single;
+                    } else if b == b'"' && !in_single {
+                        in_double = !in_double;
+                    } else if !in_single && !in_double && bytes[p..].starts_with(b"?>") {
+                        close_tag = Some(p + 2);
+                        break;
+                    }
+                    p += 1;
+                }
+
+                let tag_end = close_tag.unwrap_or(n);
+                blocks.push((tag_start, tag_end));
+                i = tag_end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    blocks
+}
+
+/// Determines whether a PHP source file is an HTML view template that should
+/// be migrated to `.rade.rhp`.
+pub fn is_php_view_template(source: &str, file_name: &str) -> bool {
+    let lower_name = file_name.to_ascii_lowercase();
+    if lower_name.ends_with(".phtml")
+        || lower_name.ends_with(".blade.php")
+        || lower_name.ends_with(".blade.rhp")
+        || lower_name.ends_with(".rade.rhp")
+        || lower_name.ends_with(".rade")
+    {
+        return true;
+    }
+
+    if !lower_name.is_empty() && !lower_name.ends_with(".php") {
+        return false;
+    }
+
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Top-level class, interface, trait, enum, or namespace definitions indicate a code module, not a view
+    if has_top_level_type_declaration(source) {
+        return false;
+    }
+
+    // Check if full document starts with <!DOCTYPE/<html> and ends with </html>
+    let starts_html = starts_with_html_tag(trimmed);
+    let ends_html = ends_with_html_closing_tag(trimmed);
+    if starts_html && ends_html {
+        return true;
+    }
+
+    let blocks = find_php_blocks(source);
+
+    // Case 1: 0 PHP tags -> pure static HTML file
+    if blocks.is_empty() {
+        return contains_html_markup(trimmed);
+    }
+
+    // Case 2: Multiple PHP tags (interspersed with template markup or short echo)
+    if blocks.len() >= 2 {
+        let mut outside = String::new();
+        let mut prev_end = 0;
+        for (start, end) in &blocks {
+            if *start > prev_end {
+                outside.push_str(&source[prev_end..*start]);
+            }
+            prev_end = *end;
+        }
+        if prev_end < source.len() {
+            outside.push_str(&source[prev_end..]);
+        }
+        let outside_trimmed = outside.trim();
+        if !outside_trimmed.is_empty() {
+            return contains_html_markup(outside_trimmed) || !outside_trimmed.chars().all(|c| c.is_whitespace());
+        }
+        return false;
+    }
+
+    // Case 3: Exactly 1 PHP tag -> must not span the whole file from start to end
+    let (block_start, block_end) = blocks[0];
+    let before = &source[..block_start];
+    let after = &source[block_end..];
+
+    let before_trimmed = strip_shebang(before.trim());
+    let after_trimmed = after.trim();
+
+    // If both before and after are empty (or only whitespace/shebang), it's a single start-to-end script
+    if before_trimmed.is_empty() && after_trimmed.is_empty() {
+        return false;
+    }
+
+    // If HTML markup exists outside this single block
+    if !before_trimmed.is_empty() && contains_html_markup(before_trimmed) {
+        return true;
+    }
+    if !after_trimmed.is_empty() && contains_html_markup(after_trimmed) {
+        return true;
+    }
+
+    if starts_with_html_tag(before_trimmed) || ends_with_html_closing_tag(after_trimmed) {
+        return true;
+    }
+
+    false
+}
+
 pub fn is_template_file_or_source(source: &str, file_path: &str) -> bool {
     let p_lower = file_path.to_ascii_lowercase();
     if p_lower.ends_with(".phtml")
@@ -7895,6 +8240,9 @@ pub fn is_template_file_or_source(source: &str, file_path: &str) -> bool {
         || p_lower.ends_with(".rade.rhp")
         || p_lower.ends_with(".rade")
     {
+        return true;
+    }
+    if is_php_view_template(source, file_path) {
         return true;
     }
     is_template_source(source)
@@ -8266,6 +8614,13 @@ pub fn is_view_include_statement(stmt: &str) -> Option<String> {
     let trimmed = literal.trim();
     let lower = trimmed.to_ascii_lowercase();
 
+    let basename = Path::new(trimmed).file_name().and_then(|f| f.to_str()).unwrap_or("");
+    let basename_lower = basename.to_ascii_lowercase();
+    let is_common_view_file = matches!(
+        basename_lower.as_str(),
+        "header.php" | "footer.php" | "navbar.php" | "sidebar.php" | "nav.php" | "layout.php" | "menu.php"
+    );
+
     let is_view = lower.ends_with(".phtml")
         || lower.ends_with(".rade.rhp")
         || lower.ends_with(".blade.php")
@@ -8277,7 +8632,16 @@ pub fn is_view_include_statement(stmt: &str) -> Option<String> {
         || lower.contains("templates/")
         || lower.contains("/templates/")
         || lower.contains("partials/")
-        || lower.contains("/partials/");
+        || lower.contains("/partials/")
+        || lower.contains("components/")
+        || lower.contains("/components/")
+        || lower.contains("layouts/")
+        || lower.contains("/layouts/")
+        || lower.contains("pages/")
+        || lower.contains("/pages/")
+        || lower.contains("includes/")
+        || lower.contains("/includes/")
+        || is_common_view_file;
 
     if !is_view {
         return None;

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use crate::ast::{
     expr::Argument,
@@ -68,6 +69,7 @@ pub struct CombinatorStream<'s> {
     pub(crate) cursor: usize,
     pub(crate) file_id: usize,
     pub(crate) file_path: Option<String>,
+    pub(crate) inferred_namespace: Option<String>,
     pub(crate) source: Option<&'s str>,
     pub(crate) user_functions: HashSet<String>,
     pub(crate) scope: ScopeContext,
@@ -124,12 +126,27 @@ impl<'s> CombinatorStream<'s> {
             cursor: 0,
             file_id,
             file_path: None,
+            inferred_namespace: None,
             source: None,
             user_functions,
             scope: ScopeContext::new(),
             delimiter_stack: Vec::new(),
             allow_named_arguments: false,
         }
+    }
+
+    /// Check if the token stream contains an explicit namespace declaration (`namespace ...;`, `namespace;`, `namespace ~;`, etc.).
+    pub fn has_explicit_namespace(&self) -> bool {
+        self.tokens.iter().enumerate().any(|(i, t)| {
+            if t.token != Token::Namespace {
+                return false;
+            }
+            let mut j = i + 1;
+            while j < self.tokens.len() && matches!(self.tokens[j].token, Token::DocComment(_)) {
+                j += 1;
+            }
+            self.tokens.get(j).map_or(true, |next| next.token != Token::Backslash)
+        })
     }
 
     /// Attach the original source code slice to this stream for qualified identifier slicing.
@@ -139,10 +156,17 @@ impl<'s> CombinatorStream<'s> {
         self
     }
 
-    /// Attach an explicit file path to this stream for `__FILE__` and `__DIR__` resolution.
+    /// Attach an explicit file path to this stream for `__FILE__` and `__DIR__` resolution,
+    /// and derive the default convention-based namespace from `rhp.toml` or relative path.
     #[inline]
     pub fn with_file_path(mut self, path: impl Into<String>) -> Self {
-        self.file_path = Some(path.into());
+        let p = path.into();
+        let inferred = infer_namespace_from_path(Path::new(&p));
+        self.inferred_namespace = inferred.clone();
+        if !self.has_explicit_namespace() {
+            self.scope.namespace = inferred;
+        }
+        self.file_path = Some(p);
         self
     }
 
@@ -923,3 +947,124 @@ impl<'s> CombinatorStream<'s> {
         false
     }
 }
+
+/// Infer the default namespace from a file path and the nearest `rhp.toml` (or `rpm.toml`) manifest.
+///
+/// Rules:
+/// 1. Walk up parent directories to find `rhp.toml` or `rpm.toml`.
+/// 2. If no manifest is found:
+///    - If `path` is an absolute path without a manifest root, return `None` (avoid arbitrary system path pollution).
+///    - If `path` has relative directory components (e.g. `src/Services/Auth/User.rhp`),
+///      convert the directory segments to PascalCase (`Src\Services\Auth`).
+///    - If `path` is in current root or has no parent directory (e.g. `index.rhp`), return `None` (global scope).
+/// 3. If a manifest is found at `project_root`:
+///    - Compute relative path of the file from `project_root`.
+///    - If the file is at the project root itself (e.g. `index.rhp`, `app.rhp`), return `None` (global scope).
+///    - If `rhp.toml` specifies explicit `[autoload.psr-4]` mappings, check if the parent directory
+///      matches any declared PSR-4 directory prefix:
+///      - If matched, strip the directory prefix, prepend the PSR-4 namespace prefix, and PascalCase sub-segments.
+///    - If no PSR-4 mapping matched (or no `psr-4` in `rhp.toml`):
+///      - Take the relative directory segments from `project_root` and PascalCase each segment:
+///        e.g., `src/Services/Auth` -> `Src\Services\Auth`.
+pub fn infer_namespace_from_path(path: &Path) -> Option<String> {
+    let is_file = path.is_file() || path.extension().is_some();
+    let file_dir = if is_file {
+        path.parent().unwrap_or(Path::new("."))
+    } else {
+        path
+    };
+
+    // 1. Search upwards for `rhp.toml` or `rpm.toml`
+    let mut curr = Some(file_dir.to_path_buf());
+    let mut project_root_and_mappings: Option<(PathBuf, Vec<(String, String)>)> = None;
+
+    while let Some(dir) = curr {
+        let rhp_toml = dir.join("rhp.toml");
+        let rpm_toml = dir.join("rpm.toml");
+        let manifest_path = if rhp_toml.exists() {
+            Some(rhp_toml)
+        } else if rpm_toml.exists() {
+            Some(rpm_toml)
+        } else {
+            None
+        };
+
+        if let Some(mp) = manifest_path {
+            if let Ok(manifest) = crate::pkg::manifest::Manifest::load_from_file(&mp) {
+                let effective = manifest.effective_autoload();
+                let mappings: Vec<(String, String)> = effective.psr4.into_iter().collect();
+                project_root_and_mappings = Some((dir, mappings));
+                break;
+            }
+        }
+
+        if dir.as_os_str().is_empty() || dir == Path::new(".") {
+            break;
+        }
+        curr = dir.parent().map(|p| p.to_path_buf());
+    }
+
+    // 2. Resolve relative path from project root
+    let (project_root, psr4_mappings) = match project_root_and_mappings {
+        Some((root, mappings)) => (root, mappings),
+        None => return None,
+    };
+
+    let rel_path = if let Ok(stripped) = path.strip_prefix(&project_root) {
+        stripped.to_path_buf()
+    } else if let Ok(abs_path) = std::fs::canonicalize(path) {
+        if let Ok(abs_root) = std::fs::canonicalize(&project_root) {
+            abs_path
+                .strip_prefix(&abs_root)
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| path.to_path_buf())
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    let parent_dir = rel_path.parent()?;
+    let parent_str = parent_dir.to_str()?.replace('\\', "/");
+    let trimmed_parent = parent_str.trim_matches('/');
+    if trimmed_parent.is_empty() || trimmed_parent == "." {
+        return None;
+    }
+
+    // 3. Match against declared PSR-4 prefixes if any
+    for (ns_prefix, dir_prefix) in &psr4_mappings {
+        let clean_dir = dir_prefix.trim_matches('/').replace('\\', "/");
+        let clean_ns = ns_prefix.trim_end_matches('\\');
+
+        if trimmed_parent == clean_dir {
+            return Some(clean_ns.to_string());
+        }
+
+        let prefix_with_slash = format!("{}/", clean_dir);
+        if trimmed_parent.starts_with(&prefix_with_slash) {
+            let remainder = &trimmed_parent[prefix_with_slash.len()..];
+            let sub_segments: Vec<&str> = remainder.split('/').filter(|s| !s.is_empty()).collect();
+            let mut ns = clean_ns.to_string();
+            for seg in sub_segments {
+                ns.push('\\');
+                ns.push_str(&crate::lint::to_pascal_case(seg));
+            }
+            return Some(ns);
+        }
+    }
+
+    // 4. Derive directly from relative path segments (PascalCase)
+    let segments: Vec<String> = trimmed_parent
+        .split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
+        .map(crate::lint::to_pascal_case)
+        .collect();
+
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments.join("\\"))
+    }
+}
+

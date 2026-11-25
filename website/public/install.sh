@@ -75,7 +75,7 @@ LATEST_RELEASE_JSON=$(curl -sSL "https://api.github.com/repos/$REPO/releases/lat
 VERSION=$(echo "$LATEST_RELEASE_JSON" | grep '"tag_name":' | head -n 1 | cut -d '"' -f 4)
 
 if [ -z "$VERSION" ]; then
-    VERSION="v0.2.0-alpha.1"
+    VERSION="v0.2.1-alpha.1"
     info "Could not detect latest release via API; falling back to default $VERSION"
 fi
 

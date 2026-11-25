@@ -7,16 +7,55 @@ order: 7
 
 ## Namespaces
 
-RHP groups classes, interfaces, and functions under structured namespaces matching directory paths:
+RHP groups classes, interfaces, and functions under structured namespaces. RHP supports **convention over configuration**:
+
+### 1. Automatic Convention-Based Namespaces
+
+In an RHP project (with `rhp.toml`), writing `namespace ...;` in every single file is **not required**. If you omit the `namespace` header, the compiler automatically derives the namespace from the file's relative path from `rhp.toml`:
 
 ```php
-namespace App\Services\Payment;
+// File: src/Services/Auth/User.rhp
+// No namespace declaration needed! Automatically in Src\Services\Auth
 
-class StripeGateway {
-    public function charge(int $amountCents): bool {
-        return true;
+class User {
+    public function getRole(): string {
+        return "admin";
     }
 }
+```
+
+* **Direct Path Mapping (Default):** Folder names are converted to PascalCase relative to `rhp.toml`:
+  $$\text{src/Services/Auth/User.rhp} \longrightarrow \mathbf{Src\backslash Services\backslash Auth\backslash User}$$
+* **PSR-4 Mapping (if declared in `rhp.toml`):** If your `rhp.toml` maps `[autoload.psr-4]`:
+  ```toml
+  [autoload]
+  psr-4 = { "App\\" = "src/" }
+  ```
+  Then `src/Services/Auth/User.rhp` resolves to `App\Services\Auth\User`.
+* **Root Files:** Files located directly at the project root (like `index.rhp` or `app.rhp`) automatically belong to the **global root namespace** (`\`).
+
+### 2. Explicit Global Scope (`namespace;`)
+
+If a file inside a subdirectory needs to declare functions or classes in the **global root scope** (`\`), use an explicit empty `namespace;` (or `namespace ~;`):
+
+```php
+// File: src/Helpers/GlobalFunctions.rhp
+namespace; // Opts out of path-based namespace, placing symbols into global scope \
+
+function dd(...$vars): void {
+    print_r($vars);
+    exit(1);
+}
+```
+
+### 3. Explicit Namespace Override
+
+You can always explicitly override the folder-derived namespace by declaring a custom namespace at the top of the file:
+
+```php
+namespace ThirdParty\Custom\Auth;
+
+class Gateway {}
 ```
 
 ---

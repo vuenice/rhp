@@ -3768,3 +3768,187 @@ fn test_phtml_file_migrated_and_renamed_to_rade_rhp_on_disk() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_php_file_with_doctype_and_html_tags_migrated_to_rade_rhp() {
+    let input = concat!(
+        "<!DOCTYPE html>\n",
+        "<html lang=\"en\">\n",
+        "<head>\n",
+        "    <meta charset=\"UTF-8\">\n",
+        "    <title><?= $page_title ?></title>\n",
+        "</head>\n",
+        "<body>\n",
+        "    <h1>Welcome to <?= $site_name ?></h1>\n",
+        "</body>\n",
+        "</html>\n"
+    );
+
+    let res = migrate_source(input, "home.php");
+    assert!(res.modified);
+    assert_eq!(res.target_file_path.as_deref(), Some("home.rade.rhp"));
+    assert!(res.migrated_content.contains("<title>{{ $page_title }}</title>"));
+    assert!(res.migrated_content.contains("<h1>Welcome to {{ $site_name }}</h1>"));
+    assert!(res.migrated_content.contains("</html>"));
+}
+
+#[test]
+fn test_php_file_with_preamble_and_html_migrated_to_rade_rhp() {
+    let input = concat!(
+        "<?php\n",
+        "$title = \"Dashboard\";\n",
+        "$user = Request::query('user');\n",
+        "?>\n",
+        "<!DOCTYPE html>\n",
+        "<html>\n",
+        "<head><title><?= $title ?></title></head>\n",
+        "<body>\n",
+        "    <h1>Hello <?= $user ?></h1>\n",
+        "</body>\n",
+        "</html>\n"
+    );
+
+    let res = migrate_source(input, "index.php");
+    assert!(res.modified);
+    assert_eq!(res.target_file_path.as_deref(), Some("index.rade.rhp"));
+    assert!(res.migrated_content.contains("@rhp\n$title = \"Dashboard\";\n$user = Request::query('user');\n@endrhp"));
+    assert!(res.migrated_content.contains("<title>{{ $title }}</title>"));
+    assert!(res.migrated_content.contains("<h1>Hello {{ $user }}</h1>"));
+    assert!(res.migrated_content.contains("</html>"));
+}
+
+#[test]
+fn test_php_partial_view_with_multiple_tags_migrated_to_rade_rhp() {
+    let input = concat!(
+        "<div class=\"user-card\">\n",
+        "    <?php if ($user['is_active']): ?>\n",
+        "        <p>Active user: <?= $user['name'] ?></p>\n",
+        "    <?php else: ?>\n",
+        "        <p>Inactive user</p>\n",
+        "    <?php endif; ?>\n",
+        "</div>\n"
+    );
+
+    let res = migrate_source(input, "user_card.php");
+    assert!(res.modified);
+    assert_eq!(res.target_file_path.as_deref(), Some("user_card.rade.rhp"));
+    assert!(res.migrated_content.contains("@if ($user['is_active'])"));
+    assert!(res.migrated_content.contains("<p>Active user: {{ $user['name'] }}</p>"));
+    assert!(res.migrated_content.contains("@else"));
+    assert!(res.migrated_content.contains("@endif"));
+    assert!(res.migrated_content.contains("</div>"));
+}
+
+#[test]
+fn test_pure_php_class_not_converted_to_rade_rhp() {
+    let input = concat!(
+        "<?php\n",
+        "\n",
+        "namespace App\\Controllers;\n",
+        "\n",
+        "class UserController {\n",
+        "    public function index() {\n",
+        "        return \"hello\";\n",
+        "    }\n",
+        "}\n"
+    );
+
+    let res = migrate_source(input, "UserController.php");
+    assert_eq!(res.target_file_path, None);
+}
+
+#[test]
+fn test_pure_php_script_covering_entire_file_not_converted_to_rade_rhp() {
+    let input = concat!(
+        "<?php\n",
+        "\n",
+        "return [\n",
+        "    'app_name' => 'Store',\n",
+        "    'debug' => true,\n",
+        "];\n",
+        "?>\n"
+    );
+
+    let res = migrate_source(input, "config.php");
+    assert_eq!(res.target_file_path, None);
+}
+
+#[test]
+fn test_cli_shebang_script_not_converted_to_rade_rhp() {
+    let input = concat!(
+        "#!/usr/bin/env php\n",
+        "<?php\n",
+        "\n",
+        "echo \"Running CLI batch\\n\";\n"
+    );
+
+    let res = migrate_source(input, "cli_worker.php");
+    assert_eq!(res.target_file_path, None);
+}
+
+#[test]
+fn test_php_file_migrated_and_renamed_to_rade_rhp_on_disk() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_php_view_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let php_file = temp_dir.join("landing.php");
+    fs::write(
+        &php_file,
+        concat!(
+            "<!DOCTYPE html>\n",
+            "<html>\n",
+            "<head><title><?= $page_title ?></title></head>\n",
+            "<body>\n",
+            "    <h3>Welcome <?= $user_name ?></h3>\n",
+            "</body>\n",
+            "</html>\n"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+    assert!(output.status.success());
+
+    // Old .php view should be deleted
+    assert!(!php_file.exists(), "Old .php view file should have been removed");
+
+    // New .rade.rhp should exist
+    let target_file = temp_dir.join("landing.rade.rhp");
+    assert!(target_file.exists(), "New .rade.rhp file should exist on disk");
+
+    let contents = fs::read_to_string(&target_file).unwrap();
+    assert!(contents.contains("<title>{{ $page_title }}</title>"));
+    assert!(contents.contains("<h3>Welcome {{ $user_name }}</h3>"));
+    assert!(contents.contains("</html>"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_include_view_php_migrated_to_view_render() {
+    let input = concat!(
+        "<?php\n",
+        "require __DIR__ . '/header.php';\n",
+        "include __DIR__ . '/views/sidebar.php';\n",
+        "require_once __DIR__ . '/footer.php';\n"
+    );
+
+    let res = migrate_source(input, "controller.php");
+    assert!(res.modified);
+    assert_eq!(res.legacy_include_count, 3);
+    assert!(res.migrated_content.contains("View::render('./header');"));
+    assert!(res.migrated_content.contains("View::render('./views/sidebar');"));
+    assert!(res.migrated_content.contains("View::render('./footer');"));
+}
+
+

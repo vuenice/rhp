@@ -3,10 +3,10 @@ pub mod error;
 pub mod pratt;
 pub mod stmt;
 
-pub use combinator::CombinatorStream;
+pub use combinator::{infer_namespace_from_path, CombinatorStream};
 pub use error::{ParseError, ParseErrorKind};
 
-use crate::ast::{expr::Expr, stmt::Stmt, Program};
+use crate::ast::{expr::Expr, stmt::{Stmt, StmtKind}, types::Ident, Program};
 use crate::lexer::{Lexer, SpannedToken};
 
 /// High-performance custom Pratt and Combinator parser for the RHP language.
@@ -74,6 +74,27 @@ impl<'s> Parser<'s> {
             .map(|s| s.span)
             .unwrap_or(start_span);
         let span = start_span.merge(end_span);
+
+        // If the file did not have an explicit namespace declaration, but an inferred
+        // namespace was derived from rhp.toml / directory path, inject a synthetic
+        // StmtKind::Namespace at the beginning so that TypeChecker, IR lowering,
+        // and AST visitors see the enclosing namespace.
+        if !self.stream.has_explicit_namespace() {
+            if let Some(ref ns) = self.stream.inferred_namespace {
+                let leaked_ns: &'s str = Box::leak(ns.clone().into_boxed_str());
+                statements.insert(
+                    0,
+                    Stmt::new(
+                        StmtKind::Namespace {
+                            name: Some(Ident::new(leaked_ns, start_span)),
+                            body: None,
+                        },
+                        start_span,
+                    ),
+                );
+            }
+        }
+
         let mut prog = Program::new(statements, span);
         prog.file_path = self.stream.file_path.clone();
         Ok(prog)
