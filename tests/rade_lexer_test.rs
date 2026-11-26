@@ -15,7 +15,7 @@ fn test_empty_input() {
 
 #[test]
 fn test_echo_escaped() {
-    let input = "Hello, {{ $name }}!";
+    let input = "Hello, <@ $name @>!";
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
@@ -27,17 +27,17 @@ fn test_echo_escaped() {
     );
 
     // Without spaces
-    let tokens_nospace = tokenize("{{$name}}").unwrap();
+    let tokens_nospace = tokenize("<@$name@>").unwrap();
     assert_eq!(tokens_nospace, vec![Token::EchoEscaped("$name".into())]);
 
     // Expressions
-    let tokens_expr = tokenize("{{ 1 + 2 * 3 }}").unwrap();
+    let tokens_expr = tokenize("<@ 1 + 2 * 3 @>").unwrap();
     assert_eq!(tokens_expr, vec![Token::EchoEscaped("1 + 2 * 3".into())]);
 }
 
 #[test]
 fn test_echo_raw() {
-    let input = "Raw HTML: {!! $content !!}";
+    let input = "Raw HTML: <@! $content @>";
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
@@ -47,38 +47,41 @@ fn test_echo_raw() {
         ]
     );
 
-    let tokens_nospace = tokenize("{!!$content!!}").unwrap();
+    let tokens_nospace = tokenize("<@!$content@>").unwrap();
     assert_eq!(tokens_nospace, vec![Token::EchoRaw("$content".into())]);
 }
 
 #[test]
 fn test_escaped_verbatim() {
-    // In Blade, @{{ message }} outputs {{ message }} verbatim
-    let input = "Vue says: @{{ message }}";
+    // Double braces {{ ... }} now need no escape and are emitted as literal text
+    let input = "Vue says: {{ message }}";
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
-        vec![
-            Token::Text("Vue says: ".into()),
-            Token::EscapedVerbatim("{{ message }}".into()),
-        ]
+        vec![Token::Text("Vue says: {{ message }}".into())]
     );
 
-    let input_mixed = "@{{ vue_data }} and {{ blade_data }}";
+    let input_mixed = "{{ vue_data }} and <@ rade_data @>";
     let tokens_mixed = tokenize(input_mixed).unwrap();
     assert_eq!(
         tokens_mixed,
         vec![
-            Token::EscapedVerbatim("{{ vue_data }}".into()),
-            Token::Text(" and ".into()),
-            Token::EchoEscaped("blade_data".into()),
+            Token::Text("{{ vue_data }} and ".into()),
+            Token::EchoEscaped("rade_data".into()),
         ]
+    );
+
+    // <@@ escapes to literal <@
+    let escaped_at = "Literal: <@@ foo";
+    assert_eq!(
+        tokenize(escaped_at).unwrap(),
+        vec![Token::Text("Literal: <@ foo".into())]
     );
 }
 
 #[test]
 fn test_comments() {
-    let input = "Before {{-- This is a comment --}} After";
+    let input = "Before <@-- This is a comment @> After";
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
@@ -90,12 +93,12 @@ fn test_comments() {
     );
 
     // Comment containing other syntax inside
-    let nested_comment = "{{-- {{ $ignored }} @if(ignored) {!! raw !!} --}}";
+    let nested_comment = "<@-- {{ $ignored }} @if(ignored) <@ $x @>";
     let tokens_nested = tokenize(nested_comment).unwrap();
     assert_eq!(
         tokens_nested,
         vec![Token::Comment(
-            "{{ $ignored }} @if(ignored) {!! raw !!}".into()
+            "{{ $ignored }} @if(ignored) <@ $x".into()
         )]
     );
 }
@@ -245,19 +248,19 @@ fn test_escaped_at_and_emails() {
 
 #[test]
 fn test_raw_rhp_blocks() {
-    let input = "@rhp\n  let x = 10;\n  let y = 20;\n@endrhp";
+    let input = "<@?\n  let x = 10;\n  let y = 20;\n@>";
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
         vec![Token::RawRhp("let x = 10;\n  let y = 20;".into())]
     );
 
-    // Single-line @rhp
-    let single = "@rhp let count = 0; @endrhp";
+    // Single-line <@? ... @>
+    let single = "<@? let count = 0; @>";
     let tokens_single = tokenize(single).unwrap();
     assert_eq!(tokens_single, vec![Token::RawRhp("let count = 0;".into())]);
 
-    // Directive named rhp_custom should NOT be treated as @rhp block
+    // Directive named rhp_custom is a normal directive
     let custom = "@rhp_custom(123)";
     let tokens_custom = tokenize(custom).unwrap();
     assert_eq!(
@@ -272,7 +275,7 @@ fn test_raw_rhp_blocks() {
 #[test]
 fn test_multiline_support() {
     // Multi-line comment
-    let ml_comment = "{{--\n  Line 1\n  Line 2\n--}}";
+    let ml_comment = "<@--\n  Line 1\n  Line 2\n@>";
     let tokens_comment = tokenize(ml_comment).unwrap();
     assert_eq!(
         tokens_comment,
@@ -280,7 +283,7 @@ fn test_multiline_support() {
     );
 
     // Multi-line echo
-    let ml_echo = "{{\n  $items\n    .filter(|x| x > 0)\n}}";
+    let ml_echo = "<@\n  $items\n    .filter(|x| x > 0)\n@>";
     let tokens_echo = tokenize(ml_echo).unwrap();
     assert_eq!(
         tokens_echo,
@@ -288,7 +291,7 @@ fn test_multiline_support() {
     );
 
     // Multi-line raw echo
-    let ml_raw = "{!!\n  $rich_html\n!!}";
+    let ml_raw = "<@!\n  $rich_html\n@>";
     let tokens_raw = tokenize(ml_raw).unwrap();
     assert_eq!(tokens_raw, vec![Token::EchoRaw("$rich_html".into())]);
 
@@ -324,23 +327,23 @@ fn test_directive_followed_by_newline_and_parens() {
 
 #[test]
 fn test_echo_with_string_containing_delimiters() {
-    // String inside echo containing }}
-    let input = r#"{{ "hello }} world" }}"#;
+    // String inside echo containing @>
+    let input = r#"<@ "hello @> world" @>"#;
     let tokens = tokenize(input).unwrap();
     assert_eq!(
         tokens,
-        vec![Token::EchoEscaped(r#""hello }} world""#.into())]
+        vec![Token::EchoEscaped(r#""hello @> world""#.into())]
     );
 
-    // String inside raw echo containing !!}
-    let input_raw = "{!! \"content !!} here\" !";
+    // Unclosed raw echo containing @> in string
+    let input_raw = r#"<@! "content @> here" @"#;
     assert!(tokenize(input_raw).is_err());
 
-    let valid_raw = r#"{!! "hello !!} world" !!}"#;
+    let valid_raw = r#"<@! "hello @> world" @>"#;
     let tokens_raw = tokenize(valid_raw).unwrap();
     assert_eq!(
         tokens_raw,
-        vec![Token::EchoRaw(r#""hello !!} world""#.into())]
+        vec![Token::EchoRaw(r#""hello @> world""#.into())]
     );
 }
 
@@ -348,26 +351,26 @@ fn test_echo_with_string_containing_delimiters() {
 fn test_complex_template_end_to_end() {
     let template = r#"
 <div class="user-profile">
-    {{-- User header section --}}
-    <h1>Welcome, {{ $user.name }}!</h1>
+    <@-- User header section @>
+    <h1>Welcome, <@ $user.name @>!</h1>
 
     @if($user.is_admin && ($user.level > 5))
-        <span class="badge">Admin: {!! $user.badge_html !!}</span>
+        <span class="badge">Admin: <@! $user.badge_html @></span>
     @elseif($user.is_moderator)
         <span class="badge">Moderator</span>
     @else
         <span>Member</span>
     @endif
 
-    @rhp
+    <@?
         let items_count = user.items.len();
-    @endrhp
+    @>
 
-    <p>Items count: {{ items_count }}</p>
+    <p>Items count: <@ items_count @></p>
 
-    {{-- Vue.js client-side template bindings --}}
+    <@-- Vue.js client-side template bindings @>
     <div id="vue-app">
-        <span>@{{ dynamicVueMessage }}</span>
+        <span>{{ dynamicVueMessage }}</span>
         <button @@click="doSomething">Click</button>
     </div>
 
@@ -382,7 +385,7 @@ fn test_complex_template_end_to_end() {
     assert!(tokens.iter().any(|t| t.is_comment()));
     assert!(tokens.iter().any(|t| t.is_echo_escaped()));
     assert!(tokens.iter().any(|t| t.is_echo_raw()));
-    assert!(tokens.iter().any(|t| t.is_escaped_verbatim()));
+    assert!(tokens.iter().any(|t| matches!(t, Token::Text(s) if s.contains("{{ dynamicVueMessage }}"))));
     assert!(tokens.iter().any(|t| t.is_raw_rhp()));
     assert!(tokens.iter().any(|t| matches!(t, Token::Directive { name, .. } if name == "if")));
     assert!(tokens.iter().any(|t| matches!(t, Token::Directive { name, .. } if name == "elseif")));
@@ -399,32 +402,55 @@ fn test_complex_template_end_to_end() {
 #[test]
 fn test_lexer_errors() {
     // Unclosed comment
-    let unclosed_comment = "Hello {{-- missing end";
+    let unclosed_comment = "Hello <@-- missing end";
     assert_eq!(
         tokenize(unclosed_comment),
         Err(LexerError::UnclosedComment { line: 1, column: 7 })
     );
 
     // Unclosed echo
-    let unclosed_echo = "Hello {{ $name missing end";
+    let unclosed_echo = "Hello <@ $name missing end";
     assert_eq!(
         tokenize(unclosed_echo),
         Err(LexerError::UnclosedEcho { line: 1, column: 7 })
     );
 
     // Unclosed raw echo
-    let unclosed_raw = "Hello {!! $raw missing end";
+    let unclosed_raw = "Hello <@! $raw missing end";
     assert_eq!(
         tokenize(unclosed_raw),
         Err(LexerError::UnclosedRawEcho { line: 1, column: 7 })
     );
 
-    // Unclosed @rhp
-    let unclosed_rhp = "@rhp let a = 1;";
+    // Unclosed <@?
+    let unclosed_rhp = "<@? let a = 1;";
     assert_eq!(
         tokenize(unclosed_rhp),
         Err(LexerError::UnclosedRawRhp { line: 1, column: 1 })
     );
+
+    // Unknown <@ directive syntax
+    let err_triple = tokenize("Hello <@@@ world").unwrap_err();
+    assert_eq!(
+        err_triple,
+        LexerError::UnknownDirective {
+            syntax: "<@@@".into(),
+            line: 1,
+            column: 7,
+        }
+    );
+    assert!(err_triple.to_string().contains("unknown directive found"));
+
+    let err_percent = tokenize("<@% foo @>").unwrap_err();
+    assert_eq!(
+        err_percent,
+        LexerError::UnknownDirective {
+            syntax: "<@%".into(),
+            line: 1,
+            column: 1,
+        }
+    );
+    assert!(err_percent.to_string().contains("unknown directive found"));
 
     // Unclosed directive arguments
     let unclosed_directive = "@if(count($x) > 0";

@@ -4,21 +4,28 @@ use crate::rade::lexer::token::{SpannedToken, Token};
 /// Errors that can occur during template lexical analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LexerError {
-    /// A comment was started with `{{--` but never closed with `--}}`.
+    /// A comment was started with `<@--` but never closed with `@>`.
     UnclosedComment { line: usize, column: usize },
 
-    /// An echo expression was started with `{{` or `@{{` but never closed with `}}`.
+    /// An echo expression was started with `<@` but never closed with `@>`.
     UnclosedEcho { line: usize, column: usize },
 
-    /// A raw echo expression was started with `{!!` but never closed with `!!}`.
+    /// A raw echo expression was started with `<@!` but never closed with `@>`.
     UnclosedRawEcho { line: usize, column: usize },
 
-    /// A `@rhp` block was started but never closed with `@endrhp`.
+    /// A `<@?` block was started but never closed with `@>`.
     UnclosedRawRhp { line: usize, column: usize },
 
     /// A directive argument list was started with `(` but never closed with `)`.
     UnclosedDirectiveArgs {
         directive: String,
+        line: usize,
+        column: usize,
+    },
+
+    /// An unknown `<@` directive/tag syntax was encountered (e.g. `<@@@`, `<@%`).
+    UnknownDirective {
+        syntax: String,
         line: usize,
         column: usize,
     },
@@ -51,7 +58,7 @@ impl fmt::Display for LexerError {
             LexerError::UnclosedRawRhp { line, column } => {
                 write!(
                     f,
-                    "Unclosed @rhp block starting at line {}, column {}",
+                    "Unclosed <@? block starting at line {}, column {}",
                     line, column
                 )
             }
@@ -64,6 +71,17 @@ impl fmt::Display for LexerError {
                     f,
                     "Unclosed arguments for directive '@{}' starting at line {}, column {}",
                     directive, line, column
+                )
+            }
+            LexerError::UnknownDirective {
+                syntax,
+                line,
+                column,
+            } => {
+                write!(
+                    f,
+                    "unknown directive found '{}' at line {}, column {}",
+                    syntax, line, column
                 )
             }
         }
@@ -119,8 +137,8 @@ impl<'a> Scanner<'a> {
         while !self.is_eof() {
             let rem = self.remaining();
 
-            // 1. Blade comment: {{-- ... --}}
-            if rem.starts_with("{{--") {
+            // 1. Comment: <@-- ... @>
+            if rem.starts_with("<@--") {
                 Self::flush_spanned_text(
                     &mut tokens,
                     &mut current_text,
@@ -129,16 +147,16 @@ impl<'a> Scanner<'a> {
                 );
                 let start_line = self.line;
                 let start_col = self.column;
-                self.advance_str("{{--");
+                self.advance_str("<@--");
 
                 let content_start = self.cursor;
                 let mut found = false;
 
                 while !self.is_eof() {
-                    if self.remaining().starts_with("--}}") {
+                    if self.remaining().starts_with("@>") {
                         let content_end = self.cursor;
                         let raw_content = &self.input[content_start..content_end];
-                        self.advance_str("--}}");
+                        self.advance_str("@>");
                         tokens.push(SpannedToken::new(
                             Token::Comment(raw_content.trim().to_string()),
                             start_line,
@@ -159,8 +177,8 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // 2. Raw echo: {!! ... !!}
-            if rem.starts_with("{!!") {
+            // 2. Raw echo: <@! ... @>
+            if rem.starts_with("<@!") {
                 Self::flush_spanned_text(
                     &mut tokens,
                     &mut current_text,
@@ -169,44 +187,24 @@ impl<'a> Scanner<'a> {
                 );
                 let start_line = self.line;
                 let start_col = self.column;
-                self.advance_str("{!!");
-
-                let content_start = self.cursor;
-                let mut found = false;
-
-                while !self.is_eof() {
-                    let ch = self.peek().unwrap();
-                    if ch == '"' || ch == '\'' {
-                        self.scan_string_literal(ch);
-                        continue;
+                match self.scan_until_at_gt("<@!") {
+                    Some(content) => tokens.push(SpannedToken::new(
+                        Token::EchoRaw(content),
+                        start_line,
+                        start_col,
+                    )),
+                    None => {
+                        return Err(LexerError::UnclosedRawEcho {
+                            line: start_line,
+                            column: start_col,
+                        });
                     }
-
-                    if self.remaining().starts_with("!!}") {
-                        let content_end = self.cursor;
-                        let raw_content = &self.input[content_start..content_end];
-                        self.advance_str("!!}");
-                        tokens.push(SpannedToken::new(
-                            Token::EchoRaw(raw_content.trim().to_string()),
-                            start_line,
-                            start_col,
-                        ));
-                        found = true;
-                        break;
-                    }
-                    self.advance();
-                }
-
-                if !found {
-                    return Err(LexerError::UnclosedRawEcho {
-                        line: start_line,
-                        column: start_col,
-                    });
                 }
                 continue;
             }
 
-            // 3. Escaped verbatim echo: @{{ ... }}
-            if rem.starts_with("@{{") {
+            // 3. Statement / Raw RHP block: <@? ... @>
+            if rem.starts_with("<@?") {
                 Self::flush_spanned_text(
                     &mut tokens,
                     &mut current_text,
@@ -215,91 +213,97 @@ impl<'a> Scanner<'a> {
                 );
                 let start_line = self.line;
                 let start_col = self.column;
-
-                // Skip the '@' prefix
-                self.advance(); // '@'
-                let content_start = self.cursor; // points to "{{"
-                self.advance_str("{{");
-
-                let mut found = false;
-                while !self.is_eof() {
-                    let ch = self.peek().unwrap();
-                    if ch == '"' || ch == '\'' {
-                        self.scan_string_literal(ch);
-                        continue;
+                match self.scan_until_at_gt("<@?") {
+                    Some(content) => tokens.push(SpannedToken::new(
+                        Token::RawRhp(content),
+                        start_line,
+                        start_col,
+                    )),
+                    None => {
+                        return Err(LexerError::UnclosedRawRhp {
+                            line: start_line,
+                            column: start_col,
+                        });
                     }
-
-                    if self.remaining().starts_with("}}") {
-                        self.advance_str("}}");
-                        let content_end = self.cursor; // points after "}}"
-                        let verbatim = &self.input[content_start..content_end];
-                        tokens.push(SpannedToken::new(
-                            Token::EscapedVerbatim(verbatim.to_string()),
-                            start_line,
-                            start_col,
-                        ));
-                        found = true;
-                        break;
-                    }
-                    self.advance();
-                }
-
-                if !found {
-                    return Err(LexerError::UnclosedEcho {
-                        line: start_line,
-                        column: start_col,
-                    });
                 }
                 continue;
             }
 
-            // 4. Escaped echo: {{ ... }}
-            if rem.starts_with("{{") {
+            // 4. Unknown `<@@@...` sequence
+            if rem.starts_with("<@@@") {
+                return Err(LexerError::UnknownDirective {
+                    syntax: "<@@@".to_string(),
+                    line: self.line,
+                    column: self.column,
+                });
+            }
+
+            // 5. Escaped `<@`: `<@@` emits literal `<@` as plain text
+            if rem.starts_with("<@@") {
+                if current_text.is_empty() {
+                    text_start_line = self.line;
+                    text_start_col = self.column;
+                }
+                current_text.push_str("<@");
+                self.advance_str("<@@");
+                continue;
+            }
+
+            // 6. Escaped echo: <@ ... @> (or unknown `<@<char>` directive)
+            if rem.starts_with("<@") {
+                let start_line = self.line;
+                let start_col = self.column;
+                let next_char = rem["<@".len()..].chars().next();
+
+                let is_valid_echo_start = match next_char {
+                    None => {
+                        return Err(LexerError::UnclosedEcho {
+                            line: start_line,
+                            column: start_col,
+                        });
+                    }
+                    Some(c) => {
+                        c.is_ascii_whitespace()
+                            || c.is_ascii_alphanumeric()
+                            || matches!(
+                                c,
+                                '$' | '_' | '(' | '[' | '"' | '\'' | '+' | '-' | '\\'
+                            )
+                    }
+                };
+
+                if !is_valid_echo_start {
+                    let bad_char = next_char.unwrap();
+                    return Err(LexerError::UnknownDirective {
+                        syntax: format!("<@{}", bad_char),
+                        line: start_line,
+                        column: start_col,
+                    });
+                }
+
                 Self::flush_spanned_text(
                     &mut tokens,
                     &mut current_text,
                     text_start_line,
                     text_start_col,
                 );
-                let start_line = self.line;
-                let start_col = self.column;
-                self.advance_str("{{");
-
-                let content_start = self.cursor;
-                let mut found = false;
-
-                while !self.is_eof() {
-                    let ch = self.peek().unwrap();
-                    if ch == '"' || ch == '\'' {
-                        self.scan_string_literal(ch);
-                        continue;
+                match self.scan_until_at_gt("<@") {
+                    Some(content) => tokens.push(SpannedToken::new(
+                        Token::EchoEscaped(content),
+                        start_line,
+                        start_col,
+                    )),
+                    None => {
+                        return Err(LexerError::UnclosedEcho {
+                            line: start_line,
+                            column: start_col,
+                        });
                     }
-
-                    if self.remaining().starts_with("}}") {
-                        let content_end = self.cursor;
-                        let raw_content = &self.input[content_start..content_end];
-                        self.advance_str("}}");
-                        tokens.push(SpannedToken::new(
-                            Token::EchoEscaped(raw_content.trim().to_string()),
-                            start_line,
-                            start_col,
-                        ));
-                        found = true;
-                        break;
-                    }
-                    self.advance();
-                }
-
-                if !found {
-                    return Err(LexerError::UnclosedEcho {
-                        line: start_line,
-                        column: start_col,
-                    });
                 }
                 continue;
             }
 
-            // 5. Escaped @ (e.g. @@directive or @@click): emits '@' as plain text
+            // 7. Escaped @ (e.g. @@directive or @@click): emits '@' as plain text
             if rem.starts_with("@@") {
                 if current_text.is_empty() {
                     text_start_line = self.line;
@@ -311,7 +315,7 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            // 6. Directives and RawRhp blocks starting with '@'
+            // 8. Directives starting with '@'
             if rem.starts_with('@') {
                 // If preceded by a word character (like test@example.com), it's not a directive.
                 let preceded_by_word_char = self
@@ -343,52 +347,6 @@ impl<'a> Scanner<'a> {
                     current_text.push('@');
                     self.advance();
                     continue;
-                }
-
-                // Check for @rhp ... @endrhp block
-                if rem.starts_with("@rhp") {
-                    let char_after_rhp = rem["@rhp".len()..].chars().next();
-                    let is_ident_continue =
-                        char_after_rhp.map_or(false, |c| c.is_ascii_alphanumeric() || c == '_');
-
-                    if !is_ident_continue {
-                        Self::flush_spanned_text(
-                            &mut tokens,
-                            &mut current_text,
-                            text_start_line,
-                            text_start_col,
-                        );
-                        let start_line = self.line;
-                        let start_col = self.column;
-                        self.advance_str("@rhp");
-
-                        let content_start = self.cursor;
-                        let mut found = false;
-
-                        while !self.is_eof() {
-                            if self.remaining().starts_with("@endrhp") {
-                                let content_end = self.cursor;
-                                let raw_content = &self.input[content_start..content_end];
-                                self.advance_str("@endrhp");
-                                tokens.push(SpannedToken::new(
-                                    Token::RawRhp(raw_content.trim().to_string()),
-                                    start_line,
-                                    start_col,
-                                ));
-                                found = true;
-                                break;
-                            }
-                            self.advance();
-                        }
-
-                        if !found {
-                            return Err(LexerError::UnclosedRawRhp {
-                                line: start_line,
-                                column: start_col,
-                            });
-                        }
-                        continue;
-                    }
                 }
 
                 // Regular directive: @name or @name(...)
@@ -562,6 +520,29 @@ impl<'a> Scanner<'a> {
             self.last_char = Some(ch);
         }
         self.cursor += s.len();
+    }
+
+    /// Consumes `open_tag` and scans until `@>`, respecting string literals.
+    fn scan_until_at_gt(&mut self, open_tag: &str) -> Option<String> {
+        self.advance_str(open_tag);
+        let content_start = self.cursor;
+
+        while !self.is_eof() {
+            let ch = self.peek().unwrap();
+            if ch == '"' || ch == '\'' {
+                self.scan_string_literal(ch);
+                continue;
+            }
+            if self.remaining().starts_with("@>") {
+                let content_end = self.cursor;
+                let raw_content = &self.input[content_start..content_end];
+                self.advance_str("@>");
+                return Some(raw_content.trim().to_string());
+            }
+            self.advance();
+        }
+
+        None
     }
 
     /// Consumes a string literal enclosed by `quote` (`'` or `"`), respecting backslash escapes.

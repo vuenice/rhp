@@ -25,23 +25,23 @@ fn test_view_function_basic_and_dot_syntax() {
     fs::create_dir_all(&cache_dir).unwrap();
 
     // 1. Root view: views/home.rade.rhp
-    let home_template = "<h1>Welcome, {{ $name }}!</h1>\n@if ($show_count)\n<p>Count: {{ $count }}</p>\n@endif";
+    let home_template = "<h1>Welcome, <@ $name @>!</h1>\n@if ($show_count)\n<p>Count: <@ $count @></p>\n@endif";
     fs::write(views_dir.join("home.rade.rhp"), home_template).unwrap();
 
     // 2. Nested view with dot syntax: views/admin/dashboard.rade.rhp
     let admin_dir = views_dir.join("admin");
     fs::create_dir_all(&admin_dir).unwrap();
-    let dashboard_template = "<div class=\"dashboard\">Admin: {{ $admin_name }}</div>";
+    let dashboard_template = "<div class=\"dashboard\">Admin: <@ $admin_name @></div>";
     fs::write(admin_dir.join("dashboard.rade.rhp"), dashboard_template).unwrap();
 
     // 3. Test .rade extension: views/blog/post.rade
     let blog_dir = views_dir.join("blog");
     fs::create_dir_all(&blog_dir).unwrap();
-    let blog_template = "<article><h1>{{ $title }}</h1><p>{{ $body }}</p></article>";
+    let blog_template = "<article><h1><@ $title @></h1><p><@ $body @></p></article>";
     fs::write(blog_dir.join("post.rade"), blog_template).unwrap();
 
     // 4. Test backward compatibility with legacy .blade.rhp: views/legacy.blade.rhp
-    let legacy_template = "<div>Legacy Blade View: {{ $tag }}</div>";
+    let legacy_template = "<div>Legacy Blade View: <@ $tag @></div>";
     fs::write(views_dir.join("legacy.blade.rhp"), legacy_template).unwrap();
 
     // Test direct ViewEngine resolution
@@ -86,7 +86,7 @@ fn test_view_on_demand_compilation_mtime_recompile() {
     thread::sleep(Duration::from_millis(50));
 
     // Update the template
-    fs::write(&template_path, "<p>Updated Version {{ $tag }}</p>").unwrap();
+    fs::write(&template_path, "<p>Updated Version <@ $tag @></p>").unwrap();
 
     // Verify cache is recognized as expired
     assert!(engine.is_expired(&template_path).unwrap());
@@ -101,7 +101,7 @@ fn test_view_on_demand_compilation_mtime_recompile() {
 fn test_render_inline_template_in_vm() {
     // In RHP, single quotes prevent the outer script parser from interpolating $variables
     let script = r#"
-        $out = render('<h1>Hello, {{ $name }}!</h1>', ["name" => "World"]);
+        $out = render('<h1>Hello, <@ $name @>!</h1>', ["name" => "World"]);
         return $out;
     "#;
     let res = run_source(script).expect("Execution failed");
@@ -111,7 +111,7 @@ fn test_render_inline_template_in_vm() {
 #[test]
 fn test_render_inline_template_with_control_flow() {
     let script = r#"
-        $tpl = '<ul>@for ($i = 0; $i < 3; $i++)<li>Item {{ $i }}</li>@endfor</ul>';
+        $tpl = '<ul>@for ($i = 0; $i < 3; $i++)<li>Item <@ $i @></li>@endfor</ul>';
         $out = render($tpl, []);
         return $out;
     "#;
@@ -122,7 +122,7 @@ fn test_render_inline_template_with_control_flow() {
 #[test]
 fn test_render_raw_and_escaped_entities() {
     let script = r#"
-        $tpl = '<div>Escaped: {{ $malicious }} | Raw: {!! $safe_html !!}</div>';
+        $tpl = '<div>Escaped: <@ $malicious @> | Raw: <@! $safe_html @></div>';
         $out = render($tpl, [
             "malicious" => "<script>alert('xss')</script>",
             "safe_html" => "<b>Bold</b>"
@@ -143,7 +143,7 @@ fn test_view_from_file_in_vm() {
     fs::create_dir_all(&views_dir).unwrap();
 
     let template_path = views_dir.join("welcome.rade.rhp");
-    fs::write(&template_path, "<h1>Welcome, {{ $user }}!</h1><p>Status: {{ $status }}</p>").unwrap();
+    fs::write(&template_path, "<h1>Welcome, <@ $user @>!</h1><p>Status: <@ $status @></p>").unwrap();
 
     // Call view() with explicit relative file path
     let script = format!(

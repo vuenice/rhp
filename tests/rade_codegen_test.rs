@@ -67,7 +67,7 @@ fn test_escape_newlines_and_tabs_in_text() {
 fn test_merge_consecutive_text_nodes() {
     // When text is broken by comments, the comments are stripped and
     // consecutive text chunks must be merged into a single $__out += "..."; statement
-    let input = "Hello {{-- internal comment --}} Beautiful {{-- another comment --}} World!";
+    let input = "Hello <@-- internal comment @> Beautiful <@-- another comment @> World!";
     let expected = r#"$__out = "";
 $__out += "Hello  Beautiful  World!";
 return $__out;"#;
@@ -88,7 +88,7 @@ return $__out;"#;
 
 #[test]
 fn test_echo_escaped() {
-    let input = "<h1>Welcome, {{ $user.name }}!</h1>";
+    let input = "<h1>Welcome, <@ $user.name @>!</h1>";
     let expected = r#"$__out = "";
 $__out += "<h1>Welcome, ";
 $__out += Html::escape($user.name);
@@ -100,7 +100,7 @@ return $__out;"#;
 
 #[test]
 fn test_echo_raw() {
-    let input = "<div class=\"body\">{!! $article.content !!}</div>";
+    let input = "<div class=\"body\"><@! $article.content @></div>";
     let expected = r#"$__out = "";
 $__out += "<div class=\"body\">";
 $__out += string($article.content);
@@ -112,12 +112,9 @@ return $__out;"#;
 
 #[test]
 fn test_escaped_verbatim() {
-    let input = "Vue binding: @{{ message }} and @{{ $expr }}";
+    let input = "Vue binding: {{ message }} and {{ $expr }}";
     let expected = r#"$__out = "";
-$__out += "Vue binding: ";
-$__out += "{{ message }}";
-$__out += " and ";
-$__out += "{{ $expr }}";
+$__out += "Vue binding: {{ message }} and {{ $expr }}";
 return $__out;"#;
     let output = compile_to_rhp(input).unwrap();
     assert_eq!(output, expected);
@@ -125,7 +122,7 @@ return $__out;"#;
 
 #[test]
 fn test_escaped_verbatim_with_quotes() {
-    let input = r#"@{{ "hello " + name }}"#;
+    let input = r#"{{ "hello " + name }}"#;
     let expected = r#"$__out = "";
 $__out += "{{ \"hello \" + name }}";
 return $__out;"#;
@@ -177,7 +174,7 @@ return $__out;"#;
 
 #[test]
 fn test_for_directive_standalone() {
-    let input = "@for($i = 0; $i < 5; $i++)<li>{{ $i }}</li>@endfor";
+    let input = "@for($i = 0; $i < 5; $i++)<li><@ $i @></li>@endfor";
     let expected = r#"$__out = "";
 for ($i = 0; $i < 5; $i++) {
     $__out += "<li>";
@@ -191,7 +188,7 @@ return $__out;"#;
 
 #[test]
 fn test_for_directive_closure() {
-    let input = "@for($i = 0; $i < 5; $i++)<li>{{ $i }}</li>@endfor";
+    let input = "@for($i = 0; $i < 5; $i++)<li><@ $i @></li>@endfor";
     let expected = r#"return function($__data: dict): string {
     $__out = "";
     for ($i = 0; $i < 5; $i++) {
@@ -225,7 +222,7 @@ return $__out;"#;
 
 #[test]
 fn test_nested_for_inside_if() {
-    let input = "@if($has_items)<ul>@for($i = 0; $i < count($items); $i++)<li>{{ $items[$i] }}</li>@endfor</ul>@endif";
+    let input = "@if($has_items)<ul>@for($i = 0; $i < count($items); $i++)<li><@ $items[$i] @></li>@endfor</ul>@endif";
     let expected = r#"$__out = "";
 if ($has_items) {
     $__out += "<ul>";
@@ -243,7 +240,7 @@ return $__out;"#;
 
 #[test]
 fn test_raw_rhp_block() {
-    let input = "@rhp\nlet x = 10;\nlet y = 20;\n@endrhp\n<span>{{ $x + $y }}</span>";
+    let input = "<@?\nlet x = 10;\nlet y = 20;\n@>\n<span><@ $x + $y @></span>";
     let expected = r#"$__out = "";
 let x = 10;
 let y = 20;
@@ -257,7 +254,7 @@ return $__out;"#;
 
 #[test]
 fn test_raw_rhp_inside_if_closure() {
-    let input = "@if($debug)\n@rhp\nLog::info(\"debug mode enabled\");\n@endrhp\n@endif";
+    let input = "@if($debug)\n<@?\nLog::info(\"debug mode enabled\");\n@>\n@endif";
     let expected = r#"return function($__data: dict): string {
     $__out = "";
     if ($debug) {
@@ -296,7 +293,7 @@ return $__out;"#;
 #[test]
 fn test_compiler_with_format_builder() {
     let mut compiler = Compiler::new().with_format(OutputFormat::Closure);
-    let input = "Hello {{ $name }}";
+    let input = "Hello <@ $name @>";
     let expected = r#"return function($__data: dict): string {
     $__out = "";
     $__out += "Hello ";
@@ -359,29 +356,29 @@ fn test_no_echo_or_ob_functions_anywhere() {
 #[test]
 fn test_comprehensive_rade_rhp_template_end_to_end() {
     let template = r#"<div class="user-profile">
-    {{-- Header with user greetings --}}
-    <h1>Welcome, {{ $user.name }}!</h1>
+    <@-- Header with user greetings @>
+    <h1>Welcome, <@ $user.name @>!</h1>
 
     @if($user.is_admin && $user.level > 5)
-        <span class="badge">Admin: {!! $user.badge_html !!}</span>
+        <span class="badge">Admin: <@! $user.badge_html @></span>
     @elseif($user.is_moderator)
         <span class="badge">Moderator</span>
     @else
         <span>Member</span>
     @endif
 
-    @rhp
+    <@?
     let count = $user.items.len();
-    @endrhp
+    @>
 
     <ul>
     @for($i = 0; $i < $count; $i++)
-        <li>Item #{{ $i }}: {{ $user.items[$i] }}</li>
+        <li>Item #<@ $i @>: <@ $user.items[$i] @></li>
     @endfor
     </ul>
 
     <div id="vue-app">
-        <span>@{{ dynamicVueMessage }}</span>
+        <span>{{ dynamicVueMessage }}</span>
     </div>
 </div>"#;
 
@@ -408,9 +405,7 @@ for ($i = 0; $i < $count; $i++) {
     $__out += Html::escape($user.items[$i]);
     $__out += "</li>\n    ";
 }
-$__out += "\n    </ul>\n\n    <div id=\"vue-app\">\n        <span>";
-$__out += "{{ dynamicVueMessage }}";
-$__out += "</span>\n    </div>\n</div>";
+$__out += "\n    </ul>\n\n    <div id=\"vue-app\">\n        <span>{{ dynamicVueMessage }}</span>\n    </div>\n</div>";
 return $__out;"#;
 
     let compiled = compile_to_rhp(template).unwrap();

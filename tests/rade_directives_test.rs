@@ -129,9 +129,9 @@ fn test_deeply_nested_control_flow() {
 
 #[test]
 fn test_raw_rhp_emits_as_is() {
-    // Requirement 3: Ensure raw RHP block @rhp ... @endrhp directly emits
+    // Requirement 3: Ensure raw RHP block <@? ... @> directly emits
     // the inner RHP code as-is without any wrapping or alteration.
-    let input = "@rhp\nlet x = 10;\nlet y = 20;\nlet z = x + y;\n@endrhp";
+    let input = "<@?\nlet x = 10;\nlet y = 20;\nlet z = x + y;\n@>";
     let output = compile(input).unwrap();
     assert_eq!(output, "let x = 10;\nlet y = 20;\nlet z = x + y;");
 }
@@ -139,10 +139,10 @@ fn test_raw_rhp_emits_as_is() {
 #[test]
 fn test_raw_rhp_inside_control_flow() {
     let input = r#"@if($run_setup)
-@rhp
+<@?
 let count = 100;
 let initialized = true;
-@endrhp
+@>
 <p>Setup done</p>
 @endif"#;
 
@@ -158,14 +158,14 @@ let initialized = true;
 
 #[test]
 fn test_comments_stripped_during_compilation() {
-    let input = "@if($cond)\n  {{-- Ignore this secret --}}\n  <p>Visible</p>\n@endif";
+    let input = "@if($cond)\n  <@-- Ignore this secret @>\n  <p>Visible</p>\n@endif";
     let output = compile(input).unwrap();
     assert_eq!(output, "if ($cond) {\n  \n  <p>Visible</p>\n}");
 }
 
 #[test]
 fn test_escaped_verbatim_preserved() {
-    let input = "@if($cond)\n  @{{ vueBinding }}\n@endif";
+    let input = "@if($cond)\n  {{ vueBinding }}\n@endif";
     let output = compile(input).unwrap();
     assert_eq!(output, "if ($cond) {\n  {{ vueBinding }}\n}");
 }
@@ -542,9 +542,9 @@ fn test_compiler_with_custom_directives() {
 fn test_comprehensive_template() {
     let template = r#"
 <div class="container">
-  {{-- Header section --}}
+  <@-- Header section @>
   @if($user.is_authenticated)
-    <h2>Welcome, {{ $user.name }}</h2>
+    <h2>Welcome, <@ $user.name @></h2>
     @if($user.is_admin)
       <span class="badge">Admin</span>
     @elseif($user.is_mod)
@@ -556,14 +556,14 @@ fn test_comprehensive_template() {
     <h2>Please log in</h2>
   @endif
 
-  {{-- Raw RHP block --}}
-  @rhp
+  <@-- Raw RHP block @>
+  <@?
   let max_items = 5;
-  @endrhp
+  @>
 
   <ul>
     @for($i = 0; $i < max_items; $i++)
-      <li>Item {{ $i }}</li>
+      <li>Item <@ $i @></li>
     @endfor
   </ul>
 </div>
@@ -576,8 +576,8 @@ fn test_comprehensive_template() {
     assert!(output.contains("} else {"));
     assert!(output.contains("for ($i = 0; $i < max_items; $i++) {"));
     assert!(output.contains("let max_items = 5;"));
-    assert!(!output.contains("{{-- Header section --}}"));
-    assert!(!output.contains("{{-- Raw RHP block --}}"));
+    assert!(!output.contains("<@-- Header section @>"));
+    assert!(!output.contains("<@-- Raw RHP block @>"));
 }
 
 #[test]

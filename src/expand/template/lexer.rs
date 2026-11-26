@@ -103,8 +103,17 @@ impl<'a> TemplateLexer<'a> {
                 continue;
             }
 
-            // Check for Raw Echo: `{!! ... !!}`
-            if c == '{' && self.peek_char_nth(1) == Some('!') && self.peek_char_nth(2) == Some('!') {
+            // Check for escaped '<@': '<@@' emits literal '<@'
+            if c == '<' && self.peek_char_nth(1) == Some('@') && self.peek_char_nth(2) == Some('@') {
+                self.advance(); // '<'
+                self.advance(); // '@'
+                self.advance(); // '@'
+                text_buf.push_str("<@");
+                continue;
+            }
+
+            // Check for Raw Echo: `<@! ... @>`
+            if c == '<' && self.peek_char_nth(1) == Some('@') && self.peek_char_nth(2) == Some('!') {
                 if !text_buf.is_empty() {
                     let end_byte = self.current_byte();
                     tokens.push(TemplateToken::Text {
@@ -125,8 +134,8 @@ impl<'a> TemplateLexer<'a> {
                 continue;
             }
 
-            // Check for Escaped Echo: `{{ ... }}`
-            if c == '{' && self.peek_char_nth(1) == Some('{') {
+            // Check for Escaped Echo: `<@ ... @>`
+            if c == '<' && self.peek_char_nth(1) == Some('@') {
                 if !text_buf.is_empty() {
                     let end_byte = self.current_byte();
                     tokens.push(TemplateToken::Text {
@@ -204,16 +213,15 @@ impl<'a> TemplateLexer<'a> {
         let start_line = self.line;
         let start_col = self.col;
 
-        self.advance(); // '{'
-        self.advance(); // '!'
+        self.advance(); // '<'
+        self.advance(); // '@'
         self.advance(); // '!'
 
         let mut raw = String::new();
         let mut closed = false;
 
         while let Some(c) = self.peek_char() {
-            if c == '!' && self.peek_char_nth(1) == Some('!') && self.peek_char_nth(2) == Some('}') {
-                self.advance();
+            if c == '@' && self.peek_char_nth(1) == Some('>') {
                 self.advance();
                 self.advance();
                 closed = true;
@@ -224,7 +232,7 @@ impl<'a> TemplateLexer<'a> {
         }
 
         if !closed {
-            return Err("Unclosed raw echo tag `{!!`".to_string());
+            return Err("Unclosed raw echo tag `<@!`".to_string());
         }
 
         let end_byte = self.current_byte();
@@ -240,14 +248,14 @@ impl<'a> TemplateLexer<'a> {
         let start_line = self.line;
         let start_col = self.col;
 
-        self.advance(); // '{'
-        self.advance(); // '{'
+        self.advance(); // '<'
+        self.advance(); // '@'
 
         let mut raw = String::new();
         let mut closed = false;
 
         while let Some(c) = self.peek_char() {
-            if c == '}' && self.peek_char_nth(1) == Some('}') {
+            if c == '@' && self.peek_char_nth(1) == Some('>') {
                 self.advance();
                 self.advance();
                 closed = true;
@@ -258,7 +266,7 @@ impl<'a> TemplateLexer<'a> {
         }
 
         if !closed {
-            return Err("Unclosed echo tag `{{`".to_string());
+            return Err("Unclosed echo tag `<@`".to_string());
         }
 
         let end_byte = self.current_byte();

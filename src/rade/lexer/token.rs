@@ -4,16 +4,16 @@ pub enum Token {
     /// Plain HTML or text chunks.
     Text(String),
 
-    /// Escaped echo content inside `{{ ... }}`.
+    /// Escaped echo content inside `<@ ... @>`.
     EchoEscaped(String),
 
-    /// Raw unescaped echo content inside `{!! ... !!}`.
+    /// Raw unescaped echo content inside `<@! ... @>`.
     EchoRaw(String),
 
-    /// Literal Blade echo `@{{ ... }}` which should output `{{ ... }}` verbatim.
+    /// Literal verbatim text (kept for API compatibility).
     EscapedVerbatim(String),
 
-    /// Comment content inside `{{-- ... --}}` (to be ignored/stripped during compilation).
+    /// Comment content inside `<@-- ... @>` (to be ignored/stripped during compilation).
     Comment(String),
 
     /// Template directive such as `@if(...)`, `@for(...)`, `@else`, etc.
@@ -22,7 +22,7 @@ pub enum Token {
         args: Option<String>,
     },
 
-    /// Raw RHP code block inside `@rhp ... @endrhp`.
+    /// Raw RHP code block / statement inside `<@? ... @>`.
     RawRhp(String),
 }
 

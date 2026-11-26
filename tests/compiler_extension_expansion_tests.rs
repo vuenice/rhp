@@ -84,15 +84,15 @@ class User {
 fn test_template_compilation_to_generated_code() {
     let template_source = r#"<div class="user-card">
   @if($user->isAdmin)
-    <h1>Admin Portal: {{ $user->name }}</h1>
+    <h1>Admin Portal: <@ $user->name @></h1>
   @endif
   @for($i = 0; $i < 3; $i++)
-    <p>Item {{ $i }}</p>
+    <p>Item <@ $i @></p>
   @endfor
   @foreach($items as $item)
-    <span>{{ $item }}</span>
+    <span><@ $item @></span>
   @endforeach
-  {!! $rawSnippet !!}
+  <@! $rawSnippet @>
   @datetime($createdAt)
 </div>"#;
 
@@ -170,8 +170,8 @@ fn test_template_compilation_to_generated_code() {
     assert!(found_if, "@if directive must produce StmtKind::If");
     assert!(found_for, "@for directive must produce StmtKind::For");
     assert!(found_foreach, "@foreach directive must produce StmtKind::Foreach");
-    assert!(found_escaped_echo, "{{{{ expr }}}} must produce Html::escape static call");
-    assert!(found_raw_echo, "{{!! expr !!}} must produce raw echo statement");
+    assert!(found_escaped_echo, "<@ expr @> must produce Html::escape static call");
+    assert!(found_raw_echo, "<@! expr @> must produce raw echo statement");
 }
 
 /// 3. Error-span test: Error in attribute arguments points at the user's attribute line

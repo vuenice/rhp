@@ -375,13 +375,13 @@ fn test_mixed_template_echos_rhp_and_custom_directives() {
         });
 
     let input = r#"<div>
-  @rhp
+  <@?
     let count = 42;
-  @endrhp
+  @>
   @if(count > 0)
-    <p>User: {{ $user }}</p>
+    <p>User: <@ $user @></p>
     <p>Title: @uppercase($title)</p>
-    <p>Raw: {!! $raw_html !!}</p>
+    <p>Raw: <@! $raw_html @></p>
     <p>Generated at: @timestamp</p>
   @endif
 </div>"#;
@@ -390,9 +390,9 @@ fn test_mixed_template_echos_rhp_and_custom_directives() {
     let expected = r#"<div>
   let count = 42;
   if (count > 0) {
-    <p>User: {{ $user }}</p>
+    <p>User: <@ $user @></p>
     <p>Title: $__out += Str::upperCase($title);</p>
-    <p>Raw: {!! $raw_html !!}</p>
+    <p>Raw: <@! $raw_html @></p>
     <p>Generated at: $__out += Sys::timestamp();</p>
   }
 </div>"#;

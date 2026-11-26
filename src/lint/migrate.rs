@@ -515,7 +515,8 @@ pub fn migrate_source_with_options_and_context(
 
     let is_template_target = file_name.ends_with(".phtml")
         || file_name.ends_with(".blade.php")
-        || (file_name.ends_with(".php") && (is_php_view_template(source, file_name) || is_php_view_template(&current, file_name)));
+        || (file_name.ends_with(".php") && (is_php_view_template(source, file_name) || is_php_view_template(&current, file_name) || is_template_source(source)))
+        || (file_name.ends_with(".rhp") && !file_name.ends_with(".rade.rhp") && (is_php_view_template(source, file_name) || is_php_view_template(&current, file_name) || is_template_source(source)));
     let target_file_path = if is_template_target {
         Some(compute_target_template_path(Path::new(file_name)).display().to_string())
     } else {
@@ -1124,7 +1125,7 @@ pub fn migrate_project_in_stages(
         }));
     }
 
-    // Phase 2: In-memory file loading (non-blocking on individual read errors)
+    // Phase 2: In-memory file loading & upfront bulk rename before performing bulk changes
     let mut items: Vec<ProjectItem> = Vec::with_capacity(file_paths.len());
     for p in file_paths {
         match fs::read_to_string(&p) {
@@ -1132,12 +1133,32 @@ pub fn migrate_project_in_stages(
                 let file_name = p.display().to_string();
                 let is_template_target = file_name.ends_with(".phtml")
                     || file_name.ends_with(".blade.php")
-                    || (file_name.ends_with(".php") && is_php_view_template(&content, &file_name));
+                    || (file_name.ends_with(".php") && (is_php_view_template(&content, &file_name) || is_template_source(&content)))
+                    || (file_name.ends_with(".rhp") && !file_name.ends_with(".rade.rhp") && (is_php_view_template(&content, &file_name) || is_template_source(&content)));
+
                 let target_path = if is_template_target {
                     Some(compute_target_template_path(&p))
+                } else if file_name.ends_with(".php") {
+                    Some(p.with_extension("rhp"))
                 } else {
                     None
                 };
+
+                // Upfront bulk rename before performing any bulk code changes
+                if options.fix {
+                    if let Some(target) = &target_path {
+                        if target != &p {
+                            if let Err(e) = fs::rename(&p, target) {
+                                if let Ok(_) = fs::copy(&p, target) {
+                                    let _ = fs::remove_file(&p);
+                                } else {
+                                    report.warnings.push(format!("[Rename Warning] Failed to rename '{}' to '{}': {}. Continuing.", p.display(), target.display(), e));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 items.push(ProjectItem {
                     path: p,
                     file_name,
@@ -1486,13 +1507,15 @@ pub fn migrate_project_in_stages(
                 || rel_path.ends_with(".blade.php")
                 || rel_path.ends_with(".rade")
                 || rel_path.ends_with(".phtml")
-                || item.target_path.is_some();
+                || item.target_path.as_ref().map_or(false, |p| {
+                    let s = p.to_string_lossy();
+                    s.ends_with(".rade.rhp") || s.ends_with(".rade")
+                })
+                || is_php_view_template(&item.current_content, &rel_path)
+                || is_template_source(&item.current_content);
 
             let diags = if is_template {
-                match crate::rade::compile(&item.current_content) {
-                    Ok(_) => Vec::new(),
-                    Err(_) => check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE),
-                }
+                crate::diagnostic::check::check_template_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE)
             } else {
                 check_source(&item.current_content, &rel_path, DEFAULT_MAX_ERRORS_PER_FILE)
             };
@@ -5333,6 +5356,12 @@ pub fn remove_error_suppression(source: &str) -> (String, usize) {
             continue;
         }
 
+        // Never strip '@' that is part of Rade template delimiters (<@, <@!, <@?, <@--, <@@, @>)
+        if (i > 0 && bytes[i - 1] == b'<') || (i + 1 < n && bytes[i + 1] == b'>') {
+            i += 1;
+            continue;
+        }
+
         // Check preceding character (skipping whitespace backwards)
         let mut b_idx = i;
         while b_idx > 0 && (bytes[b_idx - 1] == b' ' || bytes[b_idx - 1] == b'\t' || bytes[b_idx - 1] == b'\r' || bytes[b_idx - 1] == b'\n') {
@@ -6404,6 +6433,11 @@ fn match_prefix_nullable(
     tokens: &[crate::lexer::SpannedToken<'_>],
     q_idx: usize,
 ) -> Option<(usize, String)> {
+    let q_start = tokens[q_idx].span.start;
+    if q_start >= 2 && source[..q_start].ends_with("<@") {
+        return None;
+    }
+
     let next = q_idx + 1;
     if next >= tokens.len() {
         return None;
@@ -7897,6 +7931,8 @@ pub fn compute_target_template_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     if s.ends_with(".blade.php") {
         PathBuf::from(format!("{}.rade.rhp", &s[..s.len() - ".blade.php".len()]))
+    } else if s.ends_with(".blade.rhp") {
+        PathBuf::from(format!("{}.rade.rhp", &s[..s.len() - ".blade.rhp".len()]))
     } else {
         path.with_extension("rade.rhp")
     }
@@ -8156,7 +8192,7 @@ pub fn is_php_view_template(source: &str, file_name: &str) -> bool {
         return true;
     }
 
-    if !lower_name.is_empty() && !lower_name.ends_with(".php") {
+    if !lower_name.is_empty() && !lower_name.ends_with(".php") && !lower_name.ends_with(".rhp") {
         return false;
     }
 
@@ -8174,6 +8210,26 @@ pub fn is_php_view_template(source: &str, file_name: &str) -> bool {
     let starts_html = starts_with_html_tag(trimmed);
     let ends_html = ends_with_html_closing_tag(trimmed);
     if starts_html && ends_html {
+        return true;
+    }
+
+    // If it contains template tags (<@, <@!, <@?, <@--) and HTML markup
+    if trimmed.contains("<@") && contains_html_markup(trimmed) {
+        return true;
+    }
+
+    // Check if path is in template/views directory and contains HTML markup
+    let in_view_dir = lower_name.contains("/template/")
+        || lower_name.contains("/templates/")
+        || lower_name.contains("/views/")
+        || lower_name.contains("/content/")
+        || lower_name.contains("/partials/")
+        || lower_name.contains("/layouts/")
+        || lower_name.starts_with("template/")
+        || lower_name.starts_with("templates/")
+        || lower_name.starts_with("views/")
+        || lower_name.starts_with("content/");
+    if in_view_dir && contains_html_markup(trimmed) {
         return true;
     }
 
@@ -8293,7 +8349,7 @@ pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -
                 edits.push(TextEdit {
                     start: tag_start,
                     end: tag_end + 2,
-                    replacement: format!("{{{{ {} }}}}", expr.trim()),
+                    replacement: format!("<@ {} @>", expr.trim()),
                 });
                 count += 1;
                 i = tag_end + 2;
@@ -8336,7 +8392,7 @@ pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
-                        replacement: format!("{{{{-- {} --}}}}", comment_text),
+                        replacement: format!("<@-- {} @>", comment_text),
                     });
                     count += 1;
                     i = tag_end + 2;
@@ -8350,7 +8406,7 @@ pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
-                        replacement: format!("{{{{ {} }}}}", expr.trim()),
+                        replacement: format!("<@ {} @>", expr.trim()),
                     });
                     count += 1;
                     i = tag_end + 2;
@@ -8551,12 +8607,17 @@ pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -
                     }
                 }
 
-                // 15) Arbitrary PHP code block in template: wrap in @rhp ... @endrhp
+                // 15) Arbitrary PHP code block in template: wrap in <@? ... @>
                 if is_template_file_or_source(source, file_path) && !inner.is_empty() {
+                    let replacement = if inner.contains('\n') {
+                        format!("<@?\n{}\n@>", inner)
+                    } else {
+                        format!("<@? {} @>", inner)
+                    };
                     edits.push(TextEdit {
                         start: tag_start,
                         end: tag_end + 2,
-                        replacement: format!("@rhp\n{}\n@endrhp", inner),
+                        replacement,
                     });
                     count += 1;
                     i = tag_end + 2;
@@ -8621,13 +8682,7 @@ pub fn is_view_include_statement(stmt: &str) -> Option<String> {
         "header.php" | "footer.php" | "navbar.php" | "sidebar.php" | "nav.php" | "layout.php" | "menu.php"
     );
 
-    let is_view = lower.ends_with(".phtml")
-        || lower.ends_with(".rade.rhp")
-        || lower.ends_with(".blade.php")
-        || lower.ends_with(".blade.rhp")
-        || lower.ends_with(".rade")
-        || lower.ends_with(".html")
-        || lower.contains("views/")
+    let is_view_dir = lower.contains("views/")
         || lower.contains("/views/")
         || lower.contains("templates/")
         || lower.contains("/templates/")
@@ -8638,23 +8693,21 @@ pub fn is_view_include_statement(stmt: &str) -> Option<String> {
         || lower.contains("layouts/")
         || lower.contains("/layouts/")
         || lower.contains("pages/")
-        || lower.contains("/pages/")
-        || lower.contains("includes/")
-        || lower.contains("/includes/")
-        || is_common_view_file;
+        || lower.contains("/pages/");
+
+    let is_php_view = lower.ends_with(".php")
+        && (is_common_view_file || (is_view_dir && !basename.chars().next().map_or(false, |c| c.is_ascii_uppercase())));
+
+    let is_view = lower.ends_with(".phtml")
+        || lower.ends_with(".rade.rhp")
+        || lower.ends_with(".blade.php")
+        || lower.ends_with(".blade.rhp")
+        || lower.ends_with(".rade")
+        || lower.ends_with(".html")
+        || is_php_view;
 
     if !is_view {
         return None;
-    }
-
-    // If it ends with .php, ensure it's not a PascalCase class file like views/User.php
-    let basename = Path::new(trimmed).file_name().and_then(|f| f.to_str()).unwrap_or("");
-    if lower.ends_with(".php") && !lower.ends_with(".blade.php") {
-        if let Some(first_char) = basename.chars().next() {
-            if first_char.is_ascii_uppercase() {
-                return None;
-            }
-        }
     }
 
     // Strip template extensions

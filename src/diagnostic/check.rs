@@ -13,10 +13,28 @@ use super::{builder::DiagnosticBuilder, Diagnostic};
 /// Default maximum errors per file to report before suppressing cascading noise.
 pub const DEFAULT_MAX_ERRORS_PER_FILE: usize = 5;
 
+/// Determines whether a file path or source content represents a Rade/HTML template.
+pub fn is_template_file(file_name: &str, source: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.ends_with(".rade.rhp")
+        || lower.ends_with(".rade")
+        || lower.ends_with(".blade.php")
+        || lower.ends_with(".blade.rhp")
+        || lower.ends_with(".phtml")
+    {
+        return true;
+    }
+    crate::lint::is_php_view_template(source, file_name)
+}
+
 /// Check an in-memory RHP source string and return all discovered diagnostics.
 ///
 /// Implements parser recovery and cascading error suppression up to `max_errors`.
 pub fn check_source(source: &str, file_name: &str, max_errors: usize) -> Vec<Diagnostic> {
+    if is_template_file(file_name, source) {
+        return check_template_source(source, file_name, max_errors);
+    }
+
     let mut diagnostics = Vec::new();
     let source_file = SourceFile::new(0, file_name, source);
     let builder = DiagnosticBuilder::new(&source_file);
@@ -165,4 +183,229 @@ fn collect_rhp_files(dir: &Path, collected: &mut Vec<std::path::PathBuf>) {
             }
         }
     }
+}
+
+/// Check an in-memory Rade/HTML template source string and return all discovered diagnostics.
+///
+/// Implements template structure validation and native RHP block (@rhp ... @endrhp) linting.
+pub fn check_template_source(source: &str, file_name: &str, max_errors: usize) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let source_file = SourceFile::new(0, file_name, source);
+    let builder = DiagnosticBuilder::new(&source_file);
+
+    // 1. Scan template with Rade scanner to validate syntax and tokenize directives
+    let spanned_tokens = match crate::rade::lexer::Scanner::scan_spanned(source) {
+        Ok(toks) => toks,
+        Err(lex_err) => {
+            diagnostics.push(builder.from_rade_lexer_error(&lex_err));
+            return diagnostics;
+        }
+    };
+
+    // 2. Validate template control flow / directive structure with Rade compiler
+    if let Err(compile_err) = crate::rade::compile(source) {
+        diagnostics.push(builder.from_rade_compile_error(&compile_err));
+        if diagnostics.len() >= max_errors {
+            return diagnostics;
+        }
+    }
+
+    // 3. Lint native RHP blocks (@rhp ... @endrhp) and echo expressions inside the template
+    for spanned in &spanned_tokens {
+        if diagnostics.len() >= max_errors {
+            break;
+        }
+
+        match &spanned.token {
+            crate::rade::lexer::Token::RawRhp(inner_code) => {
+                check_inner_rhp_block(
+                    inner_code,
+                    &source_file,
+                    spanned.line,
+                    spanned.column,
+                    file_name,
+                    max_errors,
+                    &builder,
+                    &mut diagnostics,
+                );
+            }
+            crate::rade::lexer::Token::EchoEscaped(expr) | crate::rade::lexer::Token::EchoRaw(expr) => {
+                check_inner_rhp_expr(
+                    expr,
+                    &source_file,
+                    spanned.line,
+                    spanned.column,
+                    file_name,
+                    &builder,
+                    &mut diagnostics,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    diagnostics.sort_by_key(|d| (d.span.start.line, d.span.start.col, d.span.start.byte));
+    if diagnostics.len() > max_errors {
+        diagnostics.truncate(max_errors);
+    }
+    diagnostics
+}
+
+fn check_inner_rhp_block(
+    inner_code: &str,
+    source_file: &SourceFile,
+    block_line: usize,
+    block_col: usize,
+    file_name: &str,
+    max_errors: usize,
+    builder: &DiagnosticBuilder,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let trimmed = inner_code.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let leading_newlines = inner_code
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .filter(|&c| c == '\n')
+        .count();
+    let code_line = block_line + leading_newlines;
+    let code_col = if leading_newlines == 0 {
+        block_col + 4
+    } else {
+        if let Some(first_non_ws) = inner_code.lines().nth(leading_newlines) {
+            first_non_ws.chars().take_while(|c| c.is_whitespace()).count() + 1
+        } else {
+            1
+        }
+    };
+
+    // 1. Lexing phase
+    let tokens = match Lexer::tokenize_with_file_id(trimmed, 0) {
+        Ok(toks) => toks,
+        Err(lex_err) => {
+            let mut diag = builder.from_lex_error(&lex_err);
+            adjust_diagnostic_span(&mut diag, code_line, code_col, source_file);
+            diagnostics.push(diag);
+            return;
+        }
+    };
+
+    // 2. Parsing phase
+    let mut parser = Parser::new(tokens, 0).with_file_path(file_name);
+    let parsed_program = match parser.parse_program() {
+        Ok(prog) => Some(prog),
+        Err(parse_err) => {
+            let mut diag = builder.from_parse_error(&parse_err);
+            adjust_diagnostic_span(&mut diag, code_line, code_col, source_file);
+            diagnostics.push(diag);
+            None
+        }
+    };
+
+    // 3. Typecheck & boundary verification phase
+    if parsed_program.is_some() {
+        let issues = run_typecheck(trimmed, file_name);
+        for issue in issues {
+            if diagnostics.len() >= max_errors {
+                break;
+            }
+            let mut diag = builder.from_issue(&issue);
+            adjust_diagnostic_span(&mut diag, code_line, code_col, source_file);
+            diagnostics.push(diag);
+        }
+    }
+}
+
+fn check_inner_rhp_expr(
+    expr: &str,
+    source_file: &SourceFile,
+    start_line: usize,
+    start_col: usize,
+    file_name: &str,
+    builder: &DiagnosticBuilder,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let trimmed = expr.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let stmt_code = format!("{};", trimmed);
+    if let Ok(tokens) = Lexer::tokenize_with_file_id(&stmt_code, 0) {
+        let mut parser = Parser::new(tokens, 0).with_file_path(file_name);
+        if let Err(parse_err) = parser.parse_stmt() {
+            let mut diag = builder.from_parse_error(&parse_err);
+            adjust_diagnostic_span(&mut diag, start_line, start_col + 2, source_file);
+            diagnostics.push(diag);
+        }
+    }
+}
+
+fn adjust_diagnostic_span(
+    diag: &mut Diagnostic,
+    start_line: usize,
+    start_col: usize,
+    source_file: &SourceFile,
+) {
+    let err_line = if diag.span.start.line == 1 {
+        diag.span.start.col = diag.span.start.col.saturating_add(start_col.saturating_sub(1));
+        start_line
+    } else {
+        start_line + diag.span.start.line - 1
+    };
+    diag.span.start.line = err_line;
+
+    if diag.span.end.line == 1 {
+        diag.span.end.col = diag.span.end.col.saturating_add(start_col.saturating_sub(1));
+        diag.span.end.line = start_line;
+    } else {
+        diag.span.end.line = start_line + diag.span.end.line - 1;
+    }
+
+    if let Some(line_byte) = source_file.line_start_offset(diag.span.start.line) {
+        diag.span.start.byte = line_byte + diag.span.start.col.saturating_sub(1);
+    }
+    if let Some(line_byte) = source_file.line_start_offset(diag.span.end.line) {
+        diag.span.end.byte = line_byte + diag.span.end.col.saturating_sub(1);
+    }
+
+    for label in &mut diag.labels {
+        if label.span.line == 1 {
+            label.span.col = label.span.col.saturating_add(start_col.saturating_sub(1));
+            label.span.line = start_line;
+        } else {
+            label.span.line = start_line + label.span.line - 1;
+        }
+        if let Some(line_byte) = source_file.line_start_offset(label.span.line) {
+            label.span.byte = Some(line_byte + label.span.col.saturating_sub(1));
+        }
+    }
+
+    let total_lines = source_file.line_count();
+    let context_start = err_line.saturating_sub(1).max(1);
+    let context_end = (err_line + 1).min(total_lines);
+
+    let mut lines = Vec::new();
+    for line_num in context_start..=context_end {
+        if let Some(text) = source_file.get_line(line_num) {
+            let marker = if line_num == err_line {
+                Some(super::SnippetMarker {
+                    col: diag.span.start.col,
+                    len: diag.span.end.col.saturating_sub(diag.span.start.col).max(1),
+                })
+            } else {
+                None
+            };
+            lines.push(super::SnippetLine {
+                line: line_num,
+                text: text.to_string(),
+                marker,
+            });
+        }
+    }
+    diag.snippet = lines;
+    diag.rendered = Some(super::render::render_human(diag));
 }

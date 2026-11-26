@@ -90,6 +90,10 @@ pub fn lint_source(source: &str, file_name: &str) -> LintResult {
 
 /// Lint in-memory source code with custom options.
 pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOptions) -> LintResult {
+    if crate::diagnostic::check::is_template_file(file_name, source) {
+        return lint_template_source_with_options(source, file_name, options);
+    }
+
     if options.fix {
         // Fix mode:
         // 0. Auto-convert strict comparison operators `===` and `!==` to `==` and `!=`
@@ -168,6 +172,97 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
             modified: false,
             issues,
         }
+    }
+}
+
+/// Lint in-memory Rade/HTML template source with custom options.
+///
+/// Leaves HTML markup intact and lints/formats RHP code inside `<@? ... @>` blocks.
+pub fn lint_template_source_with_options(
+    source: &str,
+    file_name: &str,
+    options: LintOptions,
+) -> LintResult {
+    let mut current = source.to_string();
+    let mut modified = false;
+
+    if options.fix {
+        // Find and format all <@? ... @> blocks
+        let mut result = String::with_capacity(source.len());
+        let mut last_idx = 0;
+        let n = source.len();
+        let mut i = 0;
+
+        while i < n {
+            let rem = &source[i..];
+            if rem.starts_with("<@?") {
+                let tag_start = i;
+                let content_start = i + "<@?".len();
+
+                if let Some(pos) = source[content_start..].find("@>") {
+                    let content_end = content_start + pos;
+                    let tag_end = content_end + "@>".len();
+
+                    let inner = &source[content_start..content_end];
+                    let inner_trimmed = inner.trim();
+                    if !inner_trimmed.is_empty() {
+                        let sub_res = lint_source_with_options(inner_trimmed, file_name, options);
+                        let formatted_inner = sub_res.formatted_content.trim();
+                        result.push_str(&source[last_idx..tag_start]);
+                        if inner.contains('\n') || formatted_inner.contains('\n') {
+                            result.push_str("<@?\n");
+                            result.push_str(formatted_inner);
+                            result.push_str("\n@>");
+                        } else {
+                            result.push_str("<@? ");
+                            result.push_str(formatted_inner);
+                            result.push_str(" @>");
+                        }
+                    } else {
+                        result.push_str(&source[last_idx..tag_end]);
+                    }
+                    last_idx = tag_end;
+                    i = tag_end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        if last_idx > 0 {
+            result.push_str(&source[last_idx..]);
+            current = result;
+            modified = current != source;
+        }
+    }
+
+    let diags = crate::diagnostic::check::check_template_source(&current, file_name, DEFAULT_MAX_ERRORS_PER_FILE);
+    let mut issues = Vec::with_capacity(diags.len());
+    for d in diags {
+        let level = match d.level {
+            crate::diagnostic::DiagnosticLevel::Error | crate::diagnostic::DiagnosticLevel::InternalError => IssueLevel::Error,
+            crate::diagnostic::DiagnosticLevel::Warning => IssueLevel::Warning,
+            crate::diagnostic::DiagnosticLevel::Note => IssueLevel::Note,
+            crate::diagnostic::DiagnosticLevel::Help => IssueLevel::Help,
+        };
+        issues.push(Issue::new(
+            level,
+            &d.code,
+            &d.message,
+            file_name,
+            d.span.start.line,
+            d.span.start.col,
+            d.span.start.byte,
+            d.span.end.byte,
+        ));
+    }
+
+    LintResult {
+        file_name: file_name.to_string(),
+        original_content: source.to_string(),
+        formatted_content: current,
+        modified,
+        issues,
     }
 }
 

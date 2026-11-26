@@ -83,7 +83,8 @@ impl CompileError {
                 | LexerError::UnclosedEcho { line, .. }
                 | LexerError::UnclosedRawEcho { line, .. }
                 | LexerError::UnclosedRawRhp { line, .. }
-                | LexerError::UnclosedDirectiveArgs { line, .. } => *line,
+                | LexerError::UnclosedDirectiveArgs { line, .. }
+                | LexerError::UnknownDirective { line, .. } => *line,
             },
             CompileError::UnexpectedClosingDirective { line, .. }
             | CompileError::MismatchedClosingDirective { line, .. }
@@ -103,7 +104,8 @@ impl CompileError {
                 | LexerError::UnclosedEcho { column, .. }
                 | LexerError::UnclosedRawEcho { column, .. }
                 | LexerError::UnclosedRawRhp { column, .. }
-                | LexerError::UnclosedDirectiveArgs { column, .. } => *column,
+                | LexerError::UnclosedDirectiveArgs { column, .. }
+                | LexerError::UnknownDirective { column, .. } => *column,
             },
             CompileError::UnexpectedClosingDirective { column, .. }
             | CompileError::MismatchedClosingDirective { column, .. }
@@ -367,14 +369,14 @@ impl Compiler {
                             output.push_str(&compiled);
                         }
                         Token::EchoEscaped(expr) => {
-                            output.push_str("{{ ");
+                            output.push_str("<@ ");
                             output.push_str(expr);
-                            output.push_str(" }}");
+                            output.push_str(" @>");
                         }
                         Token::EchoRaw(expr) => {
-                            output.push_str("{!! ");
+                            output.push_str("<@! ");
                             output.push_str(expr);
-                            output.push_str(" !!}");
+                            output.push_str(" @>");
                         }
                         Token::EscapedVerbatim(verbatim) => {
                             output.push_str(verbatim);

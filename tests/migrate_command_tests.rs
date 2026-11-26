@@ -379,7 +379,10 @@ fn test_cli_migrate_execution() {
         .expect("failed to run rhp migrate");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = temp_dir.join("index.rhp");
+    assert!(migrated_file.exists(), "index.php file should have been renamed to .rhp");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(migrated_content.contains("$_GET = Request::query();"));
     assert!(migrated_content.contains("$user = Request::query('user');"));
     assert!(migrated_content.contains("Cookie::set('pref', 'light');"));
@@ -1139,7 +1142,10 @@ fn test_cli_migrate_write_removes_declares() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = file_path.with_extension("rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("declare("));
     assert!(migrated_content.contains("class Service {"));
 
@@ -1306,7 +1312,10 @@ fn test_cli_migrate_write_type_casts() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = file_path.with_extension("rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("declare("));
     assert!(migrated_content.contains("int(Request::query('id'))"));
     assert!(migrated_content.contains("float($raw_price)"));
@@ -1535,7 +1544,10 @@ fn test_cli_migrate_write_list_destructuring() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = file_path.with_extension("rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("declare("));
     assert!(migrated_content.contains("[$id, $name] = $row;"));
     assert!(migrated_content.contains("[$a, [$b, $c]] = $coords;"));
@@ -1705,7 +1717,10 @@ fn test_cli_migrate_write_error_suppression() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = temp_dir.join("suppress.rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("@unlink"));
     assert!(!migrated_content.contains("@file_get_contents"));
     assert!(!migrated_content.contains("@$_GET"));
@@ -1848,7 +1863,10 @@ fn test_cli_migrate_write_var_dump_and_export() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = file_path.with_extension("rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("declare("));
     assert!(!migrated_content.contains("var_dump("));
     assert!(!migrated_content.contains("var_export("));
@@ -2022,7 +2040,10 @@ fn test_cli_migrate_write_error_reporting() {
         .expect("failed to run rhp migrate --write");
 
     assert!(migrate_output.status.success());
-    let migrated_content = fs::read_to_string(&file_path).unwrap();
+    let migrated_file = file_path.with_extension("rhp");
+    assert!(migrated_file.exists(), "New .rhp file should exist");
+    assert!(!file_path.exists(), "Old .php file should have been removed");
+    let migrated_content = fs::read_to_string(&migrated_file).unwrap();
     assert!(!migrated_content.contains("declare("));
     assert!(migrated_content.contains("// error_reporting(") || !migrated_content.contains("error_reporting("));
     assert!(migrated_content.contains("// ini_set('display_errors', '0');"));
@@ -2843,8 +2864,8 @@ fn test_transpile_php_template_to_rade() {
     let res = migrate_source(input, "card.blade.php");
     assert!(res.modified);
     assert!(res.rade_directive_count >= 8);
-    assert!(res.migrated_content.contains("<h2>{{ $user['name'] }}</h2>"));
-    assert!(res.migrated_content.contains("<span>ID: {{ $user['id'] }}</span>"));
+    assert!(res.migrated_content.contains("<h2><@ $user['name'] @></h2>"));
+    assert!(res.migrated_content.contains("<span>ID: <@ $user['id'] @></span>"));
     assert!(res.migrated_content.contains("@if ($user['is_admin'])"));
     assert!(res.migrated_content.contains("@elseif ($user['is_mod'])"));
     assert!(res.migrated_content.contains("@else"));
@@ -3195,11 +3216,13 @@ fn test_project_wide_cross_file_signature_and_call_migration() {
     assert_eq!(report.files_scanned, 2);
     assert_eq!(report.files_modified, 2);
 
-    let content_a = fs::read_to_string(&file_a).unwrap();
+    let content_a = fs::read_to_string(temp_dir.join("calc.rhp")).unwrap();
+    assert!(!file_a.exists(), "Old calc.php should have been removed");
     // In Stage 1: signature parameter types transformed and order normalized ($price before $discount)
     assert!(content_a.contains("function computeTotal($price: int, $discount: int = 0): int"));
 
-    let content_b = fs::read_to_string(&file_b).unwrap();
+    let content_b = fs::read_to_string(temp_dir.join("main.rhp")).unwrap();
+    assert!(!file_b.exists(), "Old main.php should have been removed");
     // In Stage 2: call site reordered using global signature registry ($price=100 first, $discount=10 second)
     assert!(content_b.contains("computeTotal(100, 10)"));
     // In Stage 3: typecast transformed
@@ -3266,7 +3289,8 @@ fn test_project_wide_non_blocking_unsupported_features() {
     );
 
     // Crucially: Migration did NOT halt, file_valid was fully migrated!
-    let valid_migrated = fs::read_to_string(&file_valid).unwrap();
+    let valid_migrated = fs::read_to_string(temp_dir.join("valid.rhp")).unwrap();
+    assert!(!file_valid.exists(), "Old valid.php should have been removed");
     assert!(valid_migrated.contains("// error_reporting(0);"));
     assert!(valid_migrated.contains("int(Request::query('id'))"));
 
@@ -3505,10 +3529,10 @@ fn test_cli_migrate_stream_multi_file_and_dependency_order() {
     assert_eq!(final_event["summary"]["warnings"], 0);
 
     // Verify files on disk had tags stripped and changes applied
-    let base_content = fs::read_to_string(&base_file).unwrap();
+    let base_content = fs::read_to_string(temp_dir.join("BaseModel.rhp")).unwrap();
     assert!(!base_content.contains("<?php"));
 
-    let user_content = fs::read_to_string(&user_file).unwrap();
+    let user_content = fs::read_to_string(temp_dir.join("User.rhp")).unwrap();
     assert!(!user_content.contains("<?php"));
     assert!(user_content.contains("+"));
 
@@ -3702,16 +3726,16 @@ fn test_transpile_phtml_braced_syntax_to_rade() {
 
     let res = migrate_source(input, "dashboard.phtml");
     assert!(res.modified);
-    assert!(res.migrated_content.contains("{{-- Header banner --}}"));
+    assert!(res.migrated_content.contains("<@-- Header banner @>"));
     assert!(res.migrated_content.contains("@include('header')"));
     assert!(res.migrated_content.contains("@if ($user['is_admin'])"));
-    assert!(res.migrated_content.contains("<h1>Admin Panel: {{ $user['name'] }}</h1>"));
-    assert!(res.migrated_content.contains("@rhp\n$debug_info = true;\n@endrhp"));
+    assert!(res.migrated_content.contains("<h1>Admin Panel: <@ $user['name'] @></h1>"));
+    assert!(res.migrated_content.contains("<@? $debug_info = true; @>"));
     assert!(res.migrated_content.contains("@else"));
-    assert!(res.migrated_content.contains("<h1>Welcome {{ $user['name'] }}</h1>"));
+    assert!(res.migrated_content.contains("<h1>Welcome <@ $user['name'] @></h1>"));
     assert!(res.migrated_content.contains("@endif"));
     assert!(res.migrated_content.contains("@foreach ($orders as $order)"));
-    assert!(res.migrated_content.contains("<li>Order #{{ $order['id'] }}</li>"));
+    assert!(res.migrated_content.contains("<li>Order #<@ $order['id'] @></li>"));
     assert!(res.migrated_content.contains("@endforeach"));
     assert!(res.migrated_content.contains("@include('footer')"));
     assert_eq!(res.target_file_path.as_deref(), Some("dashboard.rade.rhp"));
@@ -3759,10 +3783,10 @@ fn test_phtml_file_migrated_and_renamed_to_rade_rhp_on_disk() {
     assert!(target_file.exists(), "New .rade.rhp file should exist on disk");
 
     let contents = fs::read_to_string(&target_file).unwrap();
-    assert!(contents.contains("{{-- Order info --}}"));
-    assert!(contents.contains("<h3>Order #{{ $order_id }}</h3>"));
+    assert!(contents.contains("<@-- Order info @>"));
+    assert!(contents.contains("<h3>Order #<@ $order_id @></h3>"));
     assert!(contents.contains("@foreach ($items as $item)"));
-    assert!(contents.contains("<p>{{ $item['name'] }}</p>"));
+    assert!(contents.contains("<p><@ $item['name'] @></p>"));
     assert!(contents.contains("@endforeach"));
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -3786,8 +3810,8 @@ fn test_php_file_with_doctype_and_html_tags_migrated_to_rade_rhp() {
     let res = migrate_source(input, "home.php");
     assert!(res.modified);
     assert_eq!(res.target_file_path.as_deref(), Some("home.rade.rhp"));
-    assert!(res.migrated_content.contains("<title>{{ $page_title }}</title>"));
-    assert!(res.migrated_content.contains("<h1>Welcome to {{ $site_name }}</h1>"));
+    assert!(res.migrated_content.contains("<title><@ $page_title @></title>"));
+    assert!(res.migrated_content.contains("<h1>Welcome to <@ $site_name @></h1>"));
     assert!(res.migrated_content.contains("</html>"));
 }
 
@@ -3810,9 +3834,9 @@ fn test_php_file_with_preamble_and_html_migrated_to_rade_rhp() {
     let res = migrate_source(input, "index.php");
     assert!(res.modified);
     assert_eq!(res.target_file_path.as_deref(), Some("index.rade.rhp"));
-    assert!(res.migrated_content.contains("@rhp\n$title = \"Dashboard\";\n$user = Request::query('user');\n@endrhp"));
-    assert!(res.migrated_content.contains("<title>{{ $title }}</title>"));
-    assert!(res.migrated_content.contains("<h1>Hello {{ $user }}</h1>"));
+    assert!(res.migrated_content.contains("<@?\n$title = \"Dashboard\";\n$user = Request::query('user');\n@>"), "Output was:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("<title><@ $title @></title>"));
+    assert!(res.migrated_content.contains("<h1>Hello <@ $user @></h1>"));
     assert!(res.migrated_content.contains("</html>"));
 }
 
@@ -3832,7 +3856,7 @@ fn test_php_partial_view_with_multiple_tags_migrated_to_rade_rhp() {
     assert!(res.modified);
     assert_eq!(res.target_file_path.as_deref(), Some("user_card.rade.rhp"));
     assert!(res.migrated_content.contains("@if ($user['is_active'])"));
-    assert!(res.migrated_content.contains("<p>Active user: {{ $user['name'] }}</p>"));
+    assert!(res.migrated_content.contains("<p>Active user: <@ $user['name'] @></p>"));
     assert!(res.migrated_content.contains("@else"));
     assert!(res.migrated_content.contains("@endif"));
     assert!(res.migrated_content.contains("</div>"));
@@ -3919,16 +3943,16 @@ fn test_php_file_migrated_and_renamed_to_rade_rhp_on_disk() {
         .expect("failed to run rhp migrate --write");
     assert!(output.status.success());
 
-    // Old .php view should be deleted
-    assert!(!php_file.exists(), "Old .php view file should have been removed");
+    // Old .php file should be deleted
+    assert!(!php_file.exists(), "Old .php file should have been removed");
 
     // New .rade.rhp should exist
     let target_file = temp_dir.join("landing.rade.rhp");
     assert!(target_file.exists(), "New .rade.rhp file should exist on disk");
 
     let contents = fs::read_to_string(&target_file).unwrap();
-    assert!(contents.contains("<title>{{ $page_title }}</title>"));
-    assert!(contents.contains("<h3>Welcome {{ $user_name }}</h3>"));
+    assert!(contents.contains("<title><@ $page_title @></title>"));
+    assert!(contents.contains("<h3>Welcome <@ $user_name @></h3>"));
     assert!(contents.contains("</html>"));
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -3950,5 +3974,102 @@ fn test_include_view_php_migrated_to_view_render() {
     assert!(res.migrated_content.contains("View::render('./views/sidebar');"));
     assert!(res.migrated_content.contains("View::render('./footer');"));
 }
+
+#[test]
+fn test_require_php_not_converted_to_view_render() {
+    let input = concat!(
+        "<?php\n",
+        "\n",
+        "// Comment these lines to hide errors\n",
+        "error_reporting(E_ALL);\n",
+        "ini_set('display_errors', 1);\n",
+        "\n",
+        "require __DIR__ . '/includes/config.php';\n",
+        "require __DIR__ . '/includes/functions.php';\n",
+        "\n",
+        "init();\n"
+    );
+
+    let res = migrate_source(input, "index.php");
+    assert!(!res.migrated_content.contains("View::render"));
+    assert!(res.migrated_content.contains("init();"));
+    assert!(res.migrated_content.contains("// error_reporting(E_ALL);"));
+    assert!(res.migrated_content.contains("// ini_set('display_errors', 1);"));
+}
+
+#[test]
+fn test_template_php_converted_to_template_rade_rhp_and_properly_linted() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rhp_migrate_template_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let template_dir = temp_dir.join("template");
+    fs::create_dir_all(&template_dir).unwrap();
+
+    let template_file = template_dir.join("template.php");
+    let original_html = concat!(
+        "<!DOCTYPE html>\n",
+        "<html>\n",
+        "<head>\n",
+        "    <meta charset=\"utf-8\" />\n",
+        "    <title><?php page_title(); ?> | <?php site_name(); ?></title>\n",
+        "    <link href=\"<?php site_url(); ?>/template/style.css\" rel=\"stylesheet\" type=\"text/css\" />\n",
+        "</head>\n",
+        "<body>\n",
+        "<div class=\"wrap\">\n",
+        "    <header>\n",
+        "        <h1><?php site_name(); ?></h1>\n",
+        "        <nav class=\"menu\">\n",
+        "            <?php nav_menu(); ?>\n",
+        "        </nav>\n",
+        "    </header>\n",
+        "    <article>\n",
+        "        <h2><?php page_title(); ?></h2>\n",
+        "        <?php page_content(); ?>\n",
+        "    </article>\n",
+        "    <footer>\n",
+        "        <small>&copy;<?= date('Y') ?> <?php site_name(); ?> + <br><?php site_version(); ?></small>\n",
+        "    </footer>\n",
+        "</div>\n",
+        "</body>\n",
+        "</html>\n"
+    );
+    fs::write(&template_file, original_html).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rhp"))
+        .arg("migrate")
+        .arg(&temp_dir)
+        .arg("--write")
+        .output()
+        .expect("failed to run rhp migrate --write");
+    assert!(output.status.success());
+
+    // Original template.php must be deleted
+    assert!(!template_file.exists(), "template.php should be converted and removed");
+
+    // Must be converted to template.rade.rhp
+    let migrated_template = template_dir.join("template.rade.rhp");
+    assert!(migrated_template.exists(), "template.rade.rhp must exist on disk");
+
+    let migrated_code = fs::read_to_string(&migrated_template).unwrap();
+    assert!(migrated_code.contains("<@? page_title(); @>"));
+    assert!(migrated_code.contains("<@? site_name(); @>"));
+    assert!(migrated_code.contains("<@ date('Y') @>"));
+
+    // Proper linting on the template file: should produce 0 errors
+    let diags = rhp::check_source(&migrated_code, "template.rade.rhp", 10);
+    assert!(diags.is_empty(), "Valid template with <@? @> blocks should have 0 diagnostics, got: {:?}", diags);
+
+    // If an invalid RHP statement is added inside a <@? @> block, linting catches it
+    let with_error = migrated_code.replace("page_title();", "page_title(;");
+    let err_diags = rhp::check_source(&with_error, "template.rade.rhp", 10);
+    assert!(!err_diags.is_empty(), "Should catch syntax error inside <@? @> block");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
 
 

@@ -508,6 +508,161 @@ impl<'a> DiagnosticBuilder<'a> {
         d.rendered = Some(render_human(&d));
         d
     }
+
+    /// Convert a Rade `LexerError` into a structured `Diagnostic`.
+    pub fn from_rade_lexer_error(&self, err: &crate::rade::lexer::LexerError) -> Diagnostic {
+        let (line, col, code, message) = match err {
+            crate::rade::lexer::LexerError::UnclosedRawRhp { line, column } => (
+                *line,
+                *column,
+                "RADE0001".to_string(),
+                format!("Unclosed <@? block starting at line {}, column {}", line, column),
+            ),
+            crate::rade::lexer::LexerError::UnclosedComment { line, column } => (
+                *line,
+                *column,
+                "RADE0002".to_string(),
+                format!("Unclosed template comment starting at line {}, column {}", line, column),
+            ),
+            crate::rade::lexer::LexerError::UnclosedEcho { line, column } => (
+                *line,
+                *column,
+                "RADE0003".to_string(),
+                format!("Unclosed echo expression starting at line {}, column {}", line, column),
+            ),
+            crate::rade::lexer::LexerError::UnclosedRawEcho { line, column } => (
+                *line,
+                *column,
+                "RADE0004".to_string(),
+                format!("Unclosed raw echo expression starting at line {}, column {}", line, column),
+            ),
+            crate::rade::lexer::LexerError::UnclosedDirectiveArgs { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0005".to_string(),
+                format!("Unclosed arguments for directive `@{}` at line {}, column {}", directive, line, column),
+            ),
+            crate::rade::lexer::LexerError::UnknownDirective { syntax, line, column } => (
+                *line,
+                *column,
+                "RADE0006".to_string(),
+                format!("unknown directive found `{}` at line {}, column {}", syntax, line, column),
+            ),
+        };
+
+        let span = DiagnosticSpan {
+            file: self.file.name.clone(),
+            start: Position::new(line, col, 0),
+            end: Position::new(line, col + 1, 0),
+        };
+
+        let labels = vec![DiagnosticLabel {
+            span: LabelSpan::new(line, col),
+            text: message.clone(),
+            primary: true,
+        }];
+
+        let explain = format!("rhp explain {}", code);
+
+        let mut d = Diagnostic {
+            level: DiagnosticLevel::Error,
+            code,
+            message,
+            span,
+            found: None,
+            expected: None,
+            labels,
+            snippet: Vec::new(),
+            suggestions: Vec::new(),
+            explain,
+            rendered: None,
+            caused_by: None,
+        };
+        d.rendered = Some(render_human(&d));
+        d
+    }
+
+    /// Convert a Rade `CompileError` into a structured `Diagnostic`.
+    pub fn from_rade_compile_error(&self, err: &crate::rade::compiler::CompileError) -> Diagnostic {
+        let (line, col, code, message) = match err {
+            crate::rade::compiler::CompileError::Lexer(lex) => {
+                return self.from_rade_lexer_error(lex);
+            }
+            crate::rade::compiler::CompileError::UnclosedDirective { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0010".to_string(),
+                format!("Unclosed directive `@{}` starting at line {}, column {}", directive, line, column),
+            ),
+            crate::rade::compiler::CompileError::UnexpectedClosingDirective { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0011".to_string(),
+                format!("Unexpected closing directive `@{}` without matching opener at line {}, column {}", directive, line, column),
+            ),
+            crate::rade::compiler::CompileError::MismatchedClosingDirective { expected, found, line, column } => (
+                *line,
+                *column,
+                "RADE0012".to_string(),
+                format!("Mismatched closing directive: expected `@{}` but found `@{}` at line {}, column {}", expected, found, line, column),
+            ),
+            crate::rade::compiler::CompileError::MissingDirectiveArgs { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0013".to_string(),
+                format!("Directive `@{}` requires arguments at line {}, column {}", directive, line, column),
+            ),
+            crate::rade::compiler::CompileError::UnexpectedDirectiveArgs { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0014".to_string(),
+                format!("Directive `@{}` does not accept arguments at line {}, column {}", directive, line, column),
+            ),
+            crate::rade::compiler::CompileError::UnexpectedDirective { directive, line, column, message } => (
+                *line,
+                *column,
+                "RADE0015".to_string(),
+                format!("Unexpected directive `@{}`: {} at line {}, column {}", directive, message, line, column),
+            ),
+            crate::rade::compiler::CompileError::UnknownDirective { directive, line, column } => (
+                *line,
+                *column,
+                "RADE0016".to_string(),
+                format!("Unknown directive `@{}` at line {}, column {}", directive, line, column),
+            ),
+        };
+
+        let span = DiagnosticSpan {
+            file: self.file.name.clone(),
+            start: Position::new(line, col, 0),
+            end: Position::new(line, col + 1, 0),
+        };
+
+        let labels = vec![DiagnosticLabel {
+            span: LabelSpan::new(line, col),
+            text: message.clone(),
+            primary: true,
+        }];
+
+        let explain = format!("rhp explain {}", code);
+
+        let mut d = Diagnostic {
+            level: DiagnosticLevel::Error,
+            code,
+            message,
+            span,
+            found: None,
+            expected: None,
+            labels,
+            snippet: Vec::new(),
+            suggestions: Vec::new(),
+            explain,
+            rendered: None,
+            caused_by: None,
+        };
+        d.rendered = Some(render_human(&d));
+        d
+    }
 }
 
 /// Map `TypeErrorKind` to stable `RHP02xx` / `RHP03xx` code and formatted message.
