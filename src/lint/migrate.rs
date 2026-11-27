@@ -459,8 +459,13 @@ pub fn migrate_source_with_options_and_context(
     cookie_set_count += s_count;
     current = after_sessions;
 
+    // Step 2.9: Convert adjacent dot concatenations to string interpolation (reducing dot operators)
+    let (after_interp, interp_c) = interpolate_adjacent_concat_variables(&current, file_name);
+    dot_concat_count += interp_c;
+    current = after_interp;
+
     // Step 3: Replace dot concatenation (. and .=) with + and +=
-    let (after_dots, d_count) = replace_dot_operators(&current);
+    let (after_dots, d_count) = replace_dot_operators_with_file(&current, file_name);
     dot_concat_count += d_count;
     current = after_dots;
 
@@ -1360,8 +1365,13 @@ pub fn migrate_project_in_stages(
         item.cookie_set_count += sess_c;
         item.current_content = after_sess;
 
+        // Interpolate adjacent variables with strings before replacing remaining dot operators
+        let (after_interp, interp_c) = interpolate_adjacent_concat_variables(&item.current_content, &item.file_name);
+        item.dot_concat_count += interp_c;
+        item.current_content = after_interp;
+
         // Dot concatenation
-        let (after_dots, dot_c) = replace_dot_operators(&item.current_content);
+        let (after_dots, dot_c) = replace_dot_operators_with_file(&item.current_content, &item.file_name);
         item.dot_concat_count += dot_c;
         item.current_content = after_dots;
 
@@ -1742,6 +1752,429 @@ fn build_code_mask(source: &str) -> Vec<bool> {
                 i += 1;
             }
             continue;
+        }
+
+        i += 1;
+    }
+
+    is_code
+}
+
+/// Mask comments (`//`, `#`, `/*...*/`) and string literals (`'...'`, `"..."`, `` `...` ``, ```` ```...``` ````)
+/// as `false` within `[start, end)` of `is_code`.
+fn mask_strings_and_comments_in_range(source: &str, start: usize, end: usize, is_code: &mut [bool]) {
+    let bytes = source.as_bytes();
+    let n = end.min(bytes.len());
+    let mut i = start;
+
+    while i < n {
+        let b = bytes[i];
+
+        // Single-line comment: // or #
+        if (b == b'/' && i + 1 < n && bytes[i + 1] == b'/') || b == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                is_code[i] = false;
+                i += 1;
+            }
+            continue;
+        }
+
+        // Multi-line comment: /* ... */
+        if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+            is_code[i] = false;
+            is_code[i + 1] = false;
+            i += 2;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Single-quoted string: '...'
+        if b == b'\'' {
+            is_code[i] = false;
+            i += 1;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'\\' && i + 1 < n {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'\'' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Double-quoted string: "..."
+        if b == b'"' {
+            is_code[i] = false;
+            i += 1;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'\\' && i + 1 < n {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Triple-backtick markdown string: ```...```
+        if b == b'`' && i + 2 < n && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+            is_code[i] = false;
+            is_code[i + 1] = false;
+            is_code[i + 2] = false;
+            i += 3;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'\\' && i + 1 < n {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'`' && i + 2 < n && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+                    is_code[i + 1] = false;
+                    is_code[i + 2] = false;
+                    i += 3;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Backtick string: `...`
+        if b == b'`' {
+            is_code[i] = false;
+            i += 1;
+            while i < n {
+                is_code[i] = false;
+                if bytes[i] == b'\\' && i + 1 < n {
+                    is_code[i + 1] = false;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'`' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+}
+
+fn is_known_rade_directive(name: &str) -> bool {
+    matches!(
+        name,
+        "if" | "elseif"
+            | "unless"
+            | "isset"
+            | "empty"
+            | "foreach"
+            | "for"
+            | "forelse"
+            | "while"
+            | "switch"
+            | "case"
+            | "include"
+            | "includeIf"
+            | "includeWhen"
+            | "includeUnless"
+            | "includeFirst"
+            | "each"
+            | "extends"
+            | "section"
+            | "yield"
+            | "push"
+            | "prepend"
+            | "stack"
+            | "component"
+            | "slot"
+            | "props"
+            | "aware"
+            | "class"
+            | "style"
+            | "checked"
+            | "selected"
+            | "disabled"
+            | "readonly"
+            | "required"
+            | "json"
+            | "dd"
+            | "dump"
+            | "auth"
+            | "guest"
+            | "env"
+            | "production"
+            | "error"
+            | "method"
+            | "can"
+            | "cannot"
+            | "canany"
+            | "vite"
+            | "asset"
+            | "route"
+            | "url"
+    )
+}
+
+/// Find the closing `@>` for a Rade tag starting after the opening tag, respecting strings/comments.
+fn find_rade_close_tag(source: &str, from: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = from;
+    while i < n {
+        let b = bytes[i];
+        if b == b'\'' || b == b'"' || b == b'`' {
+            let quote = b;
+            i += 1;
+            while i < n {
+                if bytes[i] == b'\\' && i + 1 < n {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if (b == b'/' && i + 1 < n && bytes[i + 1] == b'/') || b == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+            i += 2;
+            while i < n {
+                if bytes[i] == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && bytes[i] == b'@' && bytes[i + 1] == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the closing `?>` for a PHP tag starting after `<?php` or `<?=`, respecting strings/comments.
+fn find_php_close_tag(source: &str, from: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut i = from;
+    while i < n {
+        let b = bytes[i];
+        if b == b'\'' || b == b'"' || b == b'`' {
+            let quote = b;
+            i += 1;
+            while i < n {
+                if bytes[i] == b'\\' && i + 1 < n {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if (b == b'/' && i + 1 < n && bytes[i + 1] == b'/') || b == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+            i += 2;
+            while i < n {
+                if bytes[i] == b'*' && i + 1 < n && bytes[i + 1] == b'/' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && bytes[i] == b'?' && bytes[i + 1] == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Build a mask where `true` means the byte is inside an RHP statement/expression
+/// (i.e. NOT inside a string literal, NOT inside a comment, and NOT inside HTML/template markup).
+fn build_code_mask_for_file(source: &str, file_path: &str) -> Vec<bool> {
+    if !is_template_file_or_source(source, file_path) {
+        return build_code_mask(source);
+    }
+
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    // Default everything to false (HTML / template text), then enable only code/expression regions
+    // with strings and comments masked out.
+    let mut is_code = vec![false; n];
+    let mut i = 0;
+
+    while i < n {
+        // 1. Rade comment `<@-- ... @>`: always non-code
+        if bytes[i..].starts_with(b"<@--") {
+            if let Some(close) = source[i + 4..].find("@>") {
+                i = i + 4 + close + 2;
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        // 2. Rade blocks: `<@? ... @>`, `<@! ... @>`, `<@ ... @>`
+        if bytes[i..].starts_with(b"<@?") {
+            let inner_start = i + 3;
+            let inner_end = find_rade_close_tag(source, inner_start).unwrap_or(n);
+            for b in is_code.iter_mut().take(inner_end).skip(inner_start) {
+                *b = true;
+            }
+            mask_strings_and_comments_in_range(source, inner_start, inner_end, &mut is_code);
+            i = if inner_end < n { inner_end + 2 } else { n };
+            continue;
+        }
+
+        if bytes[i..].starts_with(b"<@!") {
+            let inner_start = i + 3;
+            let inner_end = find_rade_close_tag(source, inner_start).unwrap_or(n);
+            for b in is_code.iter_mut().take(inner_end).skip(inner_start) {
+                *b = true;
+            }
+            mask_strings_and_comments_in_range(source, inner_start, inner_end, &mut is_code);
+            i = if inner_end < n { inner_end + 2 } else { n };
+            continue;
+        }
+
+        if bytes[i..].starts_with(b"<@") {
+            let inner_start = i + 2;
+            let inner_end = find_rade_close_tag(source, inner_start).unwrap_or(n);
+            for b in is_code.iter_mut().take(inner_end).skip(inner_start) {
+                *b = true;
+            }
+            mask_strings_and_comments_in_range(source, inner_start, inner_end, &mut is_code);
+            i = if inner_end < n { inner_end + 2 } else { n };
+            continue;
+        }
+
+        // 3. Remaining PHP tags: `<?= ... ?>` or `<?php ... ?>`
+        if bytes[i..].starts_with(b"<?=") {
+            let inner_start = i + 3;
+            let inner_end = find_php_close_tag(source, inner_start).unwrap_or(n);
+            for b in is_code.iter_mut().take(inner_end).skip(inner_start) {
+                *b = true;
+            }
+            mask_strings_and_comments_in_range(source, inner_start, inner_end, &mut is_code);
+            i = if inner_end < n { inner_end + 2 } else { n };
+            continue;
+        }
+
+        if bytes[i..].starts_with(b"<?php") {
+            let inner_start = i + 5;
+            let inner_end = find_php_close_tag(source, inner_start).unwrap_or(n);
+            for b in is_code.iter_mut().take(inner_end).skip(inner_start) {
+                *b = true;
+            }
+            mask_strings_and_comments_in_range(source, inner_start, inner_end, &mut is_code);
+            i = if inner_end < n { inner_end + 2 } else { n };
+            continue;
+        }
+
+        // 4. Rade directives with parenthesized expressions: `@if(...)`, `@foreach(...)`, etc.
+        if bytes[i] == b'@' {
+            let preceded_by_word = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            if !preceded_by_word && i + 1 < n && (bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_') {
+                let name_start = i + 1;
+                let mut name_end = name_start;
+                while name_end < n && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'_') {
+                    name_end += 1;
+                }
+                let dir_name = &source[name_start..name_end];
+                if is_known_rade_directive(dir_name) {
+                    let mut p = name_end;
+                    while p < n && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                        p += 1;
+                    }
+                    if p < n && bytes[p] == b'(' {
+                        let arg_start = p + 1;
+                        let mut j = arg_start;
+                        let mut depth = 1usize;
+                        while j < n && depth > 0 {
+                            let b = bytes[j];
+                            if b == b'\'' || b == b'"' || b == b'`' {
+                                let quote = b;
+                                j += 1;
+                                while j < n {
+                                    if bytes[j] == b'\\' && j + 1 < n {
+                                        j += 2;
+                                        continue;
+                                    }
+                                    if bytes[j] == quote {
+                                        j += 1;
+                                        break;
+                                    }
+                                    j += 1;
+                                }
+                                continue;
+                            }
+                            if b == b'(' {
+                                depth += 1;
+                            } else if b == b')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            j += 1;
+                        }
+                        if depth == 0 {
+                            for b in is_code.iter_mut().take(j).skip(arg_start) {
+                                *b = true;
+                            }
+                            mask_strings_and_comments_in_range(source, arg_start, j, &mut is_code);
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
 
         i += 1;
@@ -2847,14 +3280,27 @@ fn upgrade_session_sets(source: &str) -> (String, usize) {
 }
 
 // =========================================================================
+// Step 2.9: Convert string concatenation chains to template string interpolation:
+// E.g. `"hello " . $x . " how are you"` -> `` `hello {$x} how are you` ``
+// and `'.$x`, `".$x`, `` `.$x `` -> `` `...{$x}...` ``
+// This reduces dot operators before general dot-to-plus conversion.
+// =========================================================================
+
+pub fn interpolate_adjacent_concat_variables(source: &str, _file_path: &str) -> (String, usize) {
+    let converted = crate::lint::concat_to_template::convert_concat_to_template_strings(source);
+    let count = if converted != source { 1 } else { 0 };
+    (converted, count)
+}
+
+// =========================================================================
 // Step 3: Replace dot concatenation (. and .=) with + and +=
 // =========================================================================
 
 /// Replace PHP dot concatenation (`.` and `.=`) with `+` and `+=`.
 /// Ignores occurrences in comments and string literals (via mask).
 /// Preserves `...` (ellipsis), `..` (range), and floating point numbers (e.g. `3.14`, `0.5`).
-fn replace_dot_operators(source: &str) -> (String, usize) {
-    let mask = build_code_mask(source);
+fn replace_dot_operators_with_file(source: &str, file_path: &str) -> (String, usize) {
+    let mask = build_code_mask_for_file(source, file_path);
     let bytes = source.as_bytes();
     let n = bytes.len();
     let mut edits: Vec<TextEdit> = Vec::new();
@@ -10674,6 +11120,89 @@ pub fn scan_for_unsupported_php_features(source: &str, file_name: &str) -> Vec<S
     }
 
     warnings
+}
+
+#[cfg(test)]
+mod dot_operator_tests {
+    use super::*;
+
+    #[test]
+    fn skips_dots_in_html_and_rade_markup_but_replaces_in_rade_expressions() {
+        let input = concat!(
+            "<@-- Comment with dot. Should stay. @>\n",
+            "<div class=\"card\">\n",
+            "  <style>.card { color: red; }</style>\n",
+            "  <p>Hello world. Visit example.com for more info.</p>\n",
+            "  <@ $first . ' ' . $last @>\n",
+            "  <@! $prefix . $suffix @>\n",
+            "  @if($a . $b == 'xy')\n",
+            "    <span>Ok.</span>\n",
+            "  @endif\n",
+            "  <@?\n",
+            "    // Comment dot.\n",
+            "    $msg = \"a.b\" . $c;\n",
+            "    $msg .= \"!\";\n",
+            "  @>\n",
+            "</div>\n",
+        );
+
+        let (out, count) = replace_dot_operators_with_file(input, "views/home.rade.rhp");
+        assert!(out.contains("<@-- Comment with dot. Should stay. @>"));
+        assert!(out.contains("<style>.card { color: red; }</style>"));
+        assert!(out.contains("<p>Hello world. Visit example.com for more info.</p>"));
+        assert!(out.contains("<span>Ok.</span>"));
+        assert!(out.contains("<@ $first + ' ' + $last @>"));
+        assert!(out.contains("<@! $prefix + $suffix @>"));
+        assert!(out.contains("@if($a + $b == 'xy')"));
+        assert!(out.contains("// Comment dot."));
+        assert!(out.contains("$msg = \"a.b\" + $c;"));
+        assert!(out.contains("$msg += \"!\";"));
+        assert_eq!(count, 6);
+    }
+
+    #[test]
+    fn replaces_dots_in_pure_rhp_while_preserving_strings_comments_and_floats() {
+        let input = "$x = 3.14; $y = .5; // keep.\n$s = 'a.b' . $z;\n$s .= `c.d`;\n";
+        let (out, count) = replace_dot_operators_with_file(input, "app/test.rhp");
+        assert!(out.contains("$x = 3.14;"));
+        assert!(out.contains("$y = .5;"));
+        assert!(out.contains("// keep."));
+        assert!(out.contains("$s = 'a.b' + $z;"));
+        assert!(out.contains("$s += `c.d`;"));
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_interpolate_adjacent_concat_variables_reduces_dots() {
+        let input1 = r#"
+            $a = 'Hello ' . $name;
+            $b = "Hi " . $user->name;
+            $c = `Count: ` . $items[0];
+        "#;
+        let (out1, count1) = interpolate_adjacent_concat_variables(input1, "test.rhp");
+        assert!(out1.contains(r#"$a = `Hello {$name}`;"#), "out1 was: {}", out1);
+        assert!(out1.contains(r#"$b = `Hi {$user->name}`;"#), "out1 was: {}", out1);
+        assert!(out1.contains(r#"$c = `Count: {$items[0]}`;"#), "out1 was: {}", out1);
+        assert_eq!(count1, 1);
+
+        let input2 = r#"
+            $a = $name . ' is here';
+            $b = $user->age . " years old";
+            $c = $role . ` is assigned`;
+        "#;
+        let (out2, count2) = interpolate_adjacent_concat_variables(input2, "test.rhp");
+        assert!(out2.contains(r#"$a = `{$name} is here`;"#), "out2 was: {}", out2);
+        assert!(out2.contains(r#"$b = `{$user->age} years old`;"#), "out2 was: {}", out2);
+        assert!(out2.contains(r#"$c = `{$role} is assigned`;"#), "out2 was: {}", out2);
+        assert_eq!(count2, 1);
+
+        // Combined chained case:
+        // "hello " . $x . " how are you" -> `hello {$x} how are you`
+        let input3 = r#"$info = "hello " . $x . " how are you";"#;
+        let (out3, count3) = interpolate_adjacent_concat_variables(input3, "test.rhp");
+        assert_eq!(out3, r#"$info = `hello {$x} how are you`;"#);
+        assert_eq!(count3, 1);
+    }
 }
 
 

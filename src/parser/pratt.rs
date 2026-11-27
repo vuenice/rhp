@@ -327,7 +327,7 @@ impl<'s> CombinatorStream<'s> {
                 ))
             }
             Token::BacktickString(raw) => {
-                if raw.starts_with("```") && raw.ends_with("```") && spanned.token.has_interpolation() {
+                if spanned.token.has_interpolation() {
                     let parts = parse_heredoc_interpolation(raw, spanned.span, self.file_id)?;
                     Ok(Expr::new(
                         ExprKind::Literal(Literal::InterpolatedString { raw, parts }),

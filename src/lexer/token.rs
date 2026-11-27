@@ -1049,13 +1049,7 @@ impl<'s> Token<'s> {
     pub fn has_interpolation(&self) -> bool {
         match self {
             Token::DoubleQuotedString(s) => s.contains('$'),
-            Token::BacktickString(s) => {
-                if s.starts_with("```") && s.ends_with("```") {
-                    has_curly_interpolation_str(s)
-                } else {
-                    false
-                }
-            }
+            Token::BacktickString(s) => has_curly_interpolation_str(s),
             _ => false,
         }
     }

@@ -1,6 +1,7 @@
 pub mod auto_assign;
 pub mod autotype;
 pub mod casing;
+pub mod concat_to_template;
 pub mod diagnostics;
 pub mod formatter;
 pub mod migrate;
@@ -23,6 +24,9 @@ pub use autotype::add_variable_types;
 pub use casing::{
     apply_casing, check_casing, is_camel_case, is_pascal_case, is_snake_case, is_special_var,
     to_camel_case, to_pascal_case, to_snake_case,
+};
+pub use concat_to_template::{
+    check_concat_to_template_strings, convert_concat_to_template_strings,
 };
 pub use diagnostics::{run_typecheck, type_error_to_code};
 pub use formatter::{format_source, split_statements_on_semicolons};
@@ -93,14 +97,20 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
     if crate::diagnostic::check::is_template_file(file_name, source) {
         return lint_template_source_with_options(source, file_name, options);
     }
+    lint_rhp_source_with_options(source, file_name, options)
+}
 
+fn lint_rhp_source_with_options(source: &str, file_name: &str, options: LintOptions) -> LintResult {
     if options.fix {
         // Fix mode:
         // 0. Auto-convert strict comparison operators `===` and `!==` to `==` and `!=`
         let eq_fixed_code = replace_strict_equality_operators(source);
 
+        // 0.5. Convert string concatenation chains to backtick template strings (`...{$var}...`)
+        let template_concat_code = convert_concat_to_template_strings(&eq_fixed_code);
+
         // 1. Separate statements with semicolon onto different lines
-        let split_stmts_code = split_statements_on_semicolons(&eq_fixed_code);
+        let split_stmts_code = split_statements_on_semicolons(&template_concat_code);
 
         // 2. Auto-assign collection transformations ($x->map(); -> $x = $x->map();)
         let auto_assigned_code = auto_assign_collection_calls(&split_stmts_code);
@@ -141,6 +151,9 @@ pub fn lint_source_with_options(source: &str, file_name: &str, options: LintOpti
 
         // 1. Check parameter ordering (required arguments must precede optional arguments)
         issues.extend(check_parameter_order(source, file_name));
+
+        // 1.5. Check string concatenation that can use template string interpolation
+        issues.extend(check_concat_to_template_strings(source, file_name));
 
         // 2. Check casing issues (if enabled)
         if options.case_change {
@@ -195,6 +208,13 @@ pub fn lint_template_source_with_options(
 
         while i < n {
             let rem = &source[i..];
+            if rem.starts_with("<@--") {
+                if let Some(pos) = source[i + 4..].find("@>") {
+                    i = i + 4 + pos + 2;
+                    continue;
+                }
+                break;
+            }
             if rem.starts_with("<@?") {
                 let tag_start = i;
                 let content_start = i + "<@?".len();
@@ -206,7 +226,7 @@ pub fn lint_template_source_with_options(
                     let inner = &source[content_start..content_end];
                     let inner_trimmed = inner.trim();
                     if !inner_trimmed.is_empty() {
-                        let sub_res = lint_source_with_options(inner_trimmed, file_name, options);
+                        let sub_res = lint_rhp_source_with_options(inner_trimmed, file_name, options);
                         let formatted_inner = sub_res.formatted_content.trim();
                         result.push_str(&source[last_idx..tag_start]);
                         if inner.contains('\n') || formatted_inner.contains('\n') {
@@ -222,6 +242,32 @@ pub fn lint_template_source_with_options(
                         result.push_str(&source[last_idx..tag_end]);
                     }
                     last_idx = tag_end;
+                    i = tag_end;
+                    continue;
+                }
+            } else if rem.starts_with("<@!") || rem.starts_with("<@") {
+                let open_tag = if rem.starts_with("<@!") { "<@!" } else { "<@" };
+                let tag_start = i;
+                let content_start = i + open_tag.len();
+
+                if let Some(pos) = source[content_start..].find("@>") {
+                    let content_end = content_start + pos;
+                    let tag_end = content_end + "@>".len();
+                    let inner = &source[content_start..content_end];
+                    let inner_trimmed = inner.trim();
+                    if !inner_trimmed.is_empty() {
+                        let wrapped = format!("{};", inner_trimmed);
+                        let converted = convert_concat_to_template_strings(&wrapped);
+                        let converted_expr = converted.trim().strip_suffix(';').unwrap_or(converted.trim());
+                        if converted_expr != inner_trimmed {
+                            result.push_str(&source[last_idx..tag_start]);
+                            result.push_str(open_tag);
+                            result.push(' ');
+                            result.push_str(converted_expr);
+                            result.push_str(" @>");
+                            last_idx = tag_end;
+                        }
+                    }
                     i = tag_end;
                     continue;
                 }
