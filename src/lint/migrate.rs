@@ -363,6 +363,10 @@ pub fn migrate_source_with_options_and_context(
     warnings.extend(echo_warnings);
     current = after_resp;
 
+    // Step 0.00092: Replace .php and .phtml references in string literals with .rhp / .rade.rhp
+    let (after_exts, _) = migrate_php_extension_strings(&current, None);
+    current = after_exts;
+
     // Step 0.00095: Rewrite json_encode / json_decode / json_validate to Json::
     let (after_json, json_warnings) = migrate_json_calls(&current);
     warnings.extend(json_warnings);
@@ -1254,6 +1258,23 @@ pub fn migrate_project_in_stages(
         global_signatures.extend(sigs);
     }
 
+    let project_view_targets: std::collections::HashSet<String> = items
+        .iter()
+        .filter(|it| {
+            it.target_path
+                .as_ref()
+                .and_then(|tp| tp.to_str())
+                .map_or(false, |s| s.ends_with(".rade.rhp"))
+        })
+        .flat_map(|it| {
+            let p = Path::new(&it.file_name);
+            let rel = format_relative_file_path(p, dir);
+            let base = p.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+            [rel, base]
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
     // Phase 4: Stage 2 - Function Call Patterns & Built-in Facades across ALL files
     for item in &mut items {
         // Swap positional arguments at call sites matching global reordered functions
@@ -1287,6 +1308,10 @@ pub fn migrate_project_in_stages(
         item.echo_response_count += echo_c;
         item.warnings.extend(echo_w);
         item.current_content = after_resp;
+
+        // Replace .php and .phtml references in string literals with .rhp / .rade.rhp
+        let (after_exts, _) = migrate_php_extension_strings(&item.current_content, Some(&project_view_targets));
+        item.current_content = after_exts;
 
         // Json calls
         let (after_json, json_w) = migrate_json_calls(&item.current_content);
@@ -9089,14 +9114,173 @@ pub fn transpile_php_template_to_rade_with_file(source: &str, file_path: &str) -
 }
 
 fn extract_string_literal(s: &str) -> Option<String> {
-    for quote in [b'\'', b'"'] {
-        if let Some(start) = s.as_bytes().iter().position(|&b| b == quote) {
-            if let Some(end) = s.as_bytes()[start + 1..].iter().position(|&b| b == quote) {
-                return Some(s[start + 1..start + 1 + end].to_string());
+    extract_all_string_literals(s).into_iter().next()
+}
+
+fn extract_all_string_literals(s: &str) -> Vec<String> {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    let mut literals = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let q = bytes[i];
+        if q == b'\'' || q == b'"' {
+            let start = i + 1;
+            let mut j = start;
+            while j < n {
+                if bytes[j] == b'\\' && j + 1 < n {
+                    j += 2;
+                    continue;
+                }
+                if bytes[j] == q {
+                    literals.push(s[start..j].to_string());
+                    i = j + 1;
+                    break;
+                }
+                j += 1;
             }
+            if j >= n {
+                break;
+            }
+        } else {
+            i += 1;
         }
     }
-    None
+    literals
+}
+
+fn is_view_path_string(trimmed: &str) -> bool {
+    let lower = trimmed.to_ascii_lowercase();
+    let basename = Path::new(trimmed).file_name().and_then(|f| f.to_str()).unwrap_or("");
+    let basename_lower = basename.to_ascii_lowercase();
+    let is_common_view_file = matches!(
+        basename_lower.as_str(),
+        "header.php"
+            | "footer.php"
+            | "navbar.php"
+            | "sidebar.php"
+            | "nav.php"
+            | "layout.php"
+            | "menu.php"
+            | "template.php"
+    );
+
+    let is_view_dir = lower.contains("views/")
+        || lower.contains("/views/")
+        || lower.contains("templates/")
+        || lower.contains("/templates/")
+        || lower.contains("partials/")
+        || lower.contains("/partials/")
+        || lower.contains("components/")
+        || lower.contains("/components/")
+        || lower.contains("layouts/")
+        || lower.contains("/layouts/")
+        || lower.contains("pages/")
+        || lower.contains("/pages/");
+
+    let is_php_view = lower.ends_with(".php")
+        && (is_common_view_file
+            || (is_view_dir && !basename.chars().next().map_or(false, |c| c.is_ascii_uppercase())));
+
+    lower.ends_with(".phtml")
+        || lower.ends_with(".rade.rhp")
+        || lower.ends_with(".blade.php")
+        || lower.ends_with(".blade.rhp")
+        || lower.ends_with(".rade")
+        || lower.ends_with(".html")
+        || is_php_view
+}
+
+fn has_dynamic_include_expr(expr: &str) -> bool {
+    let mask = build_code_mask(expr);
+    let bytes = expr.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'$' {
+            return true;
+        }
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let ident = &expr[start..i];
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            if j < n && bytes[j] == b'(' {
+                if !ident.eq_ignore_ascii_case("dirname") {
+                    return true;
+                }
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn strip_include_keyword_and_parens(stmt: &str) -> &str {
+    let trimmed = stmt.trim();
+    let after_kw = if trimmed.len() >= 12
+        && (trimmed[..12].eq_ignore_ascii_case("require_once")
+            || trimmed[..12].eq_ignore_ascii_case("include_once"))
+    {
+        &trimmed[12..]
+    } else if trimmed.len() >= 7
+        && (trimmed[..7].eq_ignore_ascii_case("require")
+            || trimmed[..7].eq_ignore_ascii_case("include"))
+    {
+        &trimmed[7..]
+    } else {
+        trimmed
+    };
+    let mut expr = after_kw.trim();
+    if expr.starts_with('(') && expr.ends_with(')') && is_balanced_parens(&expr[1..expr.len() - 1]) {
+        expr = expr[1..expr.len() - 1].trim();
+    }
+    expr
+}
+
+enum ViewIncludeTarget {
+    Static(String),
+    Dynamic(String),
+}
+
+fn classify_view_include_statement(stmt: &str) -> Option<ViewIncludeTarget> {
+    let literals = extract_all_string_literals(stmt);
+    let view_lit = literals.iter().rev().find(|lit| is_view_path_string(lit.trim()))?;
+    let expr = strip_include_keyword_and_parens(stmt);
+
+    if has_dynamic_include_expr(expr) {
+        let (migrated_expr, _) = migrate_php_extension_strings(expr, None);
+        return Some(ViewIncludeTarget::Dynamic(migrated_expr));
+    }
+
+    let trimmed = view_lit.trim();
+    let mut clean = trimmed.to_string();
+    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".phtml", ".rade", ".html", ".php"] {
+        if clean.to_ascii_lowercase().ends_with(ext) {
+            clean.truncate(clean.len() - ext.len());
+            break;
+        }
+    }
+
+    if clean.starts_with("/../") {
+        clean = clean[1..].to_string();
+    } else if clean.starts_with('/') {
+        clean = format!(".{}", clean);
+    } else if !clean.starts_with("./") && !clean.starts_with("../") {
+        clean = format!("./{}", clean);
+    }
+
+    Some(ViewIncludeTarget::Static(clean))
 }
 
 fn sanitize_view_name(path: &str) -> String {
@@ -9117,64 +9301,10 @@ fn sanitize_view_name(path: &str) -> String {
 }
 
 pub fn is_view_include_statement(stmt: &str) -> Option<String> {
-    let literal = extract_string_literal(stmt)?;
-    let trimmed = literal.trim();
-    let lower = trimmed.to_ascii_lowercase();
-
-    let basename = Path::new(trimmed).file_name().and_then(|f| f.to_str()).unwrap_or("");
-    let basename_lower = basename.to_ascii_lowercase();
-    let is_common_view_file = matches!(
-        basename_lower.as_str(),
-        "header.php" | "footer.php" | "navbar.php" | "sidebar.php" | "nav.php" | "layout.php" | "menu.php"
-    );
-
-    let is_view_dir = lower.contains("views/")
-        || lower.contains("/views/")
-        || lower.contains("templates/")
-        || lower.contains("/templates/")
-        || lower.contains("partials/")
-        || lower.contains("/partials/")
-        || lower.contains("components/")
-        || lower.contains("/components/")
-        || lower.contains("layouts/")
-        || lower.contains("/layouts/")
-        || lower.contains("pages/")
-        || lower.contains("/pages/");
-
-    let is_php_view = lower.ends_with(".php")
-        && (is_common_view_file || (is_view_dir && !basename.chars().next().map_or(false, |c| c.is_ascii_uppercase())));
-
-    let is_view = lower.ends_with(".phtml")
-        || lower.ends_with(".rade.rhp")
-        || lower.ends_with(".blade.php")
-        || lower.ends_with(".blade.rhp")
-        || lower.ends_with(".rade")
-        || lower.ends_with(".html")
-        || is_php_view;
-
-    if !is_view {
-        return None;
+    match classify_view_include_statement(stmt)? {
+        ViewIncludeTarget::Static(s) => Some(s),
+        ViewIncludeTarget::Dynamic(expr) => Some(expr),
     }
-
-    // Strip template extensions
-    let mut clean = trimmed.to_string();
-    for ext in [".blade.php", ".rade.rhp", ".blade.rhp", ".phtml", ".rade", ".html", ".php"] {
-        if clean.to_ascii_lowercase().ends_with(ext) {
-            clean.truncate(clean.len() - ext.len());
-            break;
-        }
-    }
-
-    // Normalize path to "./views/..."
-    if clean.starts_with("/../") {
-        clean = clean[1..].to_string();
-    } else if clean.starts_with('/') {
-        clean = format!(".{}", clean);
-    } else if !clean.starts_with("./") && !clean.starts_with("../") {
-        clean = format!("./{}", clean);
-    }
-
-    Some(clean)
 }
 
 fn parse_echo_expressions(body: &str) -> Option<Vec<String>> {
@@ -9595,13 +9725,22 @@ pub fn replace_legacy_includes_with_use_and_namespace(
             };
 
             let raw_stmt = &source[i..semi_pos];
-            if let Some(view_path) = is_view_include_statement(raw_stmt) {
+            if let Some(view_target) = classify_view_include_statement(raw_stmt) {
+                let replacement = match view_target {
+                    ViewIncludeTarget::Static(view_path) => format!("View::render('{}');", view_path),
+                    ViewIncludeTarget::Dynamic(expr) => format!("View::render({});", expr),
+                };
                 edits.push(TextEdit {
                     start: i,
                     end: after_stmt,
-                    replacement: format!("View::render('{}');", view_path),
+                    replacement,
                 });
                 count += 1;
+                i = after_stmt;
+                continue;
+            }
+
+            if has_dynamic_include_expr(strip_include_keyword_and_parens(raw_stmt)) {
                 i = after_stmt;
                 continue;
             }
@@ -10617,8 +10756,402 @@ pub fn migrate_controller_echo(source: &str) -> (String, usize, Vec<String>) {
         i += 1;
     }
 
+    let mut result = source.to_string();
+    if !edits.is_empty() {
+        edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+        for edit in edits {
+            result.replace_range(edit.start..edit.end, &edit.replacement);
+        }
+    }
+
+    let (after_fn_echo, fn_count) = migrate_function_echo_and_view_returns(&result);
+    count += fn_count;
+
+    (after_fn_echo, count, warnings)
+}
+
+fn find_matching_brace_in_mask(source: &str, mask: &[bool], open_brace: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut depth = 0usize;
+    let mut i = open_brace;
+    while i < n {
+        if mask[i] {
+            if bytes[i] == b'{' {
+                depth += 1;
+            } else if bytes[i] == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn detect_line_indent(source: &str, pos: usize) -> String {
+    let start = get_line_start(source, pos);
+    let bytes = source.as_bytes();
+    let mut end = start;
+    while end < bytes.len() && (bytes[end] == b' ' || bytes[end] == b'\t') {
+        end += 1;
+    }
+    source[start..end].to_string()
+}
+
+fn find_stmt_end_in_mask(source: &str, mask: &[bool], start: usize, limit: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut i = start;
+    while i < limit {
+        if mask[i] {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return None;
+                    }
+                    depth -= 1;
+                }
+                b';' if depth == 0 => return Some(i),
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_standalone_keyword_at(source: &str, mask: &[bool], pos: usize, kw: &str) -> bool {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    if pos + kw.len() > n || !mask[pos] {
+        return false;
+    }
+    if !source[pos..pos + kw.len()].eq_ignore_ascii_case(kw) {
+        return false;
+    }
+    if pos > 0 && is_migrate_word_byte(bytes[pos - 1]) {
+        return false;
+    }
+    let after = pos + kw.len();
+    if after < n && is_migrate_word_byte(bytes[after]) {
+        return false;
+    }
+    let mut b_idx = pos;
+    while b_idx > 0
+        && (bytes[b_idx - 1] == b' '
+            || bytes[b_idx - 1] == b'\t'
+            || bytes[b_idx - 1] == b'\r'
+            || bytes[b_idx - 1] == b'\n')
+    {
+        b_idx -= 1;
+    }
+    if b_idx >= 2 && (&bytes[b_idx - 2..b_idx] == b"::" || &bytes[b_idx - 2..b_idx] == b"->") {
+        return false;
+    }
+    if b_idx >= 1 && bytes[b_idx - 1] == b'$' {
+        return false;
+    }
+    true
+}
+
+fn migrate_function_echo_and_view_returns(source: &str) -> (String, usize) {
+    let mask = build_code_mask(source);
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0usize;
+    let mut i = 0usize;
+
+    while i < n {
+        if !mask[i] {
+            i += 1;
+            continue;
+        }
+        if !is_standalone_keyword_at(source, &mask, i, "function") {
+            i += 1;
+            continue;
+        }
+
+        let mut p = i + 8;
+        while p < n && (!mask[p] || bytes[p].is_ascii_whitespace()) {
+            p += 1;
+        }
+        if p < n && bytes[p] == b'&' {
+            p += 1;
+            while p < n && (!mask[p] || bytes[p].is_ascii_whitespace()) {
+                p += 1;
+            }
+        }
+        // Must be a named function/method (not an anonymous closure `function (...)`)
+        if p >= n || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_') {
+            i += 8;
+            continue;
+        }
+        while p < n && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_') {
+            p += 1;
+        }
+        while p < n && (!mask[p] || bytes[p].is_ascii_whitespace()) {
+            p += 1;
+        }
+        if p >= n || bytes[p] != b'(' {
+            i += 8;
+            continue;
+        }
+
+        let Some(close_paren) = find_matching_paren(source, &mask, p) else {
+            i += 8;
+            continue;
+        };
+
+        let mut q = close_paren + 1;
+        let mut open_brace = None;
+        while q < n {
+            if mask[q] {
+                if bytes[q] == b'{' {
+                    open_brace = Some(q);
+                    break;
+                } else if bytes[q] == b';' {
+                    break;
+                }
+            }
+            q += 1;
+        }
+        let Some(body_open) = open_brace else {
+            i = q.max(close_paren + 1);
+            continue;
+        };
+        let Some(body_close) = find_matching_brace_in_mask(source, &mask, body_open) else {
+            i = body_open + 1;
+            continue;
+        };
+
+        let body_start = body_open + 1;
+        let body_end = body_close;
+        let fn_indent = detect_line_indent(source, i);
+        let body_indent = format!("{}    ", fn_indent);
+
+        // Scan function body while skipping nested closures / inner functions / anonymous classes
+        struct EchoStmt {
+            start: usize,
+            end: usize,
+            args: Vec<String>,
+        }
+        struct ViewRenderStmt {
+            start: usize,
+            end: usize,
+            call_expr: String,
+        }
+        struct ReturnStmt {
+            start: usize,
+            end: usize,
+            is_bare: bool,
+        }
+
+        let mut echo_stmts: Vec<EchoStmt> = Vec::new();
+        let mut view_stmts: Vec<ViewRenderStmt> = Vec::new();
+        let mut return_stmts: Vec<ReturnStmt> = Vec::new();
+
+        let mut cur = body_start;
+        while cur < body_end {
+            if !mask[cur] {
+                cur += 1;
+                continue;
+            }
+
+            // Skip nested function / anonymous class bodies
+            if is_standalone_keyword_at(source, &mask, cur, "function")
+                || is_standalone_keyword_at(source, &mask, cur, "class")
+            {
+                let mut k = cur;
+                while k < body_end && !(mask[k] && (bytes[k] == b'{' || bytes[k] == b';')) {
+                    k += 1;
+                }
+                if k < body_end && bytes[k] == b'{' {
+                    if let Some(nested_end) = find_matching_brace_in_mask(source, &mask, k) {
+                        cur = nested_end + 1;
+                        continue;
+                    }
+                }
+                cur += 1;
+                continue;
+            }
+
+            if is_standalone_keyword_at(source, &mask, cur, "echo") {
+                if let Some(semi) = find_stmt_end_in_mask(source, &mask, cur + 4, body_end) {
+                    let raw_args = source[cur + 4..semi].trim();
+                    let args = split_top_level_args(raw_args)
+                        .into_iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
+                    if !args.is_empty() {
+                        echo_stmts.push(EchoStmt {
+                            start: cur,
+                            end: semi + 1,
+                            args,
+                        });
+                    }
+                    cur = semi + 1;
+                    continue;
+                }
+            } else if is_standalone_keyword_at(source, &mask, cur, "print") {
+                if let Some(semi) = find_stmt_end_in_mask(source, &mask, cur + 5, body_end) {
+                    let raw_arg = source[cur + 5..semi].trim();
+                    if !raw_arg.is_empty() {
+                        echo_stmts.push(EchoStmt {
+                            start: cur,
+                            end: semi + 1,
+                            args: vec![raw_arg.to_string()],
+                        });
+                    }
+                    cur = semi + 1;
+                    continue;
+                }
+            } else if is_standalone_keyword_at(source, &mask, cur, "return") {
+                if let Some(semi) = find_stmt_end_in_mask(source, &mask, cur + 6, body_end) {
+                    let expr = source[cur + 6..semi].trim();
+                    return_stmts.push(ReturnStmt {
+                        start: cur,
+                        end: semi + 1,
+                        is_bare: expr.is_empty(),
+                    });
+                    cur = semi + 1;
+                    continue;
+                }
+            } else if is_standalone_keyword_at(source, &mask, cur, "View")
+                && cur + 12 <= body_end
+                && source[cur..cur + 12].eq_ignore_ascii_case("View::render")
+            {
+                let mut prev = cur;
+                while prev > body_start && bytes[prev - 1].is_ascii_whitespace() {
+                    prev -= 1;
+                }
+                let is_stmt_start = prev == body_start
+                    || matches!(bytes[prev - 1], b';' | b'{' | b'}' | b':');
+                if is_stmt_start {
+                    if let Some(semi) = find_stmt_end_in_mask(source, &mask, cur + 12, body_end) {
+                        view_stmts.push(ViewRenderStmt {
+                            start: cur,
+                            end: semi + 1,
+                            call_expr: source[cur..semi].trim().to_string(),
+                        });
+                        cur = semi + 1;
+                        continue;
+                    }
+                }
+            }
+
+            cur += 1;
+        }
+
+        let has_trailing_code = |pos_after_stmt: usize| -> bool {
+            let mut k = pos_after_stmt;
+            while k < body_end {
+                if mask[k] && !bytes[k].is_ascii_whitespace() {
+                    return true;
+                }
+                k += 1;
+            }
+            false
+        };
+
+        let ends_with_return = return_stmts
+            .last()
+            .map_or(false, |r| !has_trailing_code(r.end));
+
+        if echo_stmts.is_empty() {
+            if view_stmts.len() == 1 && !ends_with_return {
+                let vr = &view_stmts[0];
+                if !has_trailing_code(vr.end) {
+                    edits.push(TextEdit {
+                        start: vr.start,
+                        end: vr.end,
+                        replacement: format!("return {};", vr.call_expr),
+                    });
+                    count += 1;
+                }
+            }
+        } else {
+            let out_var = if source[body_start..body_end].contains("$output") {
+                "$__output"
+            } else {
+                "$output"
+            };
+
+            edits.push(TextEdit {
+                start: body_start,
+                end: body_start,
+                replacement: format!("\n{}{} = '';", body_indent, out_var),
+            });
+
+            for es in &echo_stmts {
+                let stmt_indent = detect_line_indent(source, es.start);
+                let mut rep = String::new();
+                for (idx, arg) in es.args.iter().enumerate() {
+                    if idx > 0 {
+                        rep.push('\n');
+                        rep.push_str(&stmt_indent);
+                    }
+                    rep.push_str(&format!("{} += {};", out_var, arg));
+                }
+                edits.push(TextEdit {
+                    start: es.start,
+                    end: es.end,
+                    replacement: rep,
+                });
+                count += 1;
+            }
+
+            if let Some(last_vr) = view_stmts.last() {
+                if !has_trailing_code(last_vr.end) {
+                    edits.push(TextEdit {
+                        start: last_vr.start,
+                        end: last_vr.end,
+                        replacement: format!("{} += {};", out_var, last_vr.call_expr),
+                    });
+                    count += 1;
+                }
+            }
+
+            for rs in &return_stmts {
+                if rs.is_bare {
+                    edits.push(TextEdit {
+                        start: rs.start,
+                        end: rs.end,
+                        replacement: format!("return {};", out_var),
+                    });
+                }
+            }
+
+            if !ends_with_return {
+                let mut insert_pos = body_end;
+                while insert_pos > body_start
+                    && (bytes[insert_pos - 1] == b' ' || bytes[insert_pos - 1] == b'\t')
+                {
+                    insert_pos -= 1;
+                }
+                let prefix = if insert_pos > body_start && bytes[insert_pos - 1] == b'\n' {
+                    ""
+                } else {
+                    "\n"
+                };
+                edits.push(TextEdit {
+                    start: insert_pos,
+                    end: insert_pos,
+                    replacement: format!("{}{}return {};\n", prefix, body_indent, out_var),
+                });
+            }
+        }
+
+        i = body_close + 1;
+    }
+
     if edits.is_empty() {
-        return (source.to_string(), 0, warnings);
+        return (source.to_string(), 0);
     }
 
     edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
@@ -10627,7 +11160,172 @@ pub fn migrate_controller_echo(source: &str) -> (String, usize, Vec<String>) {
         result.replace_range(edit.start..edit.end, &edit.replacement);
     }
 
-    (result, count, warnings)
+    (result, count)
+}
+
+fn rewrite_php_extensions_in_literal(
+    lit: &str,
+    view_targets: Option<&std::collections::HashSet<String>>,
+) -> (String, usize) {
+    let lower = lit.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("mailto:")
+    {
+        return (lit.to_string(), 0);
+    }
+
+    let mut out = String::with_capacity(lit.len() + 8);
+    let bytes = lit.as_bytes();
+    let n = bytes.len();
+    let mut i = 0usize;
+    let mut count = 0usize;
+
+    let is_ext_boundary = |idx: usize| -> bool {
+        if idx >= n {
+            return true;
+        }
+        matches!(
+            bytes[idx],
+            b'?' | b'#' | b'/' | b'\\' | b' ' | b'\t' | b'\r' | b'\n' | b',' | b';' | b')' | b']' | b'}' | b'\'' | b'"'
+        )
+    };
+
+    while i < n {
+        if bytes[i] == b'.' {
+            if i + 10 <= n
+                && lit[i..i + 10].eq_ignore_ascii_case(".blade.php")
+                && is_ext_boundary(i + 10)
+            {
+                out.push_str(".rade.rhp");
+                i += 10;
+                count += 1;
+                continue;
+            }
+            if i + 6 <= n
+                && lit[i..i + 6].eq_ignore_ascii_case(".phtml")
+                && is_ext_boundary(i + 6)
+            {
+                out.push_str(".rade.rhp");
+                i += 6;
+                count += 1;
+                continue;
+            }
+            if i + 4 <= n
+                && lit[i..i + 4].eq_ignore_ascii_case(".php")
+                && is_ext_boundary(i + 4)
+            {
+                // Extract the segment up to `.php` to check if it's autoload.php or a view template
+                let seg_start = lit[..i]
+                    .rfind(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\'' | '"' | ',' | ';'))
+                    .map(|p| p + 1)
+                    .unwrap_or(0);
+                let path_seg = &lit[seg_start..i + 4];
+                if path_seg.to_ascii_lowercase().ends_with("autoload.php") {
+                    out.push_str(&lit[i..i + 4]);
+                    i += 4;
+                    continue;
+                }
+                let is_known_view = is_view_path_string(path_seg)
+                    || view_targets.map_or(false, |set| {
+                        let norm = path_seg.trim_start_matches("./").trim_start_matches('/');
+                        let base = Path::new(norm).file_name().and_then(|f| f.to_str()).unwrap_or("");
+                        set.contains(norm) || (!base.is_empty() && set.contains(base))
+                    });
+                if is_known_view {
+                    out.push_str(".rade.rhp");
+                } else {
+                    out.push_str(".rhp");
+                }
+                i += 4;
+                count += 1;
+                continue;
+            }
+        }
+        let ch = lit[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    (out, count)
+}
+
+pub fn migrate_php_extension_strings(
+    source: &str,
+    view_targets: Option<&std::collections::HashSet<String>>,
+) -> (String, usize) {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut edits: Vec<TextEdit> = Vec::new();
+    let mut count = 0usize;
+    let mut i = 0usize;
+
+    while i < n {
+        if i + 1 < n && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'#' && !(i + 1 < n && bytes[i + 1] == b'[') {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(n);
+            continue;
+        }
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let q = bytes[i];
+            let content_start = i + 1;
+            let mut j = content_start;
+            while j < n {
+                if bytes[j] == b'\\' && j + 1 < n {
+                    j += 2;
+                    continue;
+                }
+                if bytes[j] == q {
+                    break;
+                }
+                j += 1;
+            }
+            if j < n {
+                let inner = &source[content_start..j];
+                if inner.contains(".php") || inner.contains(".PHP") || inner.contains(".phtml") || inner.contains(".PHTML") {
+                    let (replaced, c) = rewrite_php_extensions_in_literal(inner, view_targets);
+                    if c > 0 {
+                        edits.push(TextEdit {
+                            start: content_start,
+                            end: j,
+                            replacement: replaced,
+                        });
+                        count += c;
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    if edits.is_empty() {
+        return (source.to_string(), 0);
+    }
+    edits.sort_by(|a, b| b.start.cmp(&a.start).then_with(|| b.end.cmp(&a.end)));
+    let mut result = source.to_string();
+    for edit in edits {
+        result.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    (result, count)
 }
 
 fn split_top_level_args(args: &str) -> Vec<&str> {

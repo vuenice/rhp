@@ -4071,5 +4071,71 @@ fn test_template_php_converted_to_template_rade_rhp_and_properly_linted() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_migrate_function_echo_accumulates_to_output_and_returns() {
+    let input = concat!(
+        "<?php\n",
+        "function renderCard($title, $body) {\n",
+        "    echo '<div class=\"card\">';\n",
+        "    echo '<h2>', $title, '</h2>';\n",
+        "    print $body;\n",
+        "    echo '</div>';\n",
+        "}\n"
+    );
+
+    let res = migrate_source(input, "card_helper.php");
+    assert!(res.modified);
+    assert!(res.migrated_content.contains("$output = '';"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("$output += '<div class=\"card\">';"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("$output += '<h2>';"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("$output += $title;"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("$output += $body;"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("return $output;"), "Got:\n{}", res.migrated_content);
+    assert!(!res.migrated_content.contains("echo "), "Got:\n{}", res.migrated_content);
+}
+
+#[test]
+fn test_migrate_dynamic_template_require_at_function_end_to_return_view_render() {
+    let input = concat!(
+        "<?php\n",
+        "function init() {\n",
+        "    $title = 'Home';\n",
+        "    require dirname(__DIR__) . '/' . config('template_path') . '/template.php';\n",
+        "}\n"
+    );
+
+    let res = migrate_source(input, "functions.php");
+    assert!(res.modified);
+    assert!(
+        res.migrated_content.contains("return View::render(")
+            && res.migrated_content.contains("/template.rade.rhp');"),
+        "Expected return View::render(...template.rade.rhp), got:\n{}",
+        res.migrated_content
+    );
+}
+
+#[test]
+fn test_migrate_php_and_phtml_strings_in_code() {
+    let input = concat!(
+        "<?php\n",
+        "$ctrl = 'controllers/home.php';\n",
+        "$tpl = 'views/dashboard.phtml';\n",
+        "$blade = 'emails/welcome.blade.php';\n",
+        "$layout = 'theme/template.php';\n",
+        "$url = 'https://example.com/api.php';\n",
+        "$loader = 'vendor/autoload.php';\n"
+    );
+
+    let res = migrate_source(input, "paths.php");
+    assert!(res.modified);
+    assert!(res.migrated_content.contains("'controllers/home.rhp'"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("'views/dashboard.rade.rhp'"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("'emails/welcome.rade.rhp'"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("'theme/template.rade.rhp'"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("'https://example.com/api.php'"), "Got:\n{}", res.migrated_content);
+    assert!(res.migrated_content.contains("'vendor/autoload.php'"), "Got:\n{}", res.migrated_content);
+}
+
+
 
 
